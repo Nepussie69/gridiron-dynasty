@@ -1,0 +1,141 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Staff hiring.
+//
+// Coaches have their own interest in a job, driven by your reputation, the
+// program's prestige, and the role's salary. Elite candidates will turn you down
+// if you're nobody; you may have to settle — or sell them on the vision.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { StaffMember } from '../types'
+import { coachEffect } from './coaching'
+import type { World } from './generate'
+import { clamp, type Rng } from './rng'
+import type { Reputation } from './career'
+
+export interface HireCandidate extends StaffMember {
+  interest: number // 0-100 how much they want this job
+  askingSalary: number // what they want per year
+  negotiationRound: number
+}
+
+/** Schemes a candidate can be hired to run, by role family. */
+export const OFF_SCHEMES = ['Air Raid', 'Pro Style', 'Spread', 'West Coast', 'RPO Heavy']
+export const DEF_SCHEMES = ['4-3 Base', '3-4 Base', '4-2-5 Nickel', 'Multiple', 'Blitz Heavy']
+
+export function schemesForRole(role: string): string[] {
+  if (role.includes('Offensive') || role === 'QB Coach' || role === 'OL Coach') return OFF_SCHEMES
+  if (role.includes('Defensive') || role === 'DL Coach' || role === 'Secondary Coach') return DEF_SCHEMES
+  return []
+}
+
+/** Reputation of the program/club from the candidate's point of view. */
+function destinationAppeal(world: World, teamId: string): number {
+  const t = world.byId[teamId]
+  if (!t) return 50
+  // Prestige is the base; a strong current staff raises the ceiling.
+  const effect = coachEffect(world, teamId)
+  return clamp(t.prestige * 0.8 + effect.headCoach * 0.2, 20, 98)
+}
+
+/** How attractive the user's reputation is to a coach. */
+function repAppeal(rep: Reputation): number {
+  const leadership = rep.leadership
+  const results = rep.results
+  const profile = rep.profile
+  return clamp(leadership * 0.4 + results * 0.35 + profile * 0.25, 0, 98)
+}
+
+/**
+ * Compute a candidate's interest in joining your staff.
+ * High-rated coaches are pickier; a strong destination and your reputation help.
+ */
+export function computeInterest(
+  world: World,
+  teamId: string,
+  rep: Reputation,
+  member: StaffMember,
+  salaryOffer: number,
+): number {
+  const dest = destinationAppeal(world, teamId)
+  const you = repAppeal(rep)
+  // A coach wants: a good destination, a respected boss, and fair money.
+  const moneyPull = salaryOffer >= member.annual ? 12 : salaryOffer >= member.annual * 0.85 ? 4 : -12
+  // Elite coaches (85+) are hard to land without a strong profile.
+  const elitism = member.rating >= 88 ? -18 : member.rating >= 80 ? -8 : member.rating >= 70 ? 0 : 8
+  const interest =
+    dest * 0.3 + you * 0.35 + moneyPull + elitism + (member.rating >= 85 && you < 55 ? -14 : 0) + 16
+  return clamp(Math.round(interest), 2, 99)
+}
+
+/** Candidates currently interested in your open role. */
+export function openCandidates(
+  world: World,
+  teamId: string,
+  rep: Reputation,
+  role?: string,
+): HireCandidate[] {
+  const pool = world.staffPool.filter((m) => m.status === 'Available' && (!role || m.role === role))
+  const out: HireCandidate[] = []
+  for (const m of pool.slice(0, 24)) {
+    const asking = Math.round(m.annual * (1 + (100 - destinationAppeal(world, teamId)) / 200))
+    const interest = computeInterest(world, teamId, rep, m, asking)
+    out.push({ ...m, askingSalary: asking, interest, negotiationRound: 0 })
+  }
+  out.sort((a, b) => b.interest - a.interest || b.rating - a.rating)
+  return out
+}
+
+export interface HireResult {
+  signed: boolean
+  candidate: HireCandidate
+  message: string
+}
+
+/**
+ * Attempt to hire. Salary affects the odds; lowball an elite coach and he walks.
+ */
+export function attemptHire(
+  world: World,
+  teamId: string,
+  rep: Reputation,
+  candidate: HireCandidate,
+  salaryOffer: number,
+  rng: Rng,
+): HireResult {
+  const interest = computeInterest(world, teamId, rep, candidate, salaryOffer)
+  // Convert interest to a hire probability.
+  const prob = clamp(interest / 100 - (candidate.rating - 75) * 0.004, 0.05, 0.95)
+  const roll = rng()
+  if (roll < prob) {
+    return { signed: true, candidate: { ...candidate, interest }, message: `${candidate.name} signed as ${candidate.role}.` }
+  }
+  const reason =
+    interest < 35
+      ? `${candidate.name} isn't interested in joining a program at your level.`
+      : interest < 60
+        ? `${candidate.name} was intrigued but took another job.`
+        : `${candidate.name} nearly signed but the money wasn't right.`
+  return { signed: false, candidate: { ...candidate, interest }, message: reason }
+}
+
+/** Apply a successful hire: add to staff, remove from pool. Optionally set the scheme. */
+export function applyHire(world: World, teamId: string, candidate: HireCandidate, salary: number, scheme?: string) {
+  const member: StaffMember = {
+    ...candidate,
+    teamId,
+    status: 'Hired',
+    annual: salary,
+    contractYears: 3,
+    scheme: scheme ?? candidate.scheme,
+  }
+  delete (member as unknown as Record<string, unknown>).interest
+  delete (member as unknown as Record<string, unknown>).askingSalary
+  delete (member as unknown as Record<string, unknown>).negotiationRound
+  // Replace an existing coach in the same role, if any.
+  const staff = world.staff[teamId] ?? (world.staff[teamId] = [])
+  const idx = staff.findIndex((m) => m.role === member.role)
+  if (idx >= 0) staff[idx] = member
+  else staff.push(member)
+  world.staffPool = world.staffPool.filter((m) => m.id !== candidate.id)
+  return member
+}

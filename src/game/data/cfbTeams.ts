@@ -1,0 +1,186 @@
+import type { Team } from '../types'
+
+// Real college programs and conference alignment (2026-era). Colors are approximations of
+// each program's primary brand color. Recruiting/rosters are generated in Phase 2.
+
+type Raw = [name: string, conf: string, primary: string, prestige: number]
+
+const RAW: Raw[] = [
+  // ── SEC ────────────────────────────────────────────────────────────────
+  ['Alabama', 'SEC', '#9E1B32', 96],
+  ['Georgia', 'SEC', '#BA0C2F', 95],
+  ['Texas', 'SEC', '#BF5700', 92],
+  ['Oklahoma', 'SEC', '#841617', 88],
+  ['LSU', 'SEC', '#461D7C', 88],
+  ['Florida', 'SEC', '#0021A5', 85],
+  ['Tennessee', 'SEC', '#FF8200', 84],
+  ['Auburn', 'SEC', '#0C2340', 83],
+  ['Texas A&M', 'SEC', '#500000', 84],
+  ['Ole Miss', 'SEC', '#CE1126', 80],
+  ['Missouri', 'SEC', '#F1B82D', 76],
+  ['Arkansas', 'SEC', '#9D2235', 75],
+  ['Kentucky', 'SEC', '#0033A0', 74],
+  ['South Carolina', 'SEC', '#73000A', 76],
+  ['Mississippi State', 'SEC', '#5D1725', 72],
+  ['Vanderbilt', 'SEC', '#866D4B', 64],
+  // ── Big Ten ────────────────────────────────────────────────────────────
+  ['Ohio State', 'Big Ten', '#BB0000', 95],
+  ['Michigan', 'Big Ten', '#00274C', 92],
+  ['Penn State', 'Big Ten', '#041E42', 87],
+  ['Oregon', 'Big Ten', '#154733', 89],
+  ['USC', 'Big Ten', '#990000', 87],
+  ['UCLA', 'Big Ten', '#2D68C4', 80],
+  ['Washington', 'Big Ten', '#4B2E83', 80],
+  ['Wisconsin', 'Big Ten', '#C5050C', 80],
+  ['Iowa', 'Big Ten', '#FFCD00', 79],
+  ['Nebraska', 'Big Ten', '#E41C38', 78],
+  ['Michigan State', 'Big Ten', '#18453B', 76],
+  ['Minnesota', 'Big Ten', '#7A0019', 74],
+  ['Illinois', 'Big Ten', '#E84A27', 72],
+  ['Northwestern', 'Big Ten', '#4E2A84', 68],
+  ['Purdue', 'Big Ten', '#CEB888', 70],
+  ['Indiana', 'Big Ten', '#990000', 72],
+  ['Maryland', 'Big Ten', '#E03A3E', 70],
+  ['Rutgers', 'Big Ten', '#CC0033', 63],
+  // ── Big 12 ─────────────────────────────────────────────────────────────
+  ['Utah', 'Big 12', '#CC0000', 82],
+  ['Colorado', 'Big 12', '#CFB87C', 74],
+  ['Arizona', 'Big 12', '#AB0520', 72],
+  ['Arizona State', 'Big 12', '#8C1D40', 72],
+  ['BYU', 'Big 12', '#002E5D', 78],
+  ['TCU', 'Big 12', '#4D1979', 78],
+  ['Baylor', 'Big 12', '#154734', 76],
+  ['Texas Tech', 'Big 12', '#CC0000', 74],
+  ['Oklahoma State', 'Big 12', '#FF7300', 78],
+  ['Kansas State', 'Big 12', '#512888', 76],
+  ['Kansas', 'Big 12', '#0051BA', 70],
+  ['Iowa State', 'Big 12', '#C8102E', 74],
+  ['West Virginia', 'Big 12', '#002855', 72],
+  ['Cincinnati', 'Big 12', '#E00122', 72],
+  ['Houston', 'Big 12', '#C8102E', 70],
+  ['UCF', 'Big 12', '#BA9B37', 70],
+  // ── ACC ────────────────────────────────────────────────────────────────
+  ['Clemson', 'ACC', '#F56600', 88],
+  ['Florida State', 'ACC', '#782F40', 86],
+  ['Miami', 'ACC', '#F47321', 82],
+  ['SMU', 'ACC', '#0033A0', 74],
+  ['Louisville', 'ACC', '#AD0000', 74],
+  ['Virginia Tech', 'ACC', '#630031', 76],
+  ['North Carolina', 'ACC', '#4B9CD3', 76],
+  ['NC State', 'ACC', '#CC0000', 74],
+  ['Pittsburgh', 'ACC', '#003594', 74],
+  ['Georgia Tech', 'ACC', '#B3A369', 72],
+  ['Duke', 'ACC', '#003087', 70],
+  ['Syracuse', 'ACC', '#F76900', 70],
+  ['California', 'ACC', '#003262', 70],
+  ['Stanford', 'ACC', '#8C1515', 70],
+  ['Virginia', 'ACC', '#232D4B', 68],
+  ['Boston College', 'ACC', '#98002E', 70],
+  ['Wake Forest', 'ACC', '#9E7E38', 66],
+  // ── Pac-12 (2026 rebuild) ──────────────────────────────────────────────
+  ['Boise State', 'Pac-12', '#0033A0', 80],
+  ['Washington State', 'Pac-12', '#981E32', 72],
+  ['Oregon State', 'Pac-12', '#DC4405', 72],
+  ['Fresno State', 'Pac-12', '#DB0032', 70],
+  ['San Diego State', 'Pac-12', '#A6192E', 70],
+  ['Colorado State', 'Pac-12', '#1E4D2B', 66],
+  ['Utah State', 'Pac-12', '#0F243E', 66],
+  ['Texas State', 'Pac-12', '#501214', 62],
+  // ── Group of Five / Independents ───────────────────────────────────────
+  ['Notre Dame', 'Independent', '#0C2340', 92],
+  ['Memphis', 'AAC', '#003087', 70],
+  ['Tulane', 'AAC', '#006747', 68],
+  ['USF', 'AAC', '#006747', 64],
+  ['UTSA', 'AAC', '#F15A22', 64],
+  ['Navy', 'AAC', '#00205B', 68],
+  ['Toledo', 'MAC', '#004E8C', 66],
+  ['Miami (OH)', 'MAC', '#C41230', 62],
+  ['Western Michigan', 'MAC', '#6C4023', 62],
+  ['Ohio', 'MAC', '#00694E', 62],
+  ['Bowling Green', 'MAC', '#FE5000', 60],
+  ['UNLV', 'Mountain West', '#CF0A2C', 64],
+  ['Air Force', 'Mountain West', '#003087', 68],
+  ['Nevada', 'Mountain West', '#003366', 62],
+  ['San Jose State', 'Mountain West', '#0055A2', 60],
+  ['Wyoming', 'Mountain West', '#492F24', 60],
+  ['Hawaii', 'Mountain West', '#024731', 58],
+  ['App State', 'Sun Belt', '#222222', 70],
+  ['James Madison', 'Sun Belt', '#450084', 68],
+  ['Coastal Carolina', 'Sun Belt', '#006F71', 62],
+  ['Troy', 'Sun Belt', '#8A2432', 62],
+  ['Marshall', 'Sun Belt', '#00B140', 62],
+  ['Southern Miss', 'Sun Belt', '#FFAB00', 60],
+  ['Liberty', 'Conference USA', '#002D62', 64],
+  ['Western Kentucky', 'Conference USA', '#C60C30', 62],
+  ['UTEP', 'Conference USA', '#FF8200', 58],
+  ['New Mexico State', 'Conference USA', '#8C0B42', 56],
+  // ── Additional FBS programs (exact CFB 26 data) ────────────────────────────
+  // MAC
+  ['Akron', 'MAC', '#041E42', 56],
+  ['Ball State', 'MAC', '#BA0C2F', 58],
+  ['Buffalo', 'MAC', '#005BBB', 62],
+  ['Central Michigan', 'MAC', '#6A0032', 60],
+  ['Eastern Michigan', 'MAC', '#006633', 56],
+  ['Kent State', 'MAC', '#002664', 56],
+  ['Northern Illinois', 'MAC', '#BA0C2F', 62],
+  ['UMass', 'MAC', '#881C1C', 54],
+  // AAC
+  ['Army', 'AAC', '#D4BF91', 66],
+  ['Charlotte', 'AAC', '#046A38', 56],
+  ['East Carolina', 'AAC', '#592A8A', 62],
+  ['Florida Atlantic', 'AAC', '#003366', 60],
+  ['Rice', 'AAC', '#00205B', 60],
+  ['Temple', 'AAC', '#9D2235', 60],
+  ['Tulsa', 'AAC', '#002D72', 60],
+  ['UAB', 'AAC', '#1E6B52', 60],
+  ['North Texas', 'AAC', '#00853E', 62],
+  // Sun Belt
+  ['Arkansas State', 'Sun Belt', '#CC092F', 60],
+  ['Georgia Southern', 'Sun Belt', '#041E42', 62],
+  ['Georgia State', 'Sun Belt', '#0039A6', 58],
+  ['Louisiana', 'Sun Belt', '#CE181E', 68],
+  ['UL–Monroe', 'Sun Belt', '#840029', 58],
+  ['South Alabama', 'Sun Belt', '#00205B', 60],
+  ['Old Dominion', 'Sun Belt', '#003057', 58],
+  // Conference USA
+  ['Jacksonville State', 'Conference USA', '#CC0000', 60],
+  ['Kennesaw State', 'Conference USA', '#FDBB30', 54],
+  ['Louisiana Tech', 'Conference USA', '#002EB8', 60],
+  ['Middle Tennessee', 'Conference USA', '#0066CC', 58],
+  ['Missouri State', 'Conference USA', '#5E0009', 58],
+  ['Sam Houston', 'Conference USA', '#F56600', 58],
+  ['FIU', 'Conference USA', '#081E3F', 56],
+  // Mountain West / Independent
+  ['New Mexico', 'Mountain West', '#BA0C2F', 58],
+  ['UConn', 'Independent', '#000E2F', 58],
+  // ── 2026 FBS newcomers (exact data via CFB 27/26) ──────────────────────────
+  ['North Dakota State', 'Mountain West', '#006633', 74],
+  ['Delaware', 'Conference USA', '#00539F', 62],
+  ['Sacramento State', 'MAC', '#043927', 56],
+]
+
+export const CFB_TEAMS: Team[] = RAW.map(([name, conference, primary, prestige]) => {
+  const tier = ['MVFC', 'Big Sky', 'CAA', 'SWAC', 'Patriot'].includes(conference)
+    ? ('FCS' as const)
+    : ('FBS' as const)
+  return {
+    id: name,
+    abbr: name,
+    city: '',
+    name,
+    tier,
+    conference,
+    primary,
+    secondary: '#0a1626',
+    stadium: `${name} Stadium`,
+    prestige,
+  }
+})
+
+export const CFB_CONFERENCES: Record<string, string[]> = CFB_TEAMS.reduce(
+  (acc, t) => {
+    ;(acc[t.conference] ??= []).push(t.id)
+    return acc
+  },
+  {} as Record<string, string[]>,
+)

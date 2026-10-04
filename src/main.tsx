@@ -1,0 +1,27 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.tsx'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, useGame } from './store/gameStore'
+import { simulatePlayByPlay } from './game/engine/playsim'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+if (import.meta.env.DEV) {
+  ;(window as unknown as Record<string, unknown>).__simTest = simTest
+  ;(window as unknown as Record<string, unknown>).__staffProbe = staffProbe
+  ;(window as unknown as Record<string, unknown>).__hiringProbe = hiringProbe
+  ;(window as unknown as Record<string, unknown>).__cohesionProbe = cohesionProbe
+  ;(window as unknown as Record<string, unknown>).__draftProbe = draftProbe
+  ;(window as unknown as Record<string, unknown>).__draftFlowProbe = draftFlowProbe
+  ;(window as unknown as Record<string, unknown>).__seasonProbe = seasonProbe
+  ;(window as unknown as Record<string, unknown>).__tradeProbe = tradeProbe
+  ;(window as unknown as Record<string, unknown>).__game = useGame
+  ;(window as unknown as Record<string, unknown>).__world = getWorld
+  ;(window as unknown as Record<string, unknown>).__simOne = (homeId = 'BUF', awayId = 'MIA') =>
+    simulatePlayByPlay(getWorld(), homeId, awayId, 12345)
+}
