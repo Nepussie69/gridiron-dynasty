@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Star } from 'lucide-react'
 import { cn } from '../lib/cn'
+import { useEffect } from 'react'
+import { ensureProspectPools } from '../game/engine/progress'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 
@@ -22,6 +24,7 @@ function commitOdds(id: string, prestige: number) {
 
 export function Recruiting() {
   const league = useWorld()
+  useEffect(() => { ensureProspectPools(league) }, [league])
   const activeTeamId = useGame((s) => s.activeTeamId)
   const showToast = useGame((s) => s.showToast)
   const team = league.byId[activeTeamId]
@@ -29,12 +32,12 @@ export function Recruiting() {
   const [pos, setPos] = useState('ALL')
   const [committed, setCommitted] = useState<string[]>([])
 
-  const recruits = league.draft
+  const recruits = league.recruits
     .filter((p) => pos === 'ALL' || p.pos === pos)
     .sort((a, b) => b.grade - a.grade)
 
   const nilBudget = 3.5 // $M
-  const used = committed.reduce((s, id) => s + (league.draft.find((d) => d.id === id)?.grade ?? 0) / 100, 0)
+  const used = committed.reduce((s, id) => s + (league.recruits.find((d) => d.id === id)?.grade ?? 0) / 100, 0)
 
   return (
     <div>
@@ -48,7 +51,7 @@ export function Recruiting() {
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card><Stat label="Commits" value={committed.length} sub="this class" /></Card>
         <Card><Stat label="NIL Budget" value={`$${nilBudget.toFixed(1)}M`} sub={`$${used.toFixed(2)}M pledged`} /></Card>
-        <Card><Stat label="5-Star Targets" value={league.draft.filter((p) => starsFor(p.grade) === 5).length} sub="nation's elite" /></Card>
+        <Card><Stat label="5-Star Targets" value={league.recruits.filter((p) => starsFor(p.grade) === 5).length} sub="nation's elite" /></Card>
         <Card><Stat label="Class Rank" value="#14" sub="national" /></Card>
       </div>
 
@@ -103,8 +106,8 @@ export function Recruiting() {
               </div>
 
               <div className="mt-3 flex items-center justify-between text-xs text-muted">
-                <span>{r.college}</span>
-                <span>Grade {r.grade} · Ceiling {r.pot}</span>
+                <span>High School · Age {r.age}</span>
+                <span>Ceiling {r.pot}</span>
               </div>
 
               <div className="mt-3">

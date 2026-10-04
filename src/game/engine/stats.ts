@@ -137,15 +137,24 @@ function world_scheme(teamId: string, level: StatLevel): string {
   return SCHEME_LOOKUP ? SCHEME_LOOKUP(teamId, level) : ''
 }
 
-/** Fold a game's box score into every participating player's career stats. */
-export function recordGameStats(world: World, sim: GameSim, season: number, level: StatLevel) {
-  const lines = boxScore(world, sim)
-  for (const b of lines) {
+/** Fold a precomputed box score into every participating player's career stats. */
+export function recordBoxLines(
+  world: World,
+  box: PlayerBoxScore[],
+  season: number,
+  level: StatLevel,
+) {
+  for (const b of box) {
     const p = world.players.find((x) => x.id === b.playerId)
     if (!p) continue
     const entry = currentSeason(p, season, level, b.teamId)
     mergeInto(entry, b.line)
   }
+}
+
+/** Fold a game's box score into every participating player's career stats. */
+export function recordGameStats(world: World, sim: GameSim, season: number, level: StatLevel) {
+  recordBoxLines(world, boxScore(world, sim), season, level)
 }
 
 /** Career totals across college + pro. */

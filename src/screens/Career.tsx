@@ -4,14 +4,39 @@ import { money } from '../lib/format'
 import {
   isGM,
   ladderFor,
+  masteryCarryOver,
   overallRep,
   progressToNext,
+  roleMastery as getRoleMastery,
   roleObjectives,
   salaryFor,
   tierFor,
   unitRanks,
   type Reputation,
 } from '../game/engine/career'
+import { ALL_CAPABILITIES, capabilities } from '../game/engine/capabilities'
+
+const CAP_LABELS: Record<string, string> = {
+  grade: 'Grade prospects',
+  rankBoard: 'Rank the board',
+  crossCheck: 'Cross-check reports',
+  assignScouts: 'Assign scouts',
+  setBoard: 'Set the final board',
+  proScout: 'Pro scouting',
+  negotiate: 'Negotiate contracts',
+  manageCap: 'Manage the cap',
+  draft: 'Make draft picks',
+  signFreeAgents: 'Sign free agents',
+  recruit: 'Recruit',
+  portal: 'Transfer portal',
+  nilBudget: 'NIL budget',
+  developRoom: 'Develop a room',
+  callPlays: 'Call plays',
+  installScheme: 'Install scheme',
+  hireStaff: 'Hire staff',
+  gameManagement: 'Game management',
+  setExpectations: 'Own expectations',
+}
 import { recordOf, recordStr } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, TeamCrest } from '../ui/kit'
@@ -40,6 +65,8 @@ export function Career() {
   const overall = overallRep(career.reputation)
   const hitRate = career.hits + career.misses ? Math.round((career.hits / (career.hits + career.misses)) * 100) : 0
   const prog = progressToNext(career.reputation, career.path, career.level)
+  const caps = capabilities(career)
+  const thisMastery = getRoleMastery(career)
   const objectives = roleObjectives(
     league,
     career,
@@ -168,6 +195,58 @@ export function Career() {
 
         {/* Right rail */}
         <div className="space-y-5">
+          {/* Your role: what this job can actually do */}
+          <Card>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-display text-lg font-700 uppercase tracking-wide">Your Role</h3>
+              <Badge tone="team">{current.title}</Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+              {ALL_CAPABILITIES.map((cap) => {
+                const has = caps.can.has(cap)
+                return (
+                  <div key={cap} className={cn('flex items-center gap-1.5 text-xs', has ? 'text-ink' : 'text-faint')}>
+                    {has ? <CheckCircle2 size={13} className="shrink-0 text-win" /> : <Circle size={13} className="shrink-0" />}
+                    <span className="capitalize">{CAP_LABELS[cap] ?? cap}</span>
+                  </div>
+                )
+              })}
+            </div>
+            {caps.prospectScope !== undefined && (
+              <p className="mt-3 rounded-lg bg-surface-2 p-2.5 text-[11px] text-muted">
+                Scope: you track <strong className="text-ink">{caps.prospectScope} prospects</strong> — climbing widens your view.
+              </p>
+            )}
+            {caps.planScope !== 'none' && (
+              <p className="mt-2 rounded-lg bg-surface-2 p-2.5 text-[11px] text-muted">
+                Game plan control: <strong className="text-ink">{caps.planScope === 'both' ? 'both sides' : 'your side of the ball'}</strong>.
+              </p>
+            )}
+          </Card>
+
+          {/* How well you're doing THIS job — feeds the next one */}
+          <Card>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-display text-lg font-700 uppercase tracking-wide">Role Mastery</h3>
+              <span className="font-display text-xl font-700 tnum text-ink">{thisMastery}</span>
+            </div>
+            <RatingBar value={thisMastery} color={thisMastery >= 70 ? '#05914f' : thisMastery >= 45 ? 'var(--team)' : '#d98207'} height={8} />
+            <p className="mt-2 text-[11px] text-muted">
+              {thisMastery >= 75
+                ? 'Thriving in this role. Excellence here gives you a head start at the next level.'
+                : thisMastery >= 50
+                  ? 'Solid. Meet your objectives to build a stronger résumé for the next job.'
+                  : 'Struggling in this role. Your next step will be harder.'}
+            </p>
+            {next && (
+              <div className="mt-3 rounded-lg bg-surface-2 p-2.5 text-[11px] text-muted">
+                Prior-role carry-over: <strong className="text-ink">
+                  +{Math.max(0, Math.round((masteryCarryOver(career).profile ?? 0)))} profile
+                </strong> toward becoming {next.title}.
+              </div>
+            )}
+          </Card>
+
           {/* Next step */}
           <Card>
             <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Next Step</h3>

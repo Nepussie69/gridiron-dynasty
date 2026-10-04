@@ -6,7 +6,7 @@ import {
   zeroRecord,
   type World,
 } from '../game/engine/generate'
-import { finalizeGame, simWeek, simulateCollegePlayoff, simulatePlayoffs } from '../game/engine/sim'
+import { finalizeGame, healAfterWeek, simWeek, simulateCollegePlayoff, simulatePlayoffs } from '../game/engine/sim'
 import { simulatePlayByPlay, setUserCoaching, setLivePlan, type GameSim } from '../game/engine/playsim'
 import { BALANCED_PLAN, type GamePlan } from '../game/engine/gameplan'
 import { userBonusFromSkills } from '../game/engine/coaching'
@@ -37,7 +37,8 @@ import {
   type AwardHistory,
   type SeasonHonors,
 } from '../game/engine/awards'
-import { recordGameStats, boxScore } from '../game/engine/stats'
+import { recordGameStats, boxScore, recordBoxLines } from '../game/engine/stats'
+import { simLeagueGames } from '../game/engine/leagueSim'
 import {
   developPlayers,
   evaluateScouting,
@@ -60,6 +61,7 @@ import {
   salaryFor,
   tierFor,
   unitRanks,
+  updateRoleMastery,
   ZERO_REP,
   ZERO_SKILLS,
   type Objective,
@@ -72,6 +74,7 @@ import {
   currentTeamId,
   initDraft,
   buildDraftOrder,
+  DRAFT_ROUNDS,
   makePick,
   overallPick,
   runUDFAs,
@@ -92,9 +95,10 @@ import {
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem } from '../game/types'
-import { loadGame, saveGame, clearSave } from '../game/persistence'
+import { loadGame, loadBackup, saveGame, clearSave } from '../game/persistence'
 import { loadRealData, getRealData } from '../game/data/realData'
 import { loadCalibration } from '../game/data/calibration'
+import { runBalance } from '../game/engine/balance'
 
 export type ScreenId =
   | 'career' | 'dashboard' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
@@ -231,6 +235,25 @@ export interface SeasonSummary {
   objectivesDone?: number
 }
 
+/** The persisted payload. Kept independent of store internals for migration. */
+export interface SaveData {
+  world: World
+  career: CareerState | null
+  activeTeamId: string
+  screen: ScreenId
+  readNews: Record<string, boolean>
+}
+
+/** A human-readable summary of an available save for the "Continue" card. */
+export interface SaveInfo {
+  savedAt: number
+  season: number
+  teamName: string
+  title: string
+  tier: LeagueTier
+  usedBackup: boolean
+}
+
 interface GameStore {
   tick: number
   ready: boolean
@@ -245,6 +268,11 @@ interface GameStore {
   offers: JobOffer[]
   modal: 'none' | 'seasonReview' | 'offers'
   summary: SeasonSummary | null
+  /** A validated save waiting to be resumed from the career hub. */
+  pendingSave: SaveData | null
+  saveInfo: SaveInfo | null
+  /** Set when the last load recovered from a problem (shown on the hub). */
+  saveError: string | null
   match: GameSim | null
   statsDb: () => CareerDatabase
   liveGame: LiveGame | null
@@ -255,6 +283,9 @@ interface GameStore {
   /** Saved pre-game plan, applied every week. */
   defaultPlan: { off: GamePlan; def: GamePlan }
   setDefaultPlan: (side: 'off' | 'def', plan: GamePlan) => void
+  /** Opt-in: run the whole league's games through true play-by-play (Web Worker). */
+  leaguePbp: boolean
+  setLeaguePbp: (v: boolean) => void
   setScreen: (s: ScreenId) => void
   setActiveTeam: (id: string) => void
   selectPlayer: (id: string | null) => void
@@ -264,6 +295,10 @@ interface GameStore {
   advanceWeek: () => void
   startNextSeason: () => void
   dismissModal: () => void
+  /** Resume the validated save held by the career hub. */
+  continueCareer: () => void
+  /** Abandon the available save (used by "start fresh" on the hub). */
+  discardSave: () => void
   openMatch: (gameId: string) => void
   closeMatch: () => void
 
@@ -320,9 +355,13 @@ export const useGame = create<GameStore>((set, get) => ({
   offers: [],
   modal: 'none',
   summary: null,
+  pendingSave: null,
+  saveInfo: null,
+  saveError: null,
   match: null,
   liveGame: null,
   defaultPlan: { off: { ...BALANCED_PLAN }, def: { ...BALANCED_PLAN } },
+  leaguePbp: false,
 
   statsDb: () => statDb,
   setScreen: (screen) => set({ screen }),
@@ -376,6 +415,9 @@ export const useGame = create<GameStore>((set, get) => ({
       offers: [],
       modal: 'none',
       summary: null,
+      pendingSave: null,
+      saveInfo: null,
+      saveError: null,
       match: null,
       tick: get().tick + 1,
     })
@@ -386,10 +428,10 @@ export const useGame = create<GameStore>((set, get) => ({
     world = buildWorld(20261004, getRealData())
     initAllPlaybooks()
     void clearSave()
-    set({ career: null, screen: 'career', tick: get().tick + 1, summary: null, modal: 'none', offers: [], match: null })
+    set({ career: null, screen: 'career', tick: get().tick + 1, summary: null, modal: 'none', offers: [], match: null, pendingSave: null, saveInfo: null, saveError: null })
   },
 
-  advanceWeek: () => {
+  advanceWeek: async () => {
     const career = get().career
     if (!career) return
     if (world.phase === 'offseason') {
@@ -411,7 +453,14 @@ export const useGame = create<GameStore>((set, get) => ({
     const userGame = world.schedule.find(
       (g) => g.week === week && !g.played && (g.homeId === career.teamId || g.awayId === career.teamId),
     )
-    simWeek(world, week, userGame?.id)
+    // Authentic mode runs the whole league through play-by-play in a worker,
+    // falling back to the fast allocator if the worker is unavailable.
+    if (get().leaguePbp) {
+      const ok = await simulateLeagueWeek(world, week, userGame?.id)
+      if (!ok) simWeek(world, week, userGame?.id)
+    } else {
+      simWeek(world, week, userGame?.id)
+    }
     let sim: GameSim | null = null
     if (userGame) {
       sim = simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101)
@@ -499,6 +548,11 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  setLeaguePbp: (v) => {
+    set({ leaguePbp: v, tick: get().tick + 1 })
+    get().showToast(v ? 'Authentic league sim ON — every game runs play-by-play.' : 'Fast league sim restored.')
+  },
+
   startNextSeason: () => {
     const career = get().career
     if (!career) return
@@ -536,6 +590,29 @@ export const useGame = create<GameStore>((set, get) => ({
     const { modal, offers } = get()
     if (modal === 'seasonReview' && offers.length) set({ modal: 'offers' })
     else set({ modal: 'none' })
+  },
+
+  continueCareer: () => {
+    const p = get().pendingSave
+    if (!p || !p.career) return
+    world = migrateWorld(p.world)
+    const career = migrateCareer(p.career)
+    set({
+      career,
+      activeTeamId: p.activeTeamId ?? career.teamId,
+      screen: p.screen ?? 'career',
+      readNews: p.readNews ?? {},
+      pendingSave: null,
+      saveInfo: null,
+      saveError: null,
+      tick: get().tick + 1,
+    })
+    get().showToast('Career resumed.')
+  },
+
+  discardSave: () => {
+    void clearSave()
+    set({ pendingSave: null, saveInfo: null, saveError: null, tick: get().tick + 1 })
   },
 
   scoutProspect: (id) => {
@@ -848,24 +925,38 @@ export const useGame = create<GameStore>((set, get) => ({
   hydrate: async () => {
     // Pull the exact-ratings datasets (Madden 26 / CFB 26) so new worlds use them.
     await Promise.all([loadRealData(), loadCalibration()])
-    const saved = await loadGame<{
-      world: World; career: CareerState | null; activeTeamId: string
-      screen: ScreenId; readNews: Record<string, boolean>
-    }>()
-    if (saved?.world && saved.career) {
-      world = migrateWorld(saved.world)
-      // Migrate saves created before the multi-dimensional reputation system.
-      const career = migrateCareer(saved.career)
+    const primary = await loadGame<SaveData>()
+    let payload: SaveData | null = null
+    let savedAt = primary?.savedAt ?? 0
+    let usedBackup = false
+    let saveError: string | null = null
+
+    if (primary && isSaveValid(primary.data)) {
+      payload = primary.data
+    } else {
+      if (primary) saveError = 'Your most recent save looked corrupted. Restoring the backup…'
+      const backup = await loadBackup<SaveData>()
+      if (backup && isSaveValid(backup.data)) {
+        payload = backup.data
+        savedAt = backup.savedAt
+        usedBackup = true
+        saveError = 'Recovered from backup — the last save was damaged.'
+      } else if (primary) {
+        saveError = 'No usable save was found. The damaged save was cleared.'
+        await clearSave()
+      }
+    }
+
+    if (payload && payload.career) {
       set({
-        career,
-        activeTeamId: saved.activeTeamId ?? career.teamId,
-        screen: saved.screen ?? 'career',
-        readNews: saved.readNews ?? {},
+        pendingSave: payload,
+        saveInfo: describeSave(payload, savedAt, usedBackup),
+        saveError,
         ready: true,
         tick: get().tick + 1,
       })
     } else {
-      set({ ready: true })
+      set({ ready: true, saveError, tick: get().tick + 1 })
     }
   },
 }))
@@ -916,6 +1007,35 @@ function startLiveSim(
   set({ liveGame: { gameId: game.id, off, def }, match: sim, tick: get().tick + 1 })
 }
 
+/**
+ * Authentic league week: simulate every non-user game play-by-play in a worker
+ * and apply the results with real box scores. Returns false on worker failure so
+ * the caller can fall back to the fast allocator.
+ */
+async function simulateLeagueWeek(world: World, week: number, exceptGameId?: string): Promise<boolean> {
+  const games = world.schedule.filter((g) => g.week === week && !g.played && g.id !== exceptGameId)
+  if (!games.length) return true
+  const reqs = games.map((g, i) => ({
+    id: g.id,
+    homeId: g.homeId,
+    awayId: g.awayId,
+    seed: world.seed + week * 7919 + 101 + i * 131,
+  }))
+  const results = await simLeagueGames(world, reqs)
+  if (!results) return false
+  const byId = new Map(results.map((r) => [r.id, r]))
+  for (const g of games) {
+    const r = byId.get(g.id)
+    if (!r) continue
+    finalizeGame(world, g, r.homeScore, r.awayScore)
+    const level = world.byId[g.homeId]?.tier === 'NFL' ? 'NFL' : 'CFB'
+    recordBoxLines(world, r.box, world.season, level)
+    g.statsDone = true
+  }
+  healAfterWeek(world, week)
+  return true
+}
+
 /** Add a career milestone to the inbox. */
 function pushCareerNews(world: World, career: CareerState, item: { category: NewsItem['category']; headline: string; body: string }) {
   world.news.unshift({
@@ -939,7 +1059,51 @@ function migrateWorld(w: World): World {
   w.ir ??= {}
   w.compLedger ??= {}
   if (!w.draftPicks.length) w.draftPicks = freshDraftPicks(w.season + 1)
+  // Older saves stored a 32-team draft order; rebuild the ownership-aware one
+  // (preserving the current pick index) unless the draft is already finished.
+  if ((w.draftOrder?.length ?? 0) < DRAFT_ROUNDS * 32 && !w.draftState?.complete) {
+    const built = buildDraftOrder(w)
+    w.draftOrder = built.order
+    w.draftRounds = built.rounds
+  }
   return w
+}
+
+/** Validate a loaded payload before trusting it. Never throws. */
+function isSaveValid(p: SaveData | null | undefined): p is SaveData {
+  try {
+    if (!p || typeof p !== 'object') return false
+    const w = p.world as World | undefined
+    if (!w || typeof w !== 'object') return false
+    if (typeof w.seed !== 'number') return false
+    if (!w.byId || typeof w.byId !== 'object') return false
+    if (!w.roster || typeof w.roster !== 'object') return false
+    if (!Array.isArray(w.teams) || !Array.isArray(w.players) || !Array.isArray(w.schedule)) return false
+    if (!Array.isArray(w.news)) return false
+    const anyTeam = Object.keys(w.roster)[0]
+    if (anyTeam && !Array.isArray(w.roster[anyTeam])) return false
+    const c = p.career
+    if (!c || typeof c !== 'object') return false
+    if (typeof c.teamId !== 'string' || !c.reputation) return false
+    if (!Array.isArray(c.history)) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Build the "Continue" card metadata from a validated payload. */
+function describeSave(p: SaveData, savedAt: number, usedBackup: boolean): SaveInfo {
+  const c = p.career!
+  const team = p.world.byId?.[c.teamId]
+  return {
+    savedAt,
+    season: c.season,
+    teamName: team ? (team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name) : c.teamId,
+    title: tierFor(c.path, c.level).title,
+    tier: c.tier,
+    usedBackup,
+  }
 }
 
 /** Bring a legacy save (numeric reputation, single ladder) up to the current shape. */
@@ -1044,6 +1208,12 @@ function runEndOfRegularSeason(
     objs = roleObjectives(world, seasonCareer, { wins: rec?.wins ?? 0, losses: rec?.losses ?? 0 }, unitRanks(world, career.tier === 'NFL' ? 'NFL' : 'FBS')[career.teamId])
     graded = gradeObjectives(objs)
 
+    // Track how well you did your actual job — this carries into the next rung.
+    const recWins = rec?.wins ?? 0
+    const recLosses = rec?.losses ?? 0
+    const winPct = recWins / Math.max(1, recWins + recLosses)
+    const roleMasteryMap = updateRoleMastery(career, graded.doneCount, objs.length, winPct)
+
     // Fold the season into the multi-dimensional reputation.
     const rep: Reputation = { ...career.reputation }
     rep.evaluation = clamp(rep.evaluation + scout.repDelta, 0, 100)
@@ -1063,7 +1233,7 @@ function runEndOfRegularSeason(
     }
     // Skills grow with performance.
     const skills: Skills = { ...career.skills }
-    skills.evaluation = clamp(skills.evaluation + (scout.accuracy >= 60 ? 3 : scout.graded > 0 ? 1 : 0), 0, 99)
+    skills.evaluation = clamp(skills.evaluation + (scout.accuracy >= 60 ? 4 : scout.graded > 0 ? 2 : 0), 0, 99)
     for (const [k, v] of Object.entries(review.skillDelta)) {
       ;(skills as unknown as Record<string, number>)[k] = clamp(
         ((skills as unknown as Record<string, number>)[k] ?? 0) + (v as number),
@@ -1090,6 +1260,7 @@ function runEndOfRegularSeason(
       misses: career.misses + scout.misses,
       seasonHits: scout.hits,
       jobSecurity: nextSecurity,
+      roleMastery: roleMasteryMap,
       history: [
         ...career.history,
         {
@@ -1222,6 +1393,32 @@ export function staffProbe(games = 60) {
     n++
   }
   return { games: n, eliteStaffPoints: +(goodTotal / n).toFixed(1), poorStaffPoints: +(badTotal / n).toFixed(1) }
+}
+
+/** Dev-only balance probe: run whole seasons headlessly and report the long arc. */
+export function balanceProbe(seasons = 10, path: 'coach' | 'personnel' = 'personnel') {
+  return runBalance({ seasons, path, seed: world.seed, data: getRealData() })
+}
+
+/** Dev-only probe: run the league play-by-play worker on the current week (no mutation). */
+export async function leaguePbpProbe(count = 8) {
+  const week = world.week
+  const games = world.schedule.filter((g) => g.week === week && !g.played).slice(0, count)
+  const reqs = games.map((g, i) => ({
+    id: g.id,
+    homeId: g.homeId,
+    awayId: g.awayId,
+    seed: world.seed + week * 7919 + 101 + i * 131,
+  }))
+  const t0 = Date.now()
+  const results = await simLeagueGames(world, reqs)
+  return {
+    ms: Date.now() - t0,
+    requested: reqs.length,
+    got: results?.length ?? 0,
+    fallback: results === null,
+    sample: (results ?? []).slice(0, 3).map((r) => ({ id: r.id, home: r.homeScore, away: r.awayScore, lines: r.box.length })),
+  }
 }
 
 /** Dev-only probe: does cohesion change penalties and scoring? */

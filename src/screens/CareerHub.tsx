@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, GraduationCap, Search, Shield, TrendingUp } from 'lucide-react'
+import { ArrowRight, GraduationCap, Play, Search, Shield, TriangleAlert, TrendingUp } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { CFB_TEAMS } from '../game/data/cfbTeams'
 import { NFL_TEAMS } from '../game/data/nflTeams'
@@ -32,6 +32,10 @@ function poolFor(path: CareerPath, level: number) {
 
 export function CareerHub() {
   const startCareer = useGame((s) => s.startCareer)
+  const continueCareer = useGame((s) => s.continueCareer)
+  const discardSave = useGame((s) => s.discardSave)
+  const saveInfo = useGame((s) => s.saveInfo)
+  const saveError = useGame((s) => s.saveError)
   const [name, setName] = useState('A. Reeves')
   const [path, setPath] = useState<CareerPath>('personnel')
   const [archetype, setArchetype] = useState('scout')
@@ -122,8 +126,52 @@ export function CareerHub() {
         </div>
 
         {/* Setup card */}
-        <div className="rounded-2xl border border-line bg-surface p-5 shadow-[0_8px_30px_rgba(10,22,38,0.08)]">
-          <div className="label mb-1">New Career</div>
+        <div className="space-y-4">
+          {saveInfo && (
+            <div className="rounded-2xl border border-[var(--team)] bg-surface p-5 shadow-[0_8px_30px_rgba(10,22,38,0.08)]">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="label">Continue Career</div>
+                {saveInfo.usedBackup && <Badge tone="warn">Recovered from backup</Badge>}
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink text-white">
+                  <Play size={20} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xl font-700 uppercase leading-none text-ink">
+                    {saveInfo.title}
+                  </div>
+                  <div className="mt-0.5 font-cond text-xs text-muted">
+                    {saveInfo.teamName} · Season {saveInfo.season} · {saveInfo.tier}
+                  </div>
+                  {saveInfo.savedAt > 0 && (
+                    <div className="mt-0.5 text-[11px] text-faint">
+                      Saved {new Date(saveInfo.savedAt).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <Button variant="primary" size="lg" className="mt-3 w-full" onClick={continueCareer}>
+                <Play size={16} /> Continue
+              </Button>
+              <button
+                onClick={discardSave}
+                className="mt-2 w-full text-center font-cond text-xs font-600 uppercase tracking-wide text-muted hover:text-loss"
+              >
+                Start fresh (erase this save)
+              </button>
+            </div>
+          )}
+
+          {saveError && !saveInfo && (
+            <div className="flex items-start gap-2 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-xs text-warn">
+              <TriangleAlert size={15} className="mt-0.5 shrink-0" />
+              <span>{saveError}</span>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-line bg-surface p-5 shadow-[0_8px_30px_rgba(10,22,38,0.08)]">
+            <div className="label mb-1">New Career</div>
           <h2 className="mb-5 font-display text-2xl font-700 uppercase tracking-wide">Build Your Resumé</h2>
 
           <label className="label mb-1 block">Your Name</label>
@@ -262,6 +310,7 @@ export function CareerHub() {
           >
             {advanced ? 'Hide advanced options' : 'Advanced: choose a starting level'}
           </button>
+          </div>
         </div>
       </div>
       <div className="pb-10 text-center text-xs text-faint">

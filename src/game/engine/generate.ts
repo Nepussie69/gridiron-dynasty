@@ -39,7 +39,10 @@ export interface World {
   staffPool: StaffMember[]
   standings: Record<string, TeamRecord>
   news: NewsItem[]
+  /** NFL draft pool — draft-eligible COLLEGE players. */
   draft: DraftProspect[]
+  /** College recruiting pool — HIGH-SCHOOL prospects. */
+  recruits: DraftProspect[]
   freeAgents: Player[]
   schedule: Game[]
   deadMoney: Record<string, number>
@@ -332,6 +335,62 @@ export function generateProspectClass(rng: Rng, season: number, count = 170): Dr
   })
 }
 
+const HS_NOTES = [
+  'Elite arm talent; thin frame that needs a college weight program.',
+  'Track speed. Raw route-running, massive upside.',
+  'Dominated small-school competition — level of play is the question.',
+  'Legacy recruit; brother played in the league.',
+  'Late bloomer whose camp circuit opened eyes this summer.',
+  'Physical freak who has never been coached hard. High ceiling, bust risk.',
+  'Wins with instincts and football IQ beyond his years.',
+  'Two-sport star; may take a while to commit to football.',
+]
+
+/**
+ * HIGH-SCHOOL RECRUITING CLASS.
+ *
+ * College programs recruit high-schoolers, not college seniors. These are 17-18
+ * year olds with wide error bars — far more projection, far less certainty than
+ * a draft prospect. They carry a star rating and no college yet.
+ */
+export function generateRecruitClass(rng: Rng, season: number, count = 300): DraftProspect[] {
+  return Array.from({ length: count }, (_, i) => {
+    const pos = rpick(rng, PROSPECT_POS)
+    // Wider spread than the pro draft: a few elite, a long tail.
+    const trueGrade = Math.max(45, Math.min(99, Math.round(62 + (rng() - 0.45) * 46)))
+    const noise = Math.round((rng() - 0.5) * 26) // HS evals are noisier
+    const grade = Math.max(40, Math.min(99, trueGrade + noise))
+    const rank = i + 1
+    const stars: 1 | 2 | 3 | 4 | 5 =
+      grade >= 92 ? 5 : grade >= 84 ? 4 : grade >= 74 ? 3 : grade >= 64 ? 2 : 1
+    return {
+      id: `r${season}_${i}`,
+      name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
+      pos,
+      college: 'High School', // not yet enrolled anywhere
+      age: rint(rng, 17, 18),
+      ovr: Math.round(48 + grade * 0.24),
+      pot: Math.round(Math.min(99, 62 + trueGrade * 0.37)),
+      grade,
+      trueGrade,
+      myGrade: null,
+      confidence: rint(rng, 3, 18),
+      recommendation: null,
+      projectedRound: 0,
+      projectedPick: rank,
+      scoutConfidence: rint(rng, 10, 45),
+      traits: traitsFor(rng, pos, trueGrade),
+      notes: rpick(rng, HS_NOTES),
+      classYear: 'FR',
+      stars,
+      production: rint(rng, 30, 99),
+      committedTo: null,
+      draftedBy: null,
+      draftPick: null,
+    }
+  })
+}
+
 // ── Schedule ─────────────────────────────────────────────────────────────────
 function shuffle<T>(rng: Rng, arr: T[]) {
   const a = [...arr]
@@ -558,7 +617,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     } else {
       players = generateNFLRoster(rng, t, season)
     }
-    fitToCap(players, t.prestige > 80 ? 0.985 : 0.93)
+    fitToCap(players, t.prestige > 80 ? 0.86 : 0.79)
     roster[t.id] = players
     allPlayers.push(...players)
     staff[t.id] = NFL_STAFF_ROLES.map((r) =>
@@ -608,6 +667,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     standings,
     news: buildNews('BUF', 'Buffalo Bills', 'NFL'),
     draft: data ? realProspectClass(rng, data.cfb, season) : generateProspectClass(rng, season),
+    recruits: generateRecruitClass(rng, season),
     freeAgents,
     schedule,
     deadMoney,

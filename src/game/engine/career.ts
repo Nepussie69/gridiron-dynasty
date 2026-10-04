@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { CareerPath, CareerState, JobOffer, LeagueTier } from '../types'
+import { crossOverLevel } from './capabilities'
 import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
 import type { World } from './generate'
@@ -188,6 +189,29 @@ export function generateJobOffers(world: World, career: CareerState): JobOffer[]
           : `A program wants you as its ${next.title} after your work got noticed.`,
     })
   }
+
+  // ── Cross-over offers ────────────────────────────────────────────────────
+  // A college head coach does NOT walk into an NFL HC job. He crosses into an
+  // NFL position-coach or coordinator role and must earn the top job from there.
+  if (career.path === 'coach' && career.tier === 'FBS' && career.level >= 3 && !offers.some((o) => o.tier === 'NFL')) {
+    const crossLevel = crossOverLevel('coach', career.level, 'FBS', 'NFL')
+    const crossRole = ladderFor('coach')[crossLevel]
+    if (crossRole && overall >= 55 && rng() < 0.7) {
+      const teamId = rpick(rng, NFL_TEAMS).id
+      offers.push({
+        id: `xover_${world.season}_${teamId}`,
+        title: crossRole.title,
+        teamId,
+        tier: 'NFL',
+        level: crossLevel,
+        salary: salaryFor('coach', crossLevel),
+        years: 4,
+        interest: clamp(50 + Math.round((overall - 50) * 1.2) + Math.round(rng() * 15), 40, 98),
+        note: `A league club wants to bring you in as ${crossRole.title}. College head-coaching success earns a look — but you start over on the NFL side and must work up from here.`,
+      })
+    }
+  }
+
   return offers
 }
 
@@ -217,6 +241,17 @@ export function resolveInterview(invite: InterviewInvite, rng: () => number): bo
 }
 
 export function promote(career: CareerState, offer: JobOffer): CareerState {
+  // Excellence at the prior rung carries a head start into the new job.
+  const carry = masteryCarryOver(career)
+  const rep: Reputation = { ...career.reputation }
+  for (const [k, v] of Object.entries(carry)) {
+    ;(rep as unknown as Record<string, number>)[k] = clamp(
+      ((rep as unknown as Record<string, number>)[k] ?? 0) + (v as number),
+      0,
+      100,
+    )
+  }
+  rep.profile = clamp(rep.profile + 3, 0, 100)
   return {
     ...career,
     teamId: offer.teamId,
@@ -224,7 +259,7 @@ export function promote(career: CareerState, offer: JobOffer): CareerState {
     tier: offer.tier,
     salary: offer.salary,
     jobSecurity: 72,
-    reputation: { ...career.reputation, profile: clamp(career.reputation.profile + 3, 0, 100) },
+    reputation: rep,
     history: [
       ...career.history,
       { season: career.season, team: career.teamId, role: tierFor(career.path, career.level).title, record: '', outcome: `Hired as ${offer.title}` },
@@ -296,46 +331,123 @@ export function unitRanks(world: World, tier: 'NFL' | 'FBS' = 'NFL'): Record<str
   return out
 }
 
-/** Objectives for the current role, evaluated against live data. */
+/**
+ * Objectives for the current role. Every rung has its OWN goals, tied to the job's
+ * real verb — a scout files accurate grades, a coordinator ranks a unit, a GM wins.
+ * Completing them raises the reputation dimension that gates the next rung.
+ */
 export function roleObjectives(
-  world: World,
+  _world: World,
   career: CareerState,
   record: { wins: number; losses: number },
   unitRank?: { off: number; def: number; total: number },
 ): Objective[] {
-  const ladder = ladderFor(career.path)
-  const t = ladder[career.level]
   const winPct = record.wins / Math.max(1, record.wins + record.losses)
   const recs = career.seasonRecs
+  const hits = career.seasonHits
+  const acc = recs ? Math.round((hits / recs) * 100) : 0
   const out: Objective[] = []
 
-  const mk = (id: string, label: string, target: number, current: number, repReward: Partial<Reputation>, higherIsBetter = true): Objective => {
-    const done = higherIsBetter ? current >= target : current <= target
-    return { id, label, target, current, done, repReward }
+  const mk = (id: string, label: string, target: number, current: number, repReward: Partial<Reputation>, higherIsBetter = true): Objective => ({
+    id, label, target, current, done: higherIsBetter ? current >= target : current <= target, repReward,
+  })
+  const winGoal = (target: number, reward: Partial<Reputation> = { results: 4 }) =>
+    out.push(mk('winpct', `Win ${target}% of games`, target, Math.round(winPct * 100), reward))
+  const gradeGoal = (n: number, reward: Partial<Reputation>) =>
+    out.push(mk('grades', `File ${n} graded reports`, n, recs, reward))
+
+  // ── PERSONNEL TRACK ────────────────────────────────────────────────────────
+  if (career.path === 'personnel') {
+    switch (career.level) {
+      case 0: // Local Scout — prove accuracy with limited information
+        gradeGoal(6, { evaluation: 2 })
+        out.push(mk('accuracy', 'Grade accuracy (65%)', 65, acc, { evaluation: 3 }))
+        break
+      case 1: // Area Scout — volume + a diamond
+        gradeGoal(10, { evaluation: 3 })
+        out.push(mk('accuracy', 'Grade accuracy (68%)', 68, acc, { evaluation: 3, profile: 1 }))
+        break
+      case 2: // Regional Scout — build a board against consensus
+        gradeGoal(12, { evaluation: 3 })
+        out.push(mk('accuracy', 'Board accuracy (70%)', 70, acc, { evaluation: 3, roster: 1 }))
+        break
+      case 3: // National Scout — cross-check others
+        gradeGoal(12, { evaluation: 3 })
+        out.push(mk('accuracy', 'Cross-check accuracy (72%)', 72, acc, { evaluation: 3, profile: 2 }))
+        break
+      case 4: // Asst Dir College Scouting — run the room
+        gradeGoal(8, { evaluation: 2 })
+        out.push(mk('accuracy', 'Department accuracy (72%)', 72, acc, { evaluation: 3, leadership: 2 }))
+        winGoal(50, { leadership: 2 })
+        break
+      case 5: // Dir College Scouting — own the class
+        out.push(mk('class', 'Deliver a graded class (5+)', 5, recs, { roster: 3 }))
+        out.push(mk('accuracy', 'Board hit rate (70%)', 70, acc, { roster: 2, evaluation: 2 }))
+        winGoal(52, { roster: 2, results: 2 })
+        break
+      case 6: // Dir Player Personnel — pro scouting + contracts
+        winGoal(55, { roster: 3, results: 2 })
+        out.push(mk('health', 'Keep the cap healthy', 60, 60, { roster: 2 }))
+        out.push(mk('accuracy', 'Scouting accuracy (70%)', 70, acc, { evaluation: 2 }))
+        break
+      case 7: // Assistant GM — run the building
+        winGoal(58, { roster: 3, leadership: 2 })
+        out.push(mk('health', 'Keep the cap healthy', 65, 65, { roster: 3 }))
+        out.push(mk('class', 'Deliver a draft class', 5, recs, { roster: 2 }))
+        break
+      default: // General Manager — final say
+        winGoal(62, { results: 5, leadership: 2 })
+        out.push(mk('playoffs', 'Make the playoffs', 1, record.wins >= 10 ? 1 : 0, { results: 4, profile: 3 }))
+        break
+    }
   }
 
-  if (career.path === 'personnel' && career.level <= 3) {
-    // Scout roles: file accurate grades.
-    out.push(mk('grades', 'File graded recommendations', 6, recs, { evaluation: 2 }))
-    out.push(mk('accuracy', 'Hit rate on your class (%)', 65, career.seasonRecs ? Math.round((career.seasonHits / career.seasonRecs) * 100) : 0, { evaluation: 3, profile: 2 }))
-  } else if (career.path === 'personnel') {
-    // Front-office roles: build the roster.
-    out.push(mk('grades', 'Deliver a graded draft class', 5, recs, { roster: 2 }))
-    const games = world.standings[career.teamId]
-    const pct = games ? games.wins / Math.max(1, games.wins + games.losses) : 0
-    out.push(mk('winpct', 'Team win percentage (%)', 55, Math.round(pct * 100), { roster: 3, results: 2 }))
-  } else {
-    // Coach roles: results, unit rank, and development.
-    out.push(mk('winpct', 'Win percentage (%)', t.level <= 2 ? 55 : 60, Math.round(winPct * 100), { results: 4, leadership: 2 }))
-    out.push(mk('grades', 'Scout a full class', 5, recs, { evaluation: 1, profile: 1 }))
-    // Coordinator / HC: your unit must rank in the top third of the league.
-    if (t.level >= 2 && unitRank) {
-      const side = career.unitFocus === 'def' ? unitRank.def : unitRank.off
-      const label = career.unitFocus === 'def' ? 'Top-10 defense' : 'Top-10 offense'
-      out.push(mk('unit', label, Math.ceil(unitRank.total / 3), side, { results: 4, scheme: 2 } as never, false))
-    }
-    if (t.level >= 3) {
-      out.push(mk('season', 'Win 9+ games', 9, record.wins, { results: 4, profile: 3 }))
+  // ── COACHING TRACK ─────────────────────────────────────────────────────────
+  if (career.path === 'coach') {
+    switch (career.level) {
+      case 0: // Graduate Assistant — service + development
+        out.push(mk('develop', 'Develop 2 players', 2, 0, { leadership: 3 }))
+        winGoal(45, { leadership: 2 })
+        break
+      case 1: // Position Coach — develop a room
+        out.push(mk('develop', 'Produce 2 draftable players', 2, 0, { leadership: 3, evaluation: 1 }))
+        winGoal(50, { leadership: 2, results: 2 })
+        break
+      case 2: // Coordinator — own a unit
+        if (unitRank) {
+          const side = career.unitFocus === 'def' ? unitRank.def : unitRank.off
+          const label = career.unitFocus === 'def' ? 'Top-third defense' : 'Top-third offense'
+          out.push(mk('unit', label, Math.ceil(unitRank.total / 3), side, { results: 4, scheme: 2 } as never, false))
+        }
+        winGoal(55, { results: 3 })
+        gradeGoal(5, { evaluation: 1, profile: 1 })
+        break
+      case 3: // Group of Five Head Coach — build a program
+        winGoal(58, { results: 4, leadership: 2 })
+        out.push(mk('season', 'Win 9+ games', 9, record.wins, { results: 3, profile: 3 }))
+        out.push(mk('recruit', 'Land a top-60 class', 60, 60, { recruiting: 2, profile: 2 } as never))
+        break
+      case 4: // Power Four Head Coach — perform under pressure
+        winGoal(65, { results: 5 })
+        out.push(mk('season', 'Win 10+ games', 10, record.wins, { results: 4, profile: 4 }))
+        out.push(mk('recruit', 'Land a top-15 class', 15, 15, { recruiting: 2, profile: 2 } as never))
+        break
+      case 5: // NFL Position Coach / QC — prove you belong
+        out.push(mk('develop', 'Develop 2 NFL contributors', 2, 0, { leadership: 3 }))
+        winGoal(55, { results: 2, leadership: 1 })
+        break
+      case 6: // NFL Coordinator — top-10 unit
+        if (unitRank) {
+          const side = career.unitFocus === 'def' ? unitRank.def : unitRank.off
+          const label = career.unitFocus === 'def' ? 'Top-10 defense' : 'Top-10 offense'
+          out.push(mk('unit', label, Math.ceil(unitRank.total / 3), side, { results: 5, scheme: 2 } as never, false))
+        }
+        winGoal(58, { results: 3 })
+        break
+      default: // NFL Head Coach
+        winGoal(62, { results: 5 })
+        out.push(mk('playoffs', 'Make the playoffs', 1, record.wins >= 10 ? 1 : 0, { results: 4, profile: 3 }))
+        break
     }
   }
 
@@ -356,6 +468,48 @@ export function gradeObjectives(objs: Objective[]): { repDelta: Partial<Reputati
     }
   }
   return { repDelta, doneCount }
+}
+
+// ── Role mastery: excellence at one rung boosts the next ─────────────────────
+/**
+ * How well you did your actual job, 0-100. Rises with objectives met, falls with
+ * a poor season. Stored per role so a strong run as an Area Scout makes you a
+ * better Regional Scout — the "great at each task helps the next" spine.
+ */
+export function roleKey(path: CareerState['path'], level: number) {
+  return `${path}:${level}`
+}
+
+export function updateRoleMastery(
+  career: CareerState,
+  met: number,
+  total: number,
+  winPct = 0.5,
+): Record<string, number> {
+  const mastery = { ...(career.roleMastery ?? {}) }
+  const key = roleKey(career.path, career.level)
+  const prev = mastery[key] ?? 50
+  // Objectives are the main signal; results matter for field roles.
+  const objScore = total ? met / total : 0.5
+  const blended = objScore * 0.75 + winPct * 0.25
+  const delta = (blended - 0.5) * 40 // -20 .. +20 per season
+  mastery[key] = Math.max(0, Math.min(100, Math.round(prev + delta)))
+  return mastery
+}
+
+/** Starting reputation bonus at the next rung, from how well you did the last one. */
+export function masteryCarryOver(career: CareerState): Partial<Reputation> {
+  const mastery = career.roleMastery ?? {}
+  const prior = mastery[roleKey(career.path, career.level - 1)] ?? 50
+  // 0 mastery → nothing, 100 mastery → a meaningful head start.
+  const bonus = Math.round((prior - 50) / 8) // -6 .. +6
+  if (bonus <= 0) return {}
+  return { profile: bonus, leadership: Math.round(bonus * 0.5) }
+}
+
+export function roleMastery(career: CareerState, path?: CareerState['path'], level?: number): number {
+  const m = career.roleMastery ?? {}
+  return m[roleKey(path ?? career.path, level ?? career.level)] ?? 50
 }
 
 // ── Season review ────────────────────────────────────────────────────────────

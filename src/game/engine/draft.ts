@@ -232,7 +232,7 @@ export function awardCompensatoryPicks(world: World): number {
 /** Teams sign a couple of undrafted free agents after the draft. */
 export function runUDFAs(world: World) {
   const rng = makeRng(world.seed + world.season * 40503)
-  const udfa = world.draft.filter((p) => !p.draftedBy).sort((a, b) => b.grade - a.grade).slice(0, 64)
+  const udfa = world.draft.filter((p) => !p.draftedBy).sort((a, b) => b.grade - a.grade).slice(0, 180)
   const teams = world.teams.filter((t) => t.tier === 'NFL')
   for (const prospect of udfa) {
     const team = teams[hash32(prospect.id, 3) % teams.length]

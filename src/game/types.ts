@@ -332,6 +332,8 @@ export interface CareerState {
   misses: number
   seasonRecs: number
   seasonHits: number
+  /** Per-role mastery (0-100), keyed `${path}:${level}`. Excellence carries over. */
+  roleMastery?: Record<string, number>
   history: { season: number; team: string; role: string; record: string; outcome: string }[]
 }
 

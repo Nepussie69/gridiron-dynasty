@@ -147,6 +147,8 @@ export function TopBar() {
   const career = useGame((s) => s.career)
   const advanceWeek = useGame((s) => s.advanceWeek)
   const setScreen = useGame((s) => s.setScreen)
+  const leaguePbp = useGame((s) => s.leaguePbp)
+  const setLeaguePbp = useGame((s) => s.setLeaguePbp)
 
   const team = league.byId[activeTeamId]
   const rec = recordOf(league, activeTeamId)
@@ -206,6 +208,19 @@ export function TopBar() {
           <div className="font-display text-lg font-700 tnum text-white">{career.jobSecurity}%</div>
         </div>
       )}
+
+      <button
+        onClick={() => setLeaguePbp(!leaguePbp)}
+        title="Simulate every league game play-by-play (slower, more authentic stats)"
+        className={cn(
+          'hidden items-center gap-1.5 rounded-lg border px-3 py-1.5 font-cond text-[11px] font-700 uppercase tracking-wide transition md:flex',
+          leaguePbp
+            ? 'border-transparent bg-[#8ef0b5] text-ink'
+            : 'border-white/25 bg-black/20 text-white/80 hover:bg-black/30',
+        )}
+      >
+        <Activity size={13} /> {leaguePbp ? 'Authentic Sim' : 'Fast Sim'}
+      </button>
 
       <Button
         variant="primary"

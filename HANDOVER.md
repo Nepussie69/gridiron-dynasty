@@ -1,7 +1,6 @@
 # HANDOVER — Gridiron Dynasty
 
 _Last updated: 2026-10-05 · status: **build green, all systems working**_
-
 A football front-office career sim. You start as a grad assistant / local scout and
 climb to NFL General Manager (or Head Coach). This file is everything a fresh chat
 needs to continue.
@@ -57,6 +56,27 @@ but his ceiling is set by **how much his unit and coaches have stayed together**
 
 **Verified:** fresh GM, Josh Allen went **0% → 7% over 6 games**, capped by a
 low-cohesion roster. Production multiplier runs **0.90 → 1.18** through the play engine.
+
+### Just finished: culture, trades, and roster rules
+- **Culture panel** (`components/CulturePanel.tsx`) on the Dashboard + Game Plan: per-side
+  cohesion, staff/unit tenure, average mastery, ideal-fit share, plain-English read.
+- **Cohesion now bends the game** beyond mastery — settled teams commit fewer penalties and
+  play better on money downs / in the red zone (`coaching.ts` folds cohesion into discipline
+  and situational; `playsim.ts` applies a clutch bonus).
+- **Scheme Fit Report** (`components/SchemeFitReport.tsx`) on the Game Plan screen; MatchView
+  now shows both coordinators' schemes in a top strip.
+- **Trade Center is real** (`engine/trade.ts`): partner AI values youth/picks (rebuild) vs.
+  veterans (win-now) + positional need, previews a verdict, and executes player/pick swaps.
+- **Draft picks are tracked assets** (`engine/picks.ts`): `World.draftPicks`, ownership-aware
+  draft order, and **compensatory picks**. Save migration added in `gameStore.hydrate`.
+- **Practice squad (16) + injured reserve** with sign/promote/release/place/activate actions,
+  surfaced on the Roster screen.
+- Dev probes: `__cohesionProbe`, `__draftProbe`, `__draftFlowProbe`, `__seasonProbe`,
+  `__tradeProbe`, plus `__game` / `__world` handles in DEV.
+
+**Verified:** real-data `simTest(60,'NFL')` still lands at 22.7 pts / 65.4% comp / 42.0%
+3rd-down; trade overpay accepted + moved a pick, lowball rejected; PS sign→promote and
+IR place→activate all work; 25 comp picks awarded in a season-end clone.
 
 ---
 
@@ -122,12 +142,14 @@ Reputation-gated **hiring market** with live interest %, salary negotiation,
 ```
 src/
   components/   AppShell, PlayerTable (+PlaybookCell, DeadMoneyCell, FitBadge),
-                PlayerProfile, MatchView, SeasonModal, PlanEditor
-  screens/      16: career, dashboard, scouting, roster, depth, gameplan, schedule,
+                PlayerProfile, MatchView, SeasonModal, PlanEditor,
+                CulturePanel, SchemeFitReport
+  screens/      18: career, dashboard, scouting, roster, depth, gameplan, schedule,
                 draft, freeagency, trades, cap, staff, inbox, standings, stats,
-                awards, league
+                awards, league, recruiting
   game/
-    types.ts         Team/Player/Staff/Contract/DraftProspect/CareerState/PlaybookState
+    types.ts         Team/Player/Staff/Contract/DraftProspect/CareerState/
+                     PlaybookState/DraftPick
     selectors.ts     derived reads
     persistence.ts   IndexedDB save/load
     data/            nflTeams, cfbTeams, ratings, realData, calibration
@@ -135,10 +157,12 @@ src/
       rng.ts         seeded RNG
       cap.ts         NFL salary cap
       generate.ts    universe builder
+      picks.ts       draft-pick ownership + compensatory picks
+      trade.ts       trade value / AI evaluation / execution
       sim.ts         fast score sim + weekly advance + playoffs
-      playsim.ts     play-by-play (+ live game-plan hooks)
+      playsim.ts     play-by-play (+ live game-plan + cohesion hooks)
       gameplan.ts    in-game dials & presets
-      coaching.ts    staff quality → on-field effects
+      coaching.ts    staff quality + cohesion → on-field effects
       style.ts       archetypes + scheme fit
       playbook.ts    playbook mastery + cohesion
       career.ts      ladders, reputation, objectives, interviews
@@ -165,11 +189,15 @@ src/
 
 ## 6. Suggested next steps
 
-1. **Surface team cohesion** on the Dashboard / Game Plan (data already computed) —
-   a "Culture" panel showing staff tenure and unit continuity.
-2. **Cohesion affects games beyond mastery** — e.g. fewer penalties, better
-   situational play for settled teams.
-3. **Coordinator scheme choice visible in games** — show the installed system on
-   the game-plan screen with a fit report for the roster.
-4. Trade AI, practice squad / IR rules, compensatory picks.
-5. Update `README.md` and `PLAN.md` (both are slightly behind the latest work).
+**Completed this cycle:** culture panel, cohesion on-field effects, scheme fit report,
+trade AI + pick ownership + comp picks, practice squad / IR, and the README/PLAN/HANDOVER
+doc refresh.
+
+1. **Draft to your scheme** — surface scheme fit on the Draft board / Scouting so you draft
+   players who fit the coordinator's system (data is already in `style.ts`).
+2. **Trade depth** — a trade block, multi-team bidding, and cap validation on acquired deals.
+3. **Practice-squad development** — tie weekly PS reps to player growth and game-day
+   elevations (currently PS is a development holding pen only).
+4. **Cohesion in opponent scouting** — show the opponent's culture read on the Game Plan so
+   continuity becomes a matchup edge.
+5. **Season-long cohesion trends** — track cohesion over time as a first-class career stat.

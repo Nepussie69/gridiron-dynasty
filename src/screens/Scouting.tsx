@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Eye, Search, Star, Target } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { gradeColor } from '../lib/format'
 import type { Recommendation } from '../game/types'
+import { ensureProspectPools } from '../game/engine/progress'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
@@ -17,6 +18,7 @@ const RECS: { id: Recommendation; label: string; tone: 'win' | 'info' | 'warn' |
 
 export function Scouting() {
   const league = useWorld()
+  useEffect(() => { ensureProspectPools(league) }, [league])
   const career = useGame((s) => s.career)!
   const points = useGame((s) => s.scoutingPoints)
   const scoutProspect = useGame((s) => s.scoutProspect)

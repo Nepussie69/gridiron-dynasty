@@ -63,6 +63,11 @@ export function simWeek(world: World, week: number, exceptGameId?: string) {
   allocateWeekStats(world, week, exceptGameId)
 }
 
+/** Weekly recovery only — used by the authentic league path, which sims elsewhere. */
+export function healAfterWeek(world: World, week: number) {
+  healPlayers(world, makeRng(world.seed + week * 7919 + 101))
+}
+
 /** Fill league-wide player stats for games that were score-simulated. */
 function allocateWeekStats(world: World, week: number, exceptGameId?: string) {
   for (const game of world.schedule) {
