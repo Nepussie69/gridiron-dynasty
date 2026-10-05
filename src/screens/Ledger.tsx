@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { BookOpen, Check, Minus, Target, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { ledgerHitRate, myGuys } from '../game/engine/ledger'
-import type { LedgerEntry } from '../game/types'
+import { tradeTree, type TradeNode, type TradeVerdict } from '../game/engine/tradeTree'
+import type { LedgerEntry, TradeAssetSnap } from '../game/types'
+import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card, PageHeader, Stat } from '../ui/kit'
+import { Badge, Card, PageHeader, Stat, TeamCrest } from '../ui/kit'
 
 const KIND_META: Record<LedgerEntry['kind'], { label: string; tone: 'win' | 'loss' | 'warn' | 'info' | 'gold' | 'neutral' }> = {
   recommendation: { label: 'Call', tone: 'info' },
@@ -13,14 +15,77 @@ const KIND_META: Record<LedgerEntry['kind'], { label: string; tone: 'win' | 'los
   advice: { label: 'Advice', tone: 'warn' },
 }
 
+const VERDICT_TONE: Record<TradeVerdict, 'win' | 'loss' | 'neutral' | 'info'> = {
+  Won: 'win',
+  Lost: 'loss',
+  Even: 'neutral',
+  'Too early': 'info',
+}
+
+function TradeAssetRow({ snap }: { snap: TradeAssetSnap }) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <span className="min-w-0 truncate text-ink-2">{snap.label}</span>
+      {snap.kind === 'pick' && snap.resolvedName && (
+        <span className="shrink-0 text-muted">→ became {snap.resolvedName}</span>
+      )}
+    </div>
+  )
+}
+
+/** One trade, with any later trades that reused its incoming assets nested beneath. */
+function TradeTreeNode({ world, node }: { world: World; node: TradeNode }) {
+  const partner = world.byId[node.record.partnerId]
+  return (
+    <div>
+      <Card>
+        <div className="flex items-start gap-3">
+          {partner && <TeamCrest team={partner} size={36} />}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-600 text-ink">Season {node.record.season}</span>
+              <span className="font-cond text-[11px] font-700 uppercase text-muted">
+                Wk {node.record.week} · with {partner?.abbr ?? node.record.partnerId}
+              </span>
+              <Badge tone={VERDICT_TONE[node.verdict]}>{node.verdict}</Badge>
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>
+                <div className="label mb-1">Gave</div>
+                {node.record.gave.length === 0 && <div className="text-xs text-muted">—</div>}
+                {node.record.gave.map((s) => <TradeAssetRow key={s.id} snap={s} />)}
+              </div>
+              <div>
+                <div className="label mb-1">Got</div>
+                {node.record.got.length === 0 && <div className="text-xs text-muted">—</div>}
+                {node.record.got.map((s) => <TradeAssetRow key={s.id} snap={s} />)}
+              </div>
+            </div>
+            <div className="mt-2 flex items-center gap-3 font-cond text-[11px] font-700 uppercase text-muted">
+              <span>Gave {node.gave} value</span>
+              <span>Got {node.got} value</span>
+            </div>
+          </div>
+        </div>
+      </Card>
+      {node.children.length > 0 && (
+        <div className="ml-6 space-y-2 border-l border-line pl-4 pt-2">
+          {node.children.map((c) => <TradeTreeNode key={c.record.id} world={world} node={c} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Ledger() {
   const world = useWorld()
   const career = useGame((s) => s.career)!
-  const [tab, setTab] = useState<'calls' | 'guys'>('calls')
+  const [tab, setTab] = useState<'calls' | 'guys' | 'trades'>('calls')
 
   const rate = ledgerHitRate(career)
   const entries = career.ledger ?? []
   const guys = myGuys(world, career)
+  const tree = tradeTree(world, career)
 
   return (
     <div>
@@ -30,7 +95,7 @@ export function Ledger() {
         subtitle="Every call you've made, dated and graded. Years later it comes back — hit or miss."
         right={
           <div className="flex rounded-lg bg-surface-2 p-0.5">
-            {(['calls', 'guys'] as const).map((t) => (
+            {(['calls', 'guys', 'trades'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -39,7 +104,7 @@ export function Ledger() {
                   tab === t ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
-                {t === 'calls' ? 'All Calls' : `My Guys (${guys.length})`}
+                {t === 'calls' ? 'All Calls' : t === 'guys' ? `My Guys (${guys.length})` : 'Trade Tree'}
               </button>
             ))}
           </div>
@@ -108,7 +173,7 @@ export function Ledger() {
             })}
           </div>
         </Card>
-      ) : (
+      ) : tab === 'guys' ? (
         <Card pad={false}>
           <div className="border-b border-line px-4 py-2">
             <span className="label">My Guys · everyone you championed</span>
@@ -147,6 +212,17 @@ export function Ledger() {
             ))}
           </div>
         </Card>
+      ) : (
+        <div className="space-y-2">
+          {tree.length === 0 && (
+            <Card>
+              <div className="px-4 py-10 text-center text-sm text-muted">
+                No trades yet — trade authority unlocks higher up the ladder.
+              </div>
+            </Card>
+          )}
+          {tree.map((n) => <TradeTreeNode key={n.record.id} world={world} node={n} />)}
+        </div>
       )}
     </div>
   )

@@ -18,6 +18,7 @@ export function initDraft(world: World) {
   const built = buildDraftOrder(world)
   world.draftOrder = built.order
   world.draftRounds = built.rounds
+  world.draftPickIds = built.ids
   world.draftState = { round: 1, pickIndex: 0, complete: false, log: [] }
   for (const p of world.draft) {
     p.draftedBy = null
@@ -30,12 +31,13 @@ export function initDraft(world: World) {
  * order the board (worst record first); traded picks keep their original slot
  * but belong to their new owner; comp picks go last in their round.
  */
-export function buildDraftOrder(world: World): { order: string[]; rounds: number[] } {
+export function buildDraftOrder(world: World): { order: string[]; rounds: number[]; ids: string[] } {
   const picks = ensureDraftPicks(world, world.season + 1)
   const base = computeDraftOrder(world)
   const slot = new Map(base.map((id, i) => [id, i]))
   const order: string[] = []
   const rounds: number[] = []
+  const ids: string[] = []
   for (let r = 1; r <= DRAFT_ROUNDS; r++) {
     const group = picks
       .filter((p) => p.round === r)
@@ -48,9 +50,10 @@ export function buildDraftOrder(world: World): { order: string[]; rounds: number
     for (const p of group) {
       order.push(p.ownerTeam)
       rounds.push(r)
+      ids.push(p.id)
     }
   }
-  return { order, rounds }
+  return { order, rounds, ids }
 }
 
 /** Number of selections in the current draft (varies with trades/comp picks). */
@@ -175,6 +178,7 @@ export function makePick(world: World, prospect: DraftProspect, teamId: string, 
     round: currentRound(world),
     pick,
     by: by ?? null,
+    pickId: world.draftPickIds?.[world.draftState.pickIndex],
   })
   world.players.push(player)
   ;(world.roster[teamId] ??= []).push(player)

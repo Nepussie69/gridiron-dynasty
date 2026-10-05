@@ -1,4 +1,4 @@
-import { ArrowUp, Briefcase, CheckCircle2, Circle, Repeat2, Star, Target, TrendingUp } from 'lucide-react'
+import { ArrowUp, Briefcase, CheckCircle2, Circle, Copy, Repeat2, Star, Target, TrendingUp } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import {
@@ -36,6 +36,8 @@ const CAP_LABELS: Record<string, string> = {
   setExpectations: 'Own expectations',
 }
 import { recordOf, recordStr } from '../game/selectors'
+import { formatSeed } from '../game/engine/seed'
+import { scenarioById } from '../game/engine/scenarios'
 import { useGame, useWorld } from '../store/gameStore'
 import { CareerRhythm } from '../components/CareerRhythm'
 import { CareerPeople } from '../components/CareerPeople'
@@ -60,6 +62,16 @@ export function Career() {
   const acceptOffer = useGame((s) => s.acceptOffer)
   const declineOffers = useGame((s) => s.declineOffers)
   const setScreen = useGame((s) => s.setScreen)
+  const showToast = useGame((s) => s.showToast)
+
+  function copySeed() {
+    try {
+      void navigator.clipboard?.writeText(formatSeed(league.seed))?.catch(() => {})
+    } catch {
+      // clipboard unavailable in this context
+    }
+    showToast('Seed copied')
+  }
 
   const team = league.byId[career.teamId]
   const ladder = ladderFor(career.path)
@@ -85,10 +97,15 @@ export function Career() {
         title="My Career"
         subtitle={current.blurb}
         right={
-          <div className="flex rounded-lg bg-surface-2 p-0.5">
-            <Badge tone="team">
-              {isGM(career) ? 'General Manager' : `${current.title}`}
-            </Badge>
+          <div className="flex items-center gap-2">
+            {career.scenario && career.scenario !== 'climb' && (
+              <Badge tone="gold">{scenarioById(career.scenario).title}</Badge>
+            )}
+            <div className="flex rounded-lg bg-surface-2 p-0.5">
+              <Badge tone="team">
+                {isGM(career) ? 'General Manager' : `${current.title}`}
+              </Badge>
+            </div>
           </div>
         }
       />
@@ -114,12 +131,26 @@ export function Career() {
             <HeadStat label="Hit Rate" value={`${hitRate}%`} />
           </div>
         </div>
-        <div className="border-t border-white/15 px-5 pb-4 pt-3">
-          <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/70">
-            This rung&apos;s verb
-          </span>
-          <div className="font-display text-sm font-700 uppercase tracking-wide text-white">
-            {VERB_BLURB[current.verb]}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/15 px-5 pb-4 pt-3">
+          <div>
+            <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/70">
+              This rung&apos;s verb
+            </span>
+            <div className="font-display text-sm font-700 uppercase tracking-wide text-white">
+              {VERB_BLURB[current.verb]}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/70">
+              World seed {formatSeed(league.seed)}
+            </span>
+            <button
+              type="button"
+              onClick={copySeed}
+              className="inline-flex items-center gap-1 rounded-md border border-white/25 px-2 py-1 font-cond text-[10px] font-700 uppercase tracking-wide text-white/90 transition hover:bg-white/10"
+            >
+              <Copy size={12} /> Copy
+            </button>
           </div>
         </div>
       </Card>

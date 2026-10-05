@@ -100,3 +100,18 @@ game's guardrails intact.
 - Real job titles ("Director of College Scouting") and one Scouting subtitle remain college-flavored
   (cosmetic; user may want rewording).
 - DOM-verification gotcha: `innerText` reflects CSS `uppercase`; match case-insensitively.
+
+## Next phase planned
+- **Phase 7 — "Proof & Memory"** spec is in **`NEXT_PHASE.md`** (repo root). Five features:
+  F1 living role objectives (real, live metrics — fixes the hardcoded `health 60/60` and
+  `develop 0/2`), F2 NFL-only ladder identity (display-only), F3 transaction trees (#6, bounded
+  at 500), F4 seeded runs (#18), F5 scheme fit on the Scouting/Draft board. 17 ordered tasks
+  (T1–T17) with per-task acceptance checks, plus a Do-NOT list.
+- Baseline: build green, lint = 5 warnings. Implementation has **not** started.
+- #14 self-scouting chess stays deferred (guardrail: no provable anti-dominant design);
+  #16 multi-scenario and practice-squad development were excluded from this phase.
+
+## Next phase planned — L5 "Long-arc stories"
+Spec + ordered task list (T1–T12) in **`NEXT_PHASE.md`** (planned by Claude Opus 5.5; implemented by
+DeepSeek Flash 4.1 via OpenCode). Features: F1 Trade Tree (#6), F2 seeded runs (#18), F3 light start
+scenarios (#16), F4 Scouting subtitle copy fix. #14 stays deferred. Checkpoint commit before L5: `f16a75d`.

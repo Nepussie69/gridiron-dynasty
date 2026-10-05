@@ -90,6 +90,7 @@ import {
 } from '../game/engine/draft'
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
+import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
 import {
   advanceContacts,
@@ -126,9 +127,11 @@ import {
   summarizeCap,
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
-import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, SeasonMoment, SeasonQuestion } from '../game/types'
+import { applyScenario, scenarioById } from '../game/engine/scenarios'
+import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, ScenarioId, SeasonMoment, SeasonQuestion } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { loadRealData, getRealData } from '../game/data/realData'
+import { NFL_TEAMS } from '../game/data/nflTeams'
 import { loadCalibration } from '../game/data/calibration'
 import { runBalance } from '../game/engine/balance'
 
@@ -330,7 +333,7 @@ interface GameStore {
   setActiveTeam: (id: string) => void
   selectPlayer: (id: string | null) => void
   selectProspect: (id: string | null) => void
-  startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number }) => void
+  startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId }) => void
   resetCareer: () => void
   advanceWeek: () => void
   startNextSeason: () => void
@@ -435,11 +438,17 @@ export const useGame = create<GameStore>((set, get) => ({
   selectPlayer: (selectedPlayerId) => set({ selectedPlayerId }),
   selectProspect: (selectedProspectId) => set({ selectedProspectId }),
 
-  startCareer: ({ name, path, archetype, teamId, startLevel = 0 }) => {
-    world = buildWorld(Date.now() % 2147483647, getRealData())
+  startCareer: ({ name, path: chosenPath, archetype, teamId: chosenTeamId, startLevel = 0, seed, scenarioId }) => {
+    world = buildWorld(seed ?? (Date.now() % 2147483647), getRealData())
     initAllPlaybooks()
+    // A scenario can override the path, the starting rung and the club.
+    const scenario = scenarioById(scenarioId)
+    const path = scenario.path ?? chosenPath
+    const teamId = scenario.forceLowestPrestige
+      ? [...NFL_TEAMS].sort((a, b) => a.prestige - b.prestige)[0].id
+      : chosenTeamId
     const ladder = ladderFor(path)
-    const level = Math.max(minNflLevel(path), Math.min(ladder.length - 1, startLevel))
+    const level = scenario.level ?? Math.max(minNflLevel(path), Math.min(ladder.length - 1, startLevel))
     const tier = tierFor(path, level).tier
     const resolvedTeam = world.byId[teamId]?.tier === tier ? teamId : 'BUF'
     // Starting at a higher rung seeds the reputation needed to have earned it.
@@ -450,7 +459,7 @@ export const useGame = create<GameStore>((set, get) => ({
         (v as number) + 2,
       )
     }
-    const career: CareerState = {
+    let career: CareerState = {
       gmName: name,
       path,
       archetype,
@@ -481,6 +490,7 @@ export const useGame = create<GameStore>((set, get) => ({
       seasonMoments: [],
       ambitions: [],
     }
+    career = applyScenario(world, career, scenario)
     career.seasonQuestion = makeSeasonQuestion(world, career)
     set({
       career,
@@ -581,7 +591,7 @@ export const useGame = create<GameStore>((set, get) => ({
       }
     }
     // Media layer: the world notices you (#13).
-    if (world.phase === 'regular' && Math.random() < 0.6) {
+    if (world.phase === 'regular' && makeRng(world.seed + world.season * 911 + world.week * 13 + 1)() < 0.6) {
       for (const m of mediaItems(world, nextCareer, makeRng(world.seed + world.season * 911 + world.week))) {
         world.news.unshift({ id: `media_${world.season}_${world.week}_${world.news.length}`, week: world.week, season: world.season, category: m.category, headline: m.headline, body: m.body, teamId: nextCareer.teamId, read: false })
       }
@@ -684,6 +694,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // #18: the league changes over the eras every few seasons.
     if (world.season % 6 === 0) world.era = ERAS[Math.floor(world.season / 6) % ERAS.length]
     // Fresh draft capital for the next cycle's Trade Center.
+    resolveTradePicks(world, career)
     world.draftPicks = freshDraftPicks(world.season + 1)
     world.draftRounds = []
     for (const id of Object.keys(world.standings)) world.standings[id] = zeroRecord(id)
@@ -754,7 +765,7 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     const target = p.trueGrade
     const current = p.myGrade ?? p.grade
-    p.myGrade = Math.round(current + (target - current) * 0.4 + (Math.random() - 0.5) * 6)
+    p.myGrade = Math.round(current + (target - current) * 0.4 + (makeRng(hash32(p.id, world.season * 31 + (p.confidence | 0)))() - 0.5) * 6)
     p.confidence = Math.min(100, p.confidence + 24)
     p.scoutConfidence = Math.min(100, p.scoutConfidence + 20)
     const c = get().career
@@ -1064,12 +1075,14 @@ export const useGame = create<GameStore>((set, get) => ({
     })
     set({ career: { ...career }, tick: get().tick + 1 })
     announceDraftPicks(world, career)
+    resolveTradePicks(world, career)
     get().save()
   },
   simToMyPick: () => {
     simUntilUser(world, get().career)
     const career = get().career
     if (career) announceDraftPicks(world, career)
+    if (career) resolveTradePicks(world, career)
     bump(set, get)
     get().save()
   },
@@ -1079,6 +1092,7 @@ export const useGame = create<GameStore>((set, get) => ({
     world.draftState.complete = true
     const career = get().career
     if (career) announceDraftPicks(world, career)
+    if (career) resolveTradePicks(world, career)
     bump(set, get)
     get().showToast('The draft is complete. Undrafted free agents have signed.')
     get().save()
@@ -1272,6 +1286,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast(verdict.reason)
       return { accepted: false, message: verdict.reason }
     }
+    const rec = recordTrade(world, career, partnerId, give, get2)
     const log = executeTrade(world, career.teamId, partnerId, give, get2)
     // #5: stamp incoming players as your acquisitions.
     for (const a of get2) {
@@ -1279,6 +1294,9 @@ export const useGame = create<GameStore>((set, get) => ({
       const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
       if (p) p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
     }
+    // #6: log the trade for the Trade Tree (newest last, capped).
+    const trades = [...(career.trades ?? []), rec].slice(-60)
+    set({ career: { ...career, trades } })
     bump(set, get)
     const msg = `Trade with the ${world.byId[partnerId].name} completed — ${log.join(', ')}.`
     get().showToast(msg)
@@ -1551,6 +1569,7 @@ function migrateWorld(w: World): World {
     const built = buildDraftOrder(w)
     w.draftOrder = built.order
     w.draftRounds = built.rounds
+    w.draftPickIds = built.ids
   }
   return w
 }

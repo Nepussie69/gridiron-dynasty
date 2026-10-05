@@ -4,7 +4,9 @@ import { cn } from '../lib/cn'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import { minNflLevel, nflLadder, tierFor } from '../game/engine/career'
 import { capabilities } from '../game/engine/capabilities'
-import type { CareerPath } from '../game/types'
+import { SCENARIOS, scenarioById } from '../game/engine/scenarios'
+import { parseSeedCode } from '../game/engine/seed'
+import type { CareerPath, ScenarioId } from '../game/types'
 import { useGame } from '../store/gameStore'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
@@ -125,16 +127,33 @@ export function CareerHub() {
   const [advanced, setAdvanced] = useState(false)
   const [level, setLevel] = useState(minNflLevel('personnel'))
   const [teamId, setTeamId] = useState(pool[0].id)
+  const [seedText, setSeedText] = useState('')
+  const [scenarioId, setScenarioId] = useState<ScenarioId>('climb')
 
+  const seedValue = parseSeedCode(seedText)
+  const seedInvalid = seedText.trim() !== '' && seedValue === null
   const selected = pool.find((t) => t.id === teamId) ?? pool[0]
   const ladder = nflLadder(path)
   const rung = tierFor(path, level)
   const startSalary = salaryForLevel(path, level)
+  const scenario = scenarioById(scenarioId)
+  const scenarioLocked = scenarioId !== 'climb'
 
   function choosePath(p: CareerPath) {
     setPath(p)
     setArchetype(ARCHETYPES[p][0].id)
     setLevel(minNflLevel(p))
+  }
+
+  function chooseScenario(id: ScenarioId) {
+    setScenarioId(id)
+    const s = scenarioById(id)
+    if (s.path) {
+      setPath(s.path)
+      setArchetype(ARCHETYPES[s.path][0].id)
+    }
+    if (s.level !== null) setLevel(s.level)
+    if (s.forceLowestPrestige) setTeamId(pool[0].id)
   }
 
   return (
@@ -304,14 +323,19 @@ export function CareerHub() {
               className="mb-5 w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-cond text-base font-600 text-ink outline-none focus:border-[var(--team)]"
             />
 
-            <div className="label mb-1.5">Track</div>
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="label">Track</span>
+              {scenarioLocked && <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Set by scenario</span>}
+            </div>
             <div className="mb-5 grid grid-cols-2 gap-2">
               {(['personnel', 'coach'] as CareerPath[]).map((p) => (
                 <button
                   key={p}
                   onClick={() => choosePath(p)}
+                  disabled={scenarioLocked}
                   className={cn(
                     'rounded-lg border px-3 py-2.5 text-left transition',
+                    scenarioLocked && 'cursor-not-allowed opacity-60',
                     path === p ? 'border-transparent bg-ink text-white' : 'border-line bg-surface-2 text-ink hover:border-line-strong',
                   )}
                 >
@@ -324,6 +348,34 @@ export function CareerHub() {
                 </button>
               ))}
             </div>
+
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="label">Scenario</span>
+              {scenarioLocked && <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Set by scenario</span>}
+            </div>
+            <div className="mb-1.5 space-y-1.5">
+              {SCENARIOS.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => chooseScenario(s.id)}
+                  className={cn(
+                    'flex w-full items-start gap-3 rounded-lg border p-2.5 text-left transition',
+                    scenarioId === s.id ? 'border-[var(--team)] bg-[var(--team-soft)]' : 'border-line hover:bg-surface-2',
+                  )}
+                >
+                  <div className={cn('mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border', scenarioId === s.id ? 'border-[var(--team)]' : 'border-line-strong')}>
+                    {scenarioId === s.id && <span className="h-2 w-2 rounded-full" style={{ background: 'var(--team)' }} />}
+                  </div>
+                  <div>
+                    <div className="font-cond text-sm font-700 uppercase text-ink">{s.title}</div>
+                    <div className="text-xs text-muted">{s.desc}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <p className="mb-5 text-[11px] leading-relaxed text-muted">
+              Scenarios skip the climb — the Standard Climb is the intended way to play.
+            </p>
 
             <div className="label mb-1.5">Archetype</div>
             <div className="mb-5 space-y-1.5">
@@ -349,14 +401,19 @@ export function CareerHub() {
 
             {advanced && (
               <>
-                <div className="label mb-1.5">Starting Level (advanced)</div>
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <span className="label">Starting Level (advanced)</span>
+                  {scenarioLocked && <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Set by scenario</span>}
+                </div>
                 <div className="mb-4 flex flex-wrap gap-1.5">
                   {ladder.map((r) => (
                     <button
                       key={r.level}
                       onClick={() => setLevel(r.level)}
+                      disabled={scenarioLocked}
                       className={cn(
                         'rounded-md border px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
+                        scenarioLocked && 'cursor-not-allowed opacity-60',
                         level === r.level ? 'border-transparent text-white' : 'border-line text-muted hover:bg-surface-2',
                       )}
                       style={level === r.level ? { background: 'var(--team)' } : undefined}
@@ -365,13 +422,25 @@ export function CareerHub() {
                     </button>
                   ))}
                 </div>
+
+                <div className="label mb-1.5">World seed</div>
+                <input
+                  value={seedText}
+                  onChange={(e) => setSeedText(e.target.value)}
+                  placeholder="Blank = random"
+                  className="mb-1 w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-cond text-sm font-600 text-ink outline-none focus:border-[var(--team)]"
+                />
+                <p className="text-[11px] leading-relaxed text-muted">Same seed → same league. Leave blank for random.</p>
+                {seedInvalid && (
+                  <p className="mt-1 text-[11px] font-600 text-loss">That seed isn&apos;t valid.</p>
+                )}
               </>
             )}
 
             <div className="mb-1.5 flex items-baseline justify-between">
               <span className="label">Choose Your Franchise</span>
               <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">
-                Rebuild jobs · weakest clubs
+                {scenario.forceLowestPrestige ? 'Set by scenario' : 'Rebuild jobs · weakest clubs'}
               </span>
             </div>
             <div className="mb-2 max-h-[180px] overflow-y-auto rounded-lg border border-line bg-surface-2 p-2">
@@ -380,8 +449,10 @@ export function CareerHub() {
                   <button
                     key={t.id}
                     onClick={() => setTeamId(t.id)}
+                    disabled={scenario.forceLowestPrestige}
                     className={cn(
                       'flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition',
+                      scenario.forceLowestPrestige && 'cursor-not-allowed opacity-60',
                       teamId === t.id ? 'bg-white shadow-sm ring-1 ring-[var(--team)]' : 'hover:bg-white/60',
                     )}
                   >
@@ -422,9 +493,9 @@ export function CareerHub() {
               variant="primary"
               size="lg"
               className="w-full"
-              onClick={() => selected && startCareer({ name, path, archetype, teamId: selected.id, startLevel: level })}
+              onClick={() => selected && startCareer({ name, path, archetype, teamId: selected.id, startLevel: level, seed: seedValue ?? undefined, scenarioId })}
             >
-              <Search size={16} /> Begin as {rung.title} <ArrowRight size={15} />
+              <Search size={16} /> Begin: {scenario.title} <ArrowRight size={15} />
             </Button>
 
             <button

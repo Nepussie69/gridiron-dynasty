@@ -55,6 +55,8 @@ export interface World {
   draftPicks: DraftPick[]
   /** Round number for each index of `draftOrder` (parallel arrays). */
   draftRounds: number[]
+  /** The DraftPick.id for each slot of `draftOrder` (parallel array). */
+  draftPickIds?: string[]
   /** Players on the practice squad, keyed by team (max 16). */
   practiceSquad: Record<string, Player[]>
   /** Players on injured reserve, keyed by team. */

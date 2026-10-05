@@ -196,6 +196,8 @@ export interface PlayerOrigin {
   by?: string | null
   /** Team the player came from, for trades/free agency. */
   fromTeamId?: string | null
+  /** The DraftPick.id used to draft him, when he was a drafted player. */
+  pickId?: string
 }
 
 /**
@@ -319,6 +321,29 @@ export interface DraftPick {
 }
 
 
+/** A snapshot of one asset at trade time, plus what it later became (picks). */
+export interface TradeAssetSnap {
+  kind: 'player' | 'pick'
+  id: string
+  /** Human label at trade time, e.g. "J. Allen (QB, 91)" or "2028 Rd 2 (NYJ)". */
+  label: string
+  /** For picks: the player drafted with it, once known. */
+  resolvedPlayerId?: string
+  resolvedName?: string
+}
+
+/** One trade the user's club made (#6 transaction trees). */
+export interface TradeRecord {
+  id: string
+  season: number
+  week: number
+  partnerId: string
+  gave: TradeAssetSnap[]
+  got: TradeAssetSnap[]
+  /** Earlier trades whose incoming assets were sent out in this one. */
+  parentIds: string[]
+}
+
 export type Recommendation = 'Blue Chip' | 'Starter' | 'Depth' | 'Pass'
 
 export interface DraftProspect {
@@ -360,6 +385,8 @@ export interface DraftProspect {
 }
 
 export type CareerPath = 'coach' | 'personnel'
+/** Opt-in starting situation (F3). Standard Climb is the default. */
+export type ScenarioId = 'climb' | 'hotSeat' | 'capHell' | 'rebuild'
 export interface CareerTier {
   level: number
   title: string
@@ -474,6 +501,10 @@ export interface CareerState {
   weekFlags?: Record<string, boolean>
   /** Your stated philosophy (#14). */
   philosophy?: string
+  /** Every trade your club has made (#6), newest last, capped at 60. */
+  trades?: TradeRecord[]
+  /** The starting situation this career began from (F3). */
+  scenario?: ScenarioId
   history: { season: number; team: string; role: string; record: string; outcome: string }[]
 }
 
