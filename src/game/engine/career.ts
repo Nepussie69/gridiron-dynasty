@@ -84,10 +84,10 @@ export const PERSONNEL_LADDER: CareerTier[] = [
   { level: 2, title: 'Regional Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 24, profile: 11 }), verb: 'predict', blurb: 'Cover multiple states for a Power program.' },
   { level: 3, title: 'National Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 35, profile: 20 }), verb: 'predict', blurb: 'Cross-check the board from coast to coast.' },
   { level: 4, title: 'Assistant Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 45, profile: 31 }), verb: 'persuade', blurb: 'Run the college board for an NFL club.' },
-  { level: 5, title: 'Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 52, roster: 22, profile: 36 }), verb: 'persuade', blurb: 'You own the draft board now.' },
-  { level: 6, title: 'Director of Player Personnel', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 58, roster: 34, profile: 43 }), verb: 'persuade', blurb: 'Pro and college. One step from the chair.' },
-  { level: 7, title: 'Assistant General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 38, leadership: 36, profile: 46 }), verb: 'allocate', blurb: 'Run the building day to day.' },
-  { level: 8, title: 'General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 46, leadership: 40, profile: 52, results: 28 }), verb: 'allocate', blurb: 'Final say on the 53. Go win a championship.' },
+  { level: 5, title: 'Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 62, roster: 32, profile: 44 }), verb: 'persuade', blurb: 'You own the draft board now.' },
+  { level: 6, title: 'Director of Player Personnel', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 68, roster: 46, profile: 52 }), verb: 'persuade', blurb: 'Pro and college. One step from the chair.' },
+  { level: 7, title: 'Assistant General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 55, leadership: 52, profile: 60 }), verb: 'allocate', blurb: 'Run the building day to day.' },
+  { level: 8, title: 'General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 62, leadership: 56, profile: 66, results: 43 }), verb: 'allocate', blurb: 'Final say on the 53. Go win a championship.' },
 ]
 
 export function ladderFor(path: CareerPath): CareerTier[] {

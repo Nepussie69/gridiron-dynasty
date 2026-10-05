@@ -99,6 +99,7 @@ game's guardrails intact.
   - Key files: `src/game/engine/department.ts`, `src/game/engine/conviction.ts`, `src/game/engine/room.ts`,
     `src/game/engine/portfolio.ts`, `src/components/InterviewPrep.tsx`, `src/components/RoomCard.tsx`,
     `src/components/PortfolioCard.tsx` (plus `draft.ts`, `career.ts`, `store/gameStore.ts` wiring).
+  - U15 Personnel gates 5–8 retuned after the draft fix (GM median ≈ season 10 across 6 seeds).
 
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.

@@ -23,6 +23,7 @@ _Starts after L5 (NEXT_PHASE_L5.md) is fully done and committed. Lint baseline: 
 | U12 | Portfolio: interview wiring | ✅ done — verified (push D) |
 | U13 | Portfolio: Interview Prep + résumé UI | ✅ done — verified (push D) |
 | U14 | HANDOFF.md docs | ✅ done — verified (push D) |
+| U15 | Personnel pacing retune (gates 5–8) | ✅ done — verified (push E) |
 
 ## Phase goal
 
@@ -287,3 +288,29 @@ If it needs `tradeTree`, that's fine (tradeTree.ts doesn't import career.ts; ver
   | 33333 | 6 | 14 |
   Personnel is now **faster than the 10–15 target** (median ~7). Pre-L6 probes (11 → 14) were run while the draft truncation bug starved the user's club of rookies.
   The likely driver is U0, which lets the club actually draft. Not tuned here: gate changes are out of scope and need a user decision.
+
+---
+
+## U15 — Personnel pacing retune (option 1, approved by user)
+
+**Why:** After U0 fixed the draft, the personnel track reached GM in ~5–10 seasons (target 10–15). Claude tuned the gates in the
+browser against the balance probe (6 seeds, mutating `PERSONNEL_LADDER` at runtime). Only the **personnel** gates for levels 5–8 change.
+Levels 0–4, the coaching ladder, and all other logic are untouched.
+
+**Change (`src/game/engine/career.ts`, `PERSONNEL_LADDER`):** edit ONLY the `gate({...})` arguments of these four rows:
+| Level | Title | Old gate | New gate |
+|---|---|---|---|
+| 5 | Director of College Scouting | evaluation 52, roster 22, profile 36 | **evaluation 62, roster 32, profile 44** |
+| 6 | Director of Player Personnel | evaluation 58, roster 34, profile 43 | **evaluation 68, roster 46, profile 52** |
+| 7 | Assistant General Manager | roster 38, leadership 36, profile 46 | **roster 55, leadership 52, profile 60** |
+| 8 | General Manager | roster 46, leadership 40, profile 52, results 28 | **roster 62, leadership 56, profile 66, results 43** |
+
+**Measured with these gates (personnel → GM season):** 20261004: 9 · 111: 14 · 2222: 10 · 33333: 10 · 5150: 10 · 777: 15 (777 never reached GM in 16 seasons on the old gates).
+Coach track unchanged (HC at 10 / 12 / 14 / never on the same seeds).
+
+**Known side effect, accepted:** the longest stay is still at Director of Player Personnel (often 5–8 seasons). If that rung feels like waiting in play,
+the follow-up is option 3 (redistribute the gate 7 requirements), not more raises.
+
+**Acceptance:** build + lint at 5 warnings. `grep -n "level: [5-8], title" src/game/engine/career.ts` shows the new numbers.
+Append one line to HANDOFF.md under the L6 entry: "Personnel gates 5–8 retuned after the draft fix (GM median ≈ season 10 across 6 seeds)."
+- **Push E** (probe on the committed code): personnel → GM at 9 / 14 / 10 / 10 / 10 (seeds 20261004 / 111 / 2222 / 33333 / 5150), matching the runtime trial exactly. Coach unchanged. Implemented by Flash on its 3rd attempt (1st hung on opencode-go; 2nd failed on the opencode/ route with "Insufficient account funds").
