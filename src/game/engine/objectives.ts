@@ -24,12 +24,12 @@ function onMySide(p: Player, career: CareerState): boolean {
   return p.side !== 'ST'
 }
 
-/** Players on your side of the ball, age ≤ 25, at season start: { id: ovr }. */
+/** Players on your side of the ball, age ≤ 26 (matches Your Room), at season start: { id: ovr }. */
 export function snapshotDevBaseline(world: World, career: CareerState): Record<string, number> {
   const roster = world.roster[career.teamId] ?? []
   const out: Record<string, number> = {}
   for (const p of roster) {
-    if (p.age <= 25 && onMySide(p, career)) out[p.id] = p.ovr
+    if (p.age <= 26 && onMySide(p, career)) out[p.id] = p.ovr
   }
   return out
 }

@@ -16,13 +16,13 @@ _Starts after L5 (NEXT_PHASE_L5.md) is fully done and committed. Lint baseline: 
 | U5 | Conviction: engine + ledger payout | ✅ done — verified (push B) |
 | U6 | Conviction: draft wiring + vindication | ✅ done — verified (push B) |
 | U7 | Conviction: UI | ✅ done — verified (push B) |
-| U8 | Your Room: engine | in progress (push C) |
-| U9 | Your Room: store + season-end wiring (replaces drills) | in progress (push C) |
-| U10 | Your Room: UI | in progress (push C) |
-| U11 | Portfolio: engine | not started |
-| U12 | Portfolio: interview wiring | not started |
-| U13 | Portfolio: Interview Prep + résumé UI | not started |
-| U14 | HANDOFF.md docs | not started |
+| U8 | Your Room: engine | ✅ done — verified (push C) |
+| U9 | Your Room: store + season-end wiring (replaces drills) | ✅ done — verified (push C) |
+| U10 | Your Room: UI | ✅ done — verified (push C) |
+| U11 | Portfolio: engine | in progress (push D) |
+| U12 | Portfolio: interview wiring | in progress (push D) |
+| U13 | Portfolio: Interview Prep + résumé UI | in progress (push D) |
+| U14 | HANDOFF.md docs | in progress (push D) |
 
 ## Phase goal
 
@@ -276,3 +276,4 @@ If it needs `tradeTree`, that's fine (tradeTree.ts doesn't import career.ts; ver
 ## Verification log
 - **Push A** (browser): GM auto-finish draft now makes 220/220 available picks (was 70); user club gets 7 rookies; every rookie carries `pickId`; `setScoutTrust` stores trust. Note: the prospect class (220) is smaller than the pick count (224, comp picks), so the last 4 picks go unused. This is a pre-existing class-size issue and is not fixed here.
 - **Push B** (browser, Asst Dir rung): conviction capped at 3 (4th refused); after auto-finish the Director took 2 of 3 tagged prospects; all 3 logged as conviction ledger entries (2 accepted, 1 passed). Claude fixed the gap where `gradeLedger` overwrote "Called it" outcome text (`ledger.ts`: skip the outcome refresh when `e.vindication`).
+- **Push C** (browser, NFL position coach, 17 banked reps): Concentrate → focus player 82→84 + develop ledger entry; Spread → +1 spread, no entries (gains < 2, by design); no reps → no gains; Dashboard shows Your Room; second drills per week refused. Claude fixes: (1) Spread no longer grants +2 with zero reps; (2) the room is computed after season-end aging, so the age cap is 27 at that point and focus players are looked up on the full roster (previously 26-year-old focus players aged out and got nothing); (3) the F5 dev baseline age is aligned to ≤ 26 to match the room.

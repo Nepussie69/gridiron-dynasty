@@ -15,8 +15,10 @@ import {
 import { useGame, useWorld, type ScreenId } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { ownerPersonality, ownerPersonalityLabel } from '../game/engine/people'
+import { hasRoom } from '../game/engine/room'
 import { CulturePanel } from '../components/CulturePanel'
 import { OfficeScene } from '../components/OfficeScene'
+import { RoomCard } from '../components/RoomCard'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { WeeklyDecision } from '../components/WeeklyDecision'
 import { Badge, Button, Card, Donut, MiniBars, OvrBadge, PageHeader, RatingBar, Stat, TeamCrest } from '../ui/kit'
@@ -191,6 +193,9 @@ export function Dashboard() {
 
           {/* Culture / cohesion */}
           <CulturePanel teamId={activeTeamId} />
+
+          {/* Your Room (G3) — coaching rungs below HC */}
+          {hasRoom(career) && <RoomCard />}
 
           {/* Positional needs (NFL) */}
           {isNFL && (

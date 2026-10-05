@@ -92,6 +92,7 @@ import {
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
+import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
@@ -356,6 +357,10 @@ interface GameStore {
   setScoutTrust: (staffId: string, level: 'fade' | 'normal' | 'lean') => void
   /** G2: tag/untag a prospect as a conviction call for this draft (max 3). */
   toggleConviction: (prospectId: string) => void
+  /** G3: add/remove a player from your room's focus list (max 3). */
+  toggleRoomFocus: (playerId: string) => void
+  /** G3: choose your room's practice plan (Concentrate or Spread). */
+  setRoomPlan: (plan: 'concentrate' | 'spread') => void
   /** Work the phones to uncover one hidden character facet of a prospect. */
   investigateCharacter: (id: string) => void
   /** Spend part of the weekly time budget on an action (#5). */
@@ -726,6 +731,12 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     seasonCareer.seasonQuestion = makeSeasonQuestion(world, seasonCareer)
     seasonCareer.devBaseline = snapshotDevBaseline(world, seasonCareer)
+    // G3: a new season empties the rep bank and drops anyone who left the room.
+    if (hasRoom(seasonCareer)) {
+      const still = new Set(roomPlayers(world, seasonCareer).map((p) => p.id))
+      const room: NonNullable<CareerState['room']> = seasonCareer.room ?? { focus: [], plan: 'concentrate', reps: 0 }
+      seasonCareer.room = { ...room, reps: 0, focus: room.focus.filter((id) => still.has(id)) }
+    }
     set({
       career: seasonCareer,
       scoutingPoints: MAX_SCOUT_POINTS,
@@ -864,6 +875,32 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  toggleRoomFocus: (playerId) => {
+    const career = get().career
+    if (!career || !hasRoom(career)) return
+    const room = career.room ?? { focus: [], plan: 'concentrate', reps: 0 }
+    const focus = [...room.focus]
+    const i = focus.indexOf(playerId)
+    if (i >= 0) focus.splice(i, 1)
+    else {
+      if (focus.length >= MAX_ROOM_FOCUS) {
+        get().showToast(`Your room focuses on ${MAX_ROOM_FOCUS} players at a time.`)
+        return
+      }
+      focus.push(playerId)
+    }
+    set({ career: { ...career, room: { ...room, focus } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  setRoomPlan: (plan) => {
+    const career = get().career
+    if (!career || !hasRoom(career)) return
+    const room = career.room ?? { focus: [], plan: 'concentrate', reps: 0 }
+    set({ career: { ...career, room: { ...room, plan } }, tick: get().tick + 1 })
+    get().save()
+  },
+
   investigateCharacter: (id) => {
     const career = get().career
     if (!career) return
@@ -904,6 +941,7 @@ export const useGame = create<GameStore>((set, get) => ({
     const skills: Skills = { ...career.skills }
     let note = ''
     let jobSecurity = career.jobSecurity
+    let nextRoom: CareerState['room']
     switch (id) {
       case 'film':
         skills.evaluation = clamp(skills.evaluation + 1, 0, 99)
@@ -937,12 +975,13 @@ export const useGame = create<GameStore>((set, get) => ({
           get().showToast('Drills already run this week.')
           return
         }
-        const roster = world.roster[career.teamId] ?? []
-        const y = [...roster].filter((p) => p.age <= 24 && p.ovr < p.pot).sort((a, b) => (b.pot - b.ovr) - (a.pot - a.ovr))[0]
-        if (y) {
-          y.ovr = clamp(y.ovr + 1, 40, y.pot)
-          note = `Drills: ${y.name} improved to ${y.ovr} OVR.`
-        } else note = 'No young player with room to grow.'
+        if (!hasRoom(career)) {
+          get().showToast('No room to run.')
+          return
+        }
+        const room: NonNullable<CareerState['room']> = career.room ?? { focus: [], plan: 'concentrate', reps: 0 }
+        nextRoom = { ...room, reps: Math.min(17, (room.reps ?? 0) + 1) }
+        note = `Drills: ${nextRoom.reps} reps banked for your room.`
         break
       }
       case 'install':
@@ -963,7 +1002,10 @@ export const useGame = create<GameStore>((set, get) => ({
         note = 'Owner meeting: the mandate is clearer (+job security).'
         break
     }
-    let nextCareer = withFlag({ ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity }, 'hours')
+    let nextCareer = withFlag(
+      { ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity, ...(nextRoom ? { room: nextRoom } : {}) },
+      'hours',
+    )
     if (id === 'drills') nextCareer = withFlag(nextCareer, 'drills')
     set({ career: nextCareer, tick: get().tick + 1 })
     get().showToast(note)
@@ -1713,6 +1755,25 @@ function runEndOfRegularSeason(
   world.awards = { mvp: mvp ?? undefined }
 
   const retired = developPlayers(world)
+  // G3: your room's banked reps turn into OVR gains at season end.
+  let roomGains: RoomGain[] = []
+  if (career && hasRoom(career)) {
+    roomGains = applyRoomDevelopment(world, career).gains
+    for (const g of roomGains) {
+      const gain = g.to - g.from
+      if (gain < 2) continue
+      const p = world.players.find((x) => x.id === g.id)
+      pushLedger(career, {
+        kind: 'develop',
+        playerId: g.id,
+        name: g.name,
+        pos: p?.pos ?? '—',
+        college: p?.college ?? '—',
+        gain,
+        note: `Developed ${g.name}: ${g.from} → ${g.to}`,
+      })
+    }
+  }
   runAIResign(world)
   tickAllContracts(world)
 
@@ -1947,6 +2008,15 @@ function runEndOfRegularSeason(
     }
     for (const line of payout.lines) {
       careerNext = logMoment(careerNext, { week: careerNext.week, text: line, tone: 'win' })
+    }
+    // G3: summarise what the room's reps produced.
+    if (roomGains.length) {
+      const total = roomGains.reduce((s, g) => s + (g.to - g.from), 0)
+      careerNext = logMoment(careerNext, {
+        week: careerNext.week,
+        text: `Your room put in the work: ${roomGains.length} player${roomGains.length === 1 ? '' : 's'} gained ${total} OVR.`,
+        tone: 'win',
+      })
     }
     // Fold the club's evaluators' reports into their ledgers so their biases
     // can be learned over time.
