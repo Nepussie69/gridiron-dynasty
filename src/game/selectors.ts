@@ -1,8 +1,43 @@
-import type { Player, Team, TeamRecord } from './types'
+import type { Player, PlayerOrigin, Team, TeamRecord } from './types'
 import type { World } from './engine/generate'
 import { summarizeCap } from './engine/cap'
 
 export type League = World
+
+/**
+ * A short "fingerprint" for how a player got here (#5). Returns null unless the
+ * move was YOURS — the game only points at things you did. `by` holds the
+ * gmName stamped at the time of the move. When the player has since left your
+ * club, the tag becomes "Your former player" instead of claiming the arrival.
+ */
+export function originTag(
+  origin: PlayerOrigin | undefined,
+  gmName: string,
+  currentTeamId?: string | null,
+  myTeamId?: string,
+): string | null {
+  if (!origin) return null
+  const mine = origin.by != null && origin.by === gmName
+  if (!mine) return null
+  if (currentTeamId && myTeamId && currentTeamId !== myTeamId) return 'Your former player'
+  switch (origin.kind) {
+    case 'draft':
+      return `Drafted by you · Rd ${origin.round ?? '?'}`
+    case 'freeAgent':
+      return 'Signed by you'
+    case 'udfa':
+      return 'Your UDFA find'
+    case 'trade':
+      return 'Traded for by you'
+    default:
+      return null
+  }
+}
+
+/** Look up a player by id across the league (roster + full pool). */
+export function playerById(league: World, playerId: string): Player | undefined {
+  return league.players.find((p) => p.id === playerId)
+}
 
 export function teamName(t: Team) {
   return t.tier === 'NFL' ? `${t.city} ${t.name}` : t.name

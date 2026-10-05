@@ -8,7 +8,6 @@ const CAT_TONE: Record<string, 'gold' | 'loss' | 'info' | 'win' | 'neutral' | 'w
   Injury: 'loss',
   Roster: 'info',
   Draft: 'info',
-  Recruiting: 'info',
   Trade: 'warn',
   League: 'neutral',
   Staff: 'neutral',

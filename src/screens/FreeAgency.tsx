@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { canSignFreeAgents } from '../game/engine/career'
+import { accessFor } from '../game/engine/access'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { PlayerTable } from '../components/PlayerTable'
@@ -17,6 +18,7 @@ export function FreeAgency() {
   const [q, setQ] = useState('')
 
   const canSign = canSignFreeAgents(career)
+  const access = accessFor(career, 'freeagency')
   const cap = capSummary(league, career.teamId)
 
   const agents = useMemo(() => {
@@ -45,7 +47,9 @@ export function FreeAgency() {
 
       {!canSign && (
         <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
-          You don't have roster control yet. Reach <strong>Director of Player Personnel</strong> or higher to sign free agents.
+          {access === 'advise'
+            ? 'Roster building is the GM\u2019s call. You influence who the club targets \u2014 the GM signs the deal.'
+            : <>You don't have roster control yet. Reach <strong>Director of Player Personnel</strong> or higher to sign free agents.</>}
         </div>
       )}
 
@@ -92,7 +96,7 @@ export function FreeAgency() {
                 disabled={!canSign || cap.space < p.contract.annual}
                 onClick={() => signFreeAgent(p.id)}
               >
-                {cap.space < p.contract.annual ? 'No cap room' : 'Sign'}
+                {!canSign ? 'GM decides' : cap.space < p.contract.annual ? 'No cap room' : 'Sign'}
               </Button>
             )}
           />

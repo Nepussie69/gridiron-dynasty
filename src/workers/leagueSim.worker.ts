@@ -37,22 +37,27 @@ interface WeekResult {
 self.onmessage = async (e: MessageEvent) => {
   const msg = e.data as WeekRequest
   if (!msg || msg.type !== 'week') return
-  // Calibration is fetched per worker; the embedded fallback covers slow loads.
-  await loadCalibration()
-  const world = {
-    ...msg.world,
-    players: Object.values(msg.world.roster).flat(),
-  } as unknown as World
+  const post = (m: unknown) => (self as unknown as { postMessage: (m: unknown) => void }).postMessage(m)
+  try {
+    // Calibration is fetched per worker; the embedded fallback covers slow loads.
+    await loadCalibration()
+    const world = {
+      ...msg.world,
+      players: Object.values(msg.world.roster).flat(),
+    } as unknown as World
 
-  const results: WeekResult[] = []
-  for (const g of msg.games) {
-    const sim = simulatePlayByPlay(world, g.homeId, g.awayId, g.seed)
-    results.push({
-      id: g.id,
-      homeScore: sim.homeScore,
-      awayScore: sim.awayScore,
-      box: boxScore(world, sim),
-    })
+    const results: WeekResult[] = []
+    for (const g of msg.games) {
+      const sim = simulatePlayByPlay(world, g.homeId, g.awayId, g.seed)
+      results.push({
+        id: g.id,
+        homeScore: sim.homeScore,
+        awayScore: sim.awayScore,
+        box: boxScore(world, sim),
+      })
+    }
+    post({ id: msg.id, results })
+  } catch (err) {
+    post({ id: msg.id, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })
   }
-  ;(self as unknown as { postMessage: (m: unknown) => void }).postMessage({ id: msg.id, results })
 }

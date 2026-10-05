@@ -11,10 +11,9 @@ export function Awards() {
   const db = useGame((s) => s.statsDb)()
   void db
   const history = getAwards()
-  const [level, setLevel] = useState<'NFL' | 'CFB'>('NFL')
   const [tab, setTab] = useState<'honors' | 'hof'>('honors')
 
-  const seasons = history.seasons.filter((s) => s.level === level).sort((a, b) => b.season - a.season)
+  const seasons = history.seasons.filter((s) => s.level === 'NFL').sort((a, b) => b.season - a.season)
   const current = seasons[0]
 
   return (
@@ -22,16 +21,9 @@ export function Awards() {
       <PageHeader
         eyebrow="League"
         title="Awards & Hall of Fame"
-        subtitle="MVPs, All-Pro teams, and the legends who built careers across your universe."
+        subtitle="MVPs, All-Pro teams, and the legends who built careers across your league."
         right={
           <div className="flex gap-2">
-            <div className="flex rounded-lg bg-surface-2 p-0.5">
-              {(['NFL', 'CFB'] as const).map((l) => (
-                <button key={l} onClick={() => setLevel(l)} className={cn('rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition', level === l ? 'bg-white text-ink shadow-sm' : 'text-muted')}>
-                  {l === 'NFL' ? 'Pro' : 'College'}
-                </button>
-              ))}
-            </div>
             <div className="flex rounded-lg bg-surface-2 p-0.5">
               {(['honors', 'hof'] as const).map((t) => (
                 <button key={t} onClick={() => setTab(t)} className={cn('rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition', tab === t ? 'bg-white text-ink shadow-sm' : 'text-muted')}>
@@ -52,7 +44,7 @@ export function Awards() {
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <AwardCard winner={current.mvp} label="MVP" world={world} />
-              <AwardCard winner={current.opoy} label={level === 'NFL' ? 'Offensive POY' : 'Offensive POY'} world={world} />
+              <AwardCard winner={current.opoy} label="Offensive POY" world={world} />
               <AwardCard winner={current.dpoy} label="Defensive POY" world={world} />
               <AwardCard winner={current.oroy} label="Offensive ROY" world={world} />
               <AwardCard winner={current.droy} label="Defensive ROY" world={world} />
@@ -165,7 +157,7 @@ function HallOfFame({ history, world }: { history: ReturnType<typeof getAwards>;
         <div className="flex items-center gap-2 text-sm text-muted">
           <Trophy size={16} className="text-gold" />
           <span>
-            <strong className="text-ink">{hof.length}</strong> legends enshrined from your universe's history.
+            <strong className="text-ink">{hof.length}</strong> legends enshrined from your league's history.
           </span>
         </div>
       </Card>

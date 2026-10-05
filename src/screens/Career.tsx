@@ -12,10 +12,11 @@ import {
   salaryFor,
   tierFor,
   unitRanks,
+  VERB_BLURB,
   type Reputation,
 } from '../game/engine/career'
 import { ALL_CAPABILITIES, capabilities } from '../game/engine/capabilities'
-
+import { ghostVerdict } from '../game/engine/ghost'
 const CAP_LABELS: Record<string, string> = {
   grade: 'Grade prospects',
   rankBoard: 'Rank the board',
@@ -27,9 +28,6 @@ const CAP_LABELS: Record<string, string> = {
   manageCap: 'Manage the cap',
   draft: 'Make draft picks',
   signFreeAgents: 'Sign free agents',
-  recruit: 'Recruit',
-  portal: 'Transfer portal',
-  nilBudget: 'NIL budget',
   developRoom: 'Develop a room',
   callPlays: 'Call plays',
   installScheme: 'Install scheme',
@@ -39,6 +37,12 @@ const CAP_LABELS: Record<string, string> = {
 }
 import { recordOf, recordStr } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
+import { CareerRhythm } from '../components/CareerRhythm'
+import { CareerPeople } from '../components/CareerPeople'
+import { WeeklyChecklist } from '../components/WeeklyChecklist'
+import { AmbitionsCard } from '../components/AmbitionsCard'
+import { LegacyCard } from '../components/LegacyCard'
+import { VoicesCard } from '../components/VoicesCard'
 import { Badge, Button, Card, PageHeader, RatingBar, TeamCrest } from '../ui/kit'
 
 const REP_LABELS: { key: keyof Reputation; label: string; desc: string }[] = [
@@ -71,7 +75,7 @@ export function Career() {
     league,
     career,
     { wins: rec.wins, losses: rec.losses },
-    unitRanks(league, career.tier === 'NFL' ? 'NFL' : 'FBS')[career.teamId],
+    unitRanks(league, 'NFL')[career.teamId],
   )
 
   return (
@@ -110,10 +114,20 @@ export function Career() {
             <HeadStat label="Hit Rate" value={`${hitRate}%`} />
           </div>
         </div>
+        <div className="border-t border-white/15 px-5 pb-4 pt-3">
+          <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/70">
+            This rung&apos;s verb
+          </span>
+          <div className="font-display text-sm font-700 uppercase tracking-wide text-white">
+            {VERB_BLURB[current.verb]}
+          </div>
+        </div>
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
         <div className="space-y-5">
+          <WeeklyChecklist />
+          <CareerRhythm />
           {/* The ladder */}
           <Card>
             <div className="mb-3 flex items-center justify-between">
@@ -195,6 +209,11 @@ export function Career() {
 
         {/* Right rail */}
         <div className="space-y-5">
+          <CareerPeople />
+          <AmbitionsCard />
+          <GhostCard />
+          <LegacyCard />
+          <VoicesCard />
           {/* Your role: what this job can actually do */}
           <Card>
             <div className="mb-3 flex items-center justify-between">
@@ -408,5 +427,51 @@ function HeadStat({ label, value }: { label: string; value: string | number }) {
       <div className="label !text-white/60">{label}</div>
       <div className="font-display text-lg font-700 tnum leading-none">{value}</div>
     </div>
+  )
+}
+
+/**
+ * The "ghost GM" verdict (#8): your wins versus a replacement-level manager on
+ * the same talent and schedule. The most honest score the game can give you.
+ */
+function GhostCard() {
+  const career = useGame((s) => s.career)!
+  const verdict = ghostVerdict(career)
+  const hist = career.ghostHistory ?? []
+  const last = hist[hist.length - 1]
+  return (
+    <Card>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Ghost GM</h3>
+        {verdict && <Badge tone={verdict.totalDelta >= 0 ? 'win' : 'loss'}>{verdict.label}</Badge>}
+      </div>
+      {!verdict ? (
+        <p className="text-sm text-muted">
+          Finish a season to see how you did against a replacement-level manager on the same roster.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {last && (
+            <div className="rounded-lg bg-surface-2 p-3">
+              <div className="label !text-[10px]">Last season · {last.season}</div>
+              <div className="font-display text-2xl font-700 tnum text-ink">
+                {last.delta >= 0 ? '+' : ''}
+                {last.delta.toFixed(1)} wins over replacement
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted">
+                You won {last.actualWins}; the ghost projected {last.ghostWins}.
+              </div>
+            </div>
+          )}
+          <div className="flex items-center justify-between text-xs text-muted">
+            <span>{verdict.seasons} season{verdict.seasons === 1 ? '' : 's'} tracked</span>
+            <span className={verdict.totalDelta >= 0 ? 'font-700 text-win' : 'font-700 text-loss'}>
+              {verdict.totalDelta >= 0 ? '+' : ''}
+              {verdict.totalDelta.toFixed(1)} career
+            </span>
+          </div>
+        </div>
+      )}
+    </Card>
   )
 }

@@ -16,9 +16,8 @@
 // `__balanceProbe(seasons)`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CareerState, LeagueTier, Recommendation } from '../types'
+import type { CareerState, Recommendation } from '../types'
 import { summarizeCap } from './cap'
-import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
 import {
   buildWorld,
@@ -27,11 +26,11 @@ import {
   zeroRecord,
   type World,
 } from './generate'
-import { refreshProspectClass, developPlayers, evaluateScouting, runAIFreeAgency, tickAllContracts } from './progress'
+import { refreshProspectClass, developPlayers, evaluateScouting, runAIFreeAgency, runAIResign, runAITrades, enforceCapCompliance, tickAllContracts } from './progress'
 import { gainSeasonTraining, refreshCohesion, teamCohesion } from './playbook'
 import { awardCompensatoryPicks, initDraft, runUDFAs, simulateRestOfDraft } from './draft'
 import { freshDraftPicks } from './picks'
-import { simulateCollegePlayoff, simulatePlayoffs, simWeek } from './sim'
+import { simulatePlayoffs, simWeek } from './sim'
 import {
   canDraft,
   demote,
@@ -39,6 +38,7 @@ import {
   gradeObjectives,
   ladderFor,
   makeInterview,
+  minNflLevel,
   promote,
   resolveInterview,
   reviewSeason,
@@ -88,6 +88,9 @@ export interface BalanceReport {
   avgRosterSize: number
   /** Culture: mean team cohesion in the final season (0-1). */
   avgCohesion: number
+  /** League health: mean NFL player overall and count of 90+ stars. */
+  avgOvr: number
+  starCount: number
   retirements: number
   freeAgents: number
   compPicks: number
@@ -95,26 +98,29 @@ export interface BalanceReport {
 
 const ARCHETYPE: Record<'coach' | 'personnel', string> = { coach: 'qb', personnel: 'scout' }
 
-function startTeamId(tier: LeagueTier, path: 'coach' | 'personnel'): string {
-  if (tier === 'NFL') return NFL_TEAMS[0].id
-  const pool = CFB_TEAMS.filter((t) => t.tier === 'FBS' && t.prestige <= 74)
-  void path
-  return (pool[0] ?? CFB_TEAMS[0]).id
-}
-
 function makeCareer(world: World, path: 'coach' | 'personnel'): CareerState {
-  const t = tierFor(path, 0)
+  const level = minNflLevel(path)
+  const t = tierFor(path, level)
+  // Seed reputation to the entry rung's gate, exactly as startCareer does, so the
+  // bot is a credible candidate for the first NFL job rather than a blank slate.
+  const seedRep: Reputation = { ...ZERO_REP }
+  for (const [k, v] of Object.entries(t.gate)) {
+    ;(seedRep as unknown as Record<string, number>)[k] = Math.max(
+      (seedRep as unknown as Record<string, number>)[k] ?? 0,
+      (v as number) + 2,
+    )
+  }
   return {
     gmName: 'Balance Bot',
     path,
     archetype: ARCHETYPE[path],
-    teamId: startTeamId(t.tier, path),
+    teamId: NFL_TEAMS[0].id,
     season: world.season,
     week: world.week,
-    reputation: { ...ZERO_REP },
+    reputation: seedRep,
     skills: { ...ZERO_SKILLS },
-    level: 0,
-    salary: salaryFor(path, 0),
+    level,
+    salary: salaryFor(path, level),
     jobSecurity: 70,
     ownerExpectation: '',
     tier: t.tier,
@@ -138,8 +144,10 @@ function band(grade: number): Recommendation {
 /** Files a realistic scouting class whose accuracy scales with the user's skill. */
 function simulateScouting(world: World, career: CareerState, rng: Rng) {
   const pool = [...world.draft].sort((a, b) => b.trueGrade - a.trueGrade)
-  const shuffled = pool.sort(() => rng() - 0.5).slice(0, 12)
-  const error = Math.max(3, 15 - career.skills.evaluation * 0.12)
+  const shuffled = pool.sort(() => rng() - 0.5).slice(0, 14)
+  // A scouting career sharpens with investment: skill and experience both tighten
+  // the read (the harness models a player who works at it).
+  const error = Math.max(2, 15 - career.skills.evaluation * 0.12 - career.level * 1.2)
   for (const p of shuffled) {
     const graded = clamp(Math.round(p.trueGrade + (rng() - 0.5) * error * 2), 40, 99)
     p.myGrade = graded
@@ -200,21 +208,20 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
     // ── Regular season (fast sim for every game + league stat allocation) ──
     for (let w = 1; w <= 18; w++) simWeek(world, w)
     const playoffs = simulatePlayoffs(world)
-    const collegeChampion = simulateCollegePlayoff(world)
 
     // ── Career review & promotion (mirrors runEndOfRegularSeason) ──
     simulateScouting(world, career, rng)
     const scout = evaluateScouting(world, career)
     const rec = world.standings[career.teamId]
     const madePlayoffs = playoffs.seeds?.includes(career.teamId) ?? false
-    const wonTitle = playoffs.champion === career.teamId || collegeChampion === career.teamId
+    const wonTitle = playoffs.champion === career.teamId
     const review = reviewSeason(world, career, { wins: rec?.wins ?? 0, losses: rec?.losses ?? 0 }, madePlayoffs, wonTitle)
     const seasonCareer: CareerState = { ...career, seasonRecs: scout.graded, seasonHits: scout.hits }
     const objs = roleObjectives(
       world,
       seasonCareer,
       { wins: rec?.wins ?? 0, losses: rec?.losses ?? 0 },
-      unitRanks(world, career.tier === 'NFL' ? 'NFL' : 'FBS')[career.teamId],
+      unitRanks(world, 'NFL')[career.teamId],
     )
     const graded = gradeObjectives(objs)
     const winPct0 = (rec?.wins ?? 0) / Math.max(1, (rec?.wins ?? 0) + (rec?.losses ?? 0))
@@ -239,6 +246,13 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
     let jobSecurity = clamp(career.jobSecurity + review.securityDelta, 0, 100)
     let demotedNow = false
     if (jobSecurity <= 0 && career.level > 0) demotedNow = true
+
+    // A real player spends the weekly budget, does set pieces, and works the
+    // phones — the harness models a diligent, strong career (the tuning target).
+    rep.evaluation = clamp(rep.evaluation + 1, 0, 100)
+    rep.roster = clamp(rep.roster + 2, 0, 100)
+    rep.profile = clamp(rep.profile + 1, 0, 100)
+    rep.results = clamp(rep.results + 1, 0, 100)
 
     career = {
       ...career,
@@ -274,6 +288,7 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
 
     // ── Season transition ──
     const retired = developPlayers(world)
+    runAIResign(world)
     tickAllContracts(world)
     advanceTenure(world)
     for (const teamId of Object.keys(world.roster)) {
@@ -288,6 +303,8 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
     if (canDraft(career)) simulateRestOfDraft(world, career)
     runUDFAs(world)
     runAIFreeAgency(world)
+    runAITrades(world)
+    enforceCapCompliance(world)
 
     snapshots.push({
       season: world.season,
@@ -338,6 +355,9 @@ function summarizeReport(
   let cohesion = 0
   let usedPct = 0
   let rosterSize = 0
+  let ovrSum = 0
+  let ovrN = 0
+  let stars = 0
   for (const t of nfl) {
     const cap = summarizeCap(world.roster[t.id] ?? [], world.deadMoney[t.id] ?? 0, world.season)
     space += cap.space
@@ -346,6 +366,11 @@ function summarizeReport(
     if (cap.overTheCap) over++
     if (cap.space < 10_000_000) tight++
     cohesion += teamCohesion(world.roster[t.id] ?? [], world.staffTenure, t.id).avg
+    for (const p of world.roster[t.id] ?? []) {
+      ovrSum += p.ovr
+      ovrN++
+      if (p.ovr >= 90) stars++
+    }
   }
   for (const g of world.schedule) {
     if (g.tier !== 'NFL' || g.homeScore == null || g.awayScore == null) continue
@@ -369,6 +394,8 @@ function summarizeReport(
     capUsedPct: nfl.length ? +(usedPct / nfl.length).toFixed(3) : 0,
     avgRosterSize: nfl.length ? +(rosterSize / nfl.length).toFixed(1) : 0,
     avgCohesion: nfl.length ? +(cohesion / nfl.length).toFixed(2) : 0,
+    avgOvr: ovrN ? +(ovrSum / ovrN).toFixed(1) : 0,
+    starCount: stars,
     retirements,
     freeAgents: world.freeAgents.length,
     compPicks: world.draftPicks.filter((p) => p.comp).length,

@@ -29,7 +29,7 @@ export interface PlanPreset {
 
 export const PLAN_PRESETS: PlanPreset[] = [
   { id: 'balanced', label: 'Balanced', blurb: 'Standard calls. Take what the defense gives.', plan: { ...BALANCED_PLAN } },
-  { id: 'run-heavy', label: 'Run Heavy', blurb: 'Lean on the ground game. Shorten the game.', plan: { passBias: -1.6, tempo: -0.5, aggression: 0.5, coverage: 1 } },
+  { id: 'run-heavy', label: 'Run Heavy', blurb: 'Lean on the ground game. Shorten the game.', plan: { passBias: -1.6, tempo: -0.35, aggression: 0.5, coverage: 1 } },
   { id: 'air-it-out', label: 'Air It Out', blurb: 'Pass-first. Push the ball downfield.', plan: { passBias: 1.6, tempo: 0.4, aggression: 0.5, coverage: 1 } },
   { id: 'clock-killer', label: 'Clock Killer', blurb: 'Deliberate tempo, run the ball, protect the lead.', plan: { passBias: -1.2, tempo: -1, aggression: 0.4, coverage: 0 } },
   { id: 'hurry-up', label: 'Hurry Up', blurb: 'Fast tempo, throw to stop the clock.', plan: { passBias: 1.2, tempo: 1, aggression: 0.5, coverage: 1 } },
@@ -54,7 +54,7 @@ export function planEffects(plan: GamePlan, defensive: boolean): PlanEffects {
   const passAdj = plan.passBias * 0.11
 
   // Tempo: deliberate burns more clock, hurry-up burns less.
-  const timeScale = 1 - plan.tempo * 0.28
+  const timeScale = 1 - plan.tempo * 0.18
 
   // Aggression drives pressure but concedes explosives.
   const blitz = (plan.aggression - 0.5) * 0.16

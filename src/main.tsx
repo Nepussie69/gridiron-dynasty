@@ -2,7 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, leaguePbpProbe, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, useGame } from './store/gameStore'
+import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 
 createRoot(document.getElementById('root')!).render(
@@ -22,6 +23,13 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__tradeProbe = tradeProbe
   ;(window as unknown as Record<string, unknown>).__balanceProbe = balanceProbe
   ;(window as unknown as Record<string, unknown>).__leaguePbpProbe = leaguePbpProbe
+  ;(window as unknown as Record<string, unknown>).__adviceProbe = adviceProbe
+  ;(window as unknown as Record<string, unknown>).__scoutBiasProbe = scoutBiasProbe
+  ;(window as unknown as Record<string, unknown>).__characterProbe = characterProbe
+  ;(window as unknown as Record<string, unknown>).__rhythmProbe = rhythmProbe
+  ;(window as unknown as Record<string, unknown>).__dominanceProbe = dominanceProbe
+  ;(window as unknown as Record<string, unknown>).__aiManagerProbe = aiManagerProbe
+  ;(window as unknown as Record<string, unknown>).__leagueWorkerDebug = leagueWorkerDebug
   ;(window as unknown as Record<string, unknown>).__game = useGame
   ;(window as unknown as Record<string, unknown>).__world = getWorld
   ;(window as unknown as Record<string, unknown>).__simOne = (homeId = 'BUF', awayId = 'MIA') =>

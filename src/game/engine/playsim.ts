@@ -394,13 +394,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const planOverrides = applyDefPlan(defId, dStyle)
   const coverage = coverSkill * dStyle.coverage * planOverrides.coverMult + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
-  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90
+  // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
+  const offPassBias = planFor(offId)?.passBias ?? 0
+  const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) : 0
+  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction
 
   // Completion probability based on real league rate vs. this matchup. Coordinator
   // quality shifts it: a great OC helps, a great DC hurts.
   const coachShift = (ocEff.offEdge - dcEff.defEdge) * 0.003
+  const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) : 0
   const compProb = clamp(
-    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(qbStyle.scramble, 0.04) * planOverrides.compMult + clutch * 0.012,
+    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(qbStyle.scramble, 0.04) * planOverrides.compMult + clutch * 0.012 + playActionComp,
     0.42,
     0.74,
   )
@@ -456,7 +460,10 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
 
   // Real NFL run distribution, tilted by line + back vs. front seven, plus back style.
   const styleEdge = cStyle.power * 14 + cStyle.elusiveness * 10 + (cFit - 0.5) * 12
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4
+  // A pass-heavy offense runs against lighter boxes — make them pay on the ground.
+  const offPassBiasRun = planFor(offId)?.passBias ?? 0
+  const boxLight = Math.max(0, offPassBiasRun) * 1.8
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.

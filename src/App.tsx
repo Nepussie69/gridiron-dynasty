@@ -8,13 +8,13 @@ import { useGame } from './store/gameStore'
 import { CareerHub } from './screens/CareerHub'
 import { Career } from './screens/Career'
 import { Dashboard } from './screens/Dashboard'
+import { Ledger } from './screens/Ledger'
 import { Roster } from './screens/Roster'
 import { DepthChart } from './screens/DepthChart'
 import { GamePlanScreen } from './screens/GamePlanScreen'
 import { Staff } from './screens/Staff'
 import { Scouting } from './screens/Scouting'
 import { Draft } from './screens/Draft'
-import { Recruiting } from './screens/Recruiting'
 import { FreeAgency } from './screens/FreeAgency'
 import { Trades } from './screens/Trades'
 import { Cap } from './screens/Cap'
@@ -55,13 +55,13 @@ export default function App() {
       <AppShell>
         {screen === 'career' && <Career />}
         {screen === 'dashboard' && <Dashboard />}
+        {screen === 'ledger' && <Ledger />}
         {screen === 'roster' && <Roster />}
         {screen === 'depth' && <DepthChart />}
         {screen === 'gameplan' && <GamePlanScreen />}
         {screen === 'staff' && <Staff />}
         {screen === 'scouting' && <Scouting />}
         {screen === 'draft' && <Draft />}
-        {screen === 'recruiting' && <Recruiting />}
         {screen === 'freeagency' && <FreeAgency />}
         {screen === 'trades' && <Trades />}
         {screen === 'cap' && <Cap />}

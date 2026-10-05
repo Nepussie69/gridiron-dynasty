@@ -1,4 +1,4 @@
-import { ArrowRight, Award, Trophy, X } from 'lucide-react'
+import { ArrowRight, Award, Fingerprint, Ghost, HelpCircle, Target, Trophy, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { ladderFor, tierFor } from '../game/engine/career'
@@ -19,7 +19,6 @@ export function SeasonModal() {
 
   if (modal === 'seasonReview' && summary) {
     const champ = summary.champion ? league.byId[summary.champion] : null
-    const cfbChamp = summary.collegeChampion ? league.byId[summary.collegeChampion] : null
     const scout = summary.scout
     return (
       <Shell onClose={dismiss}>
@@ -27,11 +26,114 @@ export function SeasonModal() {
           <div className="grid h-11 w-11 place-items-center rounded-xl bg-gold/20 text-gold" style={{ background: '#fbf3de' }}>
             <Trophy size={22} className="text-[#9a7418]" />
           </div>
-          <div>
-            <div className="label">Season Complete</div>
-            <h2 className="font-display text-3xl font-700 uppercase leading-none">{summary.season} Review</h2>
+          <div className="min-w-0 flex-1">
+            <div className="label">Season Complete · {summary.season}</div>
+            <h2 className="font-display text-3xl font-700 uppercase leading-none">
+              {summary.headline ?? `${summary.season} Review`}
+            </h2>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <Badge tone="neutral">{summary.record}</Badge>
+              {typeof summary.winsDelta === 'number' && (
+                <Badge tone={summary.winsDelta >= 0 ? 'win' : 'loss'}>
+                  {summary.winsDelta >= 0 ? '+' : ''}
+                  {summary.winsDelta} wins vs last year
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* #20: the season in 90 seconds — question, moments, fingerprints, ghost. */}
+        {summary.question && (
+          <Card className="mb-3">
+            <div className="label mb-1 flex items-center gap-1">
+              <HelpCircle size={12} /> The season question
+            </div>
+            <div className="font-display text-lg font-700 uppercase leading-snug text-ink">
+              {summary.question.text}
+            </div>
+            {summary.question.answer && (
+              <p className={cn('mt-1.5 text-sm', summary.question.good ? 'text-win' : 'text-muted')}>
+                {summary.question.answer}
+              </p>
+            )}
+          </Card>
+        )}
+
+        {summary.ambitions && summary.ambitions.length > 0 && (
+          <Card className="mb-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="label flex items-center gap-1">
+                <Target size={12} /> Your ambitions
+              </div>
+              <Badge tone={summary.ambitions.every((a) => a.done) ? 'win' : 'neutral'}>
+                {summary.ambitions.filter((a) => a.done).length}/{summary.ambitions.length} met
+              </Badge>
+            </div>
+            <div className="space-y-1.5">
+              {summary.ambitions.map((a) => (
+                <div key={a.label} className="flex items-center gap-2 text-xs">
+                  <span
+                    className={cn(
+                      'grid h-4 w-4 shrink-0 place-items-center rounded-full text-[10px]',
+                      a.done ? 'bg-win text-white' : 'bg-surface-3 text-faint',
+                    )}
+                  >
+                    {a.done ? '✓' : ''}
+                  </span>
+                  <span className={cn('flex-1 font-600', a.done ? 'text-ink' : 'text-muted')}>{a.label}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {summary.moments && summary.moments.length > 0 && (
+          <Card className="mb-3">
+            <div className="label mb-2">Three moments that mattered</div>
+            <div className="space-y-1.5">
+              {summary.moments.map((m) => (
+                <div key={`${m.week}-${m.text}`} className="flex items-center gap-2 text-xs">
+                  <span className="grid h-5 w-8 shrink-0 place-items-center rounded bg-surface-2 font-cond text-[10px] font-700 text-muted">
+                    W{m.week}
+                  </span>
+                  <span className={cn('flex-1 font-600', m.tone === 'loss' ? 'text-muted' : 'text-ink-2')}>{m.text}</span>
+                  {m.tone === 'win' && <Badge tone="win">W</Badge>}
+                  {m.tone === 'loss' && <Badge tone="loss">L</Badge>}
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {summary.fingerprint && summary.fingerprint.total > 0 && (
+          <Card className="mb-3">
+            <div className="label mb-1 flex items-center gap-1">
+              <Fingerprint size={12} /> Your fingerprints
+            </div>
+            <p className="text-sm text-ink-2">
+              <strong className="text-ink">{summary.fingerprint.drafted}</strong> drafted and{' '}
+              <strong className="text-ink">{summary.fingerprint.signed}</strong> signed by you are on this roster.
+              This season is partly yours.
+            </p>
+          </Card>
+        )}
+
+        {summary.ghost && (
+          <Card className="mb-3">
+            <div className="label mb-1 flex items-center gap-1">
+              <Ghost size={12} /> Ghost GM verdict
+            </div>
+            <div className="font-display text-2xl font-700 tnum text-ink">
+              {summary.ghost.delta >= 0 ? '+' : ''}
+              {summary.ghost.delta.toFixed(1)} wins over replacement
+            </div>
+            <p className="mt-0.5 text-xs text-muted">
+              You won {summary.ghost.actualWins}; a replacement-level manager projects to{' '}
+              {summary.ghost.ghostWins} with the same roster and schedule.
+            </p>
+          </Card>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <Card>
@@ -40,17 +142,6 @@ export function SeasonModal() {
               <div className="flex items-center gap-2">
                 <TeamCrest team={champ} size={34} />
                 <span className="font-display text-lg font-700 uppercase">{champ.name}</span>
-              </div>
-            ) : (
-              <span className="text-sm text-muted">—</span>
-            )}
-          </Card>
-          <Card>
-            <div className="label mb-2">National Champion</div>
-            {cfbChamp ? (
-              <div className="flex items-center gap-2">
-                <TeamCrest team={cfbChamp} size={34} />
-                <span className="font-display text-lg font-700 uppercase">{cfbChamp.name}</span>
               </div>
             ) : (
               <span className="text-sm text-muted">—</span>

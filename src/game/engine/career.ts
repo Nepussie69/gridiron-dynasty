@@ -7,11 +7,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { CareerPath, CareerState, JobOffer, LeagueTier } from '../types'
-import { crossOverLevel } from './capabilities'
-import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
 import type { World } from './generate'
-import { clamp, makeRng, rpick } from './rng'
+import { clamp, hash32, makeRng, rpick } from './rng'
 
 // ── Reputation dimensions ────────────────────────────────────────────────────
 export interface Reputation {
@@ -41,6 +39,14 @@ export interface Skills {
 export const ZERO_SKILLS: Skills = { evaluation: 20, negotiation: 15, leadership: 15, scheme: 15, recruiting: 15 }
 
 // ── The dual ladder ──────────────────────────────────────────────────────────
+/**
+ * The ONE verb a rung exercises (#1). Every mechanic at a rung should serve its
+ * verb; if a system doesn't, it should be hidden at that rung. This is the design
+ * test the ladder is built around:
+ *   predict (scouts) → persuade (directors) → adapt (coordinators) → lead (HC) → allocate (GM)
+ */
+export type RungVerb = 'predict' | 'persuade' | 'adapt' | 'lead' | 'allocate'
+
 export interface CareerTier {
   level: number
   title: string
@@ -48,6 +54,8 @@ export interface CareerTier {
   path: CareerPath | 'both'
   gate: Partial<Reputation> // minimum reputation to be considered
   blurb: string
+  /** The rung's single verb (#1). Drives which mechanics surface. */
+  verb: RungVerb
 }
 
 const gate = (r: Partial<Reputation>) => r
@@ -58,34 +66,61 @@ const gate = (r: Partial<Reputation>) => r
  * Both converge on the NFL.
  */
 export const COACH_LADDER: CareerTier[] = [
-  { level: 0, title: 'Graduate Assistant', tier: 'FBS', path: 'coach', gate: gate({}), blurb: 'Break down film and run the scout team for a Group of Five program.' },
-  { level: 1, title: 'Position Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 14, leadership: 14 }), blurb: 'Own a position room. Develop players who get drafted.' },
-  { level: 2, title: 'Offensive/Defensive Coordinator', tier: 'FBS', path: 'coach', gate: gate({ results: 34, leadership: 26 }), blurb: 'Call the plays. Your unit is your résumé.' },
-  { level: 3, title: 'Group of Five Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 52, leadership: 40, profile: 24 }), blurb: 'Run a program. Win your conference.' },
-  { level: 4, title: 'Power Four Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 70, leadership: 58, profile: 50 }), blurb: 'Blue-blood pressure. Compete for the playoff.' },
-  { level: 5, title: 'NFL Position Coach / Quality Control', tier: 'NFL', path: 'coach', gate: gate({ results: 76, profile: 58 }), blurb: 'Cross over to the league and prove you belong.' },
-  { level: 6, title: 'NFL Coordinator', tier: 'NFL', path: 'coach', gate: gate({ results: 84, scheme: 60, profile: 70 } as never), blurb: 'Run one side of the ball at the highest level.' },
-  { level: 7, title: 'NFL Head Coach', tier: 'NFL', path: 'coach', gate: gate({ results: 90, leadership: 82, profile: 84 }), blurb: 'You answer to the owner now.' },
+  { level: 0, title: 'Graduate Assistant', tier: 'FBS', path: 'coach', gate: gate({}), verb: 'adapt', blurb: 'Break down film and run the scout team for a Group of Five program.' },
+  { level: 1, title: 'Position Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 12, leadership: 12 }), verb: 'lead', blurb: 'Own a position room. Develop players who get drafted.' },
+  { level: 2, title: 'Offensive/Defensive Coordinator', tier: 'FBS', path: 'coach', gate: gate({ results: 28, leadership: 21 }), verb: 'adapt', blurb: 'Call the plays. Your unit is your résumé.' },
+  { level: 3, title: 'Group of Five Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 43, leadership: 33, profile: 20 }), verb: 'lead', blurb: 'Run a program. Win your conference.' },
+  { level: 4, title: 'Power Four Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 58, leadership: 48, profile: 42 }), verb: 'lead', blurb: 'Blue-blood pressure. Compete for the playoff.' },
+  { level: 5, title: 'NFL Position Coach / Quality Control', tier: 'NFL', path: 'coach', gate: gate({ results: 40, profile: 34 }), verb: 'lead', blurb: 'Cross over to the league and prove you belong.' },
+  { level: 6, title: 'NFL Coordinator', tier: 'NFL', path: 'coach', gate: gate({ results: 52, scheme: 40, profile: 46 } as never), verb: 'adapt', blurb: 'Run one side of the ball at the highest level.' },
+  { level: 7, title: 'NFL Head Coach', tier: 'NFL', path: 'coach', gate: gate({ results: 62, leadership: 54, profile: 58 }), verb: 'lead', blurb: 'You answer to the owner now.' },
 ]
 
 export const PERSONNEL_LADDER: CareerTier[] = [
-  { level: 0, title: 'Local Scout', tier: 'FBS', path: 'personnel', gate: gate({}), blurb: 'Break down film for a small program. Prove you can find players.' },
-  { level: 1, title: 'Area Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 16 }), blurb: 'Own a region. File reports that change a roster.' },
-  { level: 2, title: 'Regional Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 30, profile: 14 }), blurb: 'Cover multiple states for a Power program.' },
-  { level: 3, title: 'National Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 44, profile: 26 }), blurb: 'Cross-check the board from coast to coast.' },
-  { level: 4, title: 'Assistant Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 58, profile: 40 }), blurb: 'Run the college board for an NFL club.' },
-  { level: 5, title: 'Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 70, roster: 50, profile: 52 }), blurb: 'You own the draft board now.' },
-  { level: 6, title: 'Director of Player Personnel', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 78, roster: 68, profile: 64 }), blurb: 'Pro and college. One step from the chair.' },
-  { level: 7, title: 'Assistant General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 82, leadership: 70, profile: 76 }), blurb: 'Run the building day to day.' },
-  { level: 8, title: 'General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 90, leadership: 82, profile: 84, results: 55 }), blurb: 'Final say on the 53. Go win a championship.' },
+  { level: 0, title: 'Local Scout', tier: 'FBS', path: 'personnel', gate: gate({}), verb: 'predict', blurb: 'Break down film for a small program. Prove you can find players.' },
+  { level: 1, title: 'Area Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 13 }), verb: 'predict', blurb: 'Own a region. File reports that change a roster.' },
+  { level: 2, title: 'Regional Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 24, profile: 11 }), verb: 'predict', blurb: 'Cover multiple states for a Power program.' },
+  { level: 3, title: 'National Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 35, profile: 20 }), verb: 'predict', blurb: 'Cross-check the board from coast to coast.' },
+  { level: 4, title: 'Assistant Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 45, profile: 31 }), verb: 'persuade', blurb: 'Run the college board for an NFL club.' },
+  { level: 5, title: 'Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 52, roster: 22, profile: 36 }), verb: 'persuade', blurb: 'You own the draft board now.' },
+  { level: 6, title: 'Director of Player Personnel', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 58, roster: 34, profile: 43 }), verb: 'persuade', blurb: 'Pro and college. One step from the chair.' },
+  { level: 7, title: 'Assistant General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 38, leadership: 36, profile: 46 }), verb: 'allocate', blurb: 'Run the building day to day.' },
+  { level: 8, title: 'General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 46, leadership: 40, profile: 52, results: 28 }), verb: 'allocate', blurb: 'Final say on the 53. Go win a championship.' },
 ]
 
 export function ladderFor(path: CareerPath): CareerTier[] {
   return path === 'coach' ? COACH_LADDER : PERSONNEL_LADDER
 }
+
+/**
+ * The lowest rung of each ladder that exists in the NFL-only universe. The
+ * college side has been removed, so a career starts here and never drops below.
+ */
+export const MIN_NFL_LEVEL: Record<CareerPath, number> = { coach: 5, personnel: 4 }
+export function minNflLevel(path: CareerPath): number {
+  return MIN_NFL_LEVEL[path]
+}
+/** The NFL rungs of a ladder (the only ones reachable in this build). */
+export function nflLadder(path: CareerPath): CareerTier[] {
+  return ladderFor(path).filter((r) => r.level >= minNflLevel(path))
+}
+
 export function tierFor(path: CareerPath, level: number): CareerTier {
   const ladder = ladderFor(path)
   return ladder[clamp(level, 0, ladder.length - 1)]
+}
+
+/** One-line framing of a rung's verb, for UI copy (#1). */
+export const VERB_BLURB: Record<RungVerb, string> = {
+  predict: 'Your job is to PREDICT: read the tape and call what a player becomes.',
+  persuade: 'Your job is to PERSUADE: get the room and the GM to see it your way.',
+  adapt: 'Your job is to ADAPT: read the opponent and change the plan on the fly.',
+  lead: 'Your job is to LEAD: set the standard and get a locker room to follow.',
+  allocate: 'Your job is to ALLOCATE: spend the cap, the picks, and the staff for the best return.',
+}
+
+export function verbFor(path: CareerPath, level: number): RungVerb {
+  return tierFor(path, level).verb
 }
 
 const SALARY: Record<CareerPath, number[]> = {
@@ -98,17 +133,23 @@ export function salaryFor(path: CareerPath, level: number) {
 }
 
 // ── Control thresholds ───────────────────────────────────────────────────────
+// Single source of truth is the capability table in capabilities.ts. These
+// wrappers exist for the many call sites that import from career.ts, but they
+// must not drift: the head coach influences the roster/cap without holding the
+// pen, so only roles with the actual capability return true here.
+import { capabilities, isGM as isGmRole, isHeadCoach as isHeadCoachRole } from './capabilities'
+
 export function canDraft(career: CareerState) {
-  return career.tier === 'NFL' && career.path === 'personnel' && career.level >= 5
+  return capabilities(career).can.has('draft')
 }
 export function canSignFreeAgents(career: CareerState) {
-  return career.tier === 'NFL' && (career.level >= 6 || (career.path === 'coach' && career.level >= 7))
+  return capabilities(career).can.has('signFreeAgents')
 }
 export function isGM(career: CareerState) {
-  return career.path === 'personnel' && career.level >= 8
+  return isGmRole(career)
 }
 export function isHeadCoach(career: CareerState) {
-  return career.path === 'coach' && career.level >= 7
+  return isHeadCoachRole(career)
 }
 
 // ── Gate checks ──────────────────────────────────────────────────────────────
@@ -146,6 +187,24 @@ export interface InterviewInvite extends JobOffer {
   fit: number // 0-100 how well your profile fits
 }
 
+/**
+ * The best club that will consider you scales with your overall reputation:
+ * an unproven exec only hears from the league's worst franchises, while a
+ * proven résumé opens the bluebloods. Prestige runs ~56 (worst) to ~94 (best),
+ * so we map overall rep (0-100) onto a prestige ceiling from the basement up.
+ */
+export function prestigeCeiling(overall: number): number {
+  // rep 30 → ~58 (bottom clubs), rep 55 → ~72 (middling), rep 80+ → ~94 (anyone)
+  return clamp(56 + (overall - 28) * 0.75, 56, 99)
+}
+
+/** Pick a club that would realistically hire someone with this reputation. */
+function pickInterestedTeam(rng: () => number, ceiling: number): string {
+  const eligible = NFL_TEAMS.filter((t) => t.prestige <= ceiling)
+  const pool = eligible.length ? eligible : NFL_TEAMS
+  return rpick(rng, pool).id
+}
+
 export function generateJobOffers(world: World, career: CareerState): JobOffer[] {
   const rng = makeRng(world.seed + world.season * 524287 + career.level + (career.path === 'coach' ? 99991 : 0))
   const offers: JobOffer[] = []
@@ -154,24 +213,18 @@ export function generateJobOffers(world: World, career: CareerState): JobOffer[]
   if (!next) return offers
   const rep = career.reputation
   const overall = overallRep(rep)
+  const ceiling = prestigeCeiling(overall)
   if (!meetsGate(rep, next)) {
-    // Partial qualification can still earn a "reach" interview if you're exceptional.
+    // Partial qualification can still earn a "reach" interview if you're close.
     const { pct } = progressToNext(rep, career.path, career.level)
-    if (pct < 0.92) return offers
+    if (pct < 0.85) return offers
   }
 
   const margin = overall - 40
   const count = margin >= 45 ? 3 : margin >= 25 ? 2 : 1
 
   for (let i = 0; i < count; i++) {
-    let teamId: string
-    if (next.tier === 'NFL') {
-      teamId = rpick(rng, NFL_TEAMS).id
-    } else {
-      const target = next.level <= 2 ? 62 : next.level === 3 ? 68 : 82
-      const sorted = [...CFB_TEAMS].sort((a, b) => Math.abs(a.prestige - target) - Math.abs(b.prestige - target))
-      teamId = rpick(rng, sorted.slice(0, 10)).id
-    }
+    const teamId = pickInterestedTeam(rng, ceiling)
     if (offers.some((o) => o.teamId === teamId)) continue
     const interest = clamp(45 + Math.round((overall - 40) * 1.5) + Math.round(rng() * 20), 35, 99)
     offers.push({
@@ -181,34 +234,39 @@ export function generateJobOffers(world: World, career: CareerState): JobOffer[]
       tier: next.tier,
       level: next.level,
       salary: salaryFor(career.path, next.level),
-      years: next.tier === 'NFL' ? 4 : 3,
+      years: 4,
       interest,
-      note:
-        next.tier === 'NFL'
-          ? `A league club is interested in you for its ${next.title.replace(/Assistant /, '').toLowerCase()} role.`
-          : `A program wants you as its ${next.title} after your work got noticed.`,
+      note: `A league club is interested in you for its ${next.title.replace(/Assistant /, '').toLowerCase()} role.`,
     })
   }
 
-  // ── Cross-over offers ────────────────────────────────────────────────────
-  // A college head coach does NOT walk into an NFL HC job. He crosses into an
-  // NFL position-coach or coordinator role and must earn the top job from there.
-  if (career.path === 'coach' && career.tier === 'FBS' && career.level >= 3 && !offers.some((o) => o.tier === 'NFL')) {
-    const crossLevel = crossOverLevel('coach', career.level, 'FBS', 'NFL')
-    const crossRole = ladderFor('coach')[crossLevel]
-    if (crossRole && overall >= 55 && rng() < 0.7) {
-      const teamId = rpick(rng, NFL_TEAMS).id
-      offers.push({
-        id: `xover_${world.season}_${teamId}`,
-        title: crossRole.title,
-        teamId,
-        tier: 'NFL',
-        level: crossLevel,
-        salary: salaryFor('coach', crossLevel),
-        years: 4,
-        interest: clamp(50 + Math.round((overall - 50) * 1.2) + Math.round(rng() * 15), 40, 98),
-        note: `A league club wants to bring you in as ${crossRole.title}. College head-coaching success earns a look — but you start over on the NFL side and must work up from here.`,
-      })
+  // ── Fast-track: a standout résumé can skip a rung ─────────────────────────
+  const skip = ladder[career.level + 2]
+  if (skip && !offers.some((o) => o.level === skip.level)) {
+    let sum = 0
+    let n = 0
+    for (const [k, v] of Object.entries(skip.gate)) {
+      const rv = (rep as unknown as Record<string, number>)[k] ?? 0
+      sum += clamp(rv / (v as number), 0, 1.2)
+      n++
+    }
+    const ready = n ? sum / n : 0
+    // Reach + strong overall = the league will interview you a rung ahead.
+    if (ready >= 0.9 && overall >= 48) {
+      const teamId = pickInterestedTeam(rng, ceiling)
+      if (!offers.some((o) => o.teamId === teamId)) {
+        offers.push({
+          id: `fast_${world.season}_${teamId}`,
+          title: skip.title,
+          teamId,
+          tier: skip.tier,
+          level: skip.level,
+          salary: salaryFor(career.path, skip.level),
+          years: 4,
+          interest: clamp(55 + Math.round((overall - 52) * 1.3), 45, 99),
+          note: `A standout résumé earns a look PAST the next rung — a fast-track interview for ${skip.title}.`,
+        })
+      }
     }
   }
 
@@ -231,7 +289,21 @@ export function makeInterview(offer: JobOffer, world: World, career: CareerState
     n++
   }
   const fit = Math.round(clamp((n ? fitSum / n : 0.7) * 90, 20, 99))
-  return { ...offer, rival, rounds: fit >= 80 ? 2 : 3, fit }
+  // #14: pitch with receipts. Ledger hits count, and the owner's priorities
+  // weight which part of your résumé matters.
+  const personality = ['meddling', 'patient', 'cheap', 'win-now'][hash32(offer.teamId, 61) % 4]
+  const hits = (career.ledger ?? []).filter((e) => e.hit).length
+  const citations = 2 + Math.min(10, hits * 1.0)
+  const pmod = clamp(
+    personality === 'win-now' ? (career.reputation.results - 50) * 0.1
+    : personality === 'patient' ? (career.reputation.evaluation - 50) * 0.08
+    : personality === 'cheap' ? (career.reputation.roster - 50) * 0.08
+    : (career.reputation.profile - 50) * 0.08,
+    -1.5,
+    4,
+  )
+  const finalFit = Math.round(clamp(fit + citations + pmod, 20, 99))
+  return { ...offer, rival, rounds: finalFit >= 80 ? 2 : 3, fit: finalFit }
 }
 
 /** Resolve an interview: win the job if your fit beats the rival. */
@@ -270,21 +342,13 @@ export function promote(career: CareerState, offer: JobOffer): CareerState {
 /** Fired: drop a rung, lose profile, land somewhere smaller. */
 export function demote(world: World, career: CareerState): CareerState {
   const rng = makeRng(world.seed + world.season * 13 + career.level)
-  const ladder = ladderFor(career.path)
-  const newLevel = Math.max(0, career.level - 1)
-  const tier = ladder[newLevel].tier
-  let teamId = career.teamId
-  if (tier === 'NFL') {
-    teamId = rpick(rng, NFL_TEAMS).id
-  } else {
-    const pool = CFB_TEAMS.filter((t) => t.prestige <= 68)
-    teamId = rpick(rng, pool).id
-  }
+  const newLevel = Math.max(minNflLevel(career.path), career.level - 1)
+  const teamId = rpick(rng, NFL_TEAMS).id
   return {
     ...career,
     teamId,
     level: newLevel,
-    tier,
+    tier: 'NFL',
     salary: salaryFor(career.path, newLevel),
     jobSecurity: 55,
     reputation: { ...career.reputation, profile: clamp(career.reputation.profile - 10, 0, 100), results: clamp(career.reputation.results - 6, 0, 100) },
@@ -377,13 +441,13 @@ export function roleObjectives(
         break
       case 4: // Asst Dir College Scouting — run the room
         gradeGoal(8, { evaluation: 2 })
-        out.push(mk('accuracy', 'Department accuracy (72%)', 72, acc, { evaluation: 3, leadership: 2 }))
-        winGoal(50, { leadership: 2 })
+        out.push(mk('accuracy', 'Department accuracy (72%)', 72, acc, { evaluation: 3, roster: 2 }))
+        winGoal(50, { roster: 3, leadership: 2 })
         break
       case 5: // Dir College Scouting — own the class
         out.push(mk('class', 'Deliver a graded class (5+)', 5, recs, { roster: 3 }))
-        out.push(mk('accuracy', 'Board hit rate (70%)', 70, acc, { roster: 2, evaluation: 2 }))
-        winGoal(52, { roster: 2, results: 2 })
+        out.push(mk('accuracy', 'Board hit rate (70%)', 70, acc, { roster: 3, evaluation: 2 }))
+        winGoal(52, { roster: 3, results: 2 })
         break
       case 6: // Dir Player Personnel — pro scouting + contracts
         winGoal(55, { roster: 3, results: 2 })
@@ -422,19 +486,15 @@ export function roleObjectives(
         winGoal(55, { results: 3 })
         gradeGoal(5, { evaluation: 1, profile: 1 })
         break
-      case 3: // Group of Five Head Coach — build a program
+      case 3: // (legacy rung — not reachable in the NFL-only build)
         winGoal(58, { results: 4, leadership: 2 })
-        out.push(mk('season', 'Win 9+ games', 9, record.wins, { results: 3, profile: 3 }))
-        out.push(mk('recruit', 'Land a top-60 class', 60, 60, { recruiting: 2, profile: 2 } as never))
         break
-      case 4: // Power Four Head Coach — perform under pressure
+      case 4: // (legacy rung — not reachable in the NFL-only build)
         winGoal(65, { results: 5 })
-        out.push(mk('season', 'Win 10+ games', 10, record.wins, { results: 4, profile: 4 }))
-        out.push(mk('recruit', 'Land a top-15 class', 15, 15, { recruiting: 2, profile: 2 } as never))
         break
       case 5: // NFL Position Coach / QC — prove you belong
         out.push(mk('develop', 'Develop 2 NFL contributors', 2, 0, { leadership: 3 }))
-        winGoal(55, { results: 2, leadership: 1 })
+        winGoal(55, { results: 3, leadership: 1 })
         break
       case 6: // NFL Coordinator — top-10 unit
         if (unitRank) {

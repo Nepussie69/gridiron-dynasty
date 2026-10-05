@@ -159,6 +159,12 @@ export interface Player {
   morale: number // 1-100
   fatigue?: number
   injured?: { games: number; note: string }
+  /** Hidden character. Drives development and bust risk, not current ratings. */
+  character?: Character
+  /** Facets of character uncovered through relationships. */
+  characterReads?: CharacterRead[]
+  /** True for procedurally generated players (guards real-player narratives). */
+  generated?: boolean
   // college-only fields
   classYear?: 'FR' | 'SO' | 'JR' | 'SR' | 'RS-SR'
   stars?: 1 | 2 | 3 | 4 | 5
@@ -170,6 +176,47 @@ export interface Player {
   stats?: SeasonStats[]
   /** Playbook mastery with the current team+scheme. See engine/playbook.ts */
   playbook?: PlaybookState
+  /** How this player got to his current club (#5) — the fingerprints of a career. */
+  origin?: PlayerOrigin
+}
+
+/**
+ * Provenance for the "your fingerprints" layer (#5). Every arrival is stamped so
+ * the game can say "drafted by you", "signed by you", "your scout found him",
+ * "you let him walk". `by` is the career name when YOU did it, else the club/AI.
+ */
+export interface PlayerOrigin {
+  kind: 'draft' | 'freeAgent' | 'trade' | 'udfa' | 'initial' | 'waiver'
+  /** Season it happened. */
+  season: number
+  /** Round (draft) or note. */
+  round?: number
+  pick?: number
+  /** The career gmName when the user's club made the move; null for AI/pre-existing. */
+  by?: string | null
+  /** Team the player came from, for trades/free agency. */
+  fromTeamId?: string | null
+}
+
+/**
+ * Character: the second rating film can't show. It drives whether a player
+ * develops or busts — never his current on-field rating — so the sim's
+ * calibration stays intact.
+ */
+export interface Character {
+  workEthic: number // 0-100, higher = better
+  coachability: number // 0-100
+  maturity: number // 0-100
+  offFieldRisk: number // 0-100, higher = worse
+}
+
+/** One facet of character uncovered by working the phones. */
+export interface CharacterRead {
+  facet: keyof Character
+  /** The observed value (noisy vs. the truth). */
+  value: number
+  label: string
+  confidence: number
 }
 
 export type StaffRole =
@@ -198,6 +245,16 @@ export interface StaffMember {
   teamId: string | null
   status: 'Hired' | 'Available' | 'Interviewing' | 'Target'
   notes?: string
+  /** A scouting bias you can learn by reading their Ledger (engine/scoutBias.ts). */
+  bias?: ScoutBias
+  /** Past reports vs. outcomes, used to learn the bias over time. */
+  reportLedger?: { prospectId: string; grade: number; truth: number }[]
+}
+
+/** An evaluator's blind spot: which trait they over/under-weight. */
+export interface ScoutBias {
+  axis: 'speed' | 'size' | 'production' | 'conference' | 'character'
+  magnitude: number // signed points, e.g. +5 = grades that axis 5 high
 }
 
 export interface GameResult {
@@ -231,7 +288,6 @@ export interface NewsItem {
     | 'Owner'
     | 'Roster'
     | 'Draft'
-    | 'Recruiting'
     | 'Trade'
     | 'Injury'
     | 'League'
@@ -288,10 +344,22 @@ export interface DraftProspect {
   committedTo?: string | null
   draftedBy?: string | null
   draftPick?: number | null
+  /** Hidden character + uncovered facets. See engine/character.ts */
+  character?: Character
+  characterReads?: CharacterRead[]
+  generated?: boolean
+  /** Recruiting: relationship per coach key ('user' or assistant id), 0-100. */
+  relations?: Record<string, number>
+  /** Head Coach has approved an offer for this recruit. */
+  offered?: boolean
+  /** Who led the recruitment when he committed, and their name. */
+  leadRecruiter?: string
+  leadRecruiterName?: string
+  /** Coordinator's recommended NIL split for this target (advisory). */
+  nilRecommend?: number
 }
 
 export type CareerPath = 'coach' | 'personnel'
-
 export interface CareerTier {
   level: number
   title: string
@@ -310,6 +378,34 @@ export interface JobOffer {
   years: number
   interest: number // 0-100
   note: string
+}
+
+export type LedgerKind = 'grade' | 'recommendation' | 'pick' | 'advice'
+export interface LedgerEntry {
+  id: string
+  season: number
+  week: number
+  kind: LedgerKind
+  prospectId?: string
+  playerId?: string
+  name: string
+  pos: string
+  college: string
+  /** The role you held when you made the call. */
+  role?: string
+  /** What you said at the time. */
+  myGrade?: number
+  recommendation?: Recommendation
+  round?: number
+  pick?: number
+  note: string
+  /** Filled in later, once we know how it turned out. */
+  outcome?: string
+  hit?: boolean
+  /** Advice entries: did the NPC follow your call? */
+  accepted?: boolean
+  /** Hidden truth captured at call time, so we can grade it later. */
+  truth?: number
 }
 
 export interface CareerState {
@@ -334,6 +430,167 @@ export interface CareerState {
   seasonHits: number
   /** Per-role mastery (0-100), keyed `${path}:${level}`. Excellence carries over. */
   roleMastery?: Record<string, number>
+  /** Every call you've made: grades, recommendations, picks, advice. */
+  ledger?: LedgerEntry[]
+  /** Your ranked board for the upcoming draft (prospect ids, best first). */
+  userBoard?: string[]
+  /** The region you're assigned to scout (drives information scope). */
+  scoutRegion?: string
+  /** Weekly time budget (#5). Reset each week. */
+  hoursLeft?: number
+  /** Season in which the annual set piece was resolved (#6). */
+  setPieceDone?: number
+  /** Current stretch assignment / interim job (#8). */
+  stretch?: StretchTask
+  /** The week's one big decision and its resolution (#2). */
+  dilemma?: WeeklyDilemma
+  /** Season-by-season ghost-GM comparison (#8). */
+  ghostHistory?: GhostSeason[]
+  /** The question this season is trying to answer (#11). */
+  seasonQuestion?: SeasonQuestion
+  /** Key moments logged during the season, for the recap (#20). */
+  seasonMoments?: SeasonMoment[]
+  /** Self-chosen season ambitions (#11). Up to three per season. */
+  ambitions?: Ambition[]
+  /** Relationships that travel with you (#9). */
+  contacts?: Contact[]
+  /** Traits earned by deeds, not spent (#10). */
+  earnedTraits?: EarnedTrait[]
+  /** The boss who is shaping you (#11). */
+  mentor?: { name: string; philosophy: string; teamId: string }
+  /** People you developed who now run their own programs (#11). */
+  tree?: { name: string; role: string; teamId: string; season: number }[]
+  /** The Wilderness after a firing (#17). */
+  wilderness?: { path: string; untilSeason: number; blurb: string } | null
+  /** College NIL collective budget (#15). */
+  nilBudget?: number
+  /** Recruiting territory (region) assigned to this coaching role. */
+  recruitTerritory?: string
+  /** Position group this coach owns (position coaches). */
+  recruitGroup?: Position[]
+  /** Players whose recruitment you led (credited to your career). */
+  recruited?: { name: string; pos: string; season: number; schoolId: string }[]
+  /** Actions completed this week, for the weekly checklist. Reset on advance. */
+  weekFlags?: Record<string, boolean>
+  /** Your stated philosophy (#14). */
+  philosophy?: string
   history: { season: number; team: string; role: string; record: string; outcome: string }[]
+}
+
+/** One choice on the week's big decision card (#2). */
+export interface DilemmaChoice {
+  id: string
+  label: string
+  blurb: string
+  effect: import('./engine/dilemma').DilemmaEffect
+  /** What actually happened, shown after the call. */
+  outcome: string
+}
+
+/** The one big decision this week (#2). Everything else in the week is optional. */
+export interface WeeklyDilemma {
+  id: string
+  season: number
+  week: number
+  kind: 'roster' | 'game' | 'culture' | 'draft' | 'pressure'
+  title: string
+  body: string
+  prompt: string
+  choices: DilemmaChoice[]
+  /** The chosen id, or null if still open. */
+  resolved: string | null
+}
+
+/** One season's ghost-GM comparison (#8). */
+export interface GhostSeason {
+  season: number
+  actualWins: number
+  ghostWins: number
+  /** actual minus schedule-aware replacement expectation (+ = you beat the ghost). */
+  delta: number
+}
+
+/** A recurring question the season is trying to answer (#11, used by the recap #20). */
+export interface SeasonQuestion {
+  season: number
+  text: string
+  /** How it resolved, filled at season review. */
+  answer?: string
+  good?: boolean
+}
+
+/** A self-chosen season goal (#11) — different from the objectives the job assigns. */
+export type AmbitionKind =
+  | 'makePlayoffs'
+  | 'winDivision'
+  | 'top10Unit'
+  | 'draftStarter'
+  | 'developYoung'
+  | 'beatRival'
+  | 'capClean'
+  | 'scoutAccuracy'
+  | 'winRecord'
+
+export interface Ambition {
+  id: string
+  kind: AmbitionKind
+  label: string
+  blurb: string
+  season: number
+  /** Graded at season review. */
+  done?: boolean
+  /** Context the evaluator needs (rival id, side, target). */
+  meta?: { teamId?: string; side?: 'off' | 'def'; target?: number }
+  reward: Partial<import('./engine/career').Reputation>
+}
+
+/** One key moment in the season, for the broadcast recap (#20). */
+export interface SeasonMoment {
+  week: number
+  text: string
+  tone: 'win' | 'loss' | 'info'
+}
+
+/** A stretch assignment handed down by a boss (#8). */
+export interface StretchTask {  id: string
+  label: string
+  blurb: string
+  kind: 'stretch' | 'interim'
+  accepted: boolean
+  reward: number
+  season: number
+}
+
+/** A relationship in your contact book (#9). */
+export interface Contact {
+  id: string
+  name: string
+  kind: 'High School Coach' | 'Trainer' | 'NFL Scout' | 'Agent' | 'Beat Writer'
+  region: string
+  relationship: number // 0-100
+  /** Where they've climbed to by now. */
+  role?: string
+  teamId?: string
+}
+
+/** A trait earned through deeds (#10). */
+export interface EarnedTrait {
+  id: string
+  name: string
+  desc: string
+  season: number
+  role: string
+}
+
+/** An NPC climbing the same ladder alongside you (#12). */
+export interface Rival {
+  id: string
+  name: string
+  path: CareerPath
+  level: number
+  tier: LeagueTier
+  teamId: string
+  reputation: number
+  startSeason: number
 }
 

@@ -3,6 +3,7 @@ import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { capSavings, deadMoney } from '../game/engine/cap'
 import { canSignFreeAgents } from '../game/engine/career'
+import { accessFor } from '../game/engine/access'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
@@ -17,6 +18,7 @@ export function Cap() {
   const summary = capSummary(league, career.teamId)
   const roster = league.roster[career.teamId] ?? []
   const canMove = canSignFreeAgents(career)
+  const access = accessFor(career, 'cap')
   const contracts = useMemo(() => [...roster].sort((a, b) => b.contract.capHit - a.contract.capHit), [roster])
 
   return (
@@ -32,7 +34,9 @@ export function Cap() {
 
       {!canMove && (
         <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
-          Contract moves unlock at Director of Player Personnel. You can review the books now.
+          {access === 'advise'
+            ? 'The cap is the GM\u2019s department. You can review the books and shape the plan \u2014 the GM makes the final call on contracts.'
+            : 'Contract moves unlock at Director of Player Personnel. You can review the books now.'}
         </div>
       )}
 

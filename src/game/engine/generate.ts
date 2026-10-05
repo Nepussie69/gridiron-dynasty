@@ -1,12 +1,14 @@
 import type {
   DraftPick, DraftProspect, JobOffer, NewsItem, Player, Position, Side, StaffMember, StaffRole,
-  Team, TeamRecord,
+  Team, TeamRecord, CareerPath, LeagueTier, Rival,
 } from '../types'
 import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
 import { freshDraftPicks } from './picks'
+import { makeCharacter } from './character'
+import { makeScoutBias } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
 import { STARS } from './starSeed'
 import type { RealCfbPlayer, RealCfbTeam, RealData, RealNflPlayer } from '../data/realData'
@@ -41,8 +43,6 @@ export interface World {
   news: NewsItem[]
   /** NFL draft pool — draft-eligible COLLEGE players. */
   draft: DraftProspect[]
-  /** College recruiting pool — HIGH-SCHOOL prospects. */
-  recruits: DraftProspect[]
   freeAgents: Player[]
   schedule: Game[]
   deadMoney: Record<string, number>
@@ -50,7 +50,6 @@ export interface World {
   lastChampion: string | null
   awards: { mvp?: string; opoy?: string; dpoy?: string; roy?: string }
   jobMarket: JobOffer[]
-  recruitingRank: Record<string, number>
   draftState: { round: number; pickIndex: number; complete: boolean; log: string[] }
   /** Tradeable draft selections, including traded and compensatory picks. */
   draftPicks: DraftPick[]
@@ -60,6 +59,10 @@ export interface World {
   practiceSquad: Record<string, Player[]>
   /** Players on injured reserve, keyed by team. */
   ir: Record<string, Player[]>
+  /** NPCs who began the climb the same year you did (#12). */
+  rivals: import('../types').Rival[]
+  /** The current era: market drift that changes over decades (#18). */
+  era: { id: string; label: string; positionBias: Partial<Record<Position, number>>; capSpike: number }
   /** Free agents lost/gained last cycle, used to award compensatory picks. */
   compLedger: Record<string, { lost: number; gained: number }>
 }
@@ -77,13 +80,6 @@ const NFL_SLOTS: Position[] = [
   'TE', 'TE', 'TE', 'OT', 'OT', 'OT', 'OT', 'OG', 'OG', 'OG', 'OG', 'C', 'C',
   'DE', 'DE', 'DE', 'DE', 'DT', 'DT', 'DT', 'DT', 'LB', 'LB', 'LB', 'LB', 'LB', 'LB',
   'CB', 'CB', 'CB', 'CB', 'CB', 'CB', 'CB', 'S', 'S', 'S', 'S', 'K', 'P',
-]
-
-const CFB_SLOTS: Position[] = [
-  'QB', 'QB', 'QB', 'RB', 'RB', 'RB', 'WR', 'WR', 'WR', 'WR', 'WR', 'WR',
-  'TE', 'TE', 'TE', 'OT', 'OT', 'OT', 'OT', 'OG', 'OG', 'OG', 'OG', 'C', 'C',
-  'DE', 'DE', 'DE', 'DE', 'DT', 'DT', 'DT', 'DT', 'LB', 'LB', 'LB', 'LB', 'LB', 'LB',
-  'CB', 'CB', 'CB', 'CB', 'CB', 'CB', 'S', 'S', 'S', 'S', 'K', 'P',
 ]
 
 const TRAITS_BY_POS: Record<string, string[]> = {
@@ -218,29 +214,6 @@ function generateNFLRoster(rng: Rng, team: Team, season: number): Player[] {
   return players
 }
 
-function generateCFBRoster(rng: Rng, team: Team, season: number): Player[] {
-  const stars = STARS[team.id] ?? []
-  const slots = [...CFB_SLOTS]
-  const players: Player[] = []
-  for (const [name, pos, ovr] of stars) {
-    const idx = slots.indexOf(pos)
-    if (idx >= 0) {
-      slots.splice(idx, 1)
-      players.push(makePlayer(rng, team.id, pos, ovr, season, name))
-    }
-  }
-  for (const pos of slots) players.push(makePlayer(rng, team.id, pos, ovrFor(rng, team.prestige, pos), season))
-  // College players are unpaid; zero out contracts.
-  for (const p of players) {
-    p.contract = {
-      years: 0, length: 0, base: [0], signingBonus: 0, proration: 0, guaranteed: 0,
-      capHit: 0, annual: 0, signedThrough: season, voidYears: 0,
-    }
-    p.classYear = (['FR', 'SO', 'JR', 'SR'] as const)[Math.min(3, Math.max(0, 21 - p.age + 3))]
-  }
-  return players
-}
-
 // ── Staff ────────────────────────────────────────────────────────────────────
 const NFL_STAFF_ROLES: StaffRole[] = [
   'Head Coach', 'Offensive Coordinator', 'Defensive Coordinator', 'Special Teams Coordinator',
@@ -251,8 +224,9 @@ const SCHEMES_DEF = ['4-3 Base', '3-4 Base', '4-2-5 Nickel', 'Multiple', 'Blitz 
 
 function makeStaff(rng: Rng, teamId: string, role: StaffRole, rating: number, season: number): StaffMember {
   const def = role.includes('Defensive') || role === 'DL Coach' || role === 'Secondary Coach'
+  const id = `s_${teamId}_${role.replace(/\s/g, '')}`
   return {
-    id: `s_${teamId}_${role.replace(/\s/g, '')}`,
+    id,
     name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
     role,
     age: rint(rng, 34, 63),
@@ -264,7 +238,34 @@ function makeStaff(rng: Rng, teamId: string, role: StaffRole, rating: number, se
     teamId,
     status: 'Hired',
     notes: `Signed through ${season + rint(rng, 1, 3)}`,
+    bias: makeScoutBias(`${teamId}|${role}|${rating}`),
   }
+}
+
+/** NPC rivals who started the climb the same year you did (#12). */
+function generateRivals(rng: Rng, season: number): Rival[] {
+  const paths: CareerPath[] = ['personnel', 'coach', 'personnel', 'coach', 'personnel', 'coach']
+  return paths.map((path, i) => ({
+    id: `rival_${season}_${i}`,
+    name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
+    path,
+    level: path === 'coach' ? 5 : 4, // first NFL rung of each ladder
+    tier: 'NFL' as LeagueTier,
+    teamId: rpick(rng, NFL_TEAMS).id,
+    reputation: 30 + rint(rng, 0, 12),
+    startSeason: season,
+  }))
+}
+
+/** The current era: a market drift you can exploit (#18). */
+export const ERAS: World['era'][] = [
+  { id: 'modern', label: 'Modern Spread Era', positionBias: { QB: 1.08, WR: 1.12, TE: 1.05, RB: 0.94, LB: 0.97 }, capSpike: 1 },
+  { id: 'trenches', label: 'Trenches Era', positionBias: { OT: 1.14, OG: 1.1, DE: 1.12, DT: 1.12, WR: 0.95 }, capSpike: 1 },
+  { id: 'track', label: 'Track Meet Era', positionBias: { WR: 1.16, CB: 1.12, S: 1.08, RB: 0.9 }, capSpike: 1.05 },
+  { id: 'bully', label: 'Bully-Ball Era', positionBias: { RB: 1.2, TE: 1.1, LB: 1.1, C: 1.06, WR: 0.94 }, capSpike: 1 },
+]
+function makeEra(rng: Rng): World['era'] {
+  return rpick(rng, ERAS)
 }
 
 function generateStaffPool(rng: Rng, count: number): StaffMember[] {
@@ -308,14 +309,15 @@ export function generateProspectClass(rng: Rng, season: number, count = 170): Dr
     const noise = Math.round((rng() - 0.5) * 18)
     const grade = Math.max(45, Math.min(99, trueGrade + noise))
     const rank = i + 1
+    const id = `d${season}_${i}`
     return {
-      id: `d${season}_${i}`,
+      id,
       name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
       pos,
       college: rpick(rng, CFB_TEAMS).name,
       age: rint(rng, 20, 23),
-      ovr: Math.round(58 + grade * 0.27),
-      pot: Math.round(Math.min(99, 66 + trueGrade * 0.33)),
+      ovr: Math.round(48 + grade * 0.24),
+      pot: Math.round(Math.min(93, 56 + trueGrade * 0.32)),
       grade,
       trueGrade,
       myGrade: null,
@@ -328,62 +330,8 @@ export function generateProspectClass(rng: Rng, season: number, count = 170): Dr
       notes: rpick(rng, POS_NOTES),
       classYear: (['JR', 'SR', 'SR', 'SO'] as const)[rint(rng, 0, 3)],
       production: rint(rng, 40, 99),
-      committedTo: null,
-      draftedBy: null,
-      draftPick: null,
-    }
-  })
-}
-
-const HS_NOTES = [
-  'Elite arm talent; thin frame that needs a college weight program.',
-  'Track speed. Raw route-running, massive upside.',
-  'Dominated small-school competition — level of play is the question.',
-  'Legacy recruit; brother played in the league.',
-  'Late bloomer whose camp circuit opened eyes this summer.',
-  'Physical freak who has never been coached hard. High ceiling, bust risk.',
-  'Wins with instincts and football IQ beyond his years.',
-  'Two-sport star; may take a while to commit to football.',
-]
-
-/**
- * HIGH-SCHOOL RECRUITING CLASS.
- *
- * College programs recruit high-schoolers, not college seniors. These are 17-18
- * year olds with wide error bars — far more projection, far less certainty than
- * a draft prospect. They carry a star rating and no college yet.
- */
-export function generateRecruitClass(rng: Rng, season: number, count = 300): DraftProspect[] {
-  return Array.from({ length: count }, (_, i) => {
-    const pos = rpick(rng, PROSPECT_POS)
-    // Wider spread than the pro draft: a few elite, a long tail.
-    const trueGrade = Math.max(45, Math.min(99, Math.round(62 + (rng() - 0.45) * 46)))
-    const noise = Math.round((rng() - 0.5) * 26) // HS evals are noisier
-    const grade = Math.max(40, Math.min(99, trueGrade + noise))
-    const rank = i + 1
-    const stars: 1 | 2 | 3 | 4 | 5 =
-      grade >= 92 ? 5 : grade >= 84 ? 4 : grade >= 74 ? 3 : grade >= 64 ? 2 : 1
-    return {
-      id: `r${season}_${i}`,
-      name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
-      pos,
-      college: 'High School', // not yet enrolled anywhere
-      age: rint(rng, 17, 18),
-      ovr: Math.round(48 + grade * 0.24),
-      pot: Math.round(Math.min(99, 62 + trueGrade * 0.37)),
-      grade,
-      trueGrade,
-      myGrade: null,
-      confidence: rint(rng, 3, 18),
-      recommendation: null,
-      projectedRound: 0,
-      projectedPick: rank,
-      scoutConfidence: rint(rng, 10, 45),
-      traits: traitsFor(rng, pos, trueGrade),
-      notes: rpick(rng, HS_NOTES),
-      classYear: 'FR',
-      stars,
-      production: rint(rng, 30, 99),
+      character: makeCharacter(id),
+      generated: true,
       committedTo: null,
       draftedBy: null,
       draftPick: null,
@@ -427,14 +375,14 @@ function buildSchedule(rng: Rng, teams: Team[], weeks: number, startWeek: number
   return games
 }
 
-function buildNews(teamId: string, teamName: string, teamTier: string): NewsItem[] {
+function buildNews(teamId: string, teamName: string, _teamTier: string): NewsItem[] {
   const raw: [NewsItem['category'], string, string][] = [
-    ['Owner', `${teamName} leadership sets expectations`, `The ${teamTier === 'NFL' ? 'owner' : 'athletic department'} wants measurable progress this season. Performance will be reviewed at year end.`],
+    ['Owner', `${teamName} leadership sets expectations`, `The owner wants measurable progress this season. Performance will be reviewed at year end.`],
     ['Draft', `Scouting department finalizing the board`, `Area scouts are filing final grades. The war room convenes to stack the board and hunt for trade-back scenarios.`],
     ['League', `League releases updated cap projections`, `The cap is expected to rise again next year, creating flexibility for extension talks.`],
     ['Injury', `Starting defender day-to-day`, `A soft-tissue strain will be monitored through the week. No IR decision yet.`],
     ['Staff', `Coordinator interviews on the horizon`, `League sources expect a busy hiring cycle this winter.`],
-    ['Recruiting', `Five-star recruit narrows his list`, `The nation's top prospect will take official visits this fall. NIL packages are in play.`],
+    ['League', `Combine invites go out to the draft class`, `The top prospects in the class will work out for every club in Indianapolis.`],
   ]
   return raw.map(([category, headline, body], i) => ({
     id: `n${i}`, week: 1, season: 2026, category, headline, body, teamId, read: i > 1,
@@ -456,9 +404,6 @@ function cfbTeamIdBySchool(school: string): string | undefined {
   const s = school.replace(/&amp;/g, '&').trim()
   const norm = CFB_ALIASES[s] ?? s
   return CFB_TEAMS.find((t) => t.name === norm)?.id
-}
-function inchesToFt(inches: number) {
-  return `${Math.floor(inches / 12)}'${inches % 12}"`
 }
 
 function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: number): Player {
@@ -487,32 +432,6 @@ function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: numbe
     injured: rchance(rng, 0.07)
       ? { games: rint(rng, 1, 4), note: rpick(rng, ['Hamstring', 'Ankle', 'Concussion', 'Knee', 'Shoulder']) }
       : undefined,
-  }
-}
-
-function realCfbPlayer(rng: Rng, teamId: string, p: RealCfbPlayer, season: number): Player {
-  const pot = Math.min(99, p.ovr + (p.cls === 'FR' || p.cls === 'SO' ? rint(rng, 2, 12) : rint(rng, 0, 4)))
-  return {
-    id: nextPid(),
-    name: p.name,
-    pos: p.pos,
-    side: POS_SIDE[p.pos],
-    age: 18 + ['FR', 'SO', 'JR', 'SR'].indexOf(p.cls) + rint(rng, 0, 2),
-    height: inchesToFt(p.ht),
-    weight: p.wt,
-    college: teamId,
-    ovr: p.ovr,
-    pot,
-    dev: devFor(p.ovr, pot),
-    traits: traitsFor(rng, p.pos, p.ovr),
-    attrs: p.attrs,
-    contract: {
-      years: 0, length: 0, base: [0], signingBonus: 0, proration: 0, guaranteed: 0,
-      capHit: 0, annual: 0, signedThrough: season, voidYears: 0,
-    },
-    teamId,
-    morale: rint(rng, 55, 95),
-    classYear: p.cls,
   }
 }
 
@@ -556,8 +475,9 @@ function realProspectClass(rng: Rng, cfbTeams: RealCfbTeam[], season: number, co
     const noise = Math.round((rng() - 0.5) * 10)
     const grade = Math.max(45, Math.min(99, trueGrade + noise))
     const rank = i + 1
+    const id = `d${season}_${i}`
     return {
-      id: `d${season}_${i}`,
+      id,
       name: p.name,
       pos: p.pos,
       college: school,
@@ -576,6 +496,8 @@ function realProspectClass(rng: Rng, cfbTeams: RealCfbTeam[], season: number, co
       notes: rpick(rng, POS_NOTES),
       classYear: p.cls,
       production: Math.max(40, Math.min(99, trueGrade + rint(rng, -8, 6))),
+      character: makeCharacter(id),
+      generated: false,
       committedTo: null,
       draftedBy: null,
       draftPick: null,
@@ -588,18 +510,13 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
   PID = 0
   const season = 2026
   const nflReal: Record<string, RealNflPlayer[]> = {}
-  const cfbReal: Record<string, RealCfbPlayer[]> = {}
   if (data) {
     for (const p of data.nfl) {
       const id = nflTeamIdByName(p.team)
       if (id) (nflReal[id] ??= []).push(p)
     }
-    for (const t of data.cfb) {
-      const id = cfbTeamIdBySchool(t.school)
-      if (id) cfbReal[id] = t.players
-    }
   }
-  const teams: Team[] = [...NFL_TEAMS, ...CFB_TEAMS]
+  const teams: Team[] = [...NFL_TEAMS]
   const byId: Record<string, Team> = {}
   const roster: Record<string, Player[]> = {}
   const staff: Record<string, StaffMember[]> = {}
@@ -626,32 +543,15 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     standings[t.id] = zeroRecord(t.id)
     deadMoney[t.id] = Math.round(rng() * 22_000_000)
   }
-  for (const t of CFB_TEAMS) {
-    byId[t.id] = t
-    let players: Player[]
-    if (cfbReal[t.id]?.length) {
-      players = cfbReal[t.id].map((p) => realCfbPlayer(rng, t.id, p, season))
-    } else {
-      players = generateCFBRoster(rng, t, season)
-    }
-    roster[t.id] = players
-    allPlayers.push(...players)
-    staff[t.id] = [
-      makeStaff(rng, t.id, 'Head Coach', Math.min(96, Math.round(t.prestige * 0.95 + (rng() - 0.5) * 12)), season),
-      makeStaff(rng, t.id, 'Offensive Coordinator', Math.round(t.prestige * 0.8 + (rng() - 0.5) * 14), season),
-      makeStaff(rng, t.id, 'Defensive Coordinator', Math.round(t.prestige * 0.8 + (rng() - 0.5) * 14), season),
-    ]
-    standings[t.id] = zeroRecord(t.id)
-    deadMoney[t.id] = 0
+
+  const schedule = buildSchedule(rng, NFL_TEAMS, 18, 1, true)
+
+  // Give every player a hidden character. Real-data players keep theirs hidden
+  // from negative narratives; generated players can be the subject of them.
+  for (const p of allPlayers) {
+    if (!p.character) p.character = makeCharacter(p.id)
+    if (p.generated === undefined) p.generated = !(p.attrs && Object.keys(p.attrs).length > 0)
   }
-
-  const schedule = [
-    ...buildSchedule(rng, NFL_TEAMS, 18, 1, true),
-    ...buildSchedule(rng, CFB_TEAMS, 12, 1, false),
-  ]
-
-  const recruitingRank: Record<string, number> = {}
-  ;[...CFB_TEAMS].sort((a, b) => b.prestige - a.prestige).forEach((t, i) => { recruitingRank[t.id] = i + 1 })
 
   return {
     seed,
@@ -667,7 +567,6 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     standings,
     news: buildNews('BUF', 'Buffalo Bills', 'NFL'),
     draft: data ? realProspectClass(rng, data.cfb, season) : generateProspectClass(rng, season),
-    recruits: generateRecruitClass(rng, season),
     freeAgents,
     schedule,
     deadMoney,
@@ -675,7 +574,6 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     lastChampion: null,
     awards: {},
     jobMarket: [],
-    recruitingRank,
     staffTenure: seedStaffTenure(rng),
     draftState: { round: 1, pickIndex: 0, complete: false, log: [] },
     draftPicks: freshDraftPicks(season + 1),
@@ -683,6 +581,8 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     practiceSquad: {},
     ir: {},
     compLedger: {},
+    rivals: generateRivals(rng, season),
+    era: makeEra(rng),
   }
 }
 
@@ -703,16 +603,14 @@ export { hash32 }
 /** Random starting staff tenure for every team+side, so programs vary in stability. */
 function seedStaffTenure(rng: Rng): Record<string, number> {
   const out: Record<string, number> = {}
-  for (const t of [...NFL_TEAMS, ...CFB_TEAMS]) {
+  for (const t of NFL_TEAMS) {
     out[`${t.id}:off`] = rint(rng, 1, 7)
     out[`${t.id}:def`] = rint(rng, 1, 7)
   }
   return out
 }
 
-export function regenerateSchedule(world: World) {  const rng = makeRng(world.seed + world.season * 8161)
-  world.schedule = [
-    ...buildSchedule(rng, NFL_TEAMS, 18, 1, true),
-    ...buildSchedule(rng, CFB_TEAMS, 12, 1, false),
-  ]
+export function regenerateSchedule(world: World) {
+  const rng = makeRng(world.seed + world.season * 8161)
+  world.schedule = buildSchedule(rng, NFL_TEAMS, 18, 1, true)
 }

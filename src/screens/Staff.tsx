@@ -7,6 +7,7 @@ import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { coachEffect, staffGrade } from '../game/engine/coaching'
 import { openCandidates, schemesForRole, type HireCandidate } from '../game/engine/hiring'
+import { learnedBias } from '../game/engine/scoutBias'
 
 export function Staff() {
   const league = useWorld()
@@ -209,6 +210,7 @@ function StaffCard({
   onAction: () => void
 }) {
   const tier = member.rating >= 85 ? 'gold' : member.rating >= 75 ? 'info' : 'neutral'
+  const learned = learnedBias(member)
   return (
     <Card>
       <div className="flex items-start gap-3">
@@ -242,6 +244,13 @@ function StaffCard({
         </div>
         <RatingBar value={member.rating} color={member.rating >= 85 ? '#c99a2e' : 'var(--team)'} />
       </div>
+
+      {learned.label && (
+        <div className="mt-3 rounded-lg bg-surface-2 p-2.5 text-[11px] leading-snug text-ink-2">
+          <span className="font-cond font-700 uppercase text-muted">Scouting read · </span>
+          {learned.label} <span className="text-faint">({learned.samples} calls)</span>
+        </div>
+      )}
 
       <div className="mt-3 flex items-center justify-between">
         <span className="font-cond text-xs text-muted">{member.contractYears} yr contract</span>

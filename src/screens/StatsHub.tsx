@@ -19,12 +19,11 @@ export function StatsHub() {
   const db = useGame((s) => s.statsDb)()
   const [stat, setStat] = useState<StatKey>('passYds')
   const [scope, setScope] = useState<'season' | 'career'>('season')
-  const [level, setLevel] = useState<'NFL' | 'CFB'>('NFL')
 
   const rows = leaderboard(world, db, stat, {
     season: scope === 'season' ? world.season : undefined,
     career: scope === 'career',
-    level,
+    level: 'NFL',
     limit: 25,
   })
 
@@ -35,20 +34,9 @@ export function StatsHub() {
       <PageHeader
         eyebrow="League"
         title="Stats Hub"
-        subtitle={`League leaderboards and the career statistics database — ${seasonsRecorded.length} season${seasonsRecorded.length === 1 ? '' : 's'} recorded.`}
+        subtitle={`NFL leaderboards and the career statistics database — ${seasonsRecorded.length} season${seasonsRecorded.length === 1 ? '' : 's'} recorded.`}
         right={
           <div className="flex gap-2">
-            <div className="flex rounded-lg bg-surface-2 p-0.5">
-              {(['NFL', 'CFB'] as const).map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLevel(l)}
-                  className={cn('rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition', level === l ? 'bg-white text-ink shadow-sm' : 'text-muted')}
-                >
-                  {l === 'NFL' ? 'Pro' : 'College'}
-                </button>
-              ))}
-            </div>
             <div className="flex rounded-lg bg-surface-2 p-0.5">
               {(['season', 'career'] as const).map((s) => (
                 <button
@@ -88,7 +76,7 @@ export function StatsHub() {
       <Card pad={false}>
         <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
           <span className="label">
-            {scope === 'career' ? 'Career' : `${world.season}`} · {level === 'NFL' ? 'Pro' : 'College'} · {GROUPS.flatMap((g) => g.stats).find((s) => s.key === stat)?.label}
+            {scope === 'career' ? 'Career' : `${world.season}`} · Pro · {GROUPS.flatMap((g) => g.stats).find((s) => s.key === stat)?.label}
           </span>
           <Badge tone="neutral">{rows.length} players</Badge>
         </div>

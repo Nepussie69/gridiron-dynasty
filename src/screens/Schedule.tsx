@@ -6,7 +6,6 @@ import { Badge, Button, Card, PageHeader, Stat, TeamCrest } from '../ui/kit'
 export function Schedule() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
-  const career = useGame((s) => s.career)!
   const openMatch = useGame((s) => s.openMatch)
 
   const rec = recordOf(league, activeTeamId)
@@ -15,15 +14,14 @@ export function Schedule() {
   let w = 0
   let l = 0
   const nextWeek = games.find((g) => !g.played)?.week
-  const isCollege = league.byId[activeTeamId].tier !== 'NFL'
-  const totalGames = isCollege ? 12 : 17
+  const totalGames = 17
 
   return (
     <div>
       <PageHeader
         eyebrow={`Season ${league.season} · Week ${league.week}`}
         title="Schedule & Results"
-        subtitle={career.tier === 'NFL' ? 'Every game is a referendum on the roster you helped build.' : 'Follow the program you scout for.'}
+        subtitle="Every game is a referendum on the roster you helped build."
         right={<Badge tone={rec.wins >= rec.losses ? 'win' : 'loss'}>{recordStr(rec)} on the season</Badge>}
       />
 

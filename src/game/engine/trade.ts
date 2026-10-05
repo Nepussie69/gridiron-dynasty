@@ -74,7 +74,11 @@ function partnerValue(world: World, partnerId: string, a: TradeAsset, rebuild: b
     ? p.age <= 25 ? 1.2 : p.age >= 30 ? 0.7 : 1
     : p.age <= 27 ? 1.05 : p.age >= 31 ? 1.05 : 1
   const need = 1 + needFactor(world, partnerId, p.pos) * 0.18
-  return base * ageMul * need
+  // Stars are hard to pry away: a club's top-3 players carry a premium.
+  const roster = world.roster[partnerId] ?? []
+  const rank = [...roster].sort((x, y) => y.ovr - x.ovr).findIndex((x) => x.id === p.id)
+  const starPremium = rank >= 0 && rank < 3 ? 1.45 : 1
+  return base * ageMul * need * starPremium
 }
 
 export interface TradeVerdict {

@@ -6,6 +6,7 @@ import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { PlanEditor } from './PlanEditor'
 import { BALANCED_PLAN } from '../game/engine/gameplan'
+import { originTag } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
@@ -331,8 +332,8 @@ export function MatchView() {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <BoxScore world={world} teamId={match.awayId} box={match.box} />
-          <BoxScore world={world} teamId={match.homeId} box={match.box} />
+          <BoxScore world={world} teamId={match.awayId} box={match.box} gmName={career?.gmName} myTeamId={career?.teamId} />
+          <BoxScore world={world} teamId={match.homeId} box={match.box} gmName={career?.gmName} myTeamId={career?.teamId} />
         </div>
       </div>
 
@@ -407,38 +408,43 @@ export function MatchView() {
   )
 }
 
-function BoxScore({ world, teamId, box }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[] }) {
+function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; gmName?: string; myTeamId?: string }) {
   const team = world.byId[teamId]
   const rows = (box ?? []).filter((b) => b.teamId === teamId)
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
   const rushing = rows.filter((r) => (r.line.rushAtt ?? 0) > 0)
   const receiving = rows.filter((r) => (r.line.rec ?? 0) > 0 || (r.line.targets ?? 0) > 0)
   const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0)
+  // Index once per render: the viewer re-renders every playback tick, so a
+  // linear scan per box-score row would add up fast.
+  const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
+  const fp = { gmName, myTeamId, byId }
   return (
     <div className="rounded-lg bg-black/30 p-2">
       <div className="mb-2 flex items-center gap-2">
         <TeamCrest team={team} size={22} />
         <span className="font-display text-sm font-700 uppercase">{team.name}</span>
       </div>
-      {passing.length > 0 && <BoxBlock title="Passing" rows={passing} cols={[
+      {passing.length > 0 && <BoxBlock title="Passing" rows={passing} fp={fp} cols={[
         { k: 'passComp', l: 'C/ATT', fmt: (r) => `${r.passComp ?? 0}/${r.passAtt ?? 0}` },
         { k: 'passYds', l: 'YDS' }, { k: 'passTD', l: 'TD' }, { k: 'ints', l: 'INT' },
       ]} />}
-      {rushing.length > 0 && <BoxBlock title="Rushing" rows={rushing} cols={[
+      {rushing.length > 0 && <BoxBlock title="Rushing" rows={rushing} fp={fp} cols={[
         { k: 'rushAtt', l: 'CAR' }, { k: 'rushYds', l: 'YDS' }, { k: 'rushTD', l: 'TD' },
       ]} />}
-      {receiving.length > 0 && <BoxBlock title="Receiving" rows={receiving} cols={[
+      {receiving.length > 0 && <BoxBlock title="Receiving" rows={receiving} fp={fp} cols={[
         { k: 'rec', l: 'REC' }, { k: 'recYds', l: 'YDS' }, { k: 'recTD', l: 'TD' },
       ]} />}
-      {defense.length > 0 && <BoxBlock title="Defense" rows={defense} cols={[
+      {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
       ]} />}
     </div>
   )
 }
 
+interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player> }
 interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string }
-function BoxBlock({ title, rows, cols }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[] }) {
+function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx }) {
   const sorted = [...rows].sort((a, b) => (b.line[cols[1]?.k as keyof typeof b.line] as number ?? 0) - (a.line[cols[1]?.k as keyof typeof a.line] as number ?? 0))
   return (
     <div className="mb-2">
@@ -451,16 +457,27 @@ function BoxBlock({ title, rows, cols }: { title: string; rows: import('../game/
           </tr>
         </thead>
         <tbody>
-          {sorted.slice(0, 6).map((b) => (
+          {sorted.slice(0, 6).map((b) => {
+            const p = fp.byId.get(b.playerId)
+            const tag = fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null
+            return (
               <tr key={b.playerId} className="text-white/85">
-                <td className="truncate">{b.name}</td>
+                <td className="truncate">
+                  {b.name}
+                  {tag && (
+                    <span className="ml-1 rounded bg-[var(--team-soft)] px-1 py-px font-cond text-[9px] font-700 uppercase tracking-wide text-[var(--team)]">
+                      {tag}
+                    </span>
+                  )}
+                </td>
                 {cols.map((c) => (
                   <td key={c.k} className="text-right">
                     {c.fmt ? c.fmt(b.line) : (b.line[c.k as keyof typeof b.line] as number ?? 0)}
                   </td>
                 ))}
               </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
     </div>

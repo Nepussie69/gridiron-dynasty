@@ -2,8 +2,7 @@
 // Player stat accumulation.
 //
 // Turns a simulated game's play log into per-player box-score lines, then folds
-// those lines into each player's career stats (one SeasonStats per season, with
-// college entries from CFB rosters and pro entries from the NFL).
+// those lines into each player's career stats (one SeasonStats per pro season).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { GameStatLine, Player, SeasonStats, StatLevel } from '../types'
@@ -157,7 +156,7 @@ export function recordGameStats(world: World, sim: GameSim, season: number, leve
   recordBoxLines(world, boxScore(world, sim), season, level)
 }
 
-/** Career totals across college + pro. */
+/** Career totals across pro seasons. */
 export function careerTotals(p: Player) {
   const t = emptySeason(0, 'NFL', '')
   const seasons = p.stats ?? []

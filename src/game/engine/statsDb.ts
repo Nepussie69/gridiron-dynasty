@@ -39,26 +39,24 @@ export function newDatabase(): CareerDatabase {
 export function recordTeamSeasons(
   world: World,
   db: CareerDatabase,
-  opts: { playoffSeeds?: string[]; champion?: string; collegeChampion?: string; level?: 'NFL' | 'CFB' } = {},
+  opts: { playoffSeeds?: string[]; champion?: string } = {},
 ) {
-  const level = opts.level ?? 'NFL'
   for (const t of world.teams) {
-    if (level === 'NFL' && t.tier !== 'NFL') continue
-    if (level === 'CFB' && t.tier === 'NFL') continue
+    if (t.tier !== 'NFL') continue
     const rec = world.standings[t.id]
     if (!rec) continue
     db.teams.push({
       season: world.season,
-      level,
+      level: 'NFL',
       teamId: t.id,
-      teamName: t.tier === 'NFL' ? `${t.city} ${t.name}` : t.name,
+      teamName: `${t.city} ${t.name}`,
       wins: rec.wins,
       losses: rec.losses,
       pointsFor: rec.pointsFor,
       pointsAgainst: rec.pointsAgainst,
       teamOvr: Math.round(teamAvgOvr(world.roster[t.id] ?? [])),
       playoffs: opts.playoffSeeds?.includes(t.id) ?? false,
-      champion: opts.champion === t.id || opts.collegeChampion === t.id,
+      champion: opts.champion === t.id,
     })
   }
 }

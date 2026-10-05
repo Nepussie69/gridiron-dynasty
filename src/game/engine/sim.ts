@@ -10,7 +10,7 @@ export function simGame(world: World, game: Game, rng: Rng) {
   const homeStr = teamStrength(world.roster[game.homeId] ?? [])
   const awayStr = teamStrength(world.roster[game.awayId] ?? [])
   const diff = homeStr - awayStr + (game.postseason ? 0 : HOME_ADV)
-  const margin = gauss(rng, diff * 0.85, 10.5)
+  const margin = gauss(rng, diff * 1.05, 9.5)
 
   let homeScore = Math.round(21 + margin / 2 + gauss(rng, 0, 3.6))
   let awayScore = Math.round(21 - margin / 2 + gauss(rng, 0, 3.6))
@@ -73,8 +73,7 @@ function allocateWeekStats(world: World, week: number, exceptGameId?: string) {
   for (const game of world.schedule) {
     if (game.week !== week || !game.played || game.id === exceptGameId) continue
     if (game.statsDone) continue
-    const level = world.byId[game.homeId]?.tier === 'NFL' ? 'NFL' : 'CFB'
-    statGame(world, game, world.season, level)
+    statGame(world, game, world.season, 'NFL')
     game.statsDone = true
   }
 }
@@ -157,23 +156,4 @@ export function computeDraftOrder(world: World): string[] {
     .map((t) => ({ id: t.id, rec: world.standings[t.id] }))
     .sort((a, b) => a.rec.wins - b.rec.wins || b.rec.pointsAgainst - a.rec.pointsAgainst)
     .map((t) => t.id)
-}
-
-/** College playoff: top-4 by prestige-weighted record, single elimination. */
-export function simulateCollegePlayoff(world: World): string | null {
-  const rng = makeRng(world.seed + world.season * 15485863)
-  const fbs = world.teams
-    .filter((t) => t.tier === 'FBS')
-    .map((t) => ({ id: t.id, rec: world.standings[t.id] }))
-    .sort((a, b) => b.rec.wins - a.rec.wins || a.rec.losses - b.rec.losses)
-    .slice(0, 4)
-  if (fbs.length < 4) return null
-  const upset = (a: string, b: string) => {
-    const sa = teamStrength(world.roster[a] ?? [])
-    const sb = teamStrength(world.roster[b] ?? [])
-    return gauss(rng, sa - sb, 9) >= 0 ? a : b
-  }
-  const semi1 = upset(fbs[0].id, fbs[3].id)
-  const semi2 = upset(fbs[1].id, fbs[2].id)
-  return upset(semi1, semi2)
 }

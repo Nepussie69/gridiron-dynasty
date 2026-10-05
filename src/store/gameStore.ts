@@ -4,9 +4,10 @@ import {
   regenerateSchedule,
   teamStrength,
   zeroRecord,
+  ERAS,
   type World,
 } from '../game/engine/generate'
-import { finalizeGame, healAfterWeek, simWeek, simulateCollegePlayoff, simulatePlayoffs } from '../game/engine/sim'
+import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
 import { simulatePlayByPlay, setUserCoaching, setLivePlan, type GameSim } from '../game/engine/playsim'
 import { BALANCED_PLAN, type GamePlan } from '../game/engine/gameplan'
 import { userBonusFromSkills } from '../game/engine/coaching'
@@ -44,16 +45,20 @@ import {
   evaluateScouting,
   refreshProspectClass,
   runAIFreeAgency,
+  runAIResign,
+  runAITrades,
+  enforceCapCompliance,
   tickAllContracts,
+  updateStaffLedgers,
   type ScoutingReport,
 } from '../game/engine/progress'
 import {
   canSignFreeAgents,
-  demote,
   generateJobOffers,
   gradeObjectives,
   ladderFor,
   makeInterview,
+  minNflLevel,
   promote,
   resolveInterview,
   reviewSeason,
@@ -68,7 +73,7 @@ import {
   type Reputation,
   type Skills,
 } from '../game/engine/career'
-import { clamp } from '../game/engine/rng'
+import { clamp, hash32 } from '../game/engine/rng'
 import {
   currentRound,
   currentTeamId,
@@ -85,6 +90,33 @@ import {
 } from '../game/engine/draft'
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
+import { accessFor } from '../game/engine/access'
+import {
+  advanceContacts,
+  advanceRivals,
+  growCoachingTree,
+  makeContacts,
+  mediaItems,
+  mentorFor,
+  ownerMandate,
+} from '../game/engine/people'
+import { evaluateTraits } from '../game/engine/earnedTraits'
+import { applyWilderness, makeSuccessor } from '../game/engine/legacy'
+import { pushLedger, gradeLedger } from '../game/engine/ledger'
+import { CHARACTER_FACETS, FACET_LABEL, revealFacet } from '../game/engine/character'
+import { learnedBias, scoutReport, isEvaluator } from '../game/engine/scoutBias'
+import { currentDilemma, applyDilemma } from '../game/engine/dilemma'
+import { recordGhostSeason } from '../game/engine/ghost'
+import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
+import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
+import {
+  WEEK_HOURS,
+  weeklyActions,
+  currentSetPiece,
+  resolveSetPiece as applySetPiece,
+  maybeStretch,
+  stretchOutcome,
+} from '../game/engine/weekly'
 import {
   capSavings,
   deadMoney,
@@ -94,15 +126,15 @@ import {
   summarizeCap,
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
-import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem } from '../game/types'
-import { loadGame, loadBackup, saveGame, clearSave } from '../game/persistence'
+import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, SeasonMoment, SeasonQuestion } from '../game/types'
+import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { loadRealData, getRealData } from '../game/data/realData'
 import { loadCalibration } from '../game/data/calibration'
 import { runBalance } from '../game/engine/balance'
 
 export type ScreenId =
-  | 'career' | 'dashboard' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
-  | 'recruiting' | 'freeagency' | 'trades' | 'cap' | 'schedule' | 'standings'
+  | 'career' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
+  | 'freeagency' | 'trades' | 'cap' | 'schedule' | 'standings'
   | 'stats' | 'awards' | 'league' | 'inbox'
 
 export interface ScreenMeta {
@@ -115,13 +147,13 @@ export interface ScreenMeta {
 export const SCREENS: ScreenMeta[] = [
   { id: 'career', label: 'My Career', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'dashboard', label: 'Dashboard', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
+  { id: 'ledger', label: 'The Ledger', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'scouting', label: 'Scouting', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'roster', label: 'Roster', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'depth', label: 'Depth Chart', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'gameplan', label: 'Game Plan', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'schedule', label: 'Schedule', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'draft', label: 'Draft Board', group: 'Personnel', tiers: ['NFL'] },
-  { id: 'recruiting', label: 'Recruiting', group: 'Personnel', tiers: ['FBS', 'FCS'] },
   { id: 'freeagency', label: 'Free Agency', group: 'Personnel', tiers: ['NFL'] },
   { id: 'trades', label: 'Trade Center', group: 'Personnel', tiers: ['NFL'] },
   { id: 'cap', label: 'Salary Cap', group: 'Club', tiers: ['NFL'] },
@@ -226,13 +258,21 @@ export function useWorld(): World {
 export interface SeasonSummary {
   season: number
   champion: string | null
-  collegeChampion: string | null
   mvp: string | null
   scout: ScoutingReport | null
   record: string
   reviewNote: string
   objectives?: Objective[]
   objectivesDone?: number
+  // #20 recap
+  headline?: string
+  winsDelta?: number
+  moments?: SeasonMoment[]
+  fingerprint?: { drafted: number; signed: number; total: number }
+  question?: SeasonQuestion
+  ghost?: { actualWins: number; ghostWins: number; delta: number }
+  // #11 ambitions
+  ambitions?: { label: string; done: boolean }[]
 }
 
 /** The persisted payload. Kept independent of store internals for migration. */
@@ -304,6 +344,27 @@ interface GameStore {
 
   scoutProspect: (id: string) => void
   setRecommendation: (id: string, rec: 'Blue Chip' | 'Starter' | 'Depth' | 'Pass') => void
+  /** Advise mode: add/remove a prospect from your ranked board for the draft. */
+  toggleUserBoard: (id: string) => void
+  /** Work the phones to uncover one hidden character facet of a prospect. */
+  investigateCharacter: (id: string) => void
+  /** Spend part of the weekly time budget on an action (#5). */
+  spendHours: (id: string) => void
+  /** Resolve this season's annual set piece (#6). */
+  resolveSetPiece: (choice: string) => void
+  resolveDilemma: (choice: string) => void
+  pickAmbition: (id: string) => void
+  dropAmbition: (id: string) => void
+  /** Accept/decline a stretch assignment (#8). */
+  acceptStretch: () => void
+  declineStretch: () => void
+  /** Pick a road back after a firing (#17). */
+  chooseWilderness: (pathId: string) => void
+  /** Retire and continue as a protégé (#19). */
+  startSuccessor: (name: string) => void
+  /** Export/import saves as JSON files. */
+  exportSaveText: () => Promise<string | null>
+  importSaveText: (text: string) => Promise<void>
 
   acceptOffer: (offer: JobOffer) => void
   declineOffers: () => void
@@ -341,6 +402,11 @@ function bump(set: (p: Partial<GameStore>) => void, get: () => GameStore) {
   set({ tick: get().tick + 1 })
 }
 
+/** Mark a weekly-checklist task complete on the career (immutably). */
+function withFlag(career: CareerState, key: string): CareerState {
+  return { ...career, weekFlags: { ...(career.weekFlags ?? {}), [key]: true } }
+}
+
 export const useGame = create<GameStore>((set, get) => ({
   tick: 0,
   ready: false,
@@ -373,9 +439,9 @@ export const useGame = create<GameStore>((set, get) => ({
     world = buildWorld(Date.now() % 2147483647, getRealData())
     initAllPlaybooks()
     const ladder = ladderFor(path)
-    const level = Math.max(0, Math.min(ladder.length - 1, startLevel))
+    const level = Math.max(minNflLevel(path), Math.min(ladder.length - 1, startLevel))
     const tier = tierFor(path, level).tier
-    const resolvedTeam = world.byId[teamId]?.tier === tier ? teamId : tier === 'NFL' ? 'BUF' : teamId
+    const resolvedTeam = world.byId[teamId]?.tier === tier ? teamId : 'BUF'
     // Starting at a higher rung seeds the reputation needed to have earned it.
     const seedRep: Reputation = { ...ZERO_REP }
     for (const [k, v] of Object.entries(ladder[level].gate)) {
@@ -397,16 +463,25 @@ export const useGame = create<GameStore>((set, get) => ({
       salary: salaryFor(path, level),
       jobSecurity: 70,
       unitFocus: path === 'coach' ? (archetype === 'def' ? 'def' : archetype === 'ceo' ? 'both' : 'off') : undefined,
-      ownerExpectation:
-        tier === 'NFL' ? 'Reach the playoffs and build a sustainable contender' : 'Find and deliver talent for this program',
+      ownerExpectation: ownerMandate(resolvedTeam, tier),
       tier,
       recommendationsMade: 0,
       hits: 0,
       misses: 0,
       seasonRecs: 0,
       seasonHits: 0,
+      hoursLeft: WEEK_HOURS,
+      ledger: [],
+      contacts: makeContacts(makeRng(world.seed + world.season * 77), 'National'),
+      earnedTraits: [],
+      mentor: mentorFor(world, resolvedTeam),
+      weekFlags: {},
+      tree: [],
       history: [],
+      seasonMoments: [],
+      ambitions: [],
     }
+    career.seasonQuestion = makeSeasonQuestion(world, career)
     set({
       career,
       activeTeamId: resolvedTeam,
@@ -478,7 +553,40 @@ export const useGame = create<GameStore>((set, get) => ({
       set({ scoutingPoints: MAX_SCOUT_POINTS })
     }
     const c = get().career!
-    set({ career: { ...c, week: world.week, season: world.season }, match: sim, tick: get().tick + 1 })
+    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, hoursLeft: WEEK_HOURS, weekFlags: {} }
+    // #20: log only the notable results — blowouts and thrillers — so the
+    // season recap has a handful of real moments, not 18.
+    if (sim && userGame) {
+      const isHome = userGame.homeId === c.teamId
+      const myScore = isHome ? sim.homeScore : sim.awayScore
+      const oppScore = isHome ? sim.awayScore : sim.homeScore
+      const oppTeam = world.byId[isHome ? userGame.awayId : userGame.homeId]
+      const margin = myScore - oppScore
+      if (margin >= 17) nextCareer = logMoment(nextCareer, { week, text: `Blew out the ${oppTeam.name} ${myScore}-${oppScore}.`, tone: 'win' })
+      else if (margin >= 1 && margin <= 3) nextCareer = logMoment(nextCareer, { week, text: `Won a thriller over the ${oppTeam.name}, ${myScore}-${oppScore}.`, tone: 'win' })
+      else if (margin <= -17) nextCareer = logMoment(nextCareer, { week, text: `Routed by the ${oppTeam.name}, ${myScore}-${oppScore}.`, tone: 'loss' })
+    }
+    // The week's ONE big decision (#2). Generated from the new week's state.
+    nextCareer = { ...nextCareer, dilemma: currentDilemma(world, nextCareer) ?? undefined }
+    // Offer a stretch assignment from the rung above (once a season).
+    if (!nextCareer.stretch && world.phase === 'regular') {
+      const offer = maybeStretch(world, nextCareer, makeRng(world.seed + world.season * 613 + world.week))
+      if (offer) {
+        nextCareer = { ...nextCareer, stretch: offer }
+        pushCareerNews(world, nextCareer, {
+          category: 'Career',
+          headline: `Stretch assignment offered: ${offer.label}`,
+          body: offer.blurb,
+        })
+      }
+    }
+    // Media layer: the world notices you (#13).
+    if (world.phase === 'regular' && Math.random() < 0.6) {
+      for (const m of mediaItems(world, nextCareer, makeRng(world.seed + world.season * 911 + world.week))) {
+        world.news.unshift({ id: `media_${world.season}_${world.week}_${world.news.length}`, week: world.week, season: world.season, category: m.category, headline: m.headline, body: m.body, teamId: nextCareer.teamId, read: false })
+      }
+    }
+    set({ career: nextCareer, match: sim, tick: get().tick + 1 })
     setLivePlan(null)
     get().save()
   },
@@ -544,7 +652,12 @@ export const useGame = create<GameStore>((set, get) => ({
   },
 
   setDefaultPlan: (side, plan) => {
-    set({ defaultPlan: { ...get().defaultPlan, [side]: plan }, tick: get().tick + 1 })
+    const career = get().career
+    set({
+      defaultPlan: { ...get().defaultPlan, [side]: plan },
+      career: career ? withFlag(career, 'gameplan') : career,
+      tick: get().tick + 1,
+    })
     get().save()
   },
 
@@ -563,10 +676,13 @@ export const useGame = create<GameStore>((set, get) => ({
       world.draftState.complete = true
     }
     runAIFreeAgency(world)
+    runAITrades(world)
     world.season += 1
     world.week = 1
     world.phase = 'regular'
     world.awards = {}
+    // #18: the league changes over the eras every few seasons.
+    if (world.season % 6 === 0) world.era = ERAS[Math.floor(world.season / 6) % ERAS.length]
     // Fresh draft capital for the next cycle's Trade Center.
     world.draftPicks = freshDraftPicks(world.season + 1)
     world.draftRounds = []
@@ -574,8 +690,22 @@ export const useGame = create<GameStore>((set, get) => ({
     for (const id of Object.keys(world.deadMoney)) world.deadMoney[id] = 0
     regenerateSchedule(world)
     refreshProspectClass(world)
+    enforceCapCompliance(world)
+    // If a firing was never resolved, take the default road back (#17).
+    const resolved = career.wilderness && !career.wilderness.path ? applyWilderness(world, career, 'consult') : career
+    // #11/#20: a fresh season question, clean moment log, and a new ambition slate.
+    const seasonCareer: CareerState = {
+      ...resolved,
+      season: world.season,
+      week: 1,
+      seasonRecs: 0,
+      seasonHits: 0,
+      seasonMoments: [],
+      ambitions: [],
+    }
+    seasonCareer.seasonQuestion = makeSeasonQuestion(world, seasonCareer)
     set({
-      career: { ...career, season: world.season, week: 1, seasonRecs: 0, seasonHits: 0 },
+      career: seasonCareer,
       scoutingPoints: MAX_SCOUT_POINTS,
       modal: 'none',
       summary: null,
@@ -596,10 +726,10 @@ export const useGame = create<GameStore>((set, get) => ({
     const p = get().pendingSave
     if (!p || !p.career) return
     world = migrateWorld(p.world)
-    const career = migrateCareer(p.career)
+    const career = reconcileCareerTeam(world, migrateCareer(p.career))
     set({
       career,
-      activeTeamId: p.activeTeamId ?? career.teamId,
+      activeTeamId: p.activeTeamId && world.byId[p.activeTeamId] ? p.activeTeamId : career.teamId,
       screen: p.screen ?? 'career',
       readNews: p.readNews ?? {},
       pendingSave: null,
@@ -627,7 +757,8 @@ export const useGame = create<GameStore>((set, get) => ({
     p.myGrade = Math.round(current + (target - current) * 0.4 + (Math.random() - 0.5) * 6)
     p.confidence = Math.min(100, p.confidence + 24)
     p.scoutConfidence = Math.min(100, p.scoutConfidence + 20)
-    set({ scoutingPoints: get().scoutingPoints - 1, tick: get().tick + 1 })
+    const c = get().career
+    set({ scoutingPoints: get().scoutingPoints - 1, career: c ? withFlag(c, 'scout') : c, tick: get().tick + 1 })
     get().save()
   },
 
@@ -638,13 +769,254 @@ export const useGame = create<GameStore>((set, get) => ({
     p.recommendation = rec
     const career = get().career
     if (career && isNew) {
+      // Every filed recommendation is a dated call in the Ledger.
+      pushLedger(career, {
+        kind: 'recommendation',
+        prospectId: p.id,
+        name: p.name,
+        pos: p.pos,
+        college: p.college,
+        myGrade: p.myGrade ?? p.grade,
+        recommendation: rec,
+        truth: p.trueGrade,
+        note: `${rec} — ${p.pos}, ${p.college}`,
+      })
       set({
-        career: { ...career, recommendationsMade: career.recommendationsMade + 1, seasonRecs: career.seasonRecs + 1 },
+        career: withFlag(
+          { ...career, recommendationsMade: career.recommendationsMade + 1, seasonRecs: career.seasonRecs + 1 },
+          'grade',
+        ),
         tick: get().tick + 1,
       })
+    } else if (career) {
+      set({ career: withFlag(career, 'grade'), tick: get().tick + 1 })
     } else {
       bump(set, get)
     }
+    get().save()
+  },
+
+  toggleUserBoard: (id) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'draft') === 'decide') {
+      get().showToast('You hold the pen here — set your board and draft directly.')
+      return
+    }
+    const board = [...(career.userBoard ?? [])]
+    const i = board.indexOf(id)
+    if (i >= 0) board.splice(i, 1)
+    else board.push(id)
+    set({ career: { ...career, userBoard: board }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  investigateCharacter: (id) => {
+    const career = get().career
+    if (!career) return
+    const p = world.draft.find((d) => d.id === id)
+    if (!p || !p.character) return
+    if (get().scoutingPoints <= 0) {
+      get().showToast('No scouting points left this week.')
+      return
+    }
+    const reads = p.characterReads ?? []
+    if (reads.length >= CHARACTER_FACETS.length) {
+      get().showToast('You already know everything about him off the field.')
+      return
+    }
+    // Accuracy from your Evaluation skill and reputation.
+    const accuracy = clamp(0.4 + career.skills.evaluation / 200 + career.reputation.evaluation / 500, 0.4, 0.92)
+    const rng = makeRng(world.seed + world.season * 811 + hash32(p.id, 9))
+    const read = revealFacet(p.character, reads, accuracy, rng)
+    if (!read) return
+    p.characterReads = [...reads, read]
+    const c2 = get().career
+    set({ scoutingPoints: get().scoutingPoints - 1, career: c2 ? withFlag(c2, 'character') : c2, tick: get().tick + 1 })
+    get().showToast(`Worked the phones: ${FACET_LABEL[read.facet]} — ${read.label}.`)
+    get().save()
+  },
+
+  spendHours: (id) => {
+    const career = get().career
+    if (!career) return
+    const action = weeklyActions(career).find((a) => a.id === id)
+    if (!action) return
+    const left = career.hoursLeft ?? WEEK_HOURS
+    if (left < action.cost) {
+      get().showToast('Not enough hours left this week.')
+      return
+    }
+    const rep: Reputation = { ...career.reputation }
+    const skills: Skills = { ...career.skills }
+    let note = ''
+    let jobSecurity = career.jobSecurity
+    switch (id) {
+      case 'film':
+        skills.evaluation = clamp(skills.evaluation + 1, 0, 99)
+        note = 'Film study: your eye sharpens (+Evaluation).'
+        break
+      case 'phones': {
+        const cand = [...world.draft]
+          .filter((p) => p.character && (p.characterReads ?? []).length < 4)
+          .sort((a, b) => b.confidence - a.confidence)[0]
+        if (cand && cand.character) {
+          const accuracy = clamp(0.4 + skills.evaluation / 200 + rep.evaluation / 500, 0.4, 0.92)
+          const rng = makeRng(world.seed + world.season * 811 + hash32(cand.id, 13))
+          const r = revealFacet(cand.character, cand.characterReads ?? [], accuracy, rng)
+          if (r) {
+            cand.characterReads = [...(cand.characterReads ?? []), r]
+            note = `Worked the phones on ${cand.name}: ${FACET_LABEL[r.facet]} — ${r.label}.`
+          }
+        } else note = 'No new character intel to gather right now.'
+        break
+      }
+      case 'road':
+        rep.evaluation = clamp(rep.evaluation + 1, 0, 100)
+        note = 'Covered more ground: +Evaluation.'
+        break
+      case 'crosscheck':
+        rep.profile = clamp(rep.profile + 1, 0, 100)
+        note = 'Cross-checked the room: +Profile.'
+        break
+      case 'drills': {
+        const roster = world.roster[career.teamId] ?? []
+        const y = [...roster].filter((p) => p.age <= 24 && p.ovr < p.pot).sort((_a, b) => b.pot - b.ovr)[0]
+        if (y) {
+          y.ovr = clamp(y.ovr + 1, 40, y.pot)
+          note = `Drills: ${y.name} improved to ${y.ovr} OVR.`
+        } else note = 'No young player with room to grow.'
+        break
+      }
+      case 'install':
+        skills.scheme = clamp(skills.scheme + 1, 0, 99)
+        note = 'Film session: +Scheme.'
+        break
+      case 'scouts':
+        updateStaffLedgers(world, career.teamId)
+        rep.profile = clamp(rep.profile + 1, 0, 100)
+        note = 'Scouts meeting: you learned more about your evaluators.'
+        break
+      case 'agent':
+        rep.roster = clamp(rep.roster + 1, 0, 100)
+        note = 'Agent calls: advanced a negotiation (+Roster).'
+        break
+      case 'owner':
+        jobSecurity = clamp(jobSecurity + 2, 0, 100)
+        note = 'Owner meeting: the mandate is clearer (+job security).'
+        break
+    }
+    set({ career: withFlag({ ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity }, 'hours'), tick: get().tick + 1 })
+    get().showToast(note)
+    get().save()
+  },
+
+  resolveSetPiece: (choice) => {
+    const career = get().career
+    if (!career) return
+    const piece = currentSetPiece(world, career)
+    if (!piece) return
+    const rng = makeRng(world.seed + world.season * 97 + career.level + choice.length)
+    const res = applySetPiece(career, piece, choice, rng)
+    const rep: Reputation = { ...career.reputation }
+    for (const [k, v] of Object.entries(res.repDelta)) {
+      ;(rep as unknown as Record<string, number>)[k] = clamp(((rep as unknown as Record<string, number>)[k] ?? 0) + (v as number), 0, 100)
+    }
+    pushLedger(career, { kind: 'advice', name: piece.title, pos: '—', college: '—', note: res.note })
+    set({ career: withFlag({ ...career, reputation: rep, setPieceDone: world.season }, 'setpiece'), tick: get().tick + 1 })
+    get().showToast(res.note)
+    get().save()
+  },
+
+  resolveDilemma: (choice) => {
+    const career = get().career
+    if (!career) return
+    const card = currentDilemma(world, career)
+    if (!card || card.resolved) return
+    const chosen = card.choices.find((c) => c.id === choice) ?? card.choices[0]
+    const res = applyDilemma(career, card, choice)
+    // Culture is derived from player character + staff, so a card's culture
+    // swing lands on the people it affects: the club's veteran leaders lose a
+    // little work-ethic/maturity when you cut or slight them, gain it when you
+    // back them. Small, and only when the card actually moves culture.
+    if (res.culture !== 0) {
+      const leaders = [...(world.roster[career.teamId] ?? [])].sort((a, b) => b.ovr - a.ovr).slice(0, 8)
+      const step = res.culture * 0.6
+      for (const p of leaders) {
+        if (!p.character) continue
+        p.character = {
+          ...p.character,
+          maturity: clamp(p.character.maturity + step, 0, 100),
+          workEthic: clamp(p.character.workEthic + step, 0, 100),
+        }
+      }
+    }
+    const nextCareer: CareerState = {
+      ...res.career,
+      jobSecurity: clamp(career.jobSecurity + res.security, 0, 100),
+      dilemma: { ...card, resolved: chosen.id },
+    }
+    pushLedger(nextCareer, { kind: 'advice', name: card.title, pos: '—', college: '—', note: chosen.outcome })
+    set({ career: withFlag(nextCareer, 'dilemma'), tick: get().tick + 1 })
+    get().showToast(chosen.outcome)
+    get().save()
+  },
+
+  pickAmbition: (id) => {
+    const career = get().career
+    if (!career) return
+    const current = career.ambitions ?? []
+    if (current.length >= MAX_AMBITIONS) {
+      get().showToast(`You can carry at most ${MAX_AMBITIONS} ambitions.`)
+      return
+    }
+    if (current.some((a) => a.id === id)) return
+    const option = makeAmbitionPool(world, career).find((a) => a.id === id)
+    if (!option) return
+    set({ career: { ...career, ambitions: [...current, option] }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  dropAmbition: (id) => {
+    const career = get().career
+    if (!career) return
+    set({
+      career: { ...career, ambitions: (career.ambitions ?? []).filter((a) => a.id !== id) },
+      tick: get().tick + 1,
+    })
+    get().save()
+  },
+
+  acceptStretch: () => {
+    const career = get().career
+    if (!career?.stretch) return
+    set({ career: withFlag({ ...career, stretch: { ...career.stretch, accepted: true } }, 'stretch'), tick: get().tick + 1 })
+    get().showToast(`Accepted: ${career.stretch.label}.`)
+    get().save()
+  },
+
+  declineStretch: () => {
+    const career = get().career
+    if (!career) return
+    set({ career: { ...career, stretch: undefined }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  chooseWilderness: (pathId) => {
+    const career = get().career
+    if (!career) return
+    const next = applyWilderness(world, career, pathId)
+    set({ career: next, activeTeamId: next.teamId, tick: get().tick + 1 })
+    get().showToast(`The Wilderness: ${pathId}. The climb restarts.`)
+    get().save()
+  },
+
+  startSuccessor: (name) => {
+    const career = get().career
+    if (!career) return
+    const heir = makeSuccessor(world, career, name)
+    set({ career: heir, activeTeamId: heir.teamId, screen: 'career', tick: get().tick + 1 })
+    get().showToast(`${name} picks up the torch.`)
     get().save()
   },
 
@@ -675,12 +1047,29 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career || !userOnClock(world, career)) return
     const prospect = world.draft.find((d) => d.id === id)
     if (!prospect) return
-    makePick(world, prospect, career.teamId)
-    bump(set, get)
+    const round = currentRound(world)
+    const player = makePick(world, prospect, career.teamId, career.gmName)
+    pushLedger(career, {
+      kind: 'pick',
+      prospectId: prospect.id,
+      playerId: player.id,
+      name: prospect.name,
+      pos: prospect.pos,
+      college: prospect.college,
+      myGrade: prospect.myGrade ?? prospect.grade,
+      round,
+      pick: prospect.draftPick ?? undefined,
+      truth: prospect.trueGrade,
+      note: `Drafted ${prospect.name} (${prospect.pos}, ${prospect.college})`,
+    })
+    set({ career: { ...career }, tick: get().tick + 1 })
+    announceDraftPicks(world, career)
     get().save()
   },
   simToMyPick: () => {
     simUntilUser(world, get().career)
+    const career = get().career
+    if (career) announceDraftPicks(world, career)
     bump(set, get)
     get().save()
   },
@@ -688,6 +1077,8 @@ export const useGame = create<GameStore>((set, get) => ({
     simulateRestOfDraft(world, get().career)
     runUDFAs(world)
     world.draftState.complete = true
+    const career = get().career
+    if (career) announceDraftPicks(world, career)
     bump(set, get)
     get().showToast('The draft is complete. Undrafted free agents have signed.')
     get().save()
@@ -710,6 +1101,7 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     world.freeAgents.splice(idx, 1)
     p.teamId = career.teamId
+    p.origin = { kind: 'freeAgent', season: world.season, by: career.gmName, fromTeamId: null }
     world.roster[career.teamId].push(p)
     ledgerFreeAgent(world, career.teamId, 'gained', p.ovr)
     bump(set, get)
@@ -720,6 +1112,10 @@ export const useGame = create<GameStore>((set, get) => ({
   releasePlayer: (id) => {
     const career = get().career
     if (!career) return
+    if (accessFor(career, 'roster') !== 'decide') {
+      get().showToast('You do not have roster authority yet.')
+      return
+    }
     const roster = world.roster[career.teamId] ?? []
     const idx = roster.findIndex((p) => p.id === id)
     if (idx < 0) return
@@ -738,6 +1134,10 @@ export const useGame = create<GameStore>((set, get) => ({
   restructurePlayer: (id) => {
     const career = get().career
     if (!career) return
+    if (accessFor(career, 'cap') !== 'decide') {
+      get().showToast('Cap authority comes with a higher rung.')
+      return
+    }
     const p = (world.roster[career.teamId] ?? []).find((x) => x.id === id)
     if (!p) return
     const before = p.contract.capHit
@@ -750,6 +1150,10 @@ export const useGame = create<GameStore>((set, get) => ({
   extendPlayer: (id) => {
     const career = get().career
     if (!career) return
+    if (accessFor(career, 'cap') !== 'decide') {
+      get().showToast('Contract authority comes with a higher rung.')
+      return
+    }
     const p = (world.roster[career.teamId] ?? []).find((x) => x.id === id)
     if (!p) return
     const rng = makeRng(world.seed + world.season * 7 + p.id.length)
@@ -859,12 +1263,22 @@ export const useGame = create<GameStore>((set, get) => ({
   proposeTrade: (partnerId, give, get2) => {
     const career = get().career
     if (!career) return { accepted: false, message: 'No career.' }
+    if (accessFor(career, 'trades') !== 'decide') {
+      get().showToast('You do not have trade authority yet — keep climbing.')
+      return { accepted: false, message: 'No trade authority.' }
+    }
     const verdict = evaluateTrade(world, partnerId, career.teamId, give, get2)
     if (!verdict.accepted) {
       get().showToast(verdict.reason)
       return { accepted: false, message: verdict.reason }
     }
     const log = executeTrade(world, career.teamId, partnerId, give, get2)
+    // #5: stamp incoming players as your acquisitions.
+    for (const a of get2) {
+      if (a.kind !== 'player') continue
+      const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
+      if (p) p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
+    }
     bump(set, get)
     const msg = `Trade with the ${world.byId[partnerId].name} completed — ${log.join(', ')}.`
     get().showToast(msg)
@@ -875,6 +1289,10 @@ export const useGame = create<GameStore>((set, get) => ({
   hireStaff: (candidateId, salary, scheme) => {
     const career = get().career
     if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not hire staff at this rung yet.')
+      return
+    }
     const candidate = openCandidates(world, career.teamId, career.reputation).find((c) => c.id === candidateId)
     if (!candidate) {
       get().showToast('That candidate is no longer available.')
@@ -897,6 +1315,10 @@ export const useGame = create<GameStore>((set, get) => ({
   fireStaff: (staffId) => {
     const career = get().career
     if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
     const staff = world.staff[career.teamId] ?? []
     const idx = staff.findIndex((m) => m.id === staffId)
     if (idx < 0) return
@@ -920,6 +1342,30 @@ export const useGame = create<GameStore>((set, get) => ({
   save: () => {
     const { career, activeTeamId, screen, readNews } = get()
     void saveGame({ world, career, activeTeamId, screen, readNews })
+  },
+
+  exportSaveText: () => exportSave(),
+
+  importSaveText: async (text) => {
+    const data = await importSave<SaveData>(text)
+    if (!data || !data.career) {
+      get().showToast('That save file could not be read.')
+      return
+    }
+    world = migrateWorld(data.world)
+    const career = reconcileCareerTeam(world, migrateCareer(data.career))
+    set({
+      career,
+      activeTeamId: data.activeTeamId && world.byId[data.activeTeamId] ? data.activeTeamId : career.teamId,
+      screen: data.screen ?? 'career',
+      readNews: data.readNews ?? {},
+      pendingSave: null,
+      saveInfo: null,
+      saveError: null,
+      tick: get().tick + 1,
+    })
+    get().showToast('Save imported.')
+    get().save()
   },
 
   hydrate: async () => {
@@ -1050,14 +1496,54 @@ function pushCareerNews(world: World, career: CareerState, item: { category: New
   })
 }
 
+/** Ping the inbox whenever one of your guys comes off the board (#20). */
+function announceDraftPicks(world: World, career: CareerState) {
+  const board = new Set(career.userBoard ?? [])
+  const guys = new Set((career.ledger ?? []).map((e) => e.prospectId).filter((x): x is string => !!x))
+  for (const p of world.draft) {
+    if (!p.draftedBy) continue
+    if (!board.has(p.id) && !guys.has(p.id)) continue
+    const id = `draftping_${p.id}`
+    if (world.news.some((n) => n.id === id)) continue
+    world.news.unshift({
+      id,
+      week: world.week,
+      season: world.season,
+      category: 'Draft',
+      headline: `${p.name} drafted at #${p.draftPick ?? '?'}`,
+      body: `One of your guys is off the board — ${p.pos} from ${p.college} to the ${world.byId[p.draftedBy]?.abbr ?? p.draftedBy}. This is the payoff of the climb.`,
+      teamId: career.teamId,
+      read: false,
+    })
+  }
+}
+
 /** Bring a legacy save up to the current world shape (new fields + pick ownership). */
 function migrateWorld(w: World): World {
   w.staffTenure ??= {}
+  w.draft ??= []
   w.draftPicks ??= []
   w.draftRounds ??= []
   w.practiceSquad ??= {}
   w.ir ??= {}
   w.compLedger ??= {}
+  w.rivals ??= []
+  w.era ??= { id: 'modern', label: 'Modern Spread Era', positionBias: {}, capSpike: 1 }
+  // The college universe is gone: drop any CFB/FCS teams and their data so a
+  // legacy save opens as a clean 32-club NFL world.
+  const nflTeams = w.teams.filter((t) => t.tier === 'NFL')
+  const nflIds = new Set(nflTeams.map((t) => t.id))
+  w.teams = nflTeams
+  for (const id of Object.keys(w.roster)) if (!nflIds.has(id)) delete w.roster[id]
+  for (const id of Object.keys(w.standings)) if (!nflIds.has(id)) delete w.standings[id]
+  for (const id of Object.keys(w.deadMoney)) if (!nflIds.has(id)) delete w.deadMoney[id]
+  for (const id of Object.keys(w.byId)) if (!nflIds.has(id)) delete w.byId[id]
+  for (const id of Object.keys(w.staff)) if (!nflIds.has(id)) delete w.staff[id]
+  w.schedule = w.schedule.filter((g) => nflIds.has(g.homeId) && nflIds.has(g.awayId))
+  w.players = w.players.filter((p) => !p.teamId || nflIds.has(p.teamId))
+  w.freeAgents = w.freeAgents.filter((p) => !p.teamId || nflIds.has(p.teamId))
+  w.rivals = w.rivals.map((r) => ({ ...r, tier: 'NFL' as const }))
+  if (w.draftOrder) w.draftOrder = w.draftOrder.filter((id) => nflIds.has(id))
   if (!w.draftPicks.length) w.draftPicks = freshDraftPicks(w.season + 1)
   // Older saves stored a 32-team draft order; rebuild the ownership-aware one
   // (preserving the current pick index) unless the draft is already finished.
@@ -1109,16 +1595,23 @@ function describeSave(p: SaveData, savedAt: number, usedBackup: boolean): SaveIn
 /** Bring a legacy save (numeric reputation, single ladder) up to the current shape. */
 function migrateCareer(c: CareerState): CareerState {
   const rep = c.reputation as unknown
+  const path: CareerState['path'] = c.path === 'coach' || c.path === 'personnel' ? c.path : 'personnel'
+  const minLevel = minNflLevel(path)
+  // The college side is gone: any career saved below the NFL floor moves up to it.
+  const base: CareerState =
+    c.level < minLevel
+      ? { ...c, path, level: minLevel, tier: 'NFL', salary: salaryFor(path, minLevel) }
+      : { ...c, path }
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
-    if (!c.skills || typeof c.skills !== 'object') {
-      return { ...c, skills: { ...ZERO_SKILLS } }
+    if (!base.skills || typeof base.skills !== 'object') {
+      return { ...base, skills: { ...ZERO_SKILLS } }
     }
-    return c
+    return base
   }
   const legacy = typeof rep === 'number' ? rep : 20
   return {
-    ...c,
+    ...base,
     reputation: {
       evaluation: clamp(legacy, 0, 100),
       roster: clamp(Math.round(legacy * 0.7), 0, 100),
@@ -1130,6 +1623,15 @@ function migrateCareer(c: CareerState): CareerState {
   }
 }
 
+/** After migrating a legacy world/career pair, make sure the career sits on a
+ * real NFL team. The college universe the save was built on no longer exists. */
+function reconcileCareerTeam(w: World, c: CareerState): CareerState {
+  const team = w.byId[c.teamId]
+  if (team && team.tier === 'NFL') return c
+  const fallback = w.teams.find((t) => t.tier === 'NFL')?.id ?? 'BUF'
+  return { ...c, teamId: fallback, tier: 'NFL' }
+}
+
 // ── Season transition ────────────────────────────────────────────────────────
 function runEndOfRegularSeason(
   set: (p: Partial<GameStore>) => void,
@@ -1137,11 +1639,11 @@ function runEndOfRegularSeason(
 ) {
   const career = get().career
   const playoffs = simulatePlayoffs(world)
-  const collegeChampion = simulateCollegePlayoff(world)
   const mvp = computeMVP()
   world.awards = { mvp: mvp ?? undefined }
 
   const retired = developPlayers(world)
+  runAIResign(world)
   tickAllContracts(world)
 
   // Coaching continuity: a settled staff ages up; a churned side resets to year 1.
@@ -1169,15 +1671,12 @@ function runEndOfRegularSeason(
   refreshAllCohesion()
 
   // Snapshot the season into the career statistics database.
-  recordTeamSeasons(world, statDb, { playoffSeeds: playoffs.seeds, champion: playoffs.champion, level: 'NFL' })
-  recordTeamSeasons(world, statDb, { collegeChampion: collegeChampion ?? undefined, level: 'CFB' })
+  recordTeamSeasons(world, statDb, { playoffSeeds: playoffs.seeds, champion: playoffs.champion })
   recordPlayerSeasons(statDb, world.players)
 
-  // Select this season's awards and All-Pro/All-Conference teams from production.
+  // Select this season's awards and All-Pro teams from production.
   const nflHonors = selectHonors(world, world.season, 'NFL')
-  const cfbHonors = selectHonors(world, world.season, 'CFB')
   if (nflHonors) awards.seasons.push(nflHonors)
-  if (cfbHonors) awards.seasons.push(cfbHonors)
 
   // Induct newly eligible legends into the Hall of Fame.
   const newInductees = computeHallOfFame(world, statDb, new Set(awards.inducted))
@@ -1195,7 +1694,7 @@ function runEndOfRegularSeason(
     const rec = world.standings[career.teamId]
     // Did the team make the playoffs / win it all? (NFL seasons)
     const madePlayoffs = playoffs.seeds?.includes(career.teamId) ?? false
-    const wonTitle = playoffs.champion === career.teamId || collegeChampion === career.teamId
+    const wonTitle = playoffs.champion === career.teamId
     const review = reviewSeason(world, career, { wins: rec?.wins ?? 0, losses: rec?.losses ?? 0 }, madePlayoffs, wonTitle)
 
     // Per-role objectives for the season just played. Grade against the season
@@ -1205,7 +1704,7 @@ function runEndOfRegularSeason(
       seasonRecs: scout.graded,
       seasonHits: scout.hits,
     }
-    objs = roleObjectives(world, seasonCareer, { wins: rec?.wins ?? 0, losses: rec?.losses ?? 0 }, unitRanks(world, career.tier === 'NFL' ? 'NFL' : 'FBS')[career.teamId])
+    objs = roleObjectives(world, seasonCareer, { wins: rec?.wins ?? 0, losses: rec?.losses ?? 0 }, unitRanks(world, 'NFL')[career.teamId])
     graded = gradeObjectives(objs)
 
     // Track how well you did your actual job — this carries into the next rung.
@@ -1276,12 +1775,36 @@ function runEndOfRegularSeason(
         },
       ],
     }
+    // #8: how did the season compare to a replacement-level manager?
+    careerNext = recordGhostSeason(world, careerNext, rec?.wins ?? 0)
+    // #11: grade the ambitions the player chose for themselves.
+    {
+      const grade = gradeAmbitions(world, careerNext, {
+        wins: rec?.wins ?? 0,
+        losses: rec?.losses ?? 0,
+        madePlayoffs,
+        wonTitle,
+      })
+      const rep2: Reputation = { ...careerNext.reputation }
+      for (const [k, v] of Object.entries(grade.repDelta)) {
+        ;(rep2 as unknown as Record<string, number>)[k] = clamp(
+          ((rep2 as unknown as Record<string, number>)[k] ?? 0) + (v as number),
+          0,
+          100,
+        )
+      }
+      careerNext = { ...careerNext, reputation: rep2, ambitions: grade.results }
+    }
     if (demoted) {
-      careerNext = demote(world, careerNext)
+      // #17: getting fired opens The Wilderness — a fork, not a reset.
+      careerNext = {
+        ...careerNext,        jobSecurity: 30,
+        wilderness: { path: '', untilSeason: world.season, blurb: 'You were let go. Choose the road back.' },
+      }
       pushCareerNews(world, careerNext, {
         category: 'Career',
         headline: `Fired: ${tierFor(career.path, career.level).title} role ends`,
-        body: `After a season that fell short, you were let go as ${tierFor(career.path, career.level).title} for the ${world.byId[career.teamId].name}. You have landed on your feet as ${tierFor(careerNext.path, careerNext.level).title} with the ${world.byId[careerNext.teamId].name}. The climb restarts here.`,
+        body: `After a season that fell short, you were let go as ${tierFor(career.path, career.level).title} for the ${world.byId[career.teamId].name}. The Wilderness is open — a year on TV, consulting, college, or the UFL. Pick your road back.`,
       })
     } else if (wonTitle) {
       pushCareerNews(world, careerNext, {
@@ -1315,17 +1838,82 @@ function runEndOfRegularSeason(
 
   awardCompensatoryPicks(world)
   initDraft(world)
+  // Mature the Ledger with a season of hindsight, and reset the advise board
+  // for the new draft class.
+  if (careerNext) {
+    gradeLedger(world, careerNext)
+    // Fold the club's evaluators' reports into their ledgers so their biases
+    // can be learned over time.
+    updateStaffLedgers(world, careerNext.teamId)
+    // Resolve an accepted stretch assignment — how it went shapes the résumé.
+    if (careerNext.stretch && careerNext.stretch.accepted) {
+      const r = careerNext.reputation
+      const success = (r.evaluation + r.results + r.leadership) / 3 >= 45
+      const out = stretchOutcome(careerNext.stretch, success)
+      const rep2: Reputation = { ...r }
+      for (const [k, v] of Object.entries(out.repDelta)) {
+        ;(rep2 as unknown as Record<string, number>)[k] = clamp(((rep2 as unknown as Record<string, number>)[k] ?? 0) + (v as number), 0, 100)
+      }
+      careerNext = { ...careerNext, reputation: rep2 }
+      pushCareerNews(world, careerNext, { category: 'Career', headline: success ? 'Stretch assignment delivered' : 'Stretch assignment missed', body: out.note })
+    }
+    // People & the world keep moving (#9, #11, #12, #13).
+    const rngPeople = makeRng(world.seed + world.season * 331)
+    careerNext = {
+      ...careerNext,
+      contacts: advanceContacts(careerNext.contacts ?? [], rngPeople),
+      tree: growCoachingTree(world, careerNext, rngPeople).tree ?? careerNext.tree,
+    }
+    world.rivals = advanceRivals(world, makeRng(world.seed + world.season * 719))
+    for (const m of mediaItems(world, careerNext, makeRng(world.seed + world.season * 811))) {
+      pushCareerNews(world, careerNext, m)
+    }
+    // #10: earn traits from what you actually did.
+    const beforeTraits = new Set((careerNext.earnedTraits ?? []).map((t) => t.id))
+    const traits = evaluateTraits(careerNext)
+    for (const t of traits.filter((x) => !beforeTraits.has(x.id))) {
+      pushCareerNews(world, careerNext, { category: 'Career', headline: `Trait earned: ${t.name}`, body: t.desc })
+    }
+    careerNext = { ...careerNext, earnedTraits: traits }
+    careerNext = { ...careerNext, userBoard: [], stretch: undefined, setPieceDone: undefined, dilemma: undefined }
+  }
   const offers = careerNext ? generateJobOffers(world, careerNext) : []
   world.phase = 'offseason'
 
   const rec = world.standings[careerNext?.teamId ?? 'BUF']
+  // #20: assemble the broadcast recap from what actually happened.
+  const wins = rec?.wins ?? 0
+  const losses = rec?.losses ?? 0
+  const prevLine = career?.history?.[career.history.length - 1]?.record
+  const hasPrev = !!prevLine
+  const prevWins = prevLine ? Number(prevLine.split('-')[0]) || 0 : wins
+  const winsDelta = wins - prevWins
+  const fingerprint = careerNext ? fingerprintSummary(world, careerNext) : { drafted: 0, signed: 0, total: 0 }
+  const moments = careerNext ? topMoments(careerNext, 3) : []
+  // The season just played belongs to the pre-transition team.
+  const seasonTeamId = career?.teamId ?? careerNext?.teamId ?? 'BUF'
+  const madePlayoffs = playoffs.seeds?.includes(seasonTeamId) ?? false
+  const wonTitle = playoffs.champion === seasonTeamId
+  const headline = seasonHeadline({ wins, losses, madePlayoffs, wonTitle, winsDelta })
+  const ghost = careerNext?.ghostHistory?.[careerNext.ghostHistory.length - 1]
+  const question = careerNext?.seasonQuestion
+    ? answerSeasonQuestion(careerNext.seasonQuestion, {
+        wins,
+        losses,
+        madePlayoffs,
+        wonTitle,
+        winsDelta,
+        security: careerNext.jobSecurity,
+      })
+    : undefined
+  if (careerNext && question) careerNext = { ...careerNext, seasonQuestion: question }
+
   const summary: SeasonSummary = {
     season: world.season,
     champion: playoffs.champion,
-    collegeChampion,
     mvp,
     scout,
-    record: `${rec?.wins ?? 0}-${rec?.losses ?? 0}`,
+    record: `${wins}-${losses}`,
     reviewNote: scout
       ? scout.graded === 0
         ? 'You filed no recommendations this cycle. Get on the road next season.'
@@ -1333,6 +1921,14 @@ function runEndOfRegularSeason(
       : '',
     objectives: objs,
     objectivesDone: graded.doneCount,
+    // #20 recap
+    headline,
+    winsDelta: hasPrev ? winsDelta : undefined,
+    moments,
+    fingerprint,
+    question,
+    ghost: ghost ? { actualWins: ghost.actualWins, ghostWins: ghost.ghostWins, delta: ghost.delta } : undefined,
+    ambitions: (careerNext?.ambitions ?? []).map((a) => ({ label: a.label, done: !!a.done })),
   }
 
   set({
@@ -1393,6 +1989,168 @@ export function staffProbe(games = 60) {
     n++
   }
   return { games: n, eliteStaffPoints: +(goodTotal / n).toFixed(1), poorStaffPoints: +(badTotal / n).toFixed(1) }
+}
+
+/** Dev-only probe: check no single game-plan setting dominates the sim (#F). */
+export function dominanceProbe(games = 60) {
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const plans: { id: string; off: GamePlan }[] = [
+    { id: 'balanced', off: { ...BALANCED_PLAN } },
+    { id: 'airItOut', off: { passBias: 2, tempo: 0.4, aggression: 0.5, coverage: 1 } },
+    { id: 'runHeavy', off: { passBias: -2, tempo: -0.5, aggression: 0.5, coverage: 1 } },
+  ]
+  const rng = makeRng(world.seed + 424242)
+  // Paired design: every plan runs the same matchup with the same seed.
+  const matchups: { h: string; a: string; seed: number }[] = []
+  for (let i = 0; i < games; i++) {
+    const h = nfl[Math.floor(rng() * nfl.length)]
+    const a = nfl[Math.floor(rng() * nfl.length)]
+    if (h.id === a.id) continue
+    matchups.push({ h: h.id, a: a.id, seed: world.seed + i * 7919 + 101 })
+  }
+  const out: Record<string, number> = {}
+  const wins: Record<string, number> = {}
+  for (const p of plans) {
+    let pts = 0
+    let w = 0
+    for (const m of matchups) {
+      setUserCoaching(null)
+      setLivePlan({ offTeamId: m.h, defTeamId: m.a, off: p.off, def: BALANCED_PLAN })
+      const sim = simulatePlayByPlay(world, m.h, m.a, m.seed)
+      pts += sim.homeScore
+      if (sim.homeScore > sim.awayScore) w++
+    }
+    setLivePlan(null)
+    out[p.id] = +(pts / Math.max(1, matchups.length)).toFixed(1)
+    wins[p.id] = +((w / Math.max(1, matchups.length)) * 100).toFixed(0)
+  }
+  const vals = Object.values(out)
+  const spread = +(Math.max(...vals) - Math.min(...vals)).toFixed(1)
+  const wr = Object.values(wins)
+  const winSpread = Math.max(...wr) - Math.min(...wr)
+  return {
+    games: matchups.length,
+    pointsByPlan: out,
+    winRateByPlan: wins,
+    spread,
+    winSpread,
+    dominant: winSpread > 12 ? Object.entries(wins).sort((x, y) => y[1] - x[1])[0]?.[0] : null,
+  }
+}
+
+/** Dev-only probe: AI re-signing and AI-to-AI trades (#F, deeper rosters). */
+export function aiManagerProbe() {
+  const clone = structuredClone(world) as World
+  const before = clone.freeAgents.length
+  runAIResign(clone)
+  runAIFreeAgency(clone)
+  runAITrades(clone)
+  const tradeNews = clone.news.filter((n) => n.id.startsWith('aitrade_'))
+  return {
+    freeAgentsBefore: before,
+    freeAgentsAfter: clone.freeAgents.length,
+    aiTrades: tradeNews.length,
+    sample: tradeNews.slice(0, 3).map((n) => n.headline),
+  }
+}
+
+/** Dev-only probe: weekly rhythm state (hours, actions, set piece, stretch). */
+export function rhythmProbe() {
+  const career = useGame.getState().career
+  const w = getWorld()
+  return {
+    week: w.week,
+    season: w.season,
+    level: career?.level,
+    path: career?.path,
+    hours: career?.hoursLeft,
+    setPieceDone: career?.setPieceDone,
+    actions: career ? weeklyActions(career).map((a) => a.id) : [],
+    piece: career ? currentSetPiece(w, career) : null,
+    stretch: career?.stretch ?? null,
+  }
+}
+
+/** Dev-only probe: evaluator biases and what their ledger reveals. */
+export function scoutBiasProbe() {
+  const career = useGame.getState().career
+  const teamId = career?.teamId ?? 'BUF'
+  // Simulate a season of filed reports so the ledger has signal.
+  updateStaffLedgers(world, teamId)
+  const evaluators = (world.staff[teamId] ?? []).filter(isEvaluator)
+  const sample = world.draft[0]
+  return {
+    teamId,
+    evaluators: evaluators.map((m) => ({
+      name: m.name,
+      role: m.role,
+      hiddenBias: m.bias,
+      learned: learnedBias(m),
+      reportOnTop: sample ? scoutReport(m, sample) : null,
+    })),
+    truthTop: sample?.trueGrade,
+  }
+}
+
+/** Dev-only probe: hidden character generation and development spread. */
+export function characterProbe() {
+  const sample = world.draft.slice(0, 5).map((p) => ({
+    name: p.name,
+    pos: p.pos,
+    character: p.character,
+    generated: p.generated,
+  }))
+  // Compare average ovr growth for high vs low work ethic among young players.
+  const young = world.players.filter((p) => p.character && p.age <= 25 && p.teamId)
+  const hi = young.filter((p) => (p.character!.workEthic ?? 0) >= 70)
+  const lo = young.filter((p) => (p.character!.workEthic ?? 100) < 45)
+  const avgPot = (arr: typeof young) => (arr.length ? +(arr.reduce((s, p) => s + (p.pot - p.ovr), 0) / arr.length).toFixed(2) : 0)
+  return {
+    sample,
+    youngHighMotor: { n: hi.length, avgUpside: avgPot(hi) },
+    youngLowMotor: { n: lo.length, avgUpside: avgPot(lo) },
+    realPlayersFlagged: world.players.filter((p) => p.generated === false).length,
+  }
+}
+
+/** Dev-only probe: verify the draft "advise" flow (NPC follows/overrides your board). */
+export function adviceProbe() {
+  const clone = structuredClone(world) as World
+  initDraft(clone)
+  const top = [...clone.draft].sort((a, b) => b.grade - a.grade).slice(0, 5).map((p) => p.id)
+  const career: CareerState = {
+    gmName: 'Advise Bot',
+    path: 'personnel',
+    archetype: 'scout',
+    teamId: 'BUF',
+    season: clone.season,
+    week: clone.week,
+    reputation: { ...ZERO_REP, evaluation: 65 },
+    skills: { ...ZERO_SKILLS, evaluation: 55 },
+    level: 4,
+    salary: 0,
+    jobSecurity: 70,
+    ownerExpectation: '',
+    tier: 'NFL',
+    recommendationsMade: 0,
+    hits: 0,
+    misses: 0,
+    seasonRecs: 0,
+    seasonHits: 0,
+    ledger: [],
+    userBoard: top,
+    history: [],
+  }
+  simUntilUser(clone, career)
+  const advice = (career.ledger ?? []).filter((e) => e.kind === 'advice')
+  const bufPicks = clone.draft.filter((p) => p.draftedBy === 'BUF')
+  return {
+    adviceEntries: advice.length,
+    accepted: advice.filter((e) => e.accepted).length,
+    sample: advice.slice(0, 3).map((e) => ({ name: e.name, accepted: e.accepted, pick: e.pick })),
+    bufTopPick: bufPicks[0]?.name,
+    bufTopOnBoard: bufPicks[0] ? top.includes(bufPicks[0].id) : false,
+  }
 }
 
 /** Dev-only balance probe: run whole seasons headlessly and report the long arc. */

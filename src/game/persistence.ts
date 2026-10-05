@@ -86,3 +86,22 @@ export async function clearSave(): Promise<void> {
   await withStore('readwrite', (s) => s.delete(KEY) as IDBRequest<unknown>)
   await withStore('readwrite', (s) => s.delete(BACKUP_KEY) as IDBRequest<unknown>)
 }
+
+/** Serialize the current save to a JSON string, for backup/export. */
+export async function exportSave(): Promise<string | null> {
+  const env = await withStore<SaveEnvelope>('readonly', (s) => s.get(KEY) as IDBRequest<SaveEnvelope>)
+  if (!env) return null
+  return JSON.stringify(env)
+}
+
+/** Import a previously exported save. Writes it to IndexedDB and returns the data. */
+export async function importSave<T>(json: string): Promise<T | null> {
+  try {
+    const env = JSON.parse(json) as SaveEnvelope<T>
+    if (!env || typeof env !== 'object' || !('data' in env)) return null
+    await withStore('readwrite', (s) => s.put({ ...env, schemaVersion: env.schemaVersion ?? SAVE_SCHEMA_VERSION }, KEY) as IDBRequest<unknown>)
+    return env.data
+  } catch {
+    return null
+  }
+}

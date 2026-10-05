@@ -3,7 +3,6 @@ import { cn } from '../lib/cn'
 import { leagueGroups } from '../game/data/leagueGroups'
 import { recordOf, rosterOf, teamAvgOvr } from '../game/selectors'
 import { recordBook, teamHistory } from '../game/engine/statsDb'
-import type { LeagueTier } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, PageHeader, OvrBadge, TeamCrest } from '../ui/kit'
 
@@ -70,10 +69,9 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
 export function League() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
-  const [tier, setTier] = useState<LeagueTier>('NFL')
   const [selected, setSelected] = useState<string>(activeTeamId)
 
-  const groups = leagueGroups(tier)
+  const groups = leagueGroups('NFL')
   const team = league.byId[selected]
   const roster = rosterOf(league, selected)
   const top = [...roster].sort((a, b) => b.ovr - a.ovr).slice(0, 6)
@@ -83,23 +81,7 @@ export function League() {
       <PageHeader
         eyebrow="League"
         title="Team Browser"
-        subtitle="Scout the entire football landscape — every program and franchise, from the FCS to the NFL."
-        right={
-          <div className="flex rounded-lg bg-surface-2 p-0.5">
-            {(['NFL', 'FBS'] as LeagueTier[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTier(t)}
-                className={cn(
-                  'rounded-md px-4 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tier === t ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
-                )}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        }
+        subtitle="Scout the entire league — all 32 NFL franchises, roster by roster."
       />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">

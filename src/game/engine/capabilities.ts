@@ -6,7 +6,7 @@
 // so every rung is a distinct job rather than a title change.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CareerState, LeagueTier } from '../types'
+import type { CareerState } from '../types'
 
 export type Capability =
   // Personnel / scouting
@@ -20,10 +20,6 @@ export type Capability =
   | 'manageCap'      // cap sheet, restructures, cuts
   | 'draft'          // make draft picks
   | 'signFreeAgents' // FA signings
-  // College-specific
-  | 'recruit'        // high-school recruiting
-  | 'portal'         // transfer portal + retention (re-recruiting your own)
-  | 'nilBudget'      // NIL / revenue-share payroll
   // Coaching
   | 'developRoom'    // grow a position group
   | 'callPlays'      // live game plan
@@ -43,7 +39,6 @@ export interface RoleCapabilities {
 const ALL: Capability[] = [
   'grade', 'rankBoard', 'crossCheck', 'assignScouts', 'setBoard', 'proScout',
   'negotiate', 'manageCap', 'draft', 'signFreeAgents',
-  'recruit', 'portal', 'nilBudget',
   'developRoom', 'callPlays', 'installScheme', 'hireStaff', 'gameManagement', 'setExpectations',
 ]
 
@@ -61,7 +56,10 @@ const PERSONNEL_ROLES: Record<number, RoleCapabilities> = {
   5: { can: set('grade', 'rankBoard', 'crossCheck', 'assignScouts', 'setBoard', 'draft'), planScope: 'none' }, // Dir College Scouting
   6: { can: set('proScout', 'negotiate', 'signFreeAgents', 'draft', 'setBoard'), planScope: 'none' },          // Dir Player Personnel
   7: { can: set('proScout', 'negotiate', 'manageCap', 'signFreeAgents', 'draft', 'hireStaff'), planScope: 'none' }, // Assistant GM
-  8: { can: set(...ALL), planScope: 'both' },                                                    // General Manager
+  // GM: final call on the roster and the cap. Deliberately does NOT call plays,
+  // install schemes, or run game management — football operations belong to the
+  // head coach. The GM hires the staff and owns the results.
+  8: { can: set('proScout', 'negotiate', 'manageCap', 'signFreeAgents', 'draft', 'setBoard', 'hireStaff', 'setExpectations'), planScope: 'none' }, // General Manager
 }
 
 // ── Coaching ladder ──────────────────────────────────────────────────────────
@@ -69,11 +67,22 @@ const COACH_ROLES: Record<number, RoleCapabilities> = {
   0: { can: set('developRoom'), planScope: 'none' },                                                        // Graduate Assistant
   1: { can: set('developRoom'), planScope: 'none' },                                                        // Position Coach
   2: { can: set('developRoom', 'callPlays', 'installScheme', 'gameManagement'), planScope: 'own-side' },     // Coordinator
-  3: { can: set('developRoom', 'callPlays', 'installScheme', 'gameManagement', 'hireStaff', 'recruit', 'portal', 'nilBudget', 'setExpectations'), planScope: 'both' }, // G5 HC
-  4: { can: set('developRoom', 'callPlays', 'installScheme', 'gameManagement', 'hireStaff', 'recruit', 'portal', 'nilBudget', 'setExpectations'), planScope: 'both' }, // P4 HC
+  3: { can: set('developRoom', 'callPlays', 'installScheme', 'gameManagement', 'hireStaff', 'setExpectations'), planScope: 'both' }, // (legacy rung)
+  4: { can: set('developRoom', 'callPlays', 'installScheme', 'gameManagement', 'hireStaff', 'setExpectations'), planScope: 'both' }, // (legacy rung)
   5: { can: set('developRoom'), planScope: 'none' },                                                        // NFL Position Coach / QC
   6: { can: set('developRoom', 'callPlays', 'installScheme', 'gameManagement'), planScope: 'own-side' },     // NFL Coordinator
-  7: { can: set(...ALL), planScope: 'both' },                                                               // NFL Head Coach
+  // NFL Head Coach: complete control of football operations (game plan, training,
+  // scheme, the staff room, game management). On the roster and the cap the HC
+  // INFLUENCES the GM — it holds proScout/crossCheck to shape the call, but not
+  // draft/setBoard/manageCap/signFreeAgents. The GM holds the pen; accessFor()
+  // maps those areas to 'advise' and the game grades the HC's recommendations.
+  7: {
+    can: set(
+      'developRoom', 'callPlays', 'installScheme', 'gameManagement', 'hireStaff', 'setExpectations',
+      'proScout', 'crossCheck', 'negotiate',
+    ),
+    planScope: 'both',
+  },                                                                                                        // NFL Head Coach
 }
 
 /** What can this career actually do right now? */
@@ -101,36 +110,10 @@ export function isGM(career: CareerState) {
   return career.path === 'personnel' && career.level >= 8
 }
 export function isHeadCoach(career: CareerState) {
-  return career.path === 'coach' && (career.level >= 3 || career.level >= 7)
-}
-export function canRecruit(career: CareerState) {
-  return can(career, 'recruit') && career.tier !== 'NFL'
+  return career.path === 'coach' && career.level >= 7
 }
 export function canCallPlays(career: CareerState) {
   return can(career, 'callPlays')
-}
-
-// ── Cross-over: college HC → NFL position coach / coordinator ────────────────
-// Your rule: a college head coach does NOT walk into an NFL HC job. He crosses
-// into an NFL position-coach or coordinator role and must earn the top job.
-export function crossOverLevel(path: CareerState['path'], level: number, from: LeagueTier, to: LeagueTier) {
-  // Only coaching crossovers are constrained; personnel crossing keeps its rung.
-  if (path !== 'coach') return level
-  if (from === 'FBS' && to === 'NFL') {
-    // College HC (3 or 4) lands as NFL Position Coach (5) at most; P4 HC may
-    // land straight into an NFL Coordinator (6) role.
-    if (level >= 4) return 6
-    if (level === 3) return 5
-    if (level === 2) return 5 // college coordinator → NFL position coach
-    return level
-  }
-  if (from === 'NFL' && to === 'FBS') {
-    // NFL coordinator → college HC is realistic; NFL position coach → college coordinator.
-    if (level >= 6) return 4
-    if (level === 5) return 2
-    return level
-  }
-  return level
 }
 
 export { ALL as ALL_CAPABILITIES }

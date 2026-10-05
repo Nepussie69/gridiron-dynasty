@@ -14,7 +14,11 @@ import {
 } from '../game/selectors'
 import { useGame, useWorld, type ScreenId } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
+import { ownerPersonality, ownerPersonalityLabel } from '../game/engine/people'
 import { CulturePanel } from '../components/CulturePanel'
+import { OfficeScene } from '../components/OfficeScene'
+import { WeeklyChecklist } from '../components/WeeklyChecklist'
+import { WeeklyDecision } from '../components/WeeklyDecision'
 import { Badge, Button, Card, Donut, MiniBars, OvrBadge, PageHeader, RatingBar, Stat, TeamCrest } from '../ui/kit'
 
 export function Dashboard() {
@@ -62,12 +66,16 @@ export function Dashboard() {
         right={
           <div className="flex gap-2">
             <Button onClick={() => setScreen('roster')}>Manage Roster</Button>
-            <Button variant="team" onClick={() => setScreen(isNFL ? 'draft' : 'recruiting')}>
-              {isNFL ? 'Draft Board' : 'Recruiting'} <ArrowRight size={15} />
+            <Button variant="team" onClick={() => setScreen('draft')}>
+              Draft Board <ArrowRight size={15} />
             </Button>
           </div>
         }
       />
+
+      <OfficeScene className="mb-5" />
+      <WeeklyDecision className="mb-5" />
+      <WeeklyChecklist className="mb-5" />
 
       {/* KPI strip */}
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
@@ -292,14 +300,26 @@ export function Dashboard() {
           )}
 
           <Card>
+            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Era & Mandate</h3>
+            <div className="mb-2 flex items-center gap-2">
+              <Badge tone="gold">{league.era?.label ?? 'Modern Era'}</Badge>
+              <span className="text-xs text-muted">{ownerPersonalityLabel(ownerPersonality(activeTeamId))} owner</span>
+            </div>
+            <p className="text-xs leading-relaxed text-muted">{career.ownerExpectation}</p>
+            <p className="mt-2 text-[11px] leading-snug text-faint">
+              The league's market drifts by era — positions rise and fall in value. Build into the drift.
+            </p>
+          </Card>
+
+          <Card>
             <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Quick Actions</h3>
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
                   { label: 'Depth Chart', screen: 'depth' },
                   { label: 'Staff Hiring', screen: 'staff' },
-                  { label: isNFL ? 'Trade Center' : 'Recruiting', screen: isNFL ? 'trades' : 'recruiting' },
-                  { label: isNFL ? 'Salary Cap' : 'Scouting', screen: isNFL ? 'cap' : 'scouting' },
+                  { label: 'Trade Center', screen: 'trades' },
+                  { label: 'Salary Cap', screen: 'cap' },
                 ] as { label: string; screen: ScreenId }[]
               ).map((a) => (
                 <Button key={a.label} onClick={() => setScreen(a.screen)} className="justify-start">

@@ -1,29 +1,32 @@
 # Gridiron Dynasty
 
-A playable football front-office career sim. You begin as a **local scout at a small
-school** and climb the ladder to **NFL General Manager** — earning every promotion with
-the recommendations you make. One living universe — every FBS program and all 32 NFL teams —
-with real ratings and a full NFL salary-cap model.
+A playable football front-office career sim. You begin as an **assistant director of college
+scouting** (or an NFL position coach) and climb the ladder to **NFL General Manager** — earning
+every promotion with the recommendations you make. One living league — all 32 NFL clubs — with
+real ratings and a full NFL salary-cap model.
+
+> **NFL-only build.** The college side of the game has been removed: there is no CFB universe,
+> no recruiting screen, and no college career rungs. Every game is an NFL game, and the draft
+> class is made of college players entering the league, exactly as in the real NFL draft.
 
 See [`PLAN.md`](./PLAN.md) for the design document and roadmap.
 
 ## How to play
 
-1. **New career** — name yourself and pick a Group of Five program. You start as a Local Scout.
-2. **Scouting Board** — spend weekly scouting points to evaluate prospects. The more you
-   scout, the closer your grade gets to the truth (revealed at 70% confidence).
+1. **New career** — name yourself, pick a track (Personnel or Coaching), and pick an NFL club.
+   You start at the first NFL rung of that ladder.
+2. **Scouting Board** — spend weekly scouting points to evaluate prospects in the draft class.
+   The more you scout, the closer your grade gets to the truth (revealed at 70% confidence).
 3. **File recommendations** — Blue Chip (Rd 1), Starter (Rd 2-3), Depth (Rd 4-7), Pass.
-4. **Advance Week** — the whole league simulates: college and pro games, standings, injuries.
+4. **Advance Week** — the whole league simulates: NFL games, standings, injuries.
 5. **Season's end** — your class is graded. Accurate reads raise your **reputation**; misses
    cost you. A season-review card shows every call.
 6. **Offseason** — the draft runs, free agency opens, and job offers arrive based on your
    reputation. Accept a promotion to move up the ladder.
-7. **Climb** — Area Scout → Regional Scout → National Scout → NFL front office → Assistant
-   GM → **General Manager**. Once you're in an NFL front office you control the draft, free
-   agency, and the cap.
+7. **Climb** — the NFL rungs of your track (see *The two ladders*). Once you hold a front-office
+   or head-coach role you control the draft, free agency, and the cap.
 
-The sidebar adapts to your role: college jobs get Recruiting, NFL jobs get Draft, Free
-Agency, Trade Center, and Salary Cap.
+The sidebar adapts to your rung: locked screens are hidden until you earn the role that owns them.
 
 ## The salary-cap pathway
 
@@ -40,11 +43,11 @@ Rosters use **real, exact ratings** — no approximations:
 
 - **NFL:** all 1,833 Madden NFL 26 players across all 32 teams, with every overall
   *and* full attribute set (SPD, STR, AWR, THP, MAN, ZCV, …) exactly as rated.
-- **College:** every team in the game — **138 programs, 11,730 players** from EA Sports
-  College Football 26 (plus 2026 FBS newcomers North Dakota State and Sacramento State from
-  CFB 27), with exact overalls, core attributes, class year, and measurables.
+- **Draft class:** built from real college players (EA Sports College Football 26, plus 2026
+  newcomers) entering the NFL — exact overalls and measurables. In this build the colleges are
+  only the prospects' *schools*; there is no playable college league.
 
-**There is no generated/fake rating data anywhere in the universe.** Every team and player
+**There is no generated/fake rating data anywhere in the league.** Every team and player
 is exact.
 
 The data lives in `public/data/*.json` (loaded at boot, so it doesn't bloat the JS bundle).
@@ -99,17 +102,18 @@ and shape what roles you're suited for.
 
 ### The two ladders
 
-**Personnel** (scout → GM):
+This build is NFL-only, so each ladder begins at its first NFL rung. The college rungs remain
+in the data but are unreachable — a career never starts or drops below the NFL floor.
+
+**Personnel** (front office → GM):
 ```
-Local Scout → Area Scout → Regional Scout → National Scout
-  → Asst. Dir. College Scouting → Dir. College Scouting
+Asst. Dir. College Scouting → Dir. College Scouting
   → Dir. Player Personnel → Assistant GM → GENERAL MANAGER
 ```
 
-**Coaching** (GA → NFL HC):
+**Coaching** (on-field → NFL HC):
 ```
-Graduate Assistant → Position Coach → Coordinator → G5 Head Coach
-  → Power Four Head Coach → NFL Position Coach → NFL Coordinator → NFL HEAD COACH
+NFL Position Coach / Quality Control → NFL Coordinator → NFL HEAD COACH
 ```
 
 ### The realistic grind — with a fast lane
@@ -134,6 +138,75 @@ Promotion happens through an **offseason carousel** with a real interview:
   win 9 games. Meeting them pays reputation.
 - **Career milestones hit your inbox** — a season-review note every year, plus items when you
   make the playoffs, win a title, or **get fired and demoted**.
+
+## The rungs are jobs
+
+A rung isn't a label — it changes what you're allowed to do, what you can see, and what gets
+remembered about you.
+
+- **Four access levels on every screen: Locked → View → Advise → Decide.** A Local Scout can
+  *view* the draft board; a cross-checker can *advise* (rank a board the Director weighs against
+  consensus); the Director *decides*. The top bar shows your current level for the screen you're
+  on, and blocked actions explain themselves.
+- **Information quality is the real promotion.** You never see raw Madden numbers on a prospect —
+  you see what *your* evaluation produces. A Local Scout sees wide ranges (e.g. `82–91`) and only
+  his region; a National Scout sees tighter reads nationwide; a Director sees the staff consensus
+  with disagreements flagged. The true grade only surfaces at the very top (or near-total
+  confidence). Scouting sharpens the range; your **Evaluation** skill narrows it for good.
+- **The Ledger.** Every grade, recommendation, draft pick, and piece of advice is date-stamped
+  with the role you held. Years later it comes back — "You graded him a 2nd-rounder as an Area
+  Scout in 2027; he's a starter now." The Ledger screen shows your career **batting average** and
+  a **My Guys** tab that follows everyone you championed for their whole career.
+
+Advice is graded too: when an NPC Director follows or overrides your board, it's logged and
+judged — the stepping stone made literal.
+
+- **Character is a hidden second rating.** Film shows talent; character (work ethic,
+  coachability, maturity, off-field risk) is hidden and decides whether the talent ever arrives
+  — it drives the development curve and bust risk, never the current rating, so the sim stays
+  calibrated. You uncover it by **working the phones** (one facet at a time, sharper with a good
+  **Evaluation** skill). For real named players, invented off-field incidents are never used —
+  those narratives are reserved for generated players.
+- **You evaluate the evaluators.** Every NPC scout has a blind spot — one overrates speed, one
+  loves the blue bloods, one is soft on character. Their filed grades are skewed by it, and as a
+  Director/GM you see their **staff board** and their **Ledger**, not the truth. Over seasons you
+  learn "Scout B grades athletic testing ~5 high" and shade their grades accordingly.
+
+## The rhythm of the job
+
+A rung isn't just a permission set — it's a job with a weekly rhythm and a year of its own.
+
+- **A weekly time budget (#5).** ~40 hours a week and a menu that changes by role: study film,
+  work the phones, drive the region, cross-check reports, run drills, meet the scouts, take
+  agent calls, meet the owner. The job is choosing what *not* to do.
+- **One annual set piece (#6).** A "boss fight" per rung each season — lock your region board,
+  the Director's board meeting, March cap crunch, install week, draft day.
+- **Stretch assignments & interim jobs (#8).** Every so often your boss hands you a task from the
+  rung above ("run the Southeast cross-check", "call the defense for a week"). How it goes
+  shapes your promotion case.
+- **Same event, different seat (#20).** The draft pays off at every rung — you get a ping when one
+  of your guys comes off the board, and the seat you watch from depends on how far you've climbed.
+
+## The people and the world
+
+- **Contacts (#9)** — relationships with high-school coaches, trainers, NFL scouts and agents
+  that travel with you and climb the ladder alongside you.
+- **Mentors & a coaching tree (#11)** — every boss has a philosophy that shapes how you build; the
+  assistants you develop eventually run their own clubs.
+- **A rival class (#12)** — NPCs who started the climb the same year you did, on the same leaderboard.
+- **A media layer (#13)** — beat writers, a national insider, and the "rising execs" and "GM
+  candidates" lists your Profile earns.
+- **Bosses with agendas (#14)** — owners are meddling, patient, cheap, or win-now. Interviews
+  weigh your **Ledger receipts** against what they care about.
+- **Traits earned by deeds (#10)** — "Diamond Digger", "Burned by the Stopwatch" — each stamped with
+  where you earned it, each changing how you read prospects.
+- **Getting fired is a fork (#17)** — The Wilderness: a year on TV, consulting for a rival, joining
+  an agency, or the UFL.
+- **Big boards are dense sortable tables** — the draft class and free agents render as compact,
+  click-to-sort rows (not cards), so you can scan hundreds of names fast.
+- **Eras (#18)** — the league's market drifts over the decades; positions rise and fall in value.
+- **Legacy & succession (#19)** — a résumé case (rings, Ledger hits, players in Canton, your tree),
+  a Hall-of-Fame vote, then keep playing as your protégé.
 
 ## Player & coach styles
 
@@ -160,10 +233,9 @@ the fit rating.
 
 Selected from real production at the end of every season (`awards.ts`):
 
-- **MVP, Offensive POY, Defensive POY, and Rookie of the Year** for both the NFL and
-  college, with the headline stat line.
-- **First- and Second-Team All-Pro** (All-Conference in college) — a full offense and
-  defense, chosen by position-aware production score, never the same player twice.
+- **MVP, Offensive POY, Defensive POY, and Rookie of the Year**, with the headline stat line.
+- **First- and Second-Team All-Pro** — a full offense and defense, chosen by position-aware
+  production score, never the same player twice.
 - **Hall of Fame** — legends are enshrined automatically once their career clears a
   weighted bar (volume + peak honours + championships), and stay enshrined forever.
 - Verified: a simulated NFL season produced Baker Mayfield as MVP (5,294 yds, 40 TD),
@@ -216,13 +288,11 @@ Every play is attributed to individual players, producing:
 - **Live box score** in the match viewer — passing (C/ATT, YDS, TD, INT), rushing
   (CAR/YDS/TD), receiving (REC/YDS/TD), and defense (TCK/SCK/INT) for both teams.
 - **Season stats** rolled up per player.
-- **Career stats** on the player profile, split into **College (CFB)** and **Pro (NFL)**
-  with a per-season table — and college production carries into the pro career when a
-  player is drafted, so a career spans both levels.
+- **Career stats** on the player profile, with a per-season table.
 - **Stats Hub** — league leaderboards plus a persistent **career statistics database**:
-  single-season or career leaders for passing, rushing, receiving, and defense, filterable
-  by Pro/College, across every season played.
-- **League-wide box scores** — every game in both the NFL and college produces individual
+  single-season or career leaders for passing, rushing, receiving, and defense, across every
+  season played.
+- **League-wide box scores** — every game in the NFL produces individual
   stats (via a fast talent-weighted allocator), so leaderboards fill out across the whole
   league, not just your team. Verified: a full NFL season produces realistic leaders
   (J.J. McCarthy, 4,633 pass yards) with your own game using true play-by-play.
@@ -307,29 +377,16 @@ Resulting per-team-per-game averages vs. real NFL:
 | First downs | 20.4 | 19 |
 | 3rd-down % | 43.4 | 43.5 |
 
-The **college** sim uses its own calibration mined from **204,489 real FBS plays**
-(sportsdataverse/ESPN, 2023–2024): completion 61.6%, sack 6.0%/dropback, INT 2.55%/attempt,
-run/pass tendency by down, and the empirical yardage curve — giving the college game its
-faster tempo and heavier run volume.
+The **college** calibration mined from real FBS plays is still shipped and used to shape the
+draft class's college production flavor, but there is no playable college league in this build.
 
-College per-team-per-game vs. real FBS:
-
-| Stat | Sim | Real |
-|---|---|---|
-| Points | 25.5 | 28 |
-| Total yards | 406 | 400 |
-| Plays | 70.9 | 72 |
-| Pass yards | 237 | 235 |
-| Rush yards | 169 | 165 |
-
-Regenerate either table with:
+Regenerate the NFL table with:
 
 ```bash
 python3 scripts/mine_gamelogs.py   # NFL  (nflverse 2024-2025)
-python3 scripts/mine_cfb.py        # CFB  (ESPN 2023-2024)
 ```
 
-Both download their source data to `.cache/` (git-ignored).
+It downloads its source data to `.cache/` (git-ignored).
 
 ## Running it
 
@@ -350,8 +407,30 @@ npm run preview
 npm run lint
 ```
 
-Your career **autosaves** to IndexedDB every action — reload and pick up where you left
-off. Use **New Career** in the sidebar footer to start over.
+Your career **autosaves** to IndexedDB on every action. The save is **versioned** with a
+**rolling backup**: if a save is ever corrupted, the game silently falls back to the previous
+good copy and tells you. On launch you get a **Continue Career** card showing the role, team,
+and season — or start fresh. Reload anytime and pick up where you left off.
+
+## Authentic league simulation
+
+By default, only *your* game is true play-by-play; the rest of the league uses a fast
+statistical allocator (realistic, but not literal snaps). Flip the **Fast Sim / Authentic Sim**
+toggle in the top bar to run **every game in the league through the real play-by-play engine**:
+
+- Simulated in a **Web Worker**, so the season never freezes the UI.
+- Real per-player box scores are recorded for every game — leaderboards and storylines across
+  the whole NFL reflect actual snaps.
+- It's heavier, so it's opt-in; if the worker is unavailable the game transparently falls back
+  to the fast allocator.
+
+## Balance harness (dev)
+
+A headless harness (`src/game/engine/balance.ts`) runs whole seasons with no UI and reports the
+metrics that decide whether the long arc is fun — scoring, win parity, cap pressure, roster
+sizes, and promotion pacing. Run it from the dev console with `__balanceProbe(10)`. It's how
+the foundation was tuned (it surfaced and fixed a player-population collapse, cap drift, and a
+free-agency fill bug).
 
 ## Project structure
 
@@ -363,11 +442,11 @@ src/
     types.ts          Domain types (Team/Player/Staff/Contract/DraftPick/…)
     selectors.ts      Derived reads (cap, standings, schedule, needs)
     persistence.ts    IndexedDB save/load
-    data/             NFL + CFB teams, Madden 26 / CFB 26 ratings, calibration
+    data/             NFL teams, Madden 26 ratings, calibration
     engine/
       rng.ts          Seeded RNG + helpers
       cap.ts          NFL salary-cap model
-      generate.ts     Universe generation (teams, rosters, contracts, prospects, schedules)
+      generate.ts     Universe generation (32 NFL teams, rosters, contracts, draft class, schedule)
       picks.ts        Draft-pick ownership + compensatory picks
       trade.ts        Trade valuation, AI evaluation, execution
       sim.ts          Game/week/season/playoff simulation
@@ -377,21 +456,24 @@ src/
       style.ts        Archetypes, scheme fit
       playbook.ts     Playbook mastery + cohesion (culture)
       progress.ts     Player development, contracts, scouting evaluation
-      career.ts       Career ladder, reputation, objectives, interviews
+      career.ts       NFL career ladders, reputation, objectives, interviews
       draft.ts        Rookie draft, contracts, AI front offices
       stats.ts        Per-player stat accumulation
       statAlloc.ts    League-wide distributed box scores
       statsDb.ts      Career statistics database + leaderboards
       awards.ts       MVP / All-Pro / Hall of Fame
       hiring.ts       Reputation-gated staff hiring
-  screens/            One file per screen (18 total)
+      balance.ts      Headless multi-season balance harness
+      leagueSim.ts    Client for the league play-by-play worker
+  workers/            leagueSim.worker.ts (authentic league sim)
+  screens/            One file per screen
   store/gameStore.ts  Zustand store: UI + world + the full game loop
   ui/kit.tsx          Design system
 ```
 
 ## Notes
 
-- Real team brands; **exact real ratings** for the NFL (Madden NFL 26) and college
-  (College Football 26 + 27 newcomers), ingested by `scripts/ingest.py`. The universe is
-  100% exact — no generated ratings. You start as a scout at a Group of Five program.
+- Real team brands; **exact real ratings** for the NFL (Madden NFL 26), ingested by
+  `scripts/ingest.py`. The NFL universe is 100% exact — no generated ratings. You start at the
+  first NFL rung of your chosen track.
 - Intended for personal, non-commercial use.

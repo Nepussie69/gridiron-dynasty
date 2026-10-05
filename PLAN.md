@@ -1,9 +1,14 @@
 # GRIDIRON DYNASTY — Design & Build Plan
 
-A football front-office management sim. You start as a nobody in college football and
-climb the ladder — position coach → coordinator → college head coach → NFL exec → NFL
-General Manager. The core of the game is **decisions**: who to scout, recruit, draft,
-sign, cut, hire, and pay.
+A football front-office management sim. You start at the first **NFL** rung of your track
+(assistant director of college scouting, or NFL position coach) and climb to NFL General
+Manager / Head Coach. The core of the game is **decisions**: who to scout, draft, sign, cut,
+hire, and pay.
+
+> **NFL-only build.** The original plan below spans a high-school → college → pro universe. The
+> game now ships as an **NFL-only** build: the college universe, recruiting, NIL economy, and
+> college career rungs have been removed; the draft class remains real college players entering
+> the NFL. Sections describing college tiers/rungs are kept for history but are not implemented.
 
 Working title: **Gridiron Dynasty**
 Doc version: v0.1 (planning)
@@ -213,6 +218,11 @@ src/
 | **5** | Career layer | Scout→GM ladder, reputation, job offers, multi-season | ✅ Done |
 | **6** | Polish | IndexedDB autosave, season-review modal, toasts | ✅ Done |
 | **7** | Front-office depth | Team cohesion (culture + on-field effects), trade AI with pick ownership, practice squad / IR, compensatory picks | ✅ Done |
+| **8** | Foundation hardening | Versioned saves + rolling backup + recover/continue, headless balance harness, full-league play-by-play in a Web Worker | ✅ Done |
+| **9** | Rungs as jobs | Four access levels (Locked/View/Advise/Decide), information-quality fog of war, and the career Ledger | ✅ Done |
+| **10** | Character & evaluators | Hidden character (drives dev/busts, uncovered by working the phones) + NPC scout biases you learn from their Ledger | ✅ Done |
+| **11** | Rung rhythm | Weekly time budget, annual set pieces, stretch/interim assignments, draft payoff at every seat | ✅ Done |
+| **12** | People & the world | Contacts, mentors + coaching tree, rival class, media layer, owner agendas, earned traits, Wilderness, college NIL economy, eras, legacy & succession, save export/import, anti-dominance probe | ✅ Done |
 
 ### The career ladder (implemented)
 
@@ -262,6 +272,18 @@ unlocks as you climb.
   mastery, as a new system would.
 - **Practice squad** (up to 16) and **injured reserve** are modelled with promote / release /
   place / activate actions and active-roster spot rules.
+
+### Foundation hardening (implemented)
+
+- **Saves are versioned** and rotate a **rolling backup** on every write; the loader validates
+  the payload and falls back to the backup, or a clean start, without ever crashing. The career
+  hub offers a **Continue Career** card (role, team, season, timestamp) and recovery messaging.
+- **Balance harness** (`engine/balance.ts`): headless whole-season runs reporting scoring, win
+  parity, cap pressure, roster sizes, and promotion pacing. It surfaced and drove fixes for a
+  player-population collapse, cap drift, and a free-agency fill bug.
+- **Authentic league play-by-play**: an opt-in Web Worker (`workers/leagueSim.worker.ts` +
+  `engine/leagueSim.ts`) simulates *every* league game through the real play-by-play engine and
+  records true per-player box scores, with automatic fallback to the fast allocator.
 
 ### What Phase 1 delivered
 - Local, self-contained Node v24 toolchain at `~/.local/node` (no system changes).

@@ -3,6 +3,7 @@ import {
   Activity,
   Award,
   BarChart3,
+  BookOpen,
   CalendarDays,
   ClipboardList,
   DollarSign,
@@ -15,7 +16,6 @@ import {
   Shield,
   Trophy,
   UserCog,
-  UserPlus,
   UserRound,
   Users,
 } from 'lucide-react'
@@ -23,6 +23,9 @@ import { cn } from '../lib/cn'
 import { inkOn, money, tint } from '../lib/format'
 import { SCREENS, useGame, useWorld, type ScreenId } from '../store/gameStore'
 import { tierFor } from '../game/engine/career'
+import { accessFor } from '../game/engine/access'
+import { AccessBadge } from './AccessBadge'
+import type { AccessArea } from '../game/engine/access'
 import { capSpace, recordOf, recordStr, rosterOf, scheduleFor, teamAvgOvr } from '../game/selectors'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
@@ -31,6 +34,7 @@ type IconType = ComponentType<{ size?: number | string; className?: string; stro
 const ICONS: Record<ScreenId, IconType> = {
   career: UserRound,
   dashboard: LayoutDashboard,
+  ledger: BookOpen,
   roster: Users,
   depth: ListOrdered,
   gameplan: ClipboardList,
@@ -40,7 +44,6 @@ const ICONS: Record<ScreenId, IconType> = {
   awards: Award,
   scouting: Search,
   draft: ClipboardList,
-  recruiting: UserPlus,
   freeagency: Repeat,
   trades: Activity,
   cap: DollarSign,
@@ -49,15 +52,36 @@ const ICONS: Record<ScreenId, IconType> = {
   inbox: Inbox,
 }
 
+/** Which access area each screen belongs to (for the top-bar access badge). */
+const AREA_BY_SCREEN: Partial<Record<ScreenId, AccessArea>> = {
+  scouting: 'scouting',
+  draft: 'draft',
+  cap: 'cap',
+  freeagency: 'freeagency',
+  trades: 'trades',
+  staff: 'staff',
+  gameplan: 'gameplan',
+  roster: 'roster',
+  depth: 'roster',
+}
+
 export function Sidebar() {
   const screen = useGame((s) => s.screen)
   const setScreen = useGame((s) => s.setScreen)
   const career = useGame((s) => s.career)
   const resetCareer = useGame((s) => s.resetCareer)
+  const exportSaveText = useGame((s) => s.exportSaveText)
+  const importSaveText = useGame((s) => s.importSaveText)
   const unread = useGame((s) => Object.values(s.readNews).filter((v) => !v).length)
 
   const tier = career?.tier ?? 'NFL'
-  const visible = SCREENS.filter((s) => s.tiers.includes(tier))
+  const visible = SCREENS.filter((s) => {
+    if (!s.tiers.includes(tier)) return false
+    // The ladder is the tutorial: hide screens that are locked at this rung.
+    const area = AREA_BY_SCREEN[s.id]
+    if (area && career && accessFor(career, area) === 'locked') return false
+    return true
+  })
   const groups = ['Career', 'Team', 'Personnel', 'Club', 'League'] as const
 
   return (
@@ -135,6 +159,38 @@ export function Sidebar() {
           >
             New Career
           </button>
+          <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+            <button
+              onClick={async () => {
+                const text = await exportSaveText()
+                if (!text) return
+                const blob = new Blob([text], { type: 'application/json' })
+                const a = document.createElement('a')
+                a.href = URL.createObjectURL(blob)
+                a.download = `gridiron-save-${career?.season ?? 'career'}.json`
+                a.click()
+                URL.revokeObjectURL(a.href)
+              }}
+              className="rounded-md border border-line bg-surface px-2 py-1 font-cond text-[10px] font-700 uppercase tracking-wide text-muted transition hover:text-ink-2"
+            >
+              Export Save
+            </button>
+            <label className="cursor-pointer rounded-md border border-line bg-surface px-2 py-1 text-center font-cond text-[10px] font-700 uppercase tracking-wide text-muted transition hover:text-ink-2">
+              Import
+              <input
+                type="file"
+                accept="application/json"
+                className="hidden"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0]
+                  if (!f) return
+                  const text = await f.text()
+                  await importSaveText(text)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+          </div>
         </div>
       </div>
     </aside>
@@ -147,8 +203,10 @@ export function TopBar() {
   const career = useGame((s) => s.career)
   const advanceWeek = useGame((s) => s.advanceWeek)
   const setScreen = useGame((s) => s.setScreen)
+  const screen = useGame((s) => s.screen)
   const leaguePbp = useGame((s) => s.leaguePbp)
   const setLeaguePbp = useGame((s) => s.setLeaguePbp)
+  const accessArea = AREA_BY_SCREEN[screen]
 
   const team = league.byId[activeTeamId]
   const rec = recordOf(league, activeTeamId)
@@ -185,6 +243,7 @@ export function TopBar() {
         {team.tier === 'NFL' && (
           <ScorePill label="Cap Space" value={money(space)} tone={space < 5 ? 'loss' : space > 25 ? 'win' : undefined} />
         )}
+        {accessArea && <AccessBadge area={accessArea} />}
       </div>
 
       <div className="flex-1" />

@@ -1,10 +1,12 @@
-import type { CareerState, DraftProspect, Player, Position } from '../types'
+import type { CareerState, DraftProspect, Player, PlayerOrigin, Position } from '../types'
 import { makeRookieContract } from './cap'
 import { canDraft } from './career'
 import { computeDraftOrder } from './sim'
 import { ensureDraftPicks } from './picks'
+import { pushLedger } from './ledger'
+import { makeCharacter } from './character'
 import { type World } from './generate'
-import { hash32, makeRng } from './rng'
+import { clamp, hash32, makeRng } from './rng'
 
 export const DRAFT_ROUNDS = 7
 export const DRAFT_TEAMS = 32
@@ -87,26 +89,39 @@ function teamNeeds(roster: Player[]): Record<string, number> {
   return needs
 }
 
+/** A user's ranked board, folded into the AI's decision while they lack draft authority. */
+export interface BoardAdvice {
+  board: string[]
+  weight: number
+}
+
+/** How much a director trusts your board, from your evaluation reputation + skill. */
+export function adviceWeight(career: CareerState): number {
+  return clamp(0.15 + (career.reputation.evaluation / 100) * 0.5 + (career.skills.evaluation / 100) * 0.35, 0.15, 1)
+}
+
 /** Best available prospect for a team, weighing talent vs. positional need. */
-export function bestAvailableFor(world: World, teamId: string): DraftProspect | null {
+export function bestAvailableFor(world: World, teamId: string, advice?: BoardAdvice): DraftProspect | null {
   const available = world.draft.filter((p) => !p.draftedBy)
   if (!available.length) return null
   const needs = teamNeeds(world.roster[teamId] ?? [])
   const scored = available.map((p) => {
     const needBonus = (needs[p.pos] ?? 0) > 0 ? 6 : 0
     const posPremium = p.pos === 'QB' || p.pos === 'DE' || p.pos === 'OT' || p.pos === 'CB' ? 2 : 0
-    return { p, score: p.grade + needBonus + posPremium }
+    let adviceBonus = 0
+    if (advice) {
+      const idx = advice.board.indexOf(p.id)
+      if (idx >= 0) adviceBonus = advice.weight * Math.max(4, 30 - idx * 4)
+    }
+    return { p, score: p.grade + needBonus + posPremium + adviceBonus }
   })
   scored.sort((a, b) => b.score - a.score)
   return scored[0].p
 }
 
-export function prospectToPlayer(world: World, prospect: DraftProspect, teamId: string, pick: number, season: number): Player {
+export function prospectToPlayer(world: World, prospect: DraftProspect, teamId: string, pick: number, season: number, origin?: PlayerOrigin): Player {
+  void world
   const contract = makeRookieContract(pick, season)
-  // Carry the player's college stat history into his pro career so career totals
-  // span CFB and NFL. The CFB record is the same physical player.
-  const collegeSeasons = (world.players.find((p) => p.name === prospect.name && p.side && p.pos === prospect.pos)?.stats ?? [])
-    .filter((s) => s.level === 'CFB')
   return {
     id: `pl_${prospect.id}`,
     name: prospect.name,
@@ -123,7 +138,9 @@ export function prospectToPlayer(world: World, prospect: DraftProspect, teamId: 
     contract,
     teamId,
     morale: 80,
-    stats: collegeSeasons.length ? [...collegeSeasons] : undefined,
+    character: prospect.character ?? makeCharacter(prospect.id),
+    generated: prospect.generated ?? true,
+    origin: origin ?? { kind: 'draft', season, round: prospect.projectedRound, by: null },
   }
 }
 
@@ -148,11 +165,17 @@ function weightFor(p: DraftProspect) {
 }
 
 /** Record a pick for whoever is on the clock. */
-export function makePick(world: World, prospect: DraftProspect, teamId: string) {
+export function makePick(world: World, prospect: DraftProspect, teamId: string, by?: string | null) {
   const pick = overallPick(world)
   prospect.draftedBy = teamId
   prospect.draftPick = pick
-  const player = prospectToPlayer(world, prospect, teamId, pick, world.season + 1)
+  const player = prospectToPlayer(world, prospect, teamId, pick, world.season + 1, {
+    kind: 'draft',
+    season: world.season,
+    round: currentRound(world),
+    pick,
+    by: by ?? null,
+  })
   world.players.push(player)
   ;(world.roster[teamId] ??= []).push(player)
   world.draftState.log.unshift(
@@ -176,12 +199,35 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
     if (career && canDraft(career) && currentTeamId(world) === career.teamId) break
     const teamId = currentTeamId(world)
     if (!teamId) break
-    const prospect = bestAvailableFor(world, teamId)
+    // If the user lacks draft authority but has filed a board, the NPC weighs it.
+    const advising = !!career && career.teamId === teamId && !canDraft(career) && (career.userBoard?.length ?? 0) > 0
+    const advice: BoardAdvice | undefined = advising ? { board: career!.userBoard!, weight: adviceWeight(career!) } : undefined
+    const prospect = bestAvailableFor(world, teamId, advice)
     if (!prospect) {
       world.draftState.complete = true
       break
     }
-    makePick(world, prospect, teamId)
+    const round = currentRound(world)
+    const player = makePick(world, prospect, teamId)
+    if (advising && advice && career) {
+      const onBoard = advice.board.includes(prospect.id)
+      pushLedger(career, {
+        kind: 'advice',
+        prospectId: prospect.id,
+        playerId: player.id,
+        name: prospect.name,
+        pos: prospect.pos,
+        college: prospect.college,
+        myGrade: prospect.myGrade ?? prospect.grade,
+        round,
+        pick: prospect.draftPick ?? undefined,
+        truth: prospect.trueGrade,
+        accepted: onBoard,
+        note: onBoard
+          ? 'The Director followed your board.'
+          : 'The Director went another way over your board.',
+      })
+    }
     steps++
   }
   return steps
@@ -236,7 +282,11 @@ export function runUDFAs(world: World) {
   const teams = world.teams.filter((t) => t.tier === 'NFL')
   for (const prospect of udfa) {
     const team = teams[hash32(prospect.id, 3) % teams.length]
-    const player = prospectToPlayer(world, prospect, team.id, 250 + Math.floor(rng() * 10), world.season + 1)
+    const player = prospectToPlayer(world, prospect, team.id, 250 + Math.floor(rng() * 10), world.season + 1, {
+      kind: 'udfa',
+      season: world.season,
+      by: null,
+    })
     player.contract = makeRookieContract(224, world.season + 1)
     player.ovr = Math.max(55, player.ovr - 5)
     world.players.push(player)
