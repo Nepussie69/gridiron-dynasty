@@ -1,8 +1,12 @@
+import { useState } from 'react'
 import { ArrowRight, Award, Fingerprint, Ghost, HelpCircle, Target, Trophy, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { ladderFor, tierFor } from '../game/engine/career'
+import { portfolioItems } from '../game/engine/portfolio'
+import type { JobOffer } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
+import { InterviewPrep } from './InterviewPrep'
 import { Badge, Button, Card, TeamCrest } from '../ui/kit'
 
 export function SeasonModal() {
@@ -14,6 +18,7 @@ export function SeasonModal() {
   const dismiss = useGame((s) => s.dismissModal)
   const acceptOffer = useGame((s) => s.acceptOffer)
   const decline = useGame((s) => s.declineOffers)
+  const [prep, setPrep] = useState<JobOffer | null>(null)
 
   if (modal === 'none') return null
 
@@ -221,7 +226,9 @@ export function SeasonModal() {
 
   if (modal === 'offers') {
     const current = career ? tierFor(career.path, career.level).title : ''
+    const canPitch = career ? portfolioItems(league, career).length > 0 : false
     return (
+      <>
       <Shell onClose={decline}>
         <div className="mb-4">
           <div className="label">Offseason</div>
@@ -253,7 +260,11 @@ export function SeasonModal() {
                 <div className="mt-2 flex items-center gap-2 rounded-lg bg-surface-2 p-2 text-xs text-muted">
                   <Badge tone="info">{rung.tier}</Badge> {rung.blurb}
                 </div>
-                <Button variant="team" className="mt-2 w-full" onClick={() => acceptOffer(o)}>
+                <Button
+                  variant="team"
+                  className="mt-2 w-full"
+                  onClick={() => (canPitch ? setPrep(o) : acceptOffer(o))}
+                >
                   Sit for the interview — {o.title}
                 </Button>
               </div>
@@ -264,6 +275,8 @@ export function SeasonModal() {
           </Button>
         </div>
       </Shell>
+      {prep && <InterviewPrep offer={prep} onCancel={() => setPrep(null)} />}
+      </>
     )
   }
 

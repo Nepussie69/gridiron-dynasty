@@ -76,6 +76,29 @@ game's guardrails intact.
     "Your job this week" line on Career; drills limited to once per week + sort comparator fixed.
   - Key files: `src/game/engine/tradeTree.ts`, `src/game/engine/seed.ts`, `src/game/engine/scenarios.ts`,
     `src/game/engine/objectives.ts`.
+- **L6 "Every rung is a job" DONE** (U0–U14; spec `NEXT_PHASE_L6.md`; build green, lint = 5 baseline warnings):
+  - U0 **Draft truncation fix** — `simulateRestOfDraft` loops to completion, auto-picking best-available for
+    the user's club when they auto-finish; all ~220 available picks now resolve and the club drafts ≥ 7 rookies.
+  - G1 **Grade your scouts** — `engine/department.ts` (`TRUST_WEIGHT`, `canSetTrust`, `departmentGrade`,
+    `calibrationGain`); `bestAvailableFor` takes a `gradeOf` so the user's club drafts from the trust-weighted
+    department board; `setScoutTrust` action; season-end calibration reward; StaffBoard trust chips + grade row.
+  - G2 **Pound the table** — `engine/conviction.ts` (`canConvict`, `convictionIds`, `convictionPick`,
+    `logConvictionPicks`, `convictionPayout`); the Director weighs up to 3 tagged prospects in advise mode;
+    every tagged prospect is logged as an `advice` ledger entry and graded 2 NFL seasons later; vindications
+    flip the outcome to "Called it"; `toggleConviction` action; Scouting toggles + "Conviction n/3" chip;
+    Ledger "Conviction" / "Called it" badges.
+  - G3 **Your Room** — `engine/room.ts` (`hasRoom`, `roomPlayers`, `roomBudget`, `applyRoomDevelopment`);
+    weekly Run drills banks a rep (max 17) instead of +1 OVR; the season-end budget goes to up to 3 focus
+    players (Concentrate) or spreads +1 across the room; develop ledger entries; `toggleRoomFocus` /
+    `setRoomPlan`; `components/RoomCard.tsx` on Dashboard.
+  - G4 **Portfolio interviews** — `engine/portfolio.ts` (`PitchTag`, `PortfolioItem`, `portfolioItems`,
+    `teamWants`, `pitchBonus`; owner personality computed locally with `hash32`); `makeInterview` takes an
+    optional `pitch` and only raises citations (never below baseline, capped at 12); `acceptOffer(offer, pitch?)`
+    with a "Your pitch landed" toast; `components/InterviewPrep.tsx` (wired into SeasonModal + Career offers)
+    and `components/PortfolioCard.tsx` ("Your Résumé") on Career.
+  - Key files: `src/game/engine/department.ts`, `src/game/engine/conviction.ts`, `src/game/engine/room.ts`,
+    `src/game/engine/portfolio.ts`, `src/components/InterviewPrep.tsx`, `src/components/RoomCard.tsx`,
+    `src/components/PortfolioCard.tsx` (plus `draft.ts`, `career.ts`, `store/gameStore.ts` wiring).
 
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.

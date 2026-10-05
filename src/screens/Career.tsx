@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ArrowUp, Briefcase, CheckCircle2, Circle, Copy, Repeat2, Star, Target, TrendingUp } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
@@ -38,12 +39,16 @@ const CAP_LABELS: Record<string, string> = {
 import { recordOf, recordStr } from '../game/selectors'
 import { formatSeed } from '../game/engine/seed'
 import { scenarioById } from '../game/engine/scenarios'
+import { portfolioItems } from '../game/engine/portfolio'
+import type { JobOffer } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { CareerRhythm } from '../components/CareerRhythm'
 import { CareerPeople } from '../components/CareerPeople'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { AmbitionsCard } from '../components/AmbitionsCard'
 import { LegacyCard } from '../components/LegacyCard'
+import { PortfolioCard } from '../components/PortfolioCard'
+import { InterviewPrep } from '../components/InterviewPrep'
 import { VoicesCard } from '../components/VoicesCard'
 import { Badge, Button, Card, PageHeader, RatingBar, TeamCrest } from '../ui/kit'
 
@@ -63,6 +68,7 @@ export function Career() {
   const declineOffers = useGame((s) => s.declineOffers)
   const setScreen = useGame((s) => s.setScreen)
   const showToast = useGame((s) => s.showToast)
+  const [prep, setPrep] = useState<JobOffer | null>(null)
 
   function copySeed() {
     try {
@@ -74,6 +80,7 @@ export function Career() {
   }
 
   const team = league.byId[career.teamId]
+  const resume = portfolioItems(league, career)
   const ladder = ladderFor(career.path)
   const current = tierFor(career.path, career.level)
   const next = ladder[career.level + 1]
@@ -250,6 +257,7 @@ export function Career() {
           <AmbitionsCard />
           <GhostCard />
           <LegacyCard />
+          <PortfolioCard />
           <VoicesCard />
           {/* Your role: what this job can actually do */}
           <Card>
@@ -434,7 +442,12 @@ export function Career() {
                     </div>
                     <p className="mt-2 text-xs text-muted">{o.note}</p>
                     <div className="mt-2 flex gap-2">
-                      <Button size="sm" variant="team" className="flex-1" onClick={() => acceptOffer(o)}>
+                      <Button
+                        size="sm"
+                        variant="team"
+                        className="flex-1"
+                        onClick={() => (resume.length ? setPrep(o) : acceptOffer(o))}
+                      >
                         <ArrowUp size={13} /> Accept
                       </Button>
                     </div>
@@ -464,6 +477,7 @@ export function Career() {
           </Card>
         </div>
       </div>
+      {prep && <InterviewPrep offer={prep} onCancel={() => setPrep(null)} />}
     </div>
   )
 }

@@ -11,6 +11,7 @@ import { NFL_TEAMS } from '../data/nflTeams'
 import type { World } from './generate'
 import { clamp, hash32, makeRng, rpick } from './rng'
 import { capHealth, developedCount } from './objectives'
+import { pitchBonus, portfolioItems } from './portfolio'
 
 // ── Reputation dimensions ────────────────────────────────────────────────────
 export interface Reputation {
@@ -277,7 +278,7 @@ export function generateJobOffers(world: World, career: CareerState): JobOffer[]
 /** Rival candidate names for the interview process. */
 const RIVAL_FIRST = ['Marcus', 'Dwayne', 'Elliot', 'Rashad', 'Kirk', 'Byron', 'Nate', 'Terrance', 'Wes', 'Hank']
 const RIVAL_LAST = ['Calloway', 'Bishop', 'Vance', 'Hollis', 'Rucker', 'Marsh', 'Fontaine', 'Devers', 'Whitlock', 'Stroud']
-export function makeInterview(offer: JobOffer, world: World, career: CareerState): InterviewInvite {
+export function makeInterview(offer: JobOffer, world: World, career: CareerState, pitch?: string[]): InterviewInvite {
   const rng = makeRng(world.seed + offer.teamId.length * 7919 + career.level)
   const rival = `${rpick(rng, RIVAL_FIRST)} ${rpick(rng, RIVAL_LAST)}`
   // Fit: does your reputation match the role's priorities?
@@ -294,7 +295,14 @@ export function makeInterview(offer: JobOffer, world: World, career: CareerState
   // weight which part of your résumé matters.
   const personality = ['meddling', 'patient', 'cheap', 'win-now'][hash32(offer.teamId, 61) % 4]
   const hits = (career.ledger ?? []).filter((e) => e.hit).length
-  const citations = 2 + Math.min(10, hits * 1.0)
+  const baseline = 2 + Math.min(10, hits * 1.0)
+  // G4: pitching résumé items that match the club's wants can only help — it
+  // raises citations toward the same 12-point ceiling that already exists.
+  let citations = baseline
+  if (pitch?.length) {
+    const { bonus } = pitchBonus(offer, career.path, portfolioItems(world, career), pitch)
+    citations = Math.max(baseline, 2 + bonus)
+  }
   const pmod = clamp(
     personality === 'win-now' ? (career.reputation.results - 50) * 0.1
     : personality === 'patient' ? (career.reputation.evaluation - 50) * 0.08

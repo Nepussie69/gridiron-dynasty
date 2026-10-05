@@ -92,6 +92,7 @@ import {
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
+import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
@@ -381,7 +382,7 @@ interface GameStore {
   exportSaveText: () => Promise<string | null>
   importSaveText: (text: string) => Promise<void>
 
-  acceptOffer: (offer: JobOffer) => void
+  acceptOffer: (offer: JobOffer, pitch?: string[]) => void
   declineOffers: () => void
 
   userOnClock: () => boolean
@@ -1121,11 +1122,11 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
-  acceptOffer: (offer) => {
+  acceptOffer: (offer, pitch) => {
     const career = get().career
     if (!career) return
     // Offers now run through an interview: submit and roll against a rival candidate.
-    const invite = makeInterview(offer, world, career)
+    const invite = makeInterview(offer, world, career, pitch)
     const rng = makeRng(world.seed + world.season * 31 + offer.teamId.length + career.level)
     const won = resolveInterview(invite, rng)
     if (!won) {
@@ -1136,7 +1137,12 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     const promoted = promote(career, offer)
     set({ career: promoted, activeTeamId: offer.teamId, offers: [], modal: 'none', tick: get().tick + 1 })
-    get().showToast(`You won the job — ${offer.title} for the ${world.byId[offer.teamId].name}.`)
+    let msg = `You won the job — ${offer.title} for the ${world.byId[offer.teamId].name}.`
+    if (pitch?.length) {
+      const { matched } = pitchBonus(offer, career.path, portfolioItems(world, career), pitch)
+      if (matched.length) msg += ` Your pitch landed: ${matched.join(', ')}.`
+    }
+    get().showToast(msg)
     get().save()
   },
   declineOffers: () => set({ offers: [], modal: 'none' }),
