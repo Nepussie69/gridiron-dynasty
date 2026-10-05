@@ -407,7 +407,7 @@ export interface JobOffer {
   note: string
 }
 
-export type LedgerKind = 'grade' | 'recommendation' | 'pick' | 'advice'
+export type LedgerKind = 'grade' | 'recommendation' | 'pick' | 'advice' | 'develop'
 export interface LedgerEntry {
   id: string
   season: number
@@ -433,6 +433,12 @@ export interface LedgerEntry {
   accepted?: boolean
   /** Hidden truth captured at call time, so we can grade it later. */
   truth?: number
+  /** Conviction (G2): this entry is one of your pound-the-table calls. */
+  conviction?: boolean
+  /** Conviction (G2): your club passed, he hit anyway — a vindication. */
+  vindication?: boolean
+  /** Develop entries (G3): OVR points banked for a player. */
+  gain?: number
 }
 
 export interface CareerState {
@@ -461,6 +467,12 @@ export interface CareerState {
   ledger?: LedgerEntry[]
   /** Your ranked board for the upcoming draft (prospect ids, best first). */
   userBoard?: string[]
+  /** G1: how much you trust each evaluator's reports (staffId → trust). */
+  scoutTrust?: Record<string, 'fade' | 'normal' | 'lean'>
+  /** G2: the prospects you've tagged as conviction calls this draft (max 3). */
+  conviction?: { season: number; ids: string[] }
+  /** G3: your room's focus players, practice plan, and banked reps. */
+  room?: { focus: string[]; plan: 'concentrate' | 'spread'; reps: number }
   /** The region you're assigned to scout (drives information scope). */
   scoutRegion?: string
   /** Weekly time budget (#5). Reset each week. */

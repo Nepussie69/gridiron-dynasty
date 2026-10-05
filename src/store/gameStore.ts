@@ -90,6 +90,7 @@ import {
   awardCompensatoryPicks,
 } from '../game/engine/draft'
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
+import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
@@ -350,6 +351,8 @@ interface GameStore {
   setRecommendation: (id: string, rec: 'Blue Chip' | 'Starter' | 'Depth' | 'Pass') => void
   /** Advise mode: add/remove a prospect from your ranked board for the draft. */
   toggleUserBoard: (id: string) => void
+  /** G1: set how much you trust an evaluator's reports (Fade / Normal / Lean on). */
+  setScoutTrust: (staffId: string, level: 'fade' | 'normal' | 'lean') => void
   /** Work the phones to uncover one hidden character facet of a prospect. */
   investigateCharacter: (id: string) => void
   /** Spend part of the weekly time budget on an action (#5). */
@@ -822,6 +825,16 @@ export const useGame = create<GameStore>((set, get) => ({
     if (i >= 0) board.splice(i, 1)
     else board.push(id)
     set({ career: { ...career, userBoard: board }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  setScoutTrust: (staffId, level) => {
+    const career = get().career
+    if (!career || !canSetTrust(career)) return
+    set({
+      career: { ...career, scoutTrust: { ...(career.scoutTrust ?? {}), [staffId]: level } },
+      tick: get().tick + 1,
+    })
     get().save()
   },
 
@@ -1822,6 +1835,26 @@ function runEndOfRegularSeason(
         )
       }
       careerNext = { ...careerNext, reputation: rep2, ambitions: grade.results }
+    }
+    // G1: trust calibrated well beats the all-normal board — reward the read.
+    if (canSetTrust(career)) {
+      const gain = calibrationGain(world, career)
+      if (gain >= 1) {
+        const rep3: Reputation = { ...careerNext.reputation }
+        for (const [k, v] of Object.entries({ evaluation: 2, leadership: 1 })) {
+          ;(rep3 as unknown as Record<string, number>)[k] = clamp(
+            ((rep3 as unknown as Record<string, number>)[k] ?? 0) + (v as number),
+            0,
+            100,
+          )
+        }
+        careerNext = { ...careerNext, reputation: rep3 }
+        careerNext = logMoment(careerNext, {
+          week: career.week,
+          text: `Your read on the staff sharpened the department board (+${gain} pts accuracy).`,
+          tone: 'win',
+        })
+      }
     }
     if (demoted) {
       // #17: getting fired opens The Wilderness — a fork, not a reset.

@@ -8,6 +8,7 @@ import { readProspect, rangeText, scoutRegion, inProspectScope } from '../game/e
 import { accessFor } from '../game/engine/access'
 import { CHARACTER_FACETS, FACET_LABEL } from '../game/engine/character'
 import { isEvaluator, learnedBias, scoutReport } from '../game/engine/scoutBias'
+import { canSetTrust, departmentGrade } from '../game/engine/department'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { AccessBadge } from '../components/AccessBadge'
@@ -381,21 +382,38 @@ function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
   )
 }
 
+const TRUST_OPTIONS: { id: 'fade' | 'normal' | 'lean'; label: string; title: string }[] = [
+  { id: 'fade', label: 'Fade', title: 'Fade: weigh this report at ×0.5' },
+  { id: 'normal', label: 'Normal', title: 'Normal: weigh this report at ×1' },
+  { id: 'lean', label: 'Lean on', title: 'Lean on: weigh this report at ×2' },
+]
+
 function StaffBoard({ teamId, prospectId, className }: { teamId: string; prospectId: string; className?: string }) {
   const league = useWorld()
+  const career = useGame((s) => s.career)!
+  const setScoutTrust = useGame((s) => s.setScoutTrust)
   const evaluators = (league.staff[teamId] ?? []).filter(isEvaluator)
   const prospect = league.draft.find((p) => p.id === prospectId)
   if (!evaluators.length || !prospect) return null
+  const canTrust = canSetTrust(career)
+  const deptGrade = departmentGrade(league, career, prospect)
   return (
     <Card className={className}>
       <div className="mb-2 flex items-center justify-between">
         <h3 className="font-display text-lg font-700 uppercase tracking-wide">Staff Board</h3>
         <span className="text-[10px] text-faint">their reports, not the truth</span>
       </div>
+      {canTrust && (
+        <div className="mb-2 flex items-center justify-between rounded-md bg-surface-2 px-2.5 py-1.5">
+          <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-muted">Department grade</span>
+          <span className="font-display text-sm font-700 tnum text-ink">{deptGrade ?? '—'}</span>
+        </div>
+      )}
       <div className="space-y-2">
         {evaluators.map((m) => {
           const learned = learnedBias(m)
           const grade = scoutReport(m, prospect)
+          const trust = career.scoutTrust?.[m.id] ?? 'normal'
           return (
             <div key={m.id} className="flex items-center gap-3 text-sm">
               <div className="min-w-0 flex-1">
@@ -405,6 +423,25 @@ function StaffBoard({ teamId, prospectId, className }: { teamId: string; prospec
                   {learned.label ? ` · ${learned.label}` : learned.samples ? ` · ${learned.samples} calls` : ' · no history yet'}
                 </div>
               </div>
+              {canTrust && (
+                <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                  {TRUST_OPTIONS.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      title={t.title}
+                      onClick={() => setScoutTrust(m.id, t.id)}
+                      className={cn(
+                        'rounded px-1.5 py-0.5 font-cond text-[9px] font-700 uppercase tracking-wide transition',
+                        trust === t.id ? 'text-[var(--team-ink)]' : 'text-muted hover:bg-surface-2',
+                      )}
+                      style={trust === t.id ? { background: 'var(--team)' } : undefined}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <span className="grid h-8 w-10 place-items-center rounded-md font-display text-sm font-700 tnum" style={{ background: gradeColor(grade), color: '#fff' }}>
                 {grade}
               </span>

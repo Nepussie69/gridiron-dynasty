@@ -13,6 +13,7 @@ const KIND_META: Record<LedgerEntry['kind'], { label: string; tone: 'win' | 'los
   grade: { label: 'Grade', tone: 'neutral' },
   pick: { label: 'Pick', tone: 'gold' },
   advice: { label: 'Advice', tone: 'warn' },
+  develop: { label: 'Develop', tone: 'win' },
 }
 
 const VERDICT_TONE: Record<TradeVerdict, 'win' | 'loss' | 'neutral' | 'info'> = {

@@ -8,14 +8,14 @@ _Starts after L5 (NEXT_PHASE_L5.md) is fully done and committed. Lint baseline: 
 
 | Task | What | Status |
 |---|---|---|
-| U0 | **Bug fix:** Finish draft skips user + all later picks | not started |
-| U1 | Ledger kinds + flags (types) | not started |
-| U2 | Scout trust: engine | not started |
-| U3 | Scout trust: store + draft wiring | not started |
-| U4 | Scout trust: UI | not started |
-| U5 | Conviction: engine + ledger payout | not started |
-| U6 | Conviction: draft wiring + vindication | not started |
-| U7 | Conviction: UI | not started |
+| U0 | **Bug fix:** Finish draft skips user + all later picks | ✅ done — verified (push A) |
+| U1 | Ledger kinds + flags (types) | ✅ done — verified (push A) |
+| U2 | Scout trust: engine | ✅ done — verified (push A) |
+| U3 | Scout trust: store + draft wiring | ✅ done — verified (push A) |
+| U4 | Scout trust: UI | ✅ done — verified (push A) |
+| U5 | Conviction: engine + ledger payout | in progress (push B) |
+| U6 | Conviction: draft wiring + vindication | in progress (push B) |
+| U7 | Conviction: UI | in progress (push B) |
 | U8 | Your Room: engine | not started |
 | U9 | Your Room: store + season-end wiring (replaces drills) | not started |
 | U10 | Your Room: UI | not started |
@@ -272,3 +272,6 @@ If it needs `tradeTree`, that's fine (tradeTree.ts doesn't import career.ts; ver
 - Do not let a pitch lower fit below today's `citations` value, and do not raise its 12-point ceiling.
 - Every new save field is optional; old saves must load. No new dependencies. Do not fix the baseline lint warnings. Do not reformat unrelated code.
 - Do not edit NEXT_PHASE.md, NEXT_PHASE_L5.md or NEXT_PHASE_L6.md.
+
+## Verification log
+- **Push A** (browser): GM auto-finish draft now makes 220/220 available picks (was 70); user club gets 7 rookies; every rookie carries `pickId`; `setScoutTrust` stores trust. Note: the prospect class (220) is smaller than the pick count (224, comp picks), so the last 4 picks go unused. This is a pre-existing class-size issue and is not fixed here.

@@ -73,11 +73,13 @@ function gradeEntry(world: World, e: LedgerEntry): boolean | undefined {
  * Re-grade the ledger (called at season end). Marks hits/misses and writes a
  * human outcome, so old calls mature over a career.
  */
-export function gradeLedger(world: World, career: CareerState): { graded: number; hits: number } {
-  if (!career.ledger) return { graded: 0, hits: 0 }
+export function gradeLedger(world: World, career: CareerState): { graded: number; hits: number; newly: LedgerEntry[] } {
+  if (!career.ledger) return { graded: 0, hits: 0, newly: [] }
   let newlyGraded = 0
   let hits = 0
+  const newly: LedgerEntry[] = []
   for (const e of career.ledger) {
+    if (e.kind === 'develop') continue
     if (e.hit !== undefined && e.kind !== 'pick' && e.kind !== 'advice') continue
     const p = e.playerId ? world.players.find((x) => x.id === e.playerId) : undefined
     const result = gradeEntry(world, e)
@@ -90,10 +92,11 @@ export function gradeLedger(world: World, career: CareerState): { graded: number
     if (result !== undefined && e.hit === undefined) {
       e.hit = result
       newlyGraded++
+      newly.push(e)
     }
     if (e.hit) hits++
   }
-  return { graded: newlyGraded, hits }
+  return { graded: newlyGraded, hits, newly }
 }
 
 export interface MyGuy {

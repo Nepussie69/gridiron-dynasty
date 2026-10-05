@@ -4,6 +4,7 @@ import { canDraft } from './career'
 import { computeDraftOrder } from './sim'
 import { ensureDraftPicks } from './picks'
 import { pushLedger } from './ledger'
+import { departmentGrade } from './department'
 import { makeCharacter } from './character'
 import { type World } from './generate'
 import { clamp, hash32, makeRng } from './rng'
@@ -104,7 +105,12 @@ export function adviceWeight(career: CareerState): number {
 }
 
 /** Best available prospect for a team, weighing talent vs. positional need. */
-export function bestAvailableFor(world: World, teamId: string, advice?: BoardAdvice): DraftProspect | null {
+export function bestAvailableFor(
+  world: World,
+  teamId: string,
+  advice?: BoardAdvice,
+  gradeOf?: (p: DraftProspect) => number,
+): DraftProspect | null {
   const available = world.draft.filter((p) => !p.draftedBy)
   if (!available.length) return null
   const needs = teamNeeds(world.roster[teamId] ?? [])
@@ -116,7 +122,7 @@ export function bestAvailableFor(world: World, teamId: string, advice?: BoardAdv
       const idx = advice.board.indexOf(p.id)
       if (idx >= 0) adviceBonus = advice.weight * Math.max(4, 30 - idx * 4)
     }
-    return { p, score: p.grade + needBonus + posPremium + adviceBonus }
+    return { p, score: (gradeOf ? gradeOf(p) : p.grade) + needBonus + posPremium + adviceBonus }
   })
   scored.sort((a, b) => b.score - a.score)
   return scored[0].p
@@ -206,7 +212,9 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
     // If the user lacks draft authority but has filed a board, the NPC weighs it.
     const advising = !!career && career.teamId === teamId && !canDraft(career) && (career.userBoard?.length ?? 0) > 0
     const advice: BoardAdvice | undefined = advising ? { board: career!.userBoard!, weight: adviceWeight(career!) } : undefined
-    const prospect = bestAvailableFor(world, teamId, advice)
+    // The user's club drafts from the department grade (G1), not public consensus.
+    const gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    const prospect = bestAvailableFor(world, teamId, advice, gradeOf)
     if (!prospect) {
       world.draftState.complete = true
       break
@@ -238,7 +246,21 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
 }
 
 export function simulateRestOfDraft(world: World, career: CareerState | null) {
-  simUntilUser(world, career, totalPicks(world))
+  let guard = totalPicks(world) + 5
+  while (!world.draftState.complete && guard-- > 0) {
+    simUntilUser(world, career, totalPicks(world))
+    if (world.draftState.complete) break
+    const teamId = currentTeamId(world)
+    if (!teamId) break
+    // The user's club is on the clock but the user chose to auto-finish: take best available for them.
+    const gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    const prospect = bestAvailableFor(world, teamId, undefined, gradeOf)
+    if (!prospect) {
+      world.draftState.complete = true
+      break
+    }
+    makePick(world, prospect, teamId, career && teamId === career.teamId ? career.gmName : null)
+  }
   return world.draftState.complete
 }
 
