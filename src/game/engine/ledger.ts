@@ -84,7 +84,7 @@ export function gradeLedger(world: World, career: CareerState): { graded: number
     const p = e.playerId ? world.players.find((x) => x.id === e.playerId) : undefined
     const result = gradeEntry(world, e)
     // For picks, refresh the outcome text as the player develops.
-    if (p) {
+    if (p && !e.vindication) {
       const tag = e.kind === 'pick' ? `Pick ${e.round ? `Rd ${e.round}` : ''}`.trim() : 'Your call'
       if (result === true) e.outcome = `${tag}: ${p.name} is a ${p.ovr} OVR${p.ovr >= 88 ? ' star' : ' contributor'} — that one landed.`
       else if (result === false) e.outcome = `${tag}: ${p.name} stalled at ${p.ovr} OVR.`

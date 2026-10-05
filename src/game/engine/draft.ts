@@ -5,6 +5,7 @@ import { computeDraftOrder } from './sim'
 import { ensureDraftPicks } from './picks'
 import { pushLedger } from './ledger'
 import { departmentGrade } from './department'
+import { convictionPick } from './conviction'
 import { makeCharacter } from './character'
 import { type World } from './generate'
 import { clamp, hash32, makeRng } from './rng'
@@ -214,7 +215,12 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
     const advice: BoardAdvice | undefined = advising ? { board: career!.userBoard!, weight: adviceWeight(career!) } : undefined
     // The user's club drafts from the department grade (G1), not public consensus.
     const gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
-    const prospect = bestAvailableFor(world, teamId, advice, gradeOf)
+    let prospect = bestAvailableFor(world, teamId, advice, gradeOf)
+    // G2: in advise mode the Director may pound the table for a conviction call.
+    if (prospect && career && teamId === career.teamId && !canDraft(career)) {
+      const roll = makeRng(world.seed + world.season * 97 + world.draftState.pickIndex)()
+      prospect = convictionPick(world, career, prospect, gradeOf ?? ((p) => p.grade), roll) ?? prospect
+    }
     if (!prospect) {
       world.draftState.complete = true
       break

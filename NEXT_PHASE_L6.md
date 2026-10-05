@@ -13,12 +13,12 @@ _Starts after L5 (NEXT_PHASE_L5.md) is fully done and committed. Lint baseline: 
 | U2 | Scout trust: engine | ✅ done — verified (push A) |
 | U3 | Scout trust: store + draft wiring | ✅ done — verified (push A) |
 | U4 | Scout trust: UI | ✅ done — verified (push A) |
-| U5 | Conviction: engine + ledger payout | in progress (push B) |
-| U6 | Conviction: draft wiring + vindication | in progress (push B) |
-| U7 | Conviction: UI | in progress (push B) |
-| U8 | Your Room: engine | not started |
-| U9 | Your Room: store + season-end wiring (replaces drills) | not started |
-| U10 | Your Room: UI | not started |
+| U5 | Conviction: engine + ledger payout | ✅ done — verified (push B) |
+| U6 | Conviction: draft wiring + vindication | ✅ done — verified (push B) |
+| U7 | Conviction: UI | ✅ done — verified (push B) |
+| U8 | Your Room: engine | in progress (push C) |
+| U9 | Your Room: store + season-end wiring (replaces drills) | in progress (push C) |
+| U10 | Your Room: UI | in progress (push C) |
 | U11 | Portfolio: engine | not started |
 | U12 | Portfolio: interview wiring | not started |
 | U13 | Portfolio: Interview Prep + résumé UI | not started |
@@ -275,3 +275,4 @@ If it needs `tradeTree`, that's fine (tradeTree.ts doesn't import career.ts; ver
 
 ## Verification log
 - **Push A** (browser): GM auto-finish draft now makes 220/220 available picks (was 70); user club gets 7 rookies; every rookie carries `pickId`; `setScoutTrust` stores trust. Note: the prospect class (220) is smaller than the pick count (224, comp picks), so the last 4 picks go unused. This is a pre-existing class-size issue and is not fixed here.
+- **Push B** (browser, Asst Dir rung): conviction capped at 3 (4th refused); after auto-finish the Director took 2 of 3 tagged prospects; all 3 logged as conviction ledger entries (2 accepted, 1 passed). Claude fixed the gap where `gradeLedger` overwrote "Called it" outcome text (`ledger.ts`: skip the outcome refresh when `e.vindication`).

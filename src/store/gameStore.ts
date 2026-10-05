@@ -91,6 +91,7 @@ import {
 } from '../game/engine/draft'
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
+import { MAX_CONVICTION, canConvict, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
@@ -353,6 +354,8 @@ interface GameStore {
   toggleUserBoard: (id: string) => void
   /** G1: set how much you trust an evaluator's reports (Fade / Normal / Lean on). */
   setScoutTrust: (staffId: string, level: 'fade' | 'normal' | 'lean') => void
+  /** G2: tag/untag a prospect as a conviction call for this draft (max 3). */
+  toggleConviction: (prospectId: string) => void
   /** Work the phones to uncover one hidden character facet of a prospect. */
   investigateCharacter: (id: string) => void
   /** Spend part of the weekly time budget on an action (#5). */
@@ -690,6 +693,8 @@ export const useGame = create<GameStore>((set, get) => ({
       runUDFAs(world)
       world.draftState.complete = true
     }
+    // G2: log conviction calls for anyone drafted before the class rolls over.
+    logConvictionPicks(world, career)
     runAIFreeAgency(world)
     runAITrades(world)
     world.season += 1
@@ -833,6 +838,27 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career || !canSetTrust(career)) return
     set({
       career: { ...career, scoutTrust: { ...(career.scoutTrust ?? {}), [staffId]: level } },
+      tick: get().tick + 1,
+    })
+    get().save()
+  },
+
+  toggleConviction: (prospectId) => {
+    const career = get().career
+    if (!career || !canConvict(career)) return
+    const current = career.conviction?.season === world.season ? career.conviction.ids : []
+    let ids: string[]
+    if (current.includes(prospectId)) {
+      ids = current.filter((id) => id !== prospectId)
+    } else {
+      if (current.length >= MAX_CONVICTION) {
+        get().showToast(`Pound the table is full — ${MAX_CONVICTION} calls per draft.`)
+        return
+      }
+      ids = [...current, prospectId]
+    }
+    set({
+      career: { ...career, conviction: { season: world.season, ids } },
       tick: get().tick + 1,
     })
     get().save()
@@ -1095,6 +1121,7 @@ export const useGame = create<GameStore>((set, get) => ({
       truth: prospect.trueGrade,
       note: `Drafted ${prospect.name} (${prospect.pos}, ${prospect.college})`,
     })
+    logConvictionPicks(world, career)
     set({ career: { ...career }, tick: get().tick + 1 })
     announceDraftPicks(world, career)
     resolveTradePicks(world, career)
@@ -1103,6 +1130,7 @@ export const useGame = create<GameStore>((set, get) => ({
   simToMyPick: () => {
     simUntilUser(world, get().career)
     const career = get().career
+    if (career) logConvictionPicks(world, career)
     if (career) announceDraftPicks(world, career)
     if (career) resolveTradePicks(world, career)
     bump(set, get)
@@ -1113,6 +1141,7 @@ export const useGame = create<GameStore>((set, get) => ({
     runUDFAs(world)
     world.draftState.complete = true
     const career = get().career
+    if (career) logConvictionPicks(world, career)
     if (career) announceDraftPicks(world, career)
     if (career) resolveTradePicks(world, career)
     bump(set, get)
@@ -1902,7 +1931,23 @@ function runEndOfRegularSeason(
   // Mature the Ledger with a season of hindsight, and reset the advise board
   // for the new draft class.
   if (careerNext) {
-    gradeLedger(world, careerNext)
+    // G2: conviction calls that matured this season pay out evaluation/profile.
+    const newly = gradeLedger(world, careerNext).newly
+    const payout = convictionPayout(newly, world)
+    if (Object.keys(payout.rep).length) {
+      const repC: Reputation = { ...careerNext.reputation }
+      for (const [k, v] of Object.entries(payout.rep)) {
+        ;(repC as unknown as Record<string, number>)[k] = clamp(
+          ((repC as unknown as Record<string, number>)[k] ?? 0) + (v as number),
+          0,
+          100,
+        )
+      }
+      careerNext = { ...careerNext, reputation: repC }
+    }
+    for (const line of payout.lines) {
+      careerNext = logMoment(careerNext, { week: careerNext.week, text: line, tone: 'win' })
+    }
     // Fold the club's evaluators' reports into their ledgers so their biases
     // can be learned over time.
     updateStaffLedgers(world, careerNext.teamId)

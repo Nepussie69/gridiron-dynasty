@@ -142,6 +142,8 @@ export function Ledger() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <Badge tone={meta.tone}>{meta.label}</Badge>
+                      {e.conviction && <Badge tone="gold">Conviction</Badge>}
+                      {e.vindication && <Badge tone="win">Called it</Badge>}
                       <span className="truncate font-600 text-ink">{e.name}</span>
                       <span className="font-cond text-[11px] font-700 uppercase text-muted">{e.pos} · {e.college}</span>
                     </div>

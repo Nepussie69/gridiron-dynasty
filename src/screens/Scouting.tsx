@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Eye, Phone, Search, Star, Target, X } from 'lucide-react'
+import { Eye, Flame, Phone, Search, Star, Target, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { gradeColor } from '../lib/format'
 import type { DraftProspect, Recommendation } from '../game/types'
@@ -9,6 +9,7 @@ import { accessFor } from '../game/engine/access'
 import { CHARACTER_FACETS, FACET_LABEL } from '../game/engine/character'
 import { isEvaluator, learnedBias, scoutReport } from '../game/engine/scoutBias'
 import { canSetTrust, departmentGrade } from '../game/engine/department'
+import { MAX_CONVICTION, canConvict, convictionIds } from '../game/engine/conviction'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { AccessBadge } from '../components/AccessBadge'
@@ -52,6 +53,10 @@ export function Scouting() {
   )
 
   const graded = pool.filter((p) => p.recommendation).length
+
+  const toggleConviction = useGame((s) => s.toggleConviction)
+  const canConvictHere = canConvict(career)
+  const convicted = canConvictHere ? convictionIds(league, career) : []
 
   const columns: Column<DraftProspect>[] = [
     {
@@ -156,6 +161,21 @@ export function Scouting() {
             >
               <Phone size={11} />
             </button>
+            {canConvictHere && (
+              <button
+                type="button"
+                title={convicted.includes(p.id) ? 'Remove your conviction call' : 'Pound the table for this prospect'}
+                onClick={() => toggleConviction(p.id)}
+                className={cn(
+                  'grid h-6 w-6 place-items-center rounded-md border transition',
+                  convicted.includes(p.id)
+                    ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]'
+                    : 'border-line text-ink-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
+                )}
+              >
+                <Flame size={11} />
+              </button>
+            )}
           </div>
         )
       },
@@ -212,9 +232,14 @@ export function Scouting() {
       </div>
 
       <Card pad={false} className="overflow-hidden">
-        <div className="flex items-center justify-between border-b border-line px-4 py-2">
+        <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2">
           <span className="label">Class Board · by your read</span>
-          <span className="text-[10px] text-faint">click a row to open the report · click a column to sort · quick buttons scout in place</span>
+          <div className="flex items-center gap-2">
+            {canConvictHere && (
+              <Badge tone="gold"><Flame size={11} /> Conviction {convicted.length}/{MAX_CONVICTION}</Badge>
+            )}
+            <span className="text-[10px] text-faint">click a row to open the report · click a column to sort · quick buttons scout in place</span>
+          </div>
         </div>
         <DataTable
           rows={sorted}
