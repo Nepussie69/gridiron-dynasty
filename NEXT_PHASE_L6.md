@@ -8,6 +8,7 @@ _Starts after L5 (NEXT_PHASE_L5.md) is fully done and committed. Lint baseline: 
 
 | Task | What | Status |
 |---|---|---|
+| U0 | **Bug fix:** Finish draft skips user + all later picks | not started |
 | U1 | Ledger kinds + flags (types) | not started |
 | U2 | Scout trust: engine | not started |
 | U3 | Scout trust: store + draft wiring | not started |
@@ -41,6 +42,37 @@ How these tie together: G1, G2 and G3 produce portfolio items, and G4 spends the
 draft grade (G1), which can only get as accurate as the hidden truth. G4 can only **raise** interview fit to the
 same maximum that exists today, so promotion pacing can't get faster than its current ceiling. The weekly drills action
 used to be farmable (+1 OVR, 4×/week). G3 replaces it with a bounded season-end budget, which is a net nerf.
+
+---
+
+## U0 — Bug fix: "Finish draft" truncates the draft (pre-existing, found in L5 browser test)
+
+**Repro (verified 2026-10-05):** As a GM (any rung with `draft` authority), let the draft auto-complete: click Finish draft, or advance into
+the next season without drafting. `simulateRestOfDraft` calls `simUntilUser`, which **breaks as soon as the user's club is on the clock**.
+`finishDraft` / `startNextSeason` then force `draftState.complete = true`. Result: only ~70 of ~224 picks are made, the user's club drafts
+**nobody**, and every later pick in the league is skipped. Traded picks you hold never resolve in the Trade Tree.
+
+**Fix (`src/game/engine/draft.ts`):** Rewrite `simulateRestOfDraft(world, career)` to loop until complete:
+```ts
+export function simulateRestOfDraft(world: World, career: CareerState | null) {
+  let guard = totalPicks(world) + 5
+  while (!world.draftState.complete && guard-- > 0) {
+    simUntilUser(world, career, totalPicks(world))
+    if (world.draftState.complete) break
+    const teamId = currentTeamId(world)
+    if (!teamId) break
+    // The user's club is on the clock but the user chose to auto-finish: take best available for them.
+    const prospect = bestAvailableFor(world, teamId)
+    if (!prospect) { world.draftState.complete = true; break }
+    makePick(world, prospect, teamId, career && teamId === career.teamId ? career.gmName : null)
+  }
+  return world.draftState.complete
+}
+```
+(After U3 lands, the auto-pick should pass the same `gradeOf` the department grade uses. U3 must update this call too.)
+**Acceptance:** build + lint. In dev, start a GM career, sim to the offseason, call `__game.getState().finishDraft()`, then check
+`__world().players.filter(p => p.origin?.kind === 'draft' && p.origin.season === __world().season).length` ≈ the number of draft picks (~224+comp),
+and that the user's club has ≥ 7 rookies.
 
 ---
 
@@ -217,6 +249,7 @@ If it needs `tradeTree`, that's fine (tradeTree.ts doesn't import career.ts; ver
 ---
 
 ## TASK LIST — after EVERY task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && npm run lint` → green, exactly 5 warnings
+- **U0** Draft truncation bug fix (see U0 section).
 - **U1** G0 type changes + `KIND_META.develop` + `gradeLedger` (`develop` skip, `newly` return).
 - **U2** Create `department.ts`. No callers yet.
 - **U3** `bestAvailableFor` gets the `gradeOf` param; `simUntilUser` uses the department grade for the user's club; add the store action `setScoutTrust`; season-end calibration reward.

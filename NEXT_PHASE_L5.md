@@ -180,3 +180,11 @@ so the net pacing shift is small and goes in both directions. The orchestrator w
 - Do not touch the 5 reputation bars or the semantics of capabilities.ts/access.ts, trade evaluation, balance constants, sim calibration, or promotion gates.
 - Do not rename the real NFL job titles. No new dependencies. Do not touch `public/data/*` or `scripts/*`.
 - Do not fix the baseline lint warnings, and do not reformat unrelated code. Every new save field is optional.
+
+## Verification (Claude, in-browser, 2026-10-05)
+- Seeds: same seed → identical league (draft class, rosters, schedule); different seed → different. ✅
+- Scenarios: Hot Seat (coach 7, sec 38), Cap Hell (GM, +12% cap dead money), Rebuild (GM, forced CAR, sec 85) all start correctly. ✅
+- Trade Tree: trades recorded, nesting via parentIds works, traded-away picks resolve to drafted players on the Ledger tab. ✅
+- Received picks did NOT resolve → traced to a **pre-existing draft bug** (auto-finish stops at the user's first pick; ~70/224 picks made). Fix scheduled as L6 U0.
+- Balance probe, seed 20261004, 14 seasons: coach → HC in season 10 (unchanged); personnel → GM in season **14** (was ~11 per HANDOFF).
+  The free cap-health reward was propping up Dir. Player Personnel (probe sat at level 6 for 11 seasons). Within the 10–15 target, but at the edge. Re-check after L6.
