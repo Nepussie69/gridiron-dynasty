@@ -21,11 +21,11 @@ _Baseline: commit `f16a75d`. `npm run build` green; `npm run lint` = 5 pre-exist
 | T8 | Scenario engine | ✅ done — verified (push 3) |
 | T9 | Scenario store wiring | ✅ done — verified (push 3) |
 | T10 | Scenario UI | ✅ done — verified (push 3) |
-| T11 | Scouting subtitle copy fix | later |
-| T12 | Objective metrics engine (cap health + development) | later |
-| T13 | Rewire hardcoded objectives + dev baseline snapshot | later |
-| T14 | "Your job this week" callout on Career | later |
-| T15 | HANDOFF.md docs | later |
+| T11 | Scouting subtitle copy fix | ✅ done — verified (push 4) |
+| T12 | Objective metrics engine (cap health + development) | ✅ done — verified (push 4) |
+| T13 | Rewire hardcoded objectives + dev baseline snapshot | ✅ done — verified (push 4) |
+| T14 | "Your job this week" callout on Career | ✅ done — verified (push 4) |
+| T15 | HANDOFF.md docs | ✅ done — verified (push 4) |
 
 ## Phase goal
 

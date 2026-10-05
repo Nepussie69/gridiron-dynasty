@@ -166,7 +166,7 @@ export function Scouting() {
       <PageHeader
         eyebrow={`${career.path === 'coach' ? 'Coaching' : 'Personnel'} Track · ${league.season} Draft Class`}
         title="Scouting Board"
-        subtitle="Evaluating the draft class — college players leaving for the NFL. Spend points to sharpen the range, then file your call."
+        subtitle="Evaluating this year's draft class. Spend points to sharpen the range, then file your call."
         right={
           <div className="flex items-center gap-2">
             <AccessBadge area="scouting" />

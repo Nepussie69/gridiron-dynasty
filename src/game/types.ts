@@ -505,6 +505,8 @@ export interface CareerState {
   trades?: TradeRecord[]
   /** The starting situation this career began from (F3). */
   scenario?: ScenarioId
+  /** OVR at season start by playerId, for young players on your side (F5). */
+  devBaseline?: Record<string, number>
   history: { season: number; team: string; role: string; record: string; outcome: string }[]
 }
 

@@ -10,6 +10,7 @@ import type { CareerPath, CareerState, JobOffer, LeagueTier } from '../types'
 import { NFL_TEAMS } from '../data/nflTeams'
 import type { World } from './generate'
 import { clamp, hash32, makeRng, rpick } from './rng'
+import { capHealth, developedCount } from './objectives'
 
 // ── Reputation dimensions ────────────────────────────────────────────────────
 export interface Reputation {
@@ -401,7 +402,7 @@ export function unitRanks(world: World, tier: 'NFL' | 'FBS' = 'NFL'): Record<str
  * Completing them raises the reputation dimension that gates the next rung.
  */
 export function roleObjectives(
-  _world: World,
+  world: World,
   career: CareerState,
   record: { wins: number; losses: number },
   unitRank?: { off: number; def: number; total: number },
@@ -451,12 +452,12 @@ export function roleObjectives(
         break
       case 6: // Dir Player Personnel — pro scouting + contracts
         winGoal(55, { roster: 3, results: 2 })
-        out.push(mk('health', 'Keep the cap healthy', 60, 60, { roster: 2 }))
+        out.push(mk('health', 'Keep the cap healthy', 60, capHealth(world, career.teamId), { roster: 2 }))
         out.push(mk('accuracy', 'Scouting accuracy (70%)', 70, acc, { evaluation: 2 }))
         break
       case 7: // Assistant GM — run the building
         winGoal(58, { roster: 3, leadership: 2 })
-        out.push(mk('health', 'Keep the cap healthy', 65, 65, { roster: 3 }))
+        out.push(mk('health', 'Keep the cap healthy', 65, capHealth(world, career.teamId), { roster: 3 }))
         out.push(mk('class', 'Deliver a draft class', 5, recs, { roster: 2 }))
         break
       default: // General Manager — final say
@@ -470,11 +471,11 @@ export function roleObjectives(
   if (career.path === 'coach') {
     switch (career.level) {
       case 0: // Graduate Assistant — service + development
-        out.push(mk('develop', 'Develop 2 players', 2, 0, { leadership: 3 }))
+        out.push(mk('develop', 'Develop 2 players', 2, developedCount(world, career), { leadership: 3 }))
         winGoal(45, { leadership: 2 })
         break
       case 1: // Position Coach — develop a room
-        out.push(mk('develop', 'Produce 2 draftable players', 2, 0, { leadership: 3, evaluation: 1 }))
+        out.push(mk('develop', 'Produce 2 draftable players', 2, developedCount(world, career), { leadership: 3, evaluation: 1 }))
         winGoal(50, { leadership: 2, results: 2 })
         break
       case 2: // Coordinator — own a unit
@@ -493,7 +494,7 @@ export function roleObjectives(
         winGoal(65, { results: 5 })
         break
       case 5: // NFL Position Coach / QC — prove you belong
-        out.push(mk('develop', 'Develop 2 NFL contributors', 2, 0, { leadership: 3 }))
+        out.push(mk('develop', 'Develop 2 NFL contributors', 2, developedCount(world, career), { leadership: 3 }))
         winGoal(55, { results: 3, leadership: 1 })
         break
       case 6: // NFL Coordinator — top-10 unit

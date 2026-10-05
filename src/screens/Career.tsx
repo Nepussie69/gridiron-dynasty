@@ -89,6 +89,12 @@ export function Career() {
     { wins: rec.wins, losses: rec.losses },
     unitRanks(league, 'NFL')[career.teamId],
   )
+  // The next objective to chase: highest progress, but only fall back to the
+  // universal security goal when nothing else is left.
+  const jobThisWeek =
+    [...objectives]
+      .filter((o) => !o.done && o.id !== 'security')
+      .sort((a, b) => b.current / b.target - a.current / a.target)[0] ?? objectives.find((o) => !o.done)
 
   return (
     <div>
@@ -321,6 +327,16 @@ export function Career() {
                 <CheckCircle2 size={18} /> You have reached the top of this ladder.
               </div>
             )}
+          </Card>
+
+          {/* The live nudge toward the next objective */}
+          <Card>
+            <p className="text-xs text-muted">
+              <span className="font-600 text-ink">Your job this week:</span>{' '}
+              {jobThisWeek
+                ? `${jobThisWeek.label} (${jobThisWeek.current}/${jobThisWeek.target})`
+                : 'Every objective met — keep it rolling.'}
+            </p>
           </Card>
 
           {/* Reputation */}

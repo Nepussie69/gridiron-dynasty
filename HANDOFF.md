@@ -61,6 +61,21 @@ game's guardrails intact.
   column — Scout (1 pt) + Work the phones (1 pt) without opening the report; `stopPropagation` keeps
   the row closed; dim at 0 points (click still toasts), disabled when access is locked / character
   fully uncovered. Verified in DOM: conf 14→38, pts −1, charReads +1, row not expanded, 0-pt toast.
+- **L5 "Long-arc stories" DONE** (T1–T15; spec `NEXT_PHASE_L5.md`; checkpoint `f16a75d`; build green, lint = 5 baseline warnings):
+  - F1 **Trade Tree** (#6) — `engine/tradeTree.ts` (snapAsset, recordTrade, resolveTradePicks, sideValue,
+    tradeVerdict, tradeTree) + types, store wiring, Trade Tree tab in `Ledger.tsx`.
+  - F2 **Seeded runs** (#18) — `engine/seed.ts` (parseSeed/formatSeed/parseSeedCode); seed opt on `startCareer`,
+    both `Math.random()` calls removed; seed input on CareerHub; seed line + copy on Career.
+  - F3 **Start scenarios** (#16 light) — `engine/scenarios.ts` (climb/hotSeat/capHell/rebuild) + types,
+    store wiring, CareerHub radio cards, Career badge.
+  - F4 **Copy fix** — Scouting subtitle → "Evaluating this year's draft class. Spend points to sharpen
+    the range, then file your call."
+  - F5 **Living objectives** — new `engine/objectives.ts` (`capHealth`, `snapshotDevBaseline`,
+    `developedCount`); `roleObjectives` now reads real cap health (personnel 6/7) and development
+    (coach 0/1/5); `CareerState.devBaseline` snapshotted in `startCareer`/`startNextSeason`;
+    "Your job this week" line on Career; drills limited to once per week + sort comparator fixed.
+  - Key files: `src/game/engine/tradeTree.ts`, `src/game/engine/seed.ts`, `src/game/engine/scenarios.ts`,
+    `src/game/engine/objectives.ts`.
 
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.

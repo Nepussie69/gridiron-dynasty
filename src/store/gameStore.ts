@@ -73,6 +73,7 @@ import {
   type Reputation,
   type Skills,
 } from '../game/engine/career'
+import { snapshotDevBaseline } from '../game/engine/objectives'
 import { clamp, hash32 } from '../game/engine/rng'
 import {
   currentRound,
@@ -492,6 +493,7 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     career = applyScenario(world, career, scenario)
     career.seasonQuestion = makeSeasonQuestion(world, career)
+    career.devBaseline = snapshotDevBaseline(world, career)
     set({
       career,
       activeTeamId: resolvedTeam,
@@ -715,6 +717,7 @@ export const useGame = create<GameStore>((set, get) => ({
       ambitions: [],
     }
     seasonCareer.seasonQuestion = makeSeasonQuestion(world, seasonCareer)
+    seasonCareer.devBaseline = snapshotDevBaseline(world, seasonCareer)
     set({
       career: seasonCareer,
       scoutingPoints: MAX_SCOUT_POINTS,
@@ -891,8 +894,12 @@ export const useGame = create<GameStore>((set, get) => ({
         note = 'Cross-checked the room: +Profile.'
         break
       case 'drills': {
+        if (career.weekFlags?.drills) {
+          get().showToast('Drills already run this week.')
+          return
+        }
         const roster = world.roster[career.teamId] ?? []
-        const y = [...roster].filter((p) => p.age <= 24 && p.ovr < p.pot).sort((_a, b) => b.pot - b.ovr)[0]
+        const y = [...roster].filter((p) => p.age <= 24 && p.ovr < p.pot).sort((a, b) => (b.pot - b.ovr) - (a.pot - a.ovr))[0]
         if (y) {
           y.ovr = clamp(y.ovr + 1, 40, y.pot)
           note = `Drills: ${y.name} improved to ${y.ovr} OVR.`
@@ -917,7 +924,9 @@ export const useGame = create<GameStore>((set, get) => ({
         note = 'Owner meeting: the mandate is clearer (+job security).'
         break
     }
-    set({ career: withFlag({ ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity }, 'hours'), tick: get().tick + 1 })
+    let nextCareer = withFlag({ ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity }, 'hours')
+    if (id === 'drills') nextCareer = withFlag(nextCareer, 'drills')
+    set({ career: nextCareer, tick: get().tick + 1 })
     get().showToast(note)
     get().save()
   },
