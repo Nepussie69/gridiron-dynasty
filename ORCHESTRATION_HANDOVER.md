@@ -1,5 +1,7 @@
 # ORCHESTRATION HANDOVER — Gridiron Dynasty (start here in a new chat)
 
+> **Continuing in OpenCode?** Read `OPENCODE_CONTINUE.md` first; it has the exact next steps.
+
 _Written 2026-10-06 by Claude Opus 5.5 at the end of a long orchestration session. Read this first, then `HANDOFF.md` (game state) and the open spec files listed below._
 
 ## 1. How we work (the user's workflow)
