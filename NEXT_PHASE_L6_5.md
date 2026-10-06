@@ -10,13 +10,13 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | V1 | **Bug:** every contract is crushed to the $0.9M minimum | ✅ done — verified (P1) |
 | V2 | Repair existing saves with crushed contracts | ✅ done — verified (P1) |
 | V3 | Trade Center shows real cap hits (not "$0") | ✅ done — verified (P1) |
-| V2b | **Bug:** JSON save import un-links roster from players | in progress (P2) |
-| V4 | Deal finder: engine | in progress (P2) |
-| V5 | Deal finder: "Find deals" button + offers panel | in progress (P2) |
-| V6 | Depth chart: stored order + engine helper | not started |
-| V7 | Sim reads the depth chart | not started |
-| V8 | Depth chart UI: OT / OG / C split, all players, ▲▼ move, set starter | not started |
-| V9 | HANDOFF.md docs | not started |
+| V2b | **Bug:** JSON save import un-links roster from players | ✅ done — verified (P2) |
+| V4 | Deal finder: engine | ✅ done — verified (P2) |
+| V5 | Deal finder: "Find deals" button + offers panel | ✅ done — verified (P2) |
+| V6 | Depth chart: stored order + engine helper | in progress (P3) |
+| V7 | Sim reads the depth chart | in progress (P3) |
+| V8 | Depth chart UI: OT / OG / C split, all players, ▲▼ move, set starter | in progress (P3) |
+| V9 | HANDOFF.md docs | in progress (P3) |
 
 ## What the playtest found
 
@@ -144,3 +144,6 @@ Pushes: **P1 = V1–V3** (cap fix; the orchestrator re-runs the balance probe af
   loaded from IndexedDB is repaired (Allen $49.8M, 13% min deals, news item shown). Probe on real contracts: personnel GM 9/12/9/10/10, coach HC 10/10/10.
   `__simTest(60)` 23.0 pts, 65.7% comp. Watch: league cap usage drifts to ~59% over 14 probe seasons (AI spending), so not addressed here.
   Found the V2b import bug (JSON import un-links roster and players).
+- **P2** (browser): after a JSON export→import every roster entry `===` its `world.players` entry (V2b). Find deals on Myles Garrett (CLE) → 6 offers
+  (e.g. PIT: Highsmith + Killebrew + Rd 4; CIN: Tee Higgins + Rd 2 + Rd 3); Load deal fills the builder and the verdict is "They accept". Claude fixed the panel
+  value line, which showed unrounded partner-view numbers labelled as the user's; it now reads "Value back {userValue} · for {shopped value}", rounded.

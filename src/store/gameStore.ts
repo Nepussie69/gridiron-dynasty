@@ -1670,8 +1670,32 @@ function repairCrushedContracts(w: World): void {
   })
 }
 
+/**
+ * Re-link roster / practice-squad / IR entries to the canonical player objects
+ * in `w.players` (L6.5 V2b). A save imported from JSON holds a separate copy of
+ * each player in every list, so edits to one list never reach the others.
+ * Idempotent: once linked, every entry is the same object.
+ */
+function relinkPlayers(w: World): void {
+  const byId = new Map(w.players.map((p) => [p.id, p]))
+  const relink = (list: World['roster'][string]): World['roster'][string] =>
+    list.map((p) => byId.get(p.id) ?? p)
+  for (const t of Object.keys(w.roster)) w.roster[t] = relink(w.roster[t])
+  for (const t of Object.keys(w.practiceSquad ?? {})) w.practiceSquad[t] = relink(w.practiceSquad[t])
+  for (const t of Object.keys(w.ir ?? {})) w.ir[t] = relink(w.ir[t])
+  // Roster entries with no canonical player are adopted into `w.players`.
+  for (const list of Object.values(w.roster)) {
+    for (const p of list) {
+      if (byId.has(p.id)) continue
+      byId.set(p.id, p)
+      w.players.push(p)
+    }
+  }
+}
+
 /** Bring a legacy save up to the current world shape (new fields + pick ownership). */
 function migrateWorld(w: World): World {
+  relinkPlayers(w)
   w.staffTenure ??= {}
   w.draft ??= []
   w.draftPicks ??= []

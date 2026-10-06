@@ -130,6 +130,85 @@ export function evaluateTrade(
   return { accepted: verdict === 'accept', verdict, theyReceive, theyGive, ratio, reason }
 }
 
+export interface DealOffer {
+  partnerId: string
+  get: TradeAsset[]
+  give: TradeAsset[]
+  theyGive: number
+  theyReceive: number
+  userValue: number
+  summary: string
+}
+
+/** Human summary of a package, e.g. "BUF: Greg Rousseau (DE, 88) + 2027 Rd 3". */
+function dealSummary(world: World, partnerId: string, get: TradeAsset[]): string {
+  const abbr = world.byId[partnerId]?.abbr ?? partnerId
+  const parts = get.map((a) => {
+    if (a.kind === 'player') {
+      const p = findPlayer(world, a.id)
+      return p ? `${p.name} (${p.pos}, ${p.ovr})` : 'Player'
+    }
+    const pk = findPick(world, a.id)
+    return pk ? `${pk.season} Rd ${pk.round}` : 'Pick'
+  })
+  return `${abbr}: ${parts.join(' + ')}`
+}
+
+/**
+ * Shop one of your players around the league: the best acceptable package from
+ * each club, best first (max 6). Deterministic. Every offer is a deal
+ * `evaluateTrade` already accepts by hand — this only searches.
+ */
+export function findDeals(world: World, userTeamId: string, playerId: string): DealOffer[] {
+  const give: TradeAsset[] = [{ kind: 'player', id: playerId }]
+  const shoppedValue = assetValue(world, give[0])
+  const offers: DealOffer[] = []
+
+  for (const team of world.teams) {
+    const partner = team.id
+    if (partner === userTeamId) continue
+
+    const partnerRoster = world.roster[partner] ?? []
+    const assets: TradeAsset[] = [
+      ...partnerRoster.map((p): TradeAsset => ({ kind: 'player', id: p.id })),
+      ...world.draftPicks
+        .filter((pk) => pk.ownerTeam === partner)
+        .map((pk): TradeAsset => ({ kind: 'pick', id: pk.id })),
+    ].sort((a, b) => assetValue(world, b) - assetValue(world, a))
+
+    // Greedy: take the most valuable asset the club will still part with.
+    const get: TradeAsset[] = []
+    for (const a of assets) {
+      if (get.length >= 3) break
+      if (a.kind === 'player') {
+        const p = findPlayer(world, a.id)
+        // Don't strip a club of its last body at a position.
+        if (p && partnerRoster.filter((x) => x.pos === p.pos).length <= 1) continue
+      }
+      const tentative = [...get, a]
+      if (evaluateTrade(world, partner, userTeamId, give, tentative).accepted) get.push(a)
+    }
+    if (!get.length) continue
+
+    const userValue = get.reduce((s, a) => s + assetValue(world, a), 0)
+    if (userValue < shoppedValue * 0.5) continue
+
+    const verdict = evaluateTrade(world, partner, userTeamId, give, get)
+    offers.push({
+      partnerId: partner,
+      get,
+      give,
+      theyGive: verdict.theyGive,
+      theyReceive: verdict.theyReceive,
+      userValue,
+      summary: dealSummary(world, partner, get),
+    })
+  }
+
+  offers.sort((a, b) => b.userValue - a.userValue)
+  return offers.slice(0, 6)
+}
+
 function movePlayer(world: World, playerId: string, toTeamId: string, log: string[]) {
   const p = findPlayer(world, playerId)
   if (!p) return

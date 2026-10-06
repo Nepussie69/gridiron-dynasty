@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react'
-import { ArrowLeftRight, Handshake, Plus, X } from 'lucide-react'
+import { ArrowLeftRight, Handshake, Plus, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { rosterOf } from '../game/selectors'
 import { picksOwnedBy } from '../game/engine/picks'
 import {
   evaluateTrade,
+  findDeals,
   pickTradeValue,
   playerTradeValue,
+  type DealOffer,
   type TradeAsset,
 } from '../game/engine/trade'
 import { NFL_TEAMS } from '../game/data/nflTeams'
@@ -37,6 +39,8 @@ export function Trades() {
   const [partnerId, setPartnerId] = useState(NFL_TEAMS.find((t) => t.id !== activeTeamId)!.id)
   const [give, setGive] = useState<Asset[]>([])
   const [get, setGet] = useState<Asset[]>([])
+  const [dealTarget, setDealTarget] = useState<Asset | null>(null)
+  const [deals, setDeals] = useState<DealOffer[]>([])
 
   const team = league.byId[activeTeamId]
   const partner = league.byId[partnerId]
@@ -62,6 +66,18 @@ export function Trades() {
       setGive([])
       setGet([])
     }
+  }
+
+  const onFindDeals = (a: Asset) => {
+    setDealTarget(a)
+    setDeals(findDeals(league, activeTeamId, a.id))
+  }
+
+  const onLoadDeal = (o: DealOffer) => {
+    setPartnerId(o.partnerId)
+    setGive(resolveAssets(league, activeTeamId, o.give))
+    setGet(resolveAssets(league, o.partnerId, o.get))
+    setDealTarget(null)
   }
 
   const canTrade = give.length > 0 && get.length > 0
@@ -90,6 +106,47 @@ export function Trades() {
         }
       />
 
+      {dealTarget && (
+        <Card className="mb-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="font-display text-lg font-700 uppercase tracking-wide text-ink">
+              Deals for {dealTarget.label}
+            </h3>
+            <button
+              type="button"
+              title="Close"
+              onClick={() => setDealTarget(null)}
+              className="grid h-7 w-7 place-items-center rounded-md border border-line text-faint transition hover:text-ink"
+            >
+              <X size={15} />
+            </button>
+          </div>
+          {deals.length ? (
+            <div className="grid gap-2 md:grid-cols-2">
+              {deals.map((o) => (
+                <div
+                  key={o.partnerId}
+                  className="flex items-center gap-3 rounded-lg border border-line px-3 py-2"
+                >
+                  <TeamCrest team={league.byId[o.partnerId]} size={26} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-600 text-ink">{o.summary}</div>
+                    <div className="text-[11px] tnum text-muted">
+                      Value back {Math.round(o.userValue).toLocaleString()} · for {Math.round(dealTarget.value).toLocaleString()}
+                    </div>
+                  </div>
+                  <Button variant="team" onClick={() => onLoadDeal(o)}>
+                    Load deal
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted">No club will pay real value for {dealTarget.label} right now.</p>
+          )}
+        </Card>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-[1fr_300px_1fr]">
         <AssetColumn
           title={`${team.abbr} Sends`}
@@ -97,6 +154,7 @@ export function Trades() {
           assets={myAssets}
           selected={give}
           onToggle={(a) => toggle(give, setGive, a)}
+          onFindDeals={onFindDeals}
         />
 
         <div className="flex flex-col items-center justify-center gap-3">
@@ -174,18 +232,26 @@ function assetsFor(world: World, teamId: string): Asset[] {
   return [...playerAssets, ...pickAssets]
 }
 
+/** Map trade references back to the screen's Asset objects for a given club. */
+function resolveAssets(world: World, teamId: string, refs: TradeAsset[]): Asset[] {
+  const all = assetsFor(world, teamId)
+  return refs.map((r) => all.find((a) => a.id === r.id)).filter((a): a is Asset => !!a)
+}
+
 function AssetColumn({
   title,
   teamId,
   assets,
   selected,
   onToggle,
+  onFindDeals,
 }: {
   title: string
   teamId: string
   assets: Asset[]
   selected: Asset[]
   onToggle: (a: Asset) => void
+  onFindDeals?: (a: Asset) => void
 }) {
   const league = useWorld()
   const team = league.byId[teamId]
@@ -202,11 +268,11 @@ function AssetColumn({
         {assets.map((a) => {
           const on = selected.some((s) => s.id === a.id)
           return (
-            <button
+            <div
               key={a.id}
               onClick={() => onToggle(a)}
               className={cn(
-                'flex w-full items-center gap-3 px-4 py-2 text-left transition',
+                'flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left transition',
                 on ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
               )}
             >
@@ -222,6 +288,19 @@ function AssetColumn({
                 <span className="block truncate text-xs text-muted">{a.sub}</span>
               </span>
               <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
+              {a.kind === 'player' && onFindDeals && (
+                <button
+                  type="button"
+                  title="Find deals"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onFindDeals(a)
+                  }}
+                  className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
+                >
+                  <Search size={13} />
+                </button>
+              )}
               <span
                 className={cn(
                   'grid h-6 w-6 place-items-center rounded-md border',
@@ -230,7 +309,7 @@ function AssetColumn({
               >
                 {on ? <X size={13} /> : <Plus size={13} />}
               </span>
-            </button>
+            </div>
           )
         })}
       </div>
