@@ -11,7 +11,7 @@ import {
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
 import { simulatePlayByPlay, setUserCoaching, setLivePlan, type GameSim } from '../game/engine/playsim'
 import { BALANCED_PLAN, type GamePlan } from '../game/engine/gameplan'
-import { userBonusFromSkills } from '../game/engine/coaching'
+import { NO_USER_BONUS, userBonusFromSkills } from '../game/engine/coaching'
 import {
   gainGameReps,
   gainSeasonTraining,
@@ -93,6 +93,7 @@ import {
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
+import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
@@ -374,6 +375,8 @@ interface GameStore {
   setScoutTrust: (staffId: string, level: 'fade' | 'normal' | 'lean') => void
   /** G2: tag/untag a prospect as a conviction call for this draft (max 3). */
   toggleConviction: (prospectId: string) => void
+  /** K1: pick (or clear) this week's game-plan wrinkle for a side. */
+  pickWrinkle: (side: 'off' | 'def', id: string) => void
   /** G3: add/remove a player from your room's focus list (max 3). */
   toggleRoomFocus: (playerId: string) => void
   /** G3: choose your room's practice plan (Concentrate or Spread). */
@@ -616,6 +619,18 @@ export const useGame = create<GameStore>((set, get) => ({
       recordGameStats(world, sim, world.season, level)
       growPlaybookFromGame(world, sim)
     }
+    // K1: fold this week's wrinkles into the film history, then clear the pick.
+    if (career.wrinkles?.pick && career.wrinkles.pick.week === week) {
+      const { pick } = career.wrinkles
+      const entries: { week: number; side: 'off' | 'def'; id: string }[] = []
+      if (pick.off) entries.push({ week, side: 'off', id: pick.off })
+      if (pick.def) entries.push({ week, side: 'def', id: pick.def })
+      career.wrinkles = {
+        ...career.wrinkles,
+        history: [...career.wrinkles.history, ...entries].slice(-8),
+        pick: undefined,
+      }
+    }
     if (week >= 18) {
       runEndOfRegularSeason(set, get)
     } else {
@@ -796,6 +811,8 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     seasonCareer.seasonQuestion = makeSeasonQuestion(world, seasonCareer)
     seasonCareer.devBaseline = snapshotDevBaseline(world, seasonCareer)
+    // K1: opponents' film resets with the new season.
+    seasonCareer.wrinkles = seasonCareer.wrinkles ? { season: world.season, history: [] } : undefined
     // G3: a new season empties the rep bank and drops anyone who left the room.
     if (hasRoom(seasonCareer)) {
       const still = new Set(roomPlayers(world, seasonCareer).map((p) => p.id))
@@ -937,6 +954,25 @@ export const useGame = create<GameStore>((set, get) => ({
       career: { ...career, conviction: { season: world.season, ids } },
       tick: get().tick + 1,
     })
+    get().save()
+  },
+
+  pickWrinkle: (side, id) => {
+    const career = get().career
+    if (!career || !canWrinkle(career)) return
+    if (!wrinkleSides(career).includes(side)) return
+    const list = side === 'off' ? OFF_WRINKLES : DEF_WRINKLES
+    if (!list.some((w) => w.id === id)) return
+    // A new season opens a clean film history.
+    const current: NonNullable<CareerState['wrinkles']> =
+      career.wrinkles && career.wrinkles.season === world.season
+        ? career.wrinkles
+        : { season: world.season, history: [] }
+    const pick: { off?: string; def?: string; week: number } =
+      current.pick && current.pick.week === world.week ? { ...current.pick } : { week: world.week }
+    if (pick[side] === id) delete pick[side]
+    else pick[side] = id
+    set({ career: { ...career, wrinkles: { ...current, pick } }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -1703,15 +1739,26 @@ export const useGame = create<GameStore>((set, get) => ({
 
 /** Push the user's coaching skill into the play engine before simulating. */
 function applyUserCoaching(career: CareerState | null) {
-  if (!career || career.path !== 'coach' || career.level < 2) {
+  if (!career) {
     setUserCoaching(null)
     return
   }
-  const b = userBonusFromSkills(career.skills, true, career.unitFocus === 'both' ? 'both' : career.unitFocus ?? 'both')
+  const holdsRole = career.path === 'coach' && career.level >= 2
+  // K1 can apply even outside the normal coaching-skill path; an HC or
+  // coordinator always holds the role, so in practice this is the same.
+  if (!holdsRole && !canWrinkle(career)) {
+    setUserCoaching(null)
+    return
+  }
+  const b = holdsRole
+    ? userBonusFromSkills(career.skills, true, career.unitFocus === 'both' ? 'both' : career.unitFocus ?? 'both')
+    : NO_USER_BONUS
+  // K1/K2: the extra per-side bonus is clamped so it can never blow up the sim.
+  const extra = wrinkleBonus(career, world.week)
   setUserCoaching({
     teamId: career.teamId,
-    off: b.off,
-    def: b.def,
+    off: b.off + clamp(extra.off, -0.6, 1.5),
+    def: b.def + clamp(extra.def, -0.6, 1.5),
     development: b.development,
     situational: b.situational,
   })
@@ -1734,6 +1781,8 @@ function startLiveSim(
     (g) => !g.played && g.week === world.week && (g.homeId === career.teamId || g.awayId === career.teamId),
   )
   if (!game) return
+  // The live path runs the same coaching edges as a normal advance.
+  applyUserCoaching(career)
   const isHome = game.homeId === career.teamId
   setLivePlan({
     offTeamId: career.teamId,

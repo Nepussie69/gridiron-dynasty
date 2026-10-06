@@ -5,6 +5,8 @@ import { describePlan, type GamePlan } from '../game/engine/gameplan'
 import { PlanEditor } from '../components/PlanEditor'
 import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
+import { WrinkleCard } from '../components/WrinkleCard'
+import { canWrinkle } from '../game/engine/wrinkle'
 import { coachLabels } from '../game/engine/playsim'
 import { recordOf, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
@@ -68,6 +70,7 @@ export function GamePlanScreen() {
           </Card>
 
           <SchemeFitReport teamId={team.id} side={side} />
+          {canWrinkle(career) && <WrinkleCard />}
           <CulturePanel teamId={team.id} />
         </div>
 

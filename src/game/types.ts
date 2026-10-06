@@ -495,6 +495,12 @@ export interface CareerState {
   scoutTrust?: Record<string, 'fade' | 'normal' | 'lean'>
   /** G2: the prospects you've tagged as conviction calls this draft (max 3). */
   conviction?: { season: number; ids: string[] }
+  /** K1: this week's game-plan wrinkle per side, plus the last few weeks of film. */
+  wrinkles?: {
+    season: number
+    history: { week: number; side: 'off' | 'def'; id: string }[]
+    pick?: { off?: string; def?: string; week: number }
+  }
   /** G1: players on other clubs or in free agency you're tracking (max 10). */
   shadowBoard?: ShadowEntry[]
   /** G2: extension-talk bookkeeping per player (3 tries per season, then closed). */
