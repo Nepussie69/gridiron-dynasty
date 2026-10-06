@@ -4,7 +4,7 @@ import type {
 } from '../types'
 import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
-import { makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
+import { capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
 import { freshDraftPicks } from './picks'
 import { makeCharacter } from './character'
@@ -180,7 +180,7 @@ function ovrFor(rng: Rng, prestige: number, pos: Position) {
 }
 
 /** Scale a team's contracts so total cap usage lands near a target. */
-function fitToCap(roster: Player[], target: number) {
+export function fitToCap(roster: Player[], target: number) {
   const used = roster.reduce((s, p) => s + p.contract.capHit, 0)
   if (used <= 0) return
   const factor = target / used
@@ -536,7 +536,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     } else {
       players = generateNFLRoster(rng, t, season)
     }
-    fitToCap(players, t.prestige > 80 ? 0.86 : 0.79)
+    fitToCap(players, Math.round(capForSeason(season) * (t.prestige > 80 ? 0.86 : 0.79)))
     roster[t.id] = players
     allPlayers.push(...players)
     staff[t.id] = NFL_STAFF_ROLES.map((r) =>

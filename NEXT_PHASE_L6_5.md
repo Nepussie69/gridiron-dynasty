@@ -7,11 +7,12 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 
 | Task | What | Status |
 |---|---|---|
-| V1 | **Bug:** every contract is crushed to the $0.9M minimum | in progress (P1) |
-| V2 | Repair existing saves with crushed contracts | in progress (P1) |
-| V3 | Trade Center shows real cap hits (not "$0") | in progress (P1) |
-| V4 | Deal finder: engine | not started |
-| V5 | Deal finder: "Find deals" button + offers panel | not started |
+| V1 | **Bug:** every contract is crushed to the $0.9M minimum | ✅ done — verified (P1) |
+| V2 | Repair existing saves with crushed contracts | ✅ done — verified (P1) |
+| V3 | Trade Center shows real cap hits (not "$0") | ✅ done — verified (P1) |
+| V2b | **Bug:** JSON save import un-links roster from players | in progress (P2) |
+| V4 | Deal finder: engine | in progress (P2) |
+| V5 | Deal finder: "Find deals" button + offers panel | in progress (P2) |
 | V6 | Depth chart: stored order + engine helper | not started |
 | V7 | Sim reads the depth chart | not started |
 | V8 | Depth chart UI: OT / OG / C split, all players, ▲▼ move, set starter | not started |
@@ -44,6 +45,14 @@ re-create each rostered player's contract with `makeVeteranContract(makeRng(hash
 Keep a rookie's existing contract if `p.origin?.kind === 'draft'` and `p.origin.season >= world.season - 3`.
 Then call the same corrected `fitToCap` target as V1 (export `fitToCap` from generate.ts if needed). Free agents are left alone.
 The repair runs only once: after it, `annual` is no longer 0, so the condition is false. Log a news item: "League office: contracts restated for the new league year."
+
+## V2b — Re-link players after a JSON import (pre-existing bug, found while verifying V2)
+A save imported from a file (`importSaveText`) is parsed from JSON, so `world.roster[team]`, `world.practiceSquad[team]`, `world.ir[team]` and `world.players`
+hold **separate copies** of each player. Changes to one list (development, trades, contracts) never reach the other. Saves from IndexedDB keep identity, so they're unaffected.
+**Fix:** at the START of `migrateWorld` in `src/store/gameStore.ts`, before `repairCrushedContracts`, add `relinkPlayers(w)`. It builds
+`const byId = new Map(w.players.map(p => [p.id, p]))`, then replaces every entry of `w.roster[t]`, `w.practiceSquad[t]` and `w.ir[t]` with `byId.get(p.id) ?? p`.
+For roster entries missing from `w.players`, push them into `w.players`. It must be idempotent and cheap.
+**Acceptance:** build + lint. The orchestrator verifies `rosterPlayer === playersEntry` after an import.
 
 ## V3 — Show real money in the Trade Center (`src/screens/Trades.tsx`)
 In `assetsFor`, change the player `sub` to use `money(p.contract.capHit)` with a `/yr` suffix: `` `${p.pos} · ${p.age} yrs · ${money(p.contract.capHit)}` ``.
@@ -129,3 +138,9 @@ Pushes: **P1 = V1–V3** (cap fix; the orchestrator re-runs the balance probe af
 - Do not change `fitToCap`'s body, `makeVeteranContract`, or `marketAAV`.
 - Every new save field is optional; old saves must load. No new dependencies. Do not fix the baseline lint warnings. Do not reformat unrelated code.
 - Do not edit any NEXT_PHASE*.md.
+
+## Verification log
+- **P1** (browser): fresh career → stars on real deals (Allen $48.9M, Burrow $48.6M), clubs at 80–94% of cap, 21% on min deals (depth). A crushed save
+  loaded from IndexedDB is repaired (Allen $49.8M, 13% min deals, news item shown). Probe on real contracts: personnel GM 9/12/9/10/10, coach HC 10/10/10.
+  `__simTest(60)` 23.0 pts, 65.7% comp. Watch: league cap usage drifts to ~59% over 14 probe seasons (AI spending), so not addressed here.
+  Found the V2b import bug (JSON import un-links roster and players).

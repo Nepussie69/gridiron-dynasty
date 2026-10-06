@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   buildWorld,
+  fitToCap,
   regenerateSchedule,
   teamStrength,
   zeroRecord,
@@ -124,6 +125,7 @@ import {
   stretchOutcome,
 } from '../game/engine/weekly'
 import {
+  capForSeason,
   capSavings,
   deadMoney,
   extendContract,
@@ -1635,6 +1637,39 @@ function announceDraftPicks(world: World, career: CareerState) {
   }
 }
 
+/**
+ * One-time repair for legacy saves whose contracts were crushed to the league
+ * minimum by the old dollar-vs-fraction cap bug (L6.5 V1). Runs only when nearly
+ * every rostered player has a zero AAV, then rebuilds market contracts and re-fits
+ * each club to the corrected cap target, so it never runs twice. Free agents are
+ * left alone; recent rookie deals are preserved.
+ */
+function repairCrushedContracts(w: World): void {
+  const rostered = w.players.filter((p) => p.teamId && w.byId[p.teamId])
+  if (!rostered.length) return
+  const crushed = rostered.filter((p) => p.contract.annual === 0).length
+  if (crushed / rostered.length < 0.9) return
+  for (const t of w.teams) {
+    const players = w.roster[t.id]
+    if (!players?.length) continue
+    for (const p of players) {
+      const keepRookie = p.origin?.kind === 'draft' && p.origin.season >= w.season - 3
+      if (keepRookie) continue
+      p.contract = makeVeteranContract(makeRng(hash32(p.id, 77)), p.ovr, p.pos, p.age, w.season)
+    }
+    fitToCap(players, Math.round(capForSeason(w.season) * (t.prestige > 80 ? 0.86 : 0.79)))
+  }
+  w.news.unshift({
+    id: `repair_${w.season}_${w.news.length}`,
+    week: w.week,
+    season: w.season,
+    category: 'League',
+    headline: 'League office: contracts restated for the new league year.',
+    body: 'After a review of the ledger, the league office restated player contracts to market value for the new league year.',
+    read: false,
+  })
+}
+
 /** Bring a legacy save up to the current world shape (new fields + pick ownership). */
 function migrateWorld(w: World): World {
   w.staffTenure ??= {}
@@ -1670,6 +1705,7 @@ function migrateWorld(w: World): World {
     w.draftRounds = built.rounds
     w.draftPickIds = built.ids
   }
+  repairCrushedContracts(w)
   return w
 }
 

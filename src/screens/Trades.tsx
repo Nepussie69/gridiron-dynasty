@@ -159,7 +159,7 @@ function assetsFor(world: World, teamId: string): Asset[] {
     id: p.id,
     kind: 'player',
     label: p.name,
-    sub: `${p.pos} · ${p.age} yrs · ${money(p.contract.annual)}`,
+    sub: `${p.pos} · ${p.age} yrs · ${money(p.contract.capHit)}`,
     value: playerTradeValue(p),
     ovr: p.ovr,
   }))
