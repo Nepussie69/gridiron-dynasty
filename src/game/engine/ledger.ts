@@ -66,6 +66,12 @@ function gradeEntry(world: World, e: LedgerEntry): boolean | undefined {
     if (proSeasons < PICK_EVAL_SEASONS) return undefined
     return p.ovr >= PICK_HIT_OVR
   }
+  if (e.kind === 'contract') {
+    if (world.season - e.season < 2) return undefined
+    const p = e.playerId ? world.players.find((x) => x.id === e.playerId) : undefined
+    if (!p) return false
+    return p.ovr >= (e.ovrAtSign ?? 0) - 2
+  }
   return undefined
 }
 
@@ -83,8 +89,17 @@ export function gradeLedger(world: World, career: CareerState): { graded: number
     if (e.hit !== undefined && e.kind !== 'pick' && e.kind !== 'advice') continue
     const p = e.playerId ? world.players.find((x) => x.id === e.playerId) : undefined
     const result = gradeEntry(world, e)
+    // Extension outcome text is bespoke, not the generic pick/call wording.
+    if (e.kind === 'contract' && result !== undefined) {
+      const ovr = p?.ovr
+      e.outcome = result
+        ? `Extension held up: ${e.name} still a ${ovr ?? '—'} OVR.`
+        : ovr !== undefined
+          ? `Extension aged badly: ${e.name} down to ${ovr}.`
+          : `Extension aged badly: ${e.name} is out of the league.`
+    }
     // For picks, refresh the outcome text as the player develops.
-    if (p && !e.vindication) {
+    if (p && !e.vindication && e.kind !== 'contract') {
       const tag = e.kind === 'pick' ? `Pick ${e.round ? `Rd ${e.round}` : ''}`.trim() : 'Your call'
       if (result === true) e.outcome = `${tag}: ${p.name} is a ${p.ovr} OVR${p.ovr >= 88 ? ' star' : ' contributor'} — that one landed.`
       else if (result === false) e.outcome = `${tag}: ${p.name} stalled at ${p.ovr} OVR.`

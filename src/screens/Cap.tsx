@@ -1,12 +1,14 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { capSavings, deadMoney } from '../game/engine/cap'
 import { canSignFreeAgents } from '../game/engine/career'
 import { accessFor } from '../game/engine/access'
+import { capabilities } from '../game/engine/capabilities'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
+import { ExtensionTalks } from '../components/ExtensionTalks'
 
 export function Cap() {
   const league = useWorld()
@@ -14,10 +16,12 @@ export function Cap() {
   const restructurePlayer = useGame((s) => s.restructurePlayer)
   const releasePlayer = useGame((s) => s.releasePlayer)
   const extendPlayer = useGame((s) => s.extendPlayer)
+  const [talkId, setTalkId] = useState<string | null>(null)
 
   const summary = capSummary(league, career.teamId)
   const roster = league.roster[career.teamId] ?? []
   const canMove = canSignFreeAgents(career)
+  const canNegotiate = capabilities(career).can.has('negotiate')
   const access = accessFor(career, 'cap')
   const contracts = useMemo(() => [...roster].sort((a, b) => b.contract.capHit - a.contract.capHit), [roster])
 
@@ -133,7 +137,7 @@ export function Cap() {
                         <Button size="sm" variant="ghost" disabled={!canMove} title="Convert base salary to signing bonus" onClick={() => restructurePlayer(p.id)}>
                           Restructure
                         </Button>
-                        <Button size="sm" variant="ghost" disabled={!canMove} onClick={() => extendPlayer(p.id)}>
+                        <Button size="sm" variant="ghost" disabled={!canMove || (canNegotiate && p.contract.years > 2)} onClick={() => (canNegotiate ? setTalkId(p.id) : extendPlayer(p.id))}>
                           Extend
                         </Button>
                         <Button size="sm" variant="danger" disabled={!canMove} title={`Savings ${money(save)}`} onClick={() => releasePlayer(p.id)}>
@@ -148,6 +152,8 @@ export function Cap() {
           </table>
         </div>
       </Card>
+
+      {talkId && <ExtensionTalks key={talkId} playerId={talkId} onClose={() => setTalkId(null)} />}
     </div>
   )
 }

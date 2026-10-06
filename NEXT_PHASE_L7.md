@@ -12,11 +12,11 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | W2 | Shadow board: types + engine | P2 | ✅ done — verified (P2) |
 | W3 | Shadow board: store + season-end grading | P2 | ✅ done — verified (P2) |
 | W4 | Shadow board: UI | P2 | ✅ done — verified (P2) |
-| W5 | Extension talks: engine | P3 | in progress (P3) |
-| W6 | Extension talks: store + ledger | P3 | in progress (P3) |
-| W7 | Extension talks: UI | P3 | in progress (P3) |
-| W8 | Cap memo: engine + store + grading | P4 | not started |
-| W9 | Cap memo: UI | P4 | not started |
+| W5 | Extension talks: engine | P3 | ✅ done — verified (P3) |
+| W6 | Extension talks: store + ledger | P3 | ✅ done — verified (P3) |
+| W7 | Extension talks: UI | P3 | ✅ done — verified (P3) |
+| W8 | Cap memo: engine + store + grading | P4 | in progress (P4) |
+| W9 | Cap memo: UI | P4 | in progress (P4) |
 | W10 | Combine week: engine + store | P5 | not started |
 | W11 | Combine week: UI | P5 | not started |
 | W12 | HANDOFF.md docs | P5 | not started |
@@ -196,3 +196,6 @@ Never run `npm run dev` or any watch command. No git commands.
 - **P2** (browser, Dir. Player Personnel): board caps at 10, refuses own players, card shows on Free Agency, and hits go to the Ledger + season moments. Claude fixes:
   (1) the board was never cleared, so the same hits would pay every season. Now hits leave the board, and misses carry over re-based to the current OVR;
   (2) the growth threshold was tuned from +3 (8/10 naive young picks hit, too easy) → +5 (1/10, too hard) → **+4** (naive young picks 4–6/10, veterans 0/10 on two seeds).
+- **P3** (browser, L6 + L8): 80%-of-ask lowballs are rejected by Loyal/Market/Hardball agents, and 100% + mid guarantees sign (contract extends 3 yrs, ledger `contract` entry).
+  The 3-tries limit works ("His camp has stopped taking calls"). At L6 the GM vetoes a 120%-of-market offer. The Cap screen Extend button opens Extension Talks
+  (agent style, ask, tries, years, AAV slider, guarantees, projected cap hit). Judgment call noted: a Loyal agent with a happy player + high guarantees signs at ~75% of market.

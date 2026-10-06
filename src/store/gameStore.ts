@@ -98,6 +98,7 @@ import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGa
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
+import { capabilities } from '../game/engine/capabilities'
 import { moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
 import {
   advanceContacts,
@@ -118,6 +119,7 @@ import { recordGhostSeason } from '../game/engine/ghost'
 import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
 import { canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
+import { buildExtension, judgeOffer, type ExtensionOffer } from '../game/engine/negotiation'
 import {
   WEEK_HOURS,
   weeklyActions,
@@ -129,9 +131,11 @@ import {
 import {
   capForSeason,
   capSavings,
+  capScale,
   deadMoney,
   extendContract,
   makeVeteranContract,
+  marketAAV,
   restructure,
   summarizeCap,
 } from '../game/engine/cap'
@@ -139,6 +143,7 @@ import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
 import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, Position, ScenarioId, SeasonMoment, SeasonQuestion } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
+import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import { loadCalibration } from '../game/data/calibration'
@@ -405,6 +410,8 @@ interface GameStore {
   fireStaff: (staffId: string) => void
   restructurePlayer: (id: string) => void
   extendPlayer: (id: string) => void
+  /** G2: negotiate an extension with a player's agent (negotiate rungs). */
+  offerExtension: (playerId: string, offer: ExtensionOffer) => void
   /** G1: add/remove a non-own player from the shadow board (proScout rungs). */
   toggleShadowBoard: (playerId: string) => void
 
@@ -1307,6 +1314,69 @@ export const useGame = create<GameStore>((set, get) => ({
     p.contract = extendContract(p.contract, rng, p.ovr, p.pos, p.age, world.season)
     bump(set, get)
     get().showToast(`${p.name} extended through ${p.contract.signedThrough}.`)
+    get().save()
+  },
+
+  offerExtension: (playerId, offer) => {
+    const career = get().career
+    if (!career) return
+    if (!capabilities(career).can.has('negotiate')) {
+      get().showToast('Extension talks open higher up the ladder.')
+      return
+    }
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+    if (!p || p.contract.years > 2) {
+      get().showToast('He is not eligible for an extension.')
+      return
+    }
+    // Bookkeeping: a new season resets the table; three rejections ends talks.
+    const talks = { ...(career.talks ?? {}) }
+    const record = talks[playerId]
+    const fresh = !record || record.season !== world.season
+    const tries = fresh ? 0 : (record?.tries ?? 0)
+    if (!fresh && (record?.closed || tries >= 3)) {
+      get().showToast('His camp has stopped taking calls this season.')
+      return
+    }
+    const verdict = judgeOffer(p, world.season, offer)
+    if (!verdict.accepted) {
+      const nextTries = tries + 1
+      talks[playerId] = { season: world.season, tries: nextTries, closed: nextTries >= 3 }
+      set({ career: { ...career, talks } })
+      get().showToast(verdict.message)
+      bump(set, get)
+      get().save()
+      return
+    }
+    // Accepted — unless you own the cap, the GM still has to sign off.
+    const next = buildExtension(p, world.season, offer)
+    if (!capabilities(career).can.has('manageCap')) {
+      const market = Math.round(marketAAV(p.ovr, p.pos, p.age) * capScale(world.season))
+      if (offer.aav > market * 1.1) {
+        get().showToast(`The GM killed the deal: ${money(offer.aav)}/yr is over 110% of market.`)
+        return
+      }
+      const cap = summarizeCap(world.roster[career.teamId] ?? [], world.deadMoney[career.teamId] ?? 0, world.season)
+      if (cap.space + p.contract.capHit - next.capHit < 0) {
+        get().showToast("The GM killed the deal: it doesn't fit under the cap.")
+        return
+      }
+    }
+    p.contract = next
+    talks[playerId] = { season: world.season, tries, closed: true }
+    pushLedger(career, {
+      kind: 'contract',
+      playerId: p.id,
+      name: p.name,
+      pos: p.pos,
+      college: '—',
+      aav: offer.aav,
+      ovrAtSign: p.ovr,
+      note: `Extended ${p.name}: ${offer.years} yrs, ${money(offer.aav)}/yr`,
+    })
+    set({ career: { ...career, talks } })
+    bump(set, get)
+    get().showToast(`${p.name} extended: ${offer.years} yrs, ${money(offer.aav)}/yr.`)
     get().save()
   },
 

@@ -418,7 +418,7 @@ export interface JobOffer {
   note: string
 }
 
-export type LedgerKind = 'grade' | 'recommendation' | 'pick' | 'advice' | 'develop'
+export type LedgerKind = 'grade' | 'recommendation' | 'pick' | 'advice' | 'develop' | 'contract'
 export interface LedgerEntry {
   id: string
   season: number
@@ -450,6 +450,9 @@ export interface LedgerEntry {
   vindication?: boolean
   /** Develop entries (G3): OVR points banked for a player. */
   gain?: number
+  /** Contract entries (G2): the AAV you signed him for, and his OVR at signing. */
+  aav?: number
+  ovrAtSign?: number
 }
 
 export interface CareerState {
@@ -484,6 +487,8 @@ export interface CareerState {
   conviction?: { season: number; ids: string[] }
   /** G1: players on other clubs or in free agency you're tracking (max 10). */
   shadowBoard?: ShadowEntry[]
+  /** G2: extension-talk bookkeeping per player (3 tries per season, then closed). */
+  talks?: Record<string, { season: number; tries: number; closed?: boolean }>
   /** G3: your room's focus players, practice plan, and banked reps. */
   room?: { focus: string[]; plan: 'concentrate' | 'spread'; reps: number }
   /** The region you're assigned to scout (drives information scope). */

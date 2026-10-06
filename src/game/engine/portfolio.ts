@@ -59,6 +59,17 @@ function ledgerItems(world: World, e: LedgerEntry): PortfolioItem[] {
       season: e.season,
     }]
   }
+  if (e.kind === 'contract') {
+    if (!e.hit) return []
+    return [{
+      id: `led_${e.id}`,
+      label: e.name,
+      detail: e.outcome ?? e.note,
+      tags: ['builder'],
+      strength: 2,
+      season: e.season,
+    }]
+  }
   if (e.kind === 'develop') {
     return [{
       id: `led_${e.id}`,
