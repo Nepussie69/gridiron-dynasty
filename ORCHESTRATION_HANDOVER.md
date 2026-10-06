@@ -57,7 +57,9 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | **P1 ✅, P2 ✅; P3 (R5–R8) not sent** | see git log |
 
 ### Immediate next steps
-1. **Send L9.5 P3** (R5 staff role groups, R6 staff budget, R7 sortable roster, R8 Fit fix for defenders). P1 and P2 are done; see the spec's progress table and verification log. **R1 is a real bug:** the user's DEFENSIVE game plan is applied to the OPPONENT.
+1. **L9.5 P3 (R5 staff role groups, R6 staff budget, R7 sortable roster, R8 Fit fix) was SENT to Flash at ~21:50 on 2026-10-06** (prompt saved as `L95_P3_PROMPT.txt` at the repo root, untracked).
+   If `git status` shows uncommitted `src/` changes, Flash finished or was interrupted: verify them (build, lint = 5, read the diff, check the Staff screen tabs/budget, roster sorting, and the Fit column for defenders), then update the spec + commit.
+   If `src/` is clean, resend with `~/.claude/bin/ds-push L95_P3_PROMPT.txt l95p3`. **R1 is a real bug:** the user's DEFENSIVE game plan is applied to the OPPONENT.
    R1 check: an extreme user def plan (aggression 2) must raise the user's own sacks/blitzes, not the opponent's.
 
 3. **L10 candidate — game-day coaching:** the user asked for 10 ideas to give HCs/coordinators more input (play-calling etc.). They're in **`IDEAS_GAMEDAY.md`** with a suggested 4-push phasing.
