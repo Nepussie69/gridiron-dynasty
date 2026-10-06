@@ -7,7 +7,9 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx, Cap.tsx, ui/kit.tsx, MatchV
 
 | Task | What | Push | Status |
 |---|---|---|---|
-| Z1 | Career smoke-test probe `__careerSmoke` | P1 | in progress (P1) |
+| Z1 | Career smoke-test probe `__careerSmoke` | P1 | ✅ done — verified (P1) |
+| Z1b | **Bug:** signed starting-pool free agents never enter `world.players` | P2 | not started |
+| Z1c | **Bug:** AI rosters can exceed 60 | P2 | not started |
 | Z2 | Staff awards: engine + season-end wiring | P2 | not started |
 | Z3 | Staff awards: Awards screen + recap + résumé | P2 | not started |
 | Z4 | Owner counteroffer when a rival club comes calling | P3 | not started |
@@ -55,6 +57,22 @@ Return `{ seasons, path, finalLevel, errors: [...], violations: [...], featuresE
 
 ---
 
+## Z1b — Free agents missing from `world.players` (found by the smoke probe)
+**Repro:** after one season, players on AI rosters (e.g. "Zeek Biggers", CIN) have **no entry at all in `world.players`**. Their `origin` is undefined and they came from the
+starting free-agent pool built in `buildWorld`. Effects: `developPlayers` iterates `world.players`, so they never age, develop or retire; and `findPlayer`
+(trades, ledger, shadow board) can't see them.
+**Fix:**
+1. `src/game/engine/generate.ts` `buildWorld`: include every initial free agent in `players` (`players.push(...freeAgents)` if they aren't already there; dedupe by id).
+2. Add `export function indexPlayers(world: World)` in `generate.ts`. For every player in `world.roster[*]`, `world.practiceSquad[*]`, `world.ir[*]` and `world.freeAgents`,
+   if `world.players` has no entry with that id, push him. Call it at the end of `runAIFreeAgency` and `runUDFAs`, in `migrateWorld` (after `relinkPlayers`), and at the end of
+   `startNextSeason` in the store.
+**Acceptance:** build + lint. The orchestrator runs `__careerSmoke` on both paths; the "not the canonical player object" violations must be gone.
+
+## Z1c — AI rosters above 60
+**Repro:** the smoke probe saw IND with 61 players. `runAIFreeAgency` fills needs, then the X1 top-up can sign more. **Fix:** at the very end of `runAIFreeAgency`, call
+`trimNflRosters(world)` again (it trims to 53 respecting position floors). Do NOT change `trimNflRosters`.
+**Acceptance:** smoke probe shows no "roster has N players" violations.
+
 ## Z2–Z3 — Staff awards
 
 At the end of each regular season (`runEndOfRegularSeason`, after standings are final and before they reset), award:
@@ -100,10 +118,15 @@ A **rivalry game** is a regular-season game between the user's club and a club w
 Append "L9 The long game" (Z1–Z5, key files staffAwards.ts, counter.ts, rivalry.ts, plus the smoke probe) under Done in HANDOFF.md.
 
 ## PUSHES
-**P1 = Z1** (the orchestrator uses the probe to verify everything after it) · **P2 = Z2–Z3** · **P3 = Z4–Z6**
+**P1 = Z1** (the orchestrator uses the probe to verify everything after it) · **P2 = Z1b, Z1c, Z2–Z3** · **P3 = Z4–Z6**
 After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && npm run lint` → green, exactly 5 warnings. Never run `npm run dev` or any watch command. No git commands.
 
 ## DO NOT
 - Do not change reputation gates, objectives, capabilities/access, sim constants, `evaluateTrade`, contract pricing, `advanceRivals`'s logic, or `generateJobOffers`.
 - The smoke probe must not swallow failures silently: every caught error goes into `errors`.
 - Every new save field is optional. No new dependencies. Do not fix the baseline lint warnings. Do not reformat unrelated code. Do not edit any NEXT_PHASE*.md.
+
+## Verification log
+- **P1** (browser, real data): `__careerSmoke(6,'personnel')`: 0 errors; it exercised setScoutTrust, conviction, red flag, combine and findDeals and climbed to L5. Violations: unlinked roster entries (1–20 per season)
+  and IND at 61 players. `__careerSmoke(6,'coach')`: 0 errors; it exercised wrinkle ×108, pitch ×36, drills ×72, install, room, extensions and shadow board, and climbed to HC (L7). Violations: unlinked
+  entries (1–21 per season). Root cause: signed starting-pool free agents never enter `world.players` (fix Z1b). Roster cap fix Z1c.

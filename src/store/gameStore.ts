@@ -93,17 +93,17 @@ import {
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
-import { MAX_RED_FLAGS, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
+import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus } from '../game/engine/install'
-import { canPitch, judgePitch } from '../game/engine/pitch'
+import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
-import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
+import { evaluateTrade, executeTrade, findDeals, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
-import { moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
+import { STARTERS, depthAt, moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
 import {
   advanceContacts,
   advanceRivals,
@@ -122,10 +122,10 @@ import { currentDilemma, applyDilemma } from '../game/engine/dilemma'
 import { recordGhostSeason } from '../game/engine/ghost'
 import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
-import { canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
-import { buildExtension, judgeOffer, type ExtensionOffer } from '../game/engine/negotiation'
+import { MAX_SHADOW, canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
+import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../game/engine/negotiation'
 import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
-import { applyCombine, type CombineKind } from '../game/engine/combine'
+import { applyCombine, combineOpen, type CombineKind } from '../game/engine/combine'
 import {
   WEEK_HOURS,
   weeklyActions,
@@ -2805,6 +2805,293 @@ export function adviceProbe() {
 /** Dev-only balance probe: run whole seasons headlessly and report the long arc. */
 export function balanceProbe(seasons = 10, path: 'coach' | 'personnel' = 'personnel') {
   return runBalance({ seasons, path, seed: world.seed, data: getRealData() })
+}
+
+/** One caught failure from the career smoke probe (Z1). */
+export interface SmokeError {
+  season: number
+  week: number
+  action: string
+  error: string
+}
+
+/** The career smoke probe's report (Z1). */
+export interface SmokeReport {
+  seasons: number
+  path: 'personnel' | 'coach'
+  finalLevel: number
+  errors: SmokeError[]
+  violations: string[]
+  featuresExercised: Record<string, number>
+}
+
+/**
+ * Dev-only career smoke probe (L9 Z1): start a fresh career and drive every
+ * L5–L8 feature through the store for `seasons`, accepting the first job offer
+ * each year so the career climbs the ladder. Every feature call is wrapped in
+ * try/catch with the error recorded — nothing is swallowed. After each season a
+ * batch of cross-system invariants is checked and any breach is appended to
+ * `violations`. Returns the report for the orchestrator to inspect.
+ *
+ * This is a real career: it resets the live world to the seeded one it starts.
+ */
+export async function careerSmoke(
+  seasons = 6,
+  path: 'personnel' | 'coach' = 'personnel',
+  seed = 4242,
+): Promise<SmokeReport> {
+  const get = () => useGame.getState()
+  const errors: SmokeError[] = []
+  const violations: string[] = []
+  const featuresExercised: Record<string, number> = {}
+  const mark = (action: string) => {
+    featuresExercised[action] = (featuresExercised[action] ?? 0) + 1
+  }
+  const fail = (action: string, e: unknown) => {
+    errors.push({
+      season: world.season,
+      week: world.week,
+      action,
+      error: e instanceof Error ? e.message : String(e),
+    })
+  }
+  /** Call a feature: count it when it ran clean, record it when it threw. */
+  const exercise = (action: string, fn: () => void) => {
+    try {
+      fn()
+      mark(action)
+    } catch (e) {
+      fail(action, e)
+    }
+  }
+  /** Call a store/engine step whose result we don't count as a feature. */
+  const attempt = (action: string, fn: () => void) => {
+    try {
+      fn()
+    } catch (e) {
+      fail(action, e)
+    }
+  }
+  const attemptAsync = async (action: string, fn: () => void | Promise<void>) => {
+    try {
+      await fn()
+    } catch (e) {
+      fail(action, e)
+    }
+  }
+
+  // 1. Start the career on the requested rung (coach 5 / personnel 4).
+  const startLevel = path === 'coach' ? 5 : 4
+  get().startCareer({
+    name: 'Smoke',
+    path,
+    archetype: path === 'coach' ? 'off' : 'scout',
+    teamId: 'CLE',
+    seed,
+    startLevel,
+  })
+
+  /** Once a season: features that aren't tied to a specific week. */
+  const exerciseOncePerSeason = () => {
+    const career = get().career
+    if (!career) return
+    // G1: trust your evaluators' reports.
+    const staff = world.staff[career.teamId] ?? []
+    const evaluator = staff.find(isEvaluator) ?? staff[0]
+    if (evaluator && canSetTrust(career)) {
+      exercise('setScoutTrust', () => get().setScoutTrust(evaluator.id, 'lean'))
+    }
+    // G2: pound the table for the two best players in the class.
+    const ranked = [...world.draft].sort((a, b) => b.grade - a.grade)
+    const top2 = ranked.slice(0, 2)
+    if (canConvict(career)) {
+      for (const p of top2) exercise('toggleConviction', () => get().toggleConviction(p.id))
+    }
+    // K4: red-flag one of the league's top-64 prospects.
+    if (canRedFlag(career)) {
+      const flagged = ranked
+        .slice(0, RED_FLAG_TOP_N)
+        .find((p) => !top2.some((t) => t.id === p.id) && isRedFlaggable(world, p.id))
+      if (flagged) exercise('toggleRedFlag', () => get().toggleRedFlag(flagged.id))
+    }
+    // G1: put three players who aren't yours on the shadow board.
+    if (canShadow(career)) {
+      const outside = world.players
+        .filter((p) => p.teamId !== career.teamId && p.ovr >= 68)
+        .sort((a, b) => b.ovr - a.ovr)
+        .slice(0, 3)
+      for (const p of outside) {
+        exercise('toggleShadowBoard', () => get().toggleShadowBoard(p.id))
+      }
+    }
+    // G3: focus the room and choose its practice plan.
+    if (hasRoom(career)) {
+      const focused = new Set(career.room?.focus ?? [])
+      const picks = roomPlayers(world, career)
+        .filter((p) => !focused.has(p.id))
+        .slice(0, MAX_ROOM_FOCUS)
+      for (const p of picks) exercise('toggleRoomFocus', () => get().toggleRoomFocus(p.id))
+      exercise('setRoomPlan', () => get().setRoomPlan('concentrate'))
+    }
+    // G2: negotiate one extension at 100% of the agent's ask.
+    if (capabilities(career).can.has('negotiate')) {
+      const expiring = (world.roster[career.teamId] ?? []).filter((p) => p.contract.years <= 2)
+      const p = expiring[0]
+      if (p) {
+        const offer: ExtensionOffer = { years: 3, aav: marketAsk(p, world.season), guarantee: 'mid' }
+        exercise('offerExtension', () => get().offerExtension(p.id, offer))
+      }
+    }
+    // Trade Center: shop one player around the league (pure engine search).
+    const shop = [...(world.roster[career.teamId] ?? [])].sort((a, b) => b.ovr - a.ovr)[0]
+    if (shop) exercise('findDeals', () => { findDeals(world, career.teamId, shop.id) })
+  }
+
+  /** Every week: the features a rung uses on a week-to-week rhythm. */
+  const exerciseWeekly = () => {
+    const career = get().career
+    if (!career) return
+    // #5: bank a week of drills in your room.
+    if (hasRoom(career) && weeklyActions(career).some((a) => a.id === 'drills')) {
+      exercise('spendHours', () => get().spendHours('drills'))
+    }
+    // K1: rotate the weekly wrinkle so the film never settles.
+    if (canWrinkle(career)) {
+      for (const side of wrinkleSides(career)) {
+        const list = side === 'off' ? OFF_WRINKLES : DEF_WRINKLES
+        const id = list[world.week % list.length]?.id
+        if (id) exercise('pickWrinkle', () => get().pickWrinkle(side, id))
+      }
+    }
+    // K3: pitch the first backup on your side of the ball.
+    if (canPitch(career) && !career.weekFlags?.pitch) {
+      for (const pos of pitchSide(career)) {
+        const list = depthAt(world, career.teamId, pos)
+        const backup = list[STARTERS[pos] ?? 1]
+        if (backup) {
+          exercise('pitchStarter', () => get().pitchStarter(pos, backup.id))
+          break
+        }
+      }
+    }
+  }
+
+  /** In the offseason: the features that only open between seasons. */
+  const exerciseOffseason = () => {
+    const career = get().career
+    if (!career) return
+    // K2: a full install for the coming season.
+    if (canInstall(world, career)) {
+      exercise('chooseInstall', () => get().chooseInstall('full'))
+    }
+    // G4: spend a combine hour on a prospect.
+    if (combineOpen(world, career)) {
+      const prospect = world.draft[0]
+      if (prospect) exercise('combineAction', () => get().combineAction(prospect.id, 'interview'))
+    }
+    // G3: file the cap memo.
+    if (canFileMemo(world, career)) {
+      const priorities = (world.roster[career.teamId] ?? [])
+        .filter((p) => p.contract.years <= 2)
+        .slice(0, 3)
+        .map((p) => p.id)
+      exercise('fileCapMemo', () => get().fileCapMemo('comfortable', priorities, 'Smoke probe memo.'))
+    }
+  }
+
+  /** Take the first job offer that appears so the career climbs. */
+  const acceptFirstOffer = () => {
+    for (const offer of [...get().offers]) {
+      attempt('acceptOffer', () => get().acceptOffer(offer))
+      if (get().offers.length === 0) break
+    }
+  }
+
+  /** Post-season invariants across every system the probe touched. */
+  const checkInvariants = (seasonNo: number) => {
+    const career = get().career
+    const where = `season ${seasonNo + 1}`
+    if (!career) {
+      violations.push(`${where}: no career after the season`)
+      return
+    }
+    // Reputation stays a finite 0–100 in every dimension.
+    for (const [k, v] of Object.entries(career.reputation)) {
+      if (!Number.isFinite(v) || v < 0 || v > 100) {
+        violations.push(`${where}: reputation.${k}=${v} outside 0–100`)
+      }
+    }
+    // Every club carries a legal roster and fits under the cap.
+    const cap = capForSeason(world.season)
+    for (const [teamId, roster] of Object.entries(world.roster)) {
+      if (roster.length < 45 || roster.length > 60) {
+        violations.push(`${where}: ${teamId} roster has ${roster.length} players (need 45–60)`)
+      }
+      const used = roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[teamId] ?? 0)
+      if (used > cap * 1.05) {
+        violations.push(
+          `${where}: ${teamId} cap used $${(used / 1e6).toFixed(1)}M over 105% of $${(cap / 1e6).toFixed(1)}M`,
+        )
+      }
+    }
+    // Roster entries are the same objects as their world.players entry.
+    const byId = new Map(world.players.map((p) => [p.id, p]))
+    let unlinked = 0
+    for (const roster of Object.values(world.roster)) {
+      for (const p of roster) if (byId.get(p.id) !== p) unlinked++
+    }
+    if (unlinked) violations.push(`${where}: ${unlinked} roster entries are not the canonical player object`)
+    // Draft ids are unique.
+    const draftIds = new Set(world.draft.map((p) => p.id))
+    if (draftIds.size !== world.draft.length) {
+      violations.push(`${where}: world.draft has ${world.draft.length - draftIds.size} duplicate ids`)
+    }
+    // The boards keep their caps.
+    const shadowLen = (career.shadowBoard ?? []).length
+    if (shadowLen > MAX_SHADOW) violations.push(`${where}: shadowBoard has ${shadowLen} (max ${MAX_SHADOW})`)
+    const convLen = career.conviction?.ids.length ?? 0
+    if (convLen > MAX_CONVICTION) violations.push(`${where}: conviction has ${convLen} (max ${MAX_CONVICTION})`)
+    const rfLen = career.redFlags?.ids.length ?? 0
+    if (rfLen > MAX_RED_FLAGS) violations.push(`${where}: redFlags has ${rfLen} (max ${MAX_RED_FLAGS})`)
+    // The applied wrinkle/install extra stays inside its sim clamp.
+    const wrinkle = wrinkleBonus(career, world.week)
+    const install = installBonus(career, world)
+    for (const side of ['off', 'def'] as const) {
+      const extra = clamp(wrinkle[side] + install[side], -0.6, 1.5)
+      if (extra < -0.6 || extra > 1.5) {
+        violations.push(`${where}: ${side} wrinkle/install extra ${extra.toFixed(2)} outside [-0.6, 1.5]`)
+      }
+    }
+  }
+
+  for (let seasonNo = 0; seasonNo < seasons; seasonNo++) {
+    exerciseOncePerSeason()
+    let weeks = 0
+    while (world.phase === 'regular' && weeks < 30) {
+      weeks++
+      exerciseWeekly()
+      await attemptAsync('advanceWeek', () => get().advanceWeek())
+      if (get().modal !== 'none') get().dismissModal()
+    }
+    if (world.phase === 'regular') {
+      violations.push(`season ${seasonNo + 1}: regular season never ended after ${weeks} advances`)
+      break
+    }
+    exerciseOffseason()
+    acceptFirstOffer()
+    attempt('finishDraft', () => get().finishDraft())
+    await attemptAsync('advanceWeek', () => get().advanceWeek())
+    checkInvariants(seasonNo)
+  }
+
+  return {
+    seasons,
+    path,
+    finalLevel: get().career?.level ?? -1,
+    errors,
+    violations,
+    featuresExercised,
+  }
 }
 
 /** Dev-only probe: run the league play-by-play worker on the current week (no mutation). */
