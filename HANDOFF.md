@@ -201,8 +201,15 @@ game's guardrails intact.
   - Key files: `src/game/engine/staffAwards.ts`, `src/game/engine/counter.ts`, `src/game/engine/rivalry.ts`,
     and the `__careerSmoke` probe (`src/store/gameStore.ts` + `src/main.tsx`).
 
+- **L9.5 "Playtest 2 fixes" IN PROGRESS** (spec `NEXT_PHASE_L9_5.md`; P1 committed `e5dba86`):
+  - R1 **Game-plan wiring** — `LivePlan = { teamId, off, def }`, `planFor(teamId, side)`; the user's plan applies to the user's club only. ✅ committed.
+  - R2 **One side per plan** — `PlanEditor` `side` prop; offense shows Run/Pass + Tempo + 5 presets, defense Pass Rush + Coverage + 4 presets. ✅ committed.
+  - R3 **Team ratings** — `teamRatings(world, teamId)` in `engine/depth.ts` (OFF/DEF/OVR from the depth-group slices); Game Plan "Up Next" card shows both clubs' OFF/DEF/OVR + two matchup lines with ▲/▼ edge chips. ✅ done.
+  - R4 **Box scores** — optional `Game.box` (`players` + team totals) stored in `advanceWeek` right after `boxScore`, cleared in `startNextSeason`; `BoxScore` exported from `MatchView.tsx`; Schedule "Box" button + modal with a team-totals strip; "Watch" → "Replay (Re-simulated — may differ from the final.)". ✅ done.
+  - Next: R5–R8 (P3). Build green; lint = 5 baseline warnings after every task.
+
 ## In progress
-- (none) — **all four layers complete.** User said they will test L4 after the build.
+- **L9.5** — R3/R4 done, awaiting orchestrator verification; R5–R8 not started.
 
 ## Next move
 1. Await user's test pass on L4 (voices card on Career).

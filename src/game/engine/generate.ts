@@ -12,6 +12,15 @@ import { makeScoutBias } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
 import { STARS } from './starSeed'
 import type { RealCfbPlayer, RealCfbTeam, RealData, RealNflPlayer } from '../data/realData'
+import type { PlayerBoxScore } from './stats'
+
+/** Team offensive/defensive totals summed from a game's player box-score lines. */
+export interface GameBoxTotals {
+  passYds: number
+  rushYds: number
+  turnovers: number
+  sacks: number
+}
 
 export interface Game {
   id: string
@@ -24,6 +33,11 @@ export interface Game {
   tier: 'NFL' | 'FBS' | 'FCS'
   postseason?: boolean
   statsDone?: boolean
+  /** Season-scoped box score (only kept for the current season). */
+  box?: {
+    players: PlayerBoxScore[]
+    team: Record<string, GameBoxTotals>
+  }
 }
 
 export interface World {

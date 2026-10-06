@@ -82,3 +82,40 @@ export function setStarterInDepth(world: World, teamId: string, pos: Position, p
 export function resetDepth(world: World, teamId: string): void {
   if (world.depth) delete world.depth[teamId]
 }
+
+/** Starting-lineup slices that feed the OFF / DEF ratings. */
+const OFF_SLICE: [Position[], number][] = [
+  [['QB'], 1],
+  [['RB'], 1],
+  [['WR', 'TE'], 4],
+  [['OT', 'OG', 'C'], 5],
+]
+const DEF_SLICE: [Position[], number][] = [
+  [['DE', 'DT'], 4],
+  [['LB'], 3],
+  [['CB'], 3],
+  [['S'], 2],
+]
+
+function slicePlayers(world: World, teamId: string, slice: [Position[], number][]): Player[] {
+  return slice.flatMap(([positions, n]) => depthGroup(world, teamId, positions, n))
+}
+
+function meanOvr(players: Player[]): number {
+  if (!players.length) return 0
+  return players.reduce((s, p) => s + p.ovr, 0) / players.length
+}
+
+/**
+ * A club's headline ratings from its starting depth groups: offense (QB, RB,
+ * WR/TE, OL), defense (DL, LB, CB, S) and the combined overall.
+ */
+export function teamRatings(world: World, teamId: string): { off: number; def: number; overall: number } {
+  const offPlayers = slicePlayers(world, teamId, OFF_SLICE)
+  const defPlayers = slicePlayers(world, teamId, DEF_SLICE)
+  return {
+    off: meanOvr(offPlayers),
+    def: meanOvr(defPlayers),
+    overall: meanOvr([...offPlayers, ...defPlayers]),
+  }
+}

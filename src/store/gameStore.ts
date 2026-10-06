@@ -48,7 +48,7 @@ import {
 } from '../game/engine/staffAwards'
 import { counterOffer } from '../game/engine/counter'
 import { rivalFor } from '../game/engine/rivalry'
-import { recordGameStats, boxScore, recordBoxLines } from '../game/engine/stats'
+import { recordGameStats, boxScore, recordBoxLines, boxPlayerLines, boxTeamTotals } from '../game/engine/stats'
 import { simLeagueGames } from '../game/engine/leagueSim'
 import {
   developPlayers,
@@ -637,6 +637,8 @@ export const useGame = create<GameStore>((set, get) => ({
       // Record career stats for both teams' players (college or pro).
       const level = world.byId[userGame.homeId].tier === 'NFL' ? 'NFL' : 'CFB'
       sim.box = boxScore(world, sim)
+      // R4: keep a season-scoped box score for the user's game.
+      userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
       growPlaybookFromGame(world, sim)
     }
@@ -818,6 +820,8 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     if (world.phase !== 'offseason') return
+    // R4: box scores are kept for one season only.
+    for (const g of world.schedule) delete g.box
     if (!world.draftState.complete) {
       simulateRestOfDraft(world, career)
       runUDFAs(world)

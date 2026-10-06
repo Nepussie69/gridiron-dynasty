@@ -409,7 +409,7 @@ export function MatchView() {
   )
 }
 
-function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; gmName?: string; myTeamId?: string }) {
+export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; gmName?: string; myTeamId?: string }) {
   const team = world.byId[teamId]
   const rows = (box ?? []).filter((b) => b.teamId === teamId)
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)

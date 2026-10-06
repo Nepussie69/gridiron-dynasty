@@ -18,8 +18,11 @@ Use **`~/.claude/bin/ds-push <prompt-file> [label]`** (added 2026-10-06). It run
 - a retry prepends a note telling Flash to inspect `git status`/`git diff` first and continue without redoing work;
 - status lines start with `[push]` (follow them with a Monitor); the per-try event logs are `$PUSH_LOG_DIR` (default `$TMPDIR/ds-push`)`/<label>.tryN.jsonl`; at the end it prints Flash's final report. Exit 3 = gave up.
 - Env overrides: `STARTUP`, `IDLE`, `HARD`, `MAX_TRIES`, `DS_ROUTE` (model).
-Run it with Bash `run_in_background: true`. **Hang diagnosis:** a hung run logs *nothing* in `~/.local/share/opencode/log/opencode.log` after "cli starting" (it never gets its first model response), so a fast retry is the right fix.
-Startup hangs come in bursts (2026-10-06: 3 pings in a row hung while another Flash run was active), so avoid running two Flash jobs at once.
+Run it with Bash `run_in_background: true`.
+**Hang root cause (found 2026-10-06):** `opencode run` reads extra prompt text from **stdin** when stdin isn't a TTY. Launched from a background shell, it can inherit a pipe/socket that never closes,
+so it blocks forever *before contacting the server* (0% CPU, no log line after "cli starting", no session created). Proven: with a never-closing stdin pipe it hangs every time; with `< /dev/null` it answers in seconds.
+**Fix:** both `ds` and `ds-push` now launch with `< /dev/null`. Any other way of calling `opencode run` from a script must do the same. `--standalone` was a red herring (now opt-in via `STANDALONE=1`).
+The watchdog stays as a safety net.
 The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient account funds"**, so don't use it unless the user tops up.
 
 **Prompt template** (fill the task list):
@@ -51,11 +54,14 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | L7.5 Economy (AI depth swaps → cap use ~0.8, user owns re-signs, expiring warning, gates 7–8 respread) | NEXT_PHASE_L7_5.md | ✅ | 24de32c |
 | L8 Staff room (weekly wrinkle, install plan, starter pitch, red flag) | NEXT_PHASE_L8.md | ✅ | 9f4e40d |
 | **L9 The long game** | NEXT_PHASE_L9.md | **✅ all pushes (P3 verified)** | see git log |
-| **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | **spec final (push plan added), not sent** | — |
+| **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | **P1 ✅, P2 ✅; P3 (R5–R8) not sent** | see git log |
 
 ### Immediate next steps
-1. **Send L9.5** in its three pushes (P1 = R1+R2, P2 = R3+R4, P3 = R5–R8; see the spec's PUSHES section) and check its progress table for what's already done. **R1 is a real bug:** the user's DEFENSIVE game plan is applied to the OPPONENT.
+1. **Send L9.5 P3** (R5 staff role groups, R6 staff budget, R7 sortable roster, R8 Fit fix for defenders). P1 and P2 are done; see the spec's progress table and verification log. **R1 is a real bug:** the user's DEFENSIVE game plan is applied to the OPPONENT.
    R1 check: an extreme user def plan (aggression 2) must raise the user's own sacks/blitzes, not the opponent's.
+
+3. **L10 candidate — game-day coaching:** the user asked for 10 ideas to give HCs/coordinators more input (play-calling etc.). They're in **`IDEAS_GAMEDAY.md`** with a suggested 4-push phasing.
+   Not approved or specced yet: ask the user which ideas to build, then write `NEXT_PHASE_L10.md`.
 
 ## 4. Pacing & balance (current, measured on committed code)
 - Personnel → GM: seeds 20261004 13 · 2222 8 · 33333 8 · 5150 10 · 777 9 · 111 17 (a weak-roster outlier). Coach → HC ~10–11.

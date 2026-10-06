@@ -1,15 +1,20 @@
+import { useState } from 'react'
+import { X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { recordOf, recordStr, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
+import { BoxScore } from '../components/MatchView'
 import { Badge, Button, Card, PageHeader, Stat, TeamCrest } from '../ui/kit'
 
 export function Schedule() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const openMatch = useGame((s) => s.openMatch)
+  const [boxGameId, setBoxGameId] = useState<string | null>(null)
 
   const rec = recordOf(league, activeTeamId)
   const { out: games } = scheduleFor(league, activeTeamId)
+  const boxGame = boxGameId ? league.schedule.find((g) => g.id === boxGameId) : null
 
   let w = 0
   let l = 0
@@ -39,6 +44,7 @@ export function Schedule() {
         <div className="divide-y divide-line/60">
           {games.map((g) => {
             const opp = league.byId[g.opponentId]
+            const raw = league.schedule.find((x) => x.id === g.id)
             if (g.played) {
               if ((g.teamScore ?? 0) > (g.oppScore ?? 0)) w++
               else if ((g.teamScore ?? 0) < (g.oppScore ?? 0)) l++
@@ -68,7 +74,10 @@ export function Schedule() {
                     </span>
                     <Badge tone={tie ? 'neutral' : win ? 'win' : 'loss'}>{tie ? 'T' : win ? 'W' : 'L'}</Badge>
                     <span className="w-12 text-right font-cond text-xs font-600 tnum text-muted">{running}</span>
-                    <Button size="sm" variant="ghost" onClick={() => openMatch(g.id)}>Watch</Button>
+                    {raw?.box && (
+                      <Button size="sm" variant="ghost" onClick={() => setBoxGameId(g.id)}>Box</Button>
+                    )}
+                    <Button size="sm" variant="ghost" title="Re-simulated — may differ from the final." onClick={() => openMatch(g.id)}>Replay</Button>
                   </div>
                 ) : (
                   <div className="flex items-center gap-3">
@@ -81,6 +90,66 @@ export function Schedule() {
           })}
         </div>
       </Card>
+
+      {boxGame?.box && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-ink/50 p-4 backdrop-blur-sm"
+          onClick={() => setBoxGameId(null)}
+        >
+          <div
+            className="relative max-h-[90vh] w-full max-w-[720px] overflow-y-auto rounded-2xl border border-line bg-canvas p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setBoxGameId(null)}
+              className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-lg bg-surface-2 text-muted hover:text-ink"
+            >
+              <X size={16} />
+            </button>
+            <div className="mb-3">
+              <span className="label">Box Score · Week {boxGame.week}</span>
+            </div>
+            <div className="mb-3 grid grid-cols-2 gap-3">
+              <TeamTotals name={league.byId[boxGame.awayId].name} t={boxGame.box.team[boxGame.awayId] ?? EMPTY_TOTALS} />
+              <TeamTotals name={league.byId[boxGame.homeId].name} t={boxGame.box.team[boxGame.homeId] ?? EMPTY_TOTALS} />
+            </div>
+            <div className="grid gap-3 rounded-xl bg-[#101820] p-3 md:grid-cols-2">
+              <BoxScore world={league} teamId={boxGame.awayId} box={boxGame.box.players} />
+              <BoxScore world={league} teamId={boxGame.homeId} box={boxGame.box.players} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const EMPTY_TOTALS = { passYds: 0, rushYds: 0, turnovers: 0, sacks: 0 }
+
+function TeamTotals({
+  name,
+  t,
+}: {
+  name: string
+  t: { passYds: number; rushYds: number; turnovers: number; sacks: number }
+}) {
+  const cells: [string, number][] = [
+    ['Pass Yds', t.passYds],
+    ['Rush Yds', t.rushYds],
+    ['Turnovers', t.turnovers],
+    ['Sacks', t.sacks],
+  ]
+  return (
+    <div className="rounded-lg border border-line bg-surface-2 p-2.5">
+      <div className="label mb-1.5 truncate">{name}</div>
+      <div className="grid grid-cols-4 gap-2">
+        {cells.map(([label, value]) => (
+          <div key={label}>
+            <div className="font-display text-base font-700 tnum text-ink">{value}</div>
+            <div className="label !text-[9px]">{label}</div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

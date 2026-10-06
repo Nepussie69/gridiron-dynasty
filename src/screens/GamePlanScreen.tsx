@@ -8,6 +8,7 @@ import { SchemeFitReport } from '../components/SchemeFitReport'
 import { WrinkleCard } from '../components/WrinkleCard'
 import { InstallCard } from '../components/InstallCard'
 import { canWrinkle } from '../game/engine/wrinkle'
+import { teamRatings } from '../game/engine/depth'
 import { coachLabels } from '../game/engine/playsim'
 import { recordOf, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
@@ -25,6 +26,9 @@ export function GamePlanScreen() {
   const { out: schedule } = scheduleFor(league, career.teamId)
   const next = schedule.find((g) => !g.played)
   const opp = next ? league.byId[next.opponentId] : null
+
+  const myRatings = teamRatings(league, career.teamId)
+  const oppRatings = opp ? teamRatings(league, opp.id) : null
 
   const plan: GamePlan = defaultPlan[side]
   const opponentScheme = opp
@@ -77,7 +81,7 @@ export function GamePlanScreen() {
         </div>
 
         <div className="space-y-5">
-          {next && opp && (
+          {next && opp && oppRatings && (
             <Card pad={false} className="overflow-hidden">
               <div className="border-b border-line bg-surface-2 px-4 py-2">
                 <span className="label">Up Next · Week {next.week}</span>
@@ -94,6 +98,14 @@ export function GamePlanScreen() {
                   <div className="font-cond text-xs text-muted">{recordOf(league, opp.id).wins}-{recordOf(league, opp.id).losses}</div>
                 </div>
                 <TeamCrest team={opp} size={44} />
+              </div>
+              <div className="grid grid-cols-2 gap-4 border-t border-line px-4 py-3">
+                <RatingColumn label="You" r={myRatings} />
+                <RatingColumn label={opp.name} r={oppRatings} right />
+              </div>
+              <div className="space-y-1.5 border-t border-line bg-surface-2/40 px-4 py-2.5">
+                <MatchupLine text="Your offense" mine={myRatings.off} other="their defense" theirs={oppRatings.def} />
+                <MatchupLine text="Your defense" mine={myRatings.def} other="their offense" theirs={oppRatings.off} />
               </div>
               <div className="border-t border-line px-4 py-2.5 text-xs text-muted">
                 Opponent runs <strong className="text-ink">{opponentScheme}</strong>
@@ -134,6 +146,60 @@ export function GamePlanScreen() {
           </Card>
         </div>
       </div>
+    </div>
+  )
+}
+
+function RatingColumn({
+  label,
+  r,
+  right,
+}: {
+  label: string
+  r: { off: number; def: number; overall: number }
+  right?: boolean
+}) {
+  return (
+    <div className={cn(right && 'text-right')}>
+      <div className="label mb-1.5 truncate">{label}</div>
+      <div className={cn('flex items-center gap-4', right && 'justify-end')}>
+        {(['off', 'def', 'overall'] as const).map((k) => (
+          <div key={k}>
+            <div className="font-display text-base font-700 leading-none tnum text-ink">{r[k].toFixed(1)}</div>
+            <div className="label mt-0.5 !text-[9px]">{k === 'overall' ? 'OVR' : k.toUpperCase()}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MatchupLine({
+  text,
+  mine,
+  other,
+  theirs,
+}: {
+  text: string
+  mine: number
+  other: string
+  theirs: number
+}) {
+  const edge = mine >= theirs
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-ink-2">
+        {text} <strong className="text-ink tnum">{mine.toFixed(1)}</strong> vs {other}{' '}
+        <strong className="text-ink tnum">{theirs.toFixed(1)}</strong>
+      </span>
+      <span
+        className={cn(
+          'ml-auto inline-flex items-center rounded-md border px-1.5 py-0.5 font-cond text-[10px] font-700 uppercase tracking-wide',
+          edge ? 'border-[#bfe6cd] bg-[#e5f6ec] text-win' : 'border-[#f6c9ce] bg-[#fdeaec] text-loss',
+        )}
+      >
+        {edge ? '▲' : '▼'} Edge
+      </span>
     </div>
   )
 }

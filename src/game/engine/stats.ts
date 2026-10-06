@@ -156,6 +156,26 @@ export function recordGameStats(world: World, sim: GameSim, season: number, leve
   recordBoxLines(world, boxScore(world, sim), season, level)
 }
 
+/** Player lines that recorded any non-zero stat, for compact storage. */
+export function boxPlayerLines(box: PlayerBoxScore[]): PlayerBoxScore[] {
+  return box.filter((b) =>
+    Object.entries(b.line).some(([k, v]) => k !== 'playerId' && typeof v === 'number' && v !== 0),
+  )
+}
+
+/** Team totals for a box score, summed from its player lines. */
+export function boxTeamTotals(box: PlayerBoxScore[]): Record<string, { passYds: number; rushYds: number; turnovers: number; sacks: number }> {
+  const out: Record<string, { passYds: number; rushYds: number; turnovers: number; sacks: number }> = {}
+  for (const b of box) {
+    const t = (out[b.teamId] ??= { passYds: 0, rushYds: 0, turnovers: 0, sacks: 0 })
+    t.passYds += b.line.passYds ?? 0
+    t.rushYds += b.line.rushYds ?? 0
+    t.turnovers += b.line.ints ?? 0
+    t.sacks += b.line.defSacks ?? 0
+  }
+  return out
+}
+
 /** Career totals across pro seasons. */
 export function careerTotals(p: Player) {
   const t = emptySeason(0, 'NFL', '')
