@@ -9,12 +9,12 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 |---|---|---|---|
 | W0 | First draft class topped up to ≥ 260 prospects | P1 | ✅ done — verified (P1) |
 | W1 | AI clubs spend toward the cap floor | P1 | ✅ done — verified (P1) |
-| W2 | Shadow board: types + engine | P2 | in progress (P2) |
-| W3 | Shadow board: store + season-end grading | P2 | in progress (P2) |
-| W4 | Shadow board: UI | P2 | in progress (P2) |
-| W5 | Extension talks: engine | P3 | not started |
-| W6 | Extension talks: store + ledger | P3 | not started |
-| W7 | Extension talks: UI | P3 | not started |
+| W2 | Shadow board: types + engine | P2 | ✅ done — verified (P2) |
+| W3 | Shadow board: store + season-end grading | P2 | ✅ done — verified (P2) |
+| W4 | Shadow board: UI | P2 | ✅ done — verified (P2) |
+| W5 | Extension talks: engine | P3 | in progress (P3) |
+| W6 | Extension talks: store + ledger | P3 | in progress (P3) |
+| W7 | Extension talks: UI | P3 | in progress (P3) |
 | W8 | Cap memo: engine + store + grading | P4 | not started |
 | W9 | Cap memo: UI | P4 | not started |
 | W10 | Combine week: engine + store | P5 | not started |
@@ -193,3 +193,6 @@ Never run `npm run dev` or any watch command. No git commands.
 - **P1** (browser + probe, seed 20261004): the first draft class has 260 prospects (40 `dx` fills), all ids unique. Probe 14 seasons: GM in season 10, overCap 0.
   **W1 effect is small:** capUsedPct 0.591 → 0.611. AI rosters average 54.8 players, so the `roster.length < 53` guard blocks most top-ups.
   A real fix needs AI clubs to release cheap depth to make room (a balance decision, raised with the user; not done here).
+- **P2** (browser, Dir. Player Personnel): board caps at 10, refuses own players, card shows on Free Agency, and hits go to the Ledger + season moments. Claude fixes:
+  (1) the board was never cleared, so the same hits would pay every season. Now hits leave the board, and misses carry over re-based to the current OVR;
+  (2) the growth threshold was tuned from +3 (8/10 naive young picks hit, too easy) → +5 (1/10, too hard) → **+4** (naive young picks 4–6/10, veterans 0/10 on two seeds).

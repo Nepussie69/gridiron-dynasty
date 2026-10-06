@@ -117,6 +117,7 @@ import { currentDilemma, applyDilemma } from '../game/engine/dilemma'
 import { recordGhostSeason } from '../game/engine/ghost'
 import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
+import { canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import {
   WEEK_HOURS,
   weeklyActions,
@@ -404,6 +405,8 @@ interface GameStore {
   fireStaff: (staffId: string) => void
   restructurePlayer: (id: string) => void
   extendPlayer: (id: string) => void
+  /** G1: add/remove a non-own player from the shadow board (proScout rungs). */
+  toggleShadowBoard: (playerId: string) => void
 
   // Practice squad & injured reserve
   signToPracticeSquad: (id: string) => void
@@ -1245,6 +1248,7 @@ export const useGame = create<GameStore>((set, get) => ({
     world.freeAgents.splice(idx, 1)
     p.teamId = career.teamId
     p.origin = { kind: 'freeAgent', season: world.season, by: career.gmName, fromTeamId: null }
+    if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
     world.roster[career.teamId].push(p)
     ledgerFreeAgent(world, career.teamId, 'gained', p.ovr)
     bump(set, get)
@@ -1303,6 +1307,16 @@ export const useGame = create<GameStore>((set, get) => ({
     p.contract = extendContract(p.contract, rng, p.ovr, p.pos, p.age, world.season)
     bump(set, get)
     get().showToast(`${p.name} extended through ${p.contract.signedThrough}.`)
+    get().save()
+  },
+
+  toggleShadowBoard: (playerId) => {
+    const career = get().career
+    if (!career || !canShadow(career)) return
+    const { board, message } = toggleShadow(world, career, playerId)
+    set({ career: { ...career, shadowBoard: board } })
+    get().showToast(message)
+    bump(set, get)
     get().save()
   },
 
@@ -1421,7 +1435,10 @@ export const useGame = create<GameStore>((set, get) => ({
     for (const a of get2) {
       if (a.kind !== 'player') continue
       const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
-      if (p) p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
+      if (p) {
+        p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
+        if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
+      }
     }
     // #6: log the trade for the Trade Tree (newest last, capped).
     const trades = [...(career.trades ?? []), rec].slice(-60)
@@ -2038,6 +2055,47 @@ function runEndOfRegularSeason(
           text: `Your read on the staff sharpened the department board (+${gain} pts accuracy).`,
           tone: 'win',
         })
+      }
+    }
+    // G1: grade the shadow board against who actually grew — or who you landed.
+    if (canShadow(career)) {
+      const shadow = gradeShadowBoard(world, career)
+      if (shadow.hits) {
+        const repS: Reputation = { ...careerNext.reputation }
+        for (const [k, v] of Object.entries(shadow.rep)) {
+          ;(repS as unknown as Record<string, number>)[k] = clamp(
+            ((repS as unknown as Record<string, number>)[k] ?? 0) + (v as number),
+            0,
+            100,
+          )
+        }
+        careerNext = { ...careerNext, reputation: repS }
+        // Hits feed the Résumé as recommendations, so portfolio picks them up.
+        for (const h of shadowHits(world, career)) {
+          const sp = world.players.find((x) => x.id === h.entry.playerId)
+          pushLedger(career, {
+            kind: 'recommendation',
+            recommendation: 'Starter',
+            playerId: h.entry.playerId,
+            name: h.entry.name,
+            pos: h.entry.pos,
+            college: sp?.college ?? '—',
+            note: 'Shadow board hit',
+            hit: true,
+          })
+        }
+        for (const line of shadow.lines) {
+          careerNext = logMoment(careerNext, { week: careerNext.week, text: line, tone: 'win' })
+        }
+      }
+      // Retired players fall off the board; hits are booked and leave it, and the
+      // misses carry over re-based to today's rating so nothing is paid twice.
+      const hitIds = new Set(shadowHits(world, career).map((h) => h.entry.playerId))
+      careerNext = {
+        ...careerNext,
+        shadowBoard: pruneShadowBoard(world, career)
+          .filter((e) => !hitIds.has(e.playerId))
+          .map((e) => ({ ...e, ovrAtAdd: world.players.find((x) => x.id === e.playerId)?.ovr ?? e.ovrAtAdd, season: world.season })),
       }
     }
     if (demoted) {

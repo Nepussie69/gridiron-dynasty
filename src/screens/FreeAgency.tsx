@@ -2,10 +2,12 @@ import { useMemo, useState } from 'react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { canSignFreeAgents } from '../game/engine/career'
+import { canShadow } from '../game/engine/shadow'
 import { accessFor } from '../game/engine/access'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { PlayerTable } from '../components/PlayerTable'
+import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
 import { Badge, Button, Card, PageHeader, Stat } from '../ui/kit'
 
 const POS_FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
@@ -18,6 +20,7 @@ export function FreeAgency() {
   const [q, setQ] = useState('')
 
   const canSign = canSignFreeAgents(career)
+  const canScout = canShadow(career)
   const access = accessFor(career, 'freeagency')
   const cap = capSummary(league, career.teamId)
 
@@ -60,6 +63,8 @@ export function FreeAgency() {
         <Card><Stat label="Roster Size" value={league.roster[career.teamId]?.length ?? 0} sub="53-man target" /></Card>
       </div>
 
+      {canScout && <ShadowBoardCard className="mb-4" />}
+
       <Card pad={false}>
         <div className="flex flex-wrap items-center gap-3 border-b border-line p-3">
           <div className="flex flex-wrap gap-1">
@@ -90,14 +95,17 @@ export function FreeAgency() {
             players={agents}
             showCollege
             right={(p) => (
-              <Button
-                size="sm"
-                variant="team"
-                disabled={!canSign || cap.space < p.contract.annual}
-                onClick={() => signFreeAgent(p.id)}
-              >
-                {!canSign ? 'GM decides' : cap.space < p.contract.annual ? 'No cap room' : 'Sign'}
-              </Button>
+              <div className="flex items-center justify-end gap-1.5">
+                <ShadowStar playerId={p.id} />
+                <Button
+                  size="sm"
+                  variant="team"
+                  disabled={!canSign || cap.space < p.contract.annual}
+                  onClick={() => signFreeAgent(p.id)}
+                >
+                  {!canSign ? 'GM decides' : cap.space < p.contract.annual ? 'No cap room' : 'Sign'}
+                </Button>
+              </div>
             )}
           />
         </div>

@@ -198,6 +198,17 @@ export interface PlayerOrigin {
   fromTeamId?: string | null
   /** The DraftPick.id used to draft him, when he was a drafted player. */
   pickId?: string
+  /** Free-form provenance note, e.g. "(from your shadow board)". */
+  note?: string
+}
+
+/** G1: one player you are tracking on another club or in free agency. */
+export interface ShadowEntry {
+  playerId: string
+  name: string
+  pos: string
+  ovrAtAdd: number
+  season: number
 }
 
 /**
@@ -471,6 +482,8 @@ export interface CareerState {
   scoutTrust?: Record<string, 'fade' | 'normal' | 'lean'>
   /** G2: the prospects you've tagged as conviction calls this draft (max 3). */
   conviction?: { season: number; ids: string[] }
+  /** G1: players on other clubs or in free agency you're tracking (max 10). */
+  shadowBoard?: ShadowEntry[]
   /** G3: your room's focus players, practice plan, and banked reps. */
   room?: { focus: string[]; plan: 'concentrate' | 'spread'; reps: number }
   /** The region you're assigned to scout (drives information scope). */

@@ -12,10 +12,12 @@ import {
   type DealOffer,
   type TradeAsset,
 } from '../game/engine/trade'
+import { canShadow } from '../game/engine/shadow'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import type { Player } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
+import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
 import { Badge, Button, Card, PageHeader, OvrBadge, TeamCrest } from '../ui/kit'
 
 interface Asset {
@@ -44,6 +46,7 @@ export function Trades() {
 
   const team = league.byId[activeTeamId]
   const partner = league.byId[partnerId]
+  const canScout = !!career && canShadow(career)
 
   const myAssets = useMemo(() => assetsFor(league, activeTeamId), [league, activeTeamId])
   const theirAssets = useMemo(() => assetsFor(league, partnerId), [league, partnerId])
@@ -105,6 +108,8 @@ export function Trades() {
           </select>
         }
       />
+
+      {canScout && <ShadowBoardCard className="mb-4" />}
 
       {dealTarget && (
         <Card className="mb-4">
@@ -203,6 +208,7 @@ export function Trades() {
           assets={theirAssets}
           selected={get}
           onToggle={(a) => toggle(get, setGet, a)}
+          showShadow={canScout}
         />
       </div>
     </div>
@@ -245,6 +251,7 @@ function AssetColumn({
   selected,
   onToggle,
   onFindDeals,
+  showShadow,
 }: {
   title: string
   teamId: string
@@ -252,6 +259,7 @@ function AssetColumn({
   selected: Asset[]
   onToggle: (a: Asset) => void
   onFindDeals?: (a: Asset) => void
+  showShadow?: boolean
 }) {
   const league = useWorld()
   const team = league.byId[teamId]
@@ -288,6 +296,7 @@ function AssetColumn({
                 <span className="block truncate text-xs text-muted">{a.sub}</span>
               </span>
               <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
+              {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
               {a.kind === 'player' && onFindDeals && (
                 <button
                   type="button"
