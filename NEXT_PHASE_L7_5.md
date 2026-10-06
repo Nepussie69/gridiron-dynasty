@@ -11,6 +11,7 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | X2 | AI stops re-signing the user's club when the user owns contracts | P1 | ✅ done — verified |
 | X3 | Week-12 "expiring contracts" inbox warning | P1 | ✅ done — verified |
 | X4 | HANDOFF.md docs | P1 | ✅ done — verified |
+| X5 | Personnel gates 7–8 respread (leadership wall) | P2 | in progress (P2) |
 
 ## Problems (found while verifying L7)
 
@@ -69,3 +70,23 @@ Never run `npm run dev` or any watch command. No git commands.
 - **Pacing regression (needs a user decision):** personnel → GM by seed: 20261004: 14 · 111: never (14) · 2222: never (16, stuck at L6 all career) · 33333: 9 · 5150: 10.
   Better-funded AI clubs make the probe's club win less, so it stalls at **Director of Player Personnel** (the gate for Asst GM is roster 55 / leadership 52 / profile 60).
   The probe does not use L6/L7 rep sources (shadow board, extension talks, conviction), so real play is faster. Fix options are presented to the user.
+
+---
+
+## X5 — Respread personnel gates 7–8 (user chose option 1)
+
+**Why:** After X1, the better-funded AI clubs make the probe's club win less. Personnel careers stalled at Dir. Player Personnel or Asst GM.
+Claude isolated the binding dimension by zeroing one gate dimension at a time on the stalled seeds: **leadership** is the wall for Asst GM and GM (the personnel track
+earns little leadership), with **results** also slow for GM, and **roster** on weak-roster leagues. Fix: lower leadership/results and move the difficulty onto **profile**,
+which personnel earns.
+
+**Change (`src/game/engine/career.ts`, `PERSONNEL_LADDER`, ONLY the `gate({...})` args of two rows):**
+| Level | Title | Old gate | New gate |
+|---|---|---|---|
+| 7 | Assistant General Manager | roster 55, leadership 52, profile 60 | **roster 54, leadership 38, profile 62** |
+| 8 | General Manager | roster 62, leadership 56, profile 66, results 43 | **roster 64, leadership 42, profile 70, results 34** |
+
+**Measured (runtime trial, 16 seasons, personnel → GM):** 20261004: 13 · 111: 17 (22-season run; 19 on the old gates) · 2222: 8 · 33333: 8 · 5150: 10 · 777: 9.
+Old gates after X1: 14 · never · never · 9 · 10.
+**Acceptance:** build + lint at 5 warnings. The orchestrator re-runs the probe on the committed code and expects the same numbers.
+Append one line under the L7.5 entry in HANDOFF.md: "X5: personnel gates 7–8 respread (leadership wall) — GM ~8–13 across seeds."
