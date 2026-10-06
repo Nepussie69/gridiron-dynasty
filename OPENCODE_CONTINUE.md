@@ -12,7 +12,7 @@ You plan, verify and commit. You can implement small pushes yourself, or delegat
 | L5–L9 | ✅ all committed |
 | L9.5 P1 (R1 game-plan wiring bug, R2 one side per plan) | ✅ `e5dba86` |
 | L9.5 P2 (R3 team ratings, R4 box scores) | ✅ `7842153` |
-| **L9.5 P3 (R5 staff role tabs, R6 staff budget, R7 sortable roster, R8 Fit fix for defenders)** | **sent to Flash at ~21:52; NOT verified or committed** |
+| **L9.5 P3 (R5 staff role tabs, R6 staff budget, R7 sortable roster, R8 Fit fix for defenders)** | **Flash FINISHED at ~21:56 (4 files changed in src/, build errors: 0, lint warnings: 5). NOT reviewed or committed: do Step 1 from point 2.** |
 
 ## Step 1: finish L9.5 P3
 1. `git status`. If `src/` is clean, P3 never landed: run `~/.claude/bin/ds-push L95_P3_PROMPT.txt l95p3` (or implement R5–R8 yourself from `NEXT_PHASE_L9_5.md`).
