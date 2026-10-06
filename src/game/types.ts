@@ -503,6 +503,8 @@ export interface CareerState {
   }
   /** K2: this offseason's install plan, chosen for the season it applies to. */
   install?: { season: number; plan: 'lean' | 'full' }
+  /** K3: starter pitches accepted by the coordinator this season. */
+  pitches?: { season: number; accepted: number }
   /** G1: players on other clubs or in free agency you're tracking (max 10). */
   shadowBoard?: ShadowEntry[]
   /** G2: extension-talk bookkeeping per player (3 tries per season, then closed). */

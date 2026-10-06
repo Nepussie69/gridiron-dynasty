@@ -95,6 +95,7 @@ import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus } from '../game/engine/install'
+import { canPitch, judgePitch } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
@@ -380,6 +381,8 @@ interface GameStore {
   pickWrinkle: (side: 'off' | 'def', id: string) => void
   /** K2: choose this offseason's install plan for the coming season. */
   chooseInstall: (plan: 'lean' | 'full') => void
+  /** K3: pitch a starter on your side to the coordinator (once a week). */
+  pitchStarter: (pos: Position, playerId: string) => void
   /** G3: add/remove a player from your room's focus list (max 3). */
   toggleRoomFocus: (playerId: string) => void
   /** G3: choose your room's practice plan (Concentrate or Spread). */
@@ -984,6 +987,32 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career || !canInstall(world, career)) return
     if (plan !== 'lean' && plan !== 'full') return
     set({ career: { ...career, install: { season: world.season + 1, plan } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  pitchStarter: (pos, playerId) => {
+    const career = get().career
+    if (!career || !canPitch(career)) return
+    if (career.weekFlags?.pitch) {
+      get().showToast('You already pitched a starter this week.')
+      return
+    }
+    const verdict = judgePitch(world, career, pos, playerId)
+    if ('error' in verdict) {
+      get().showToast(verdict.error)
+      return
+    }
+    // A pitch is spent whether the coordinator buys it or passes.
+    let next = withFlag(career, 'pitch')
+    if (verdict.accepted) {
+      const current =
+        next.pitches && next.pitches.season === world.season
+          ? next.pitches
+          : { season: world.season, accepted: 0 }
+      next = { ...next, pitches: { season: world.season, accepted: current.accepted + 1 } }
+    }
+    set({ career: next, tick: get().tick + 1 })
+    get().showToast(verdict.message)
     get().save()
   },
 
@@ -2383,6 +2412,14 @@ function runEndOfRegularSeason(
     }
     for (const line of payout.lines) {
       careerNext = logMoment(careerNext, { week: careerNext.week, text: line, tone: 'win' })
+    }
+    // K3: the coordinator who bought your pitches vouches for your eye — a
+    // position coach builds a leadership reputation one accepted pitch at a time.
+    const acceptedPitches = career?.pitches?.season === world.season ? career.pitches.accepted : 0
+    if (acceptedPitches > 0) {
+      const repP: Reputation = { ...careerNext.reputation }
+      repP.leadership = clamp(repP.leadership + Math.min(3, acceptedPitches), 0, 100)
+      careerNext = { ...careerNext, reputation: repP }
     }
     // G3: summarise what the room's reps produced.
     if (roomGains.length) {

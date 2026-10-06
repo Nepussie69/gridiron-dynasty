@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, RotateCcw } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { capabilities, isGM } from '../game/engine/capabilities'
 import { STARTERS, depthAt } from '../game/engine/depth'
+import { canPitch, pitchSide } from '../game/engine/pitch'
 import type { World } from '../game/engine/generate'
 import type { Position } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
@@ -40,12 +41,18 @@ export function DepthChart() {
   const moveDepth = useGame((s) => s.moveDepth)
   const setStarter = useGame((s) => s.setStarter)
   const resetDepthChart = useGame((s) => s.resetDepthChart)
+  const pitchStarter = useGame((s) => s.pitchStarter)
   const staff = league.staff[activeTeamId] ?? []
 
   const editable =
     !!career &&
     activeTeamId === career.teamId &&
     (isGM(career) || capabilities(career).can.has('gameManagement') || capabilities(career).can.has('callPlays'))
+
+  // K3: a position coach can pitch one starter a week, for his side of the ball.
+  const pitching = !!career && activeTeamId === career.teamId && canPitch(career)
+  const pitchPositions = pitching && career ? pitchSide(career) : []
+  const pitchUsed = !!career?.weekFlags?.pitch
 
   return (
     <div>
@@ -87,6 +94,9 @@ export function DepthChart() {
           onSelect={selectPlayer}
           onMove={moveDepth}
           onStart={setStarter}
+          pitchPositions={pitchPositions}
+          pitchUsed={pitchUsed}
+          onPitch={pitchStarter}
         />
         <Unit
           title="Defense"
@@ -98,6 +108,9 @@ export function DepthChart() {
           onSelect={selectPlayer}
           onMove={moveDepth}
           onStart={setStarter}
+          pitchPositions={pitchPositions}
+          pitchUsed={pitchUsed}
+          onPitch={pitchStarter}
         />
         <Unit
           title="Special Teams"
@@ -109,6 +122,9 @@ export function DepthChart() {
           onSelect={selectPlayer}
           onMove={moveDepth}
           onStart={setStarter}
+          pitchPositions={pitchPositions}
+          pitchUsed={pitchUsed}
+          onPitch={pitchStarter}
         />
       </div>
     </div>
@@ -125,6 +141,9 @@ function Unit({
   onSelect,
   onMove,
   onStart,
+  pitchPositions,
+  pitchUsed,
+  onPitch,
 }: {
   title: string
   accent: string
@@ -135,6 +154,9 @@ function Unit({
   onSelect: (id: string) => void
   onMove: (pos: Position, playerId: string, dir: -1 | 1) => void
   onStart: (pos: Position, playerId: string) => void
+  pitchPositions: Position[]
+  pitchUsed: boolean
+  onPitch: (pos: Position, playerId: string) => void
 }) {
   return (
     <div>
@@ -210,6 +232,17 @@ function Unit({
                               <ChevronDown size={14} />
                             </IconBtn>
                           </div>
+                        )}
+                        {pitchPositions.includes(c.pos) && i > 0 && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            disabled={pitchUsed}
+                            title={pitchUsed ? 'Already pitched a starter this week' : 'Pitch him to the coordinator'}
+                            onClick={() => onPitch(c.pos, p.id)}
+                          >
+                            Pitch
+                          </Button>
                         )}
                       </div>
                     </Fragment>
