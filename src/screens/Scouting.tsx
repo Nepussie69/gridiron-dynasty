@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Eye, Flame, Phone, Search, Star, Target, X } from 'lucide-react'
+import { Eye, Flag, Flame, Phone, Search, Star, Target, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { gradeColor } from '../lib/format'
 import type { DraftProspect, Recommendation } from '../game/types'
@@ -10,6 +10,7 @@ import { CHARACTER_FACETS, FACET_LABEL } from '../game/engine/character'
 import { isEvaluator, learnedBias, scoutReport } from '../game/engine/scoutBias'
 import { canSetTrust, departmentGrade } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds } from '../game/engine/conviction'
+import { MAX_RED_FLAGS, canRedFlag, redFlagIds } from '../game/engine/redflag'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { AccessBadge } from '../components/AccessBadge'
@@ -58,6 +59,10 @@ export function Scouting() {
   const toggleConviction = useGame((s) => s.toggleConviction)
   const canConvictHere = canConvict(career)
   const convicted = canConvictHere ? convictionIds(league, career) : []
+
+  const toggleRedFlag = useGame((s) => s.toggleRedFlag)
+  const canRedFlagHere = canRedFlag(career)
+  const redFlagged = canRedFlagHere ? redFlagIds(league, career) : []
 
   const columns: Column<DraftProspect>[] = [
     {
@@ -177,6 +182,21 @@ export function Scouting() {
                 <Flame size={11} />
               </button>
             )}
+            {canRedFlagHere && (
+              <button
+                type="button"
+                title={redFlagged.includes(p.id) ? 'Remove the red flag' : 'Red flag this prospect (take him off the board)'}
+                onClick={() => toggleRedFlag(p.id)}
+                className={cn(
+                  'grid h-6 w-6 place-items-center rounded-md border transition',
+                  redFlagged.includes(p.id)
+                    ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]'
+                    : 'border-line text-ink-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
+                )}
+              >
+                <Flag size={11} />
+              </button>
+            )}
           </div>
         )
       },
@@ -240,6 +260,9 @@ export function Scouting() {
           <div className="flex items-center gap-2">
             {canConvictHere && (
               <Badge tone="gold"><Flame size={11} /> Conviction {convicted.length}/{MAX_CONVICTION}</Badge>
+            )}
+            {canRedFlagHere && (
+              <Badge tone="warn"><Flag size={11} /> Red flags {redFlagged.length}/{MAX_RED_FLAGS}</Badge>
             )}
             <span className="text-[10px] text-faint">click a row to open the report · click a column to sort · quick buttons scout in place</span>
           </div>

@@ -16,6 +16,8 @@ import { tierFor } from './career'
 /** How many seasons a drafted player needs before we grade the pick. */
 const PICK_EVAL_SEASONS = 2
 const PICK_HIT_OVR = 78
+/** K4: a red flag hits when the prospect busts below this OVR, not above a bar. */
+const RED_FLAG_BUST_OVR = 75
 
 const BAND: Record<Recommendation, [number, number]> = {
   'Blue Chip': [86, 99],
@@ -64,6 +66,8 @@ function gradeEntry(world: World, e: LedgerEntry): boolean | undefined {
     if (!p) return undefined
     const proSeasons = (p.stats ?? []).filter((s) => s.level === 'NFL').length
     if (proSeasons < PICK_EVAL_SEASONS) return undefined
+    // K4: a red flag is a bet that he busts, so the hit test flips.
+    if (e.redFlag) return p.ovr < RED_FLAG_BUST_OVR
     return p.ovr >= PICK_HIT_OVR
   }
   if (e.kind === 'contract') {
@@ -100,9 +104,14 @@ export function gradeLedger(world: World, career: CareerState): { graded: number
     }
     // For picks, refresh the outcome text as the player develops.
     if (p && !e.vindication && e.kind !== 'contract') {
-      const tag = e.kind === 'pick' ? `Pick ${e.round ? `Rd ${e.round}` : ''}`.trim() : 'Your call'
-      if (result === true) e.outcome = `${tag}: ${p.name} is a ${p.ovr} OVR${p.ovr >= 88 ? ' star' : ' contributor'} — that one landed.`
-      else if (result === false) e.outcome = `${tag}: ${p.name} stalled at ${p.ovr} OVR.`
+      if (e.redFlag) {
+        if (result === true) e.outcome = `Red flag held: ${p.name} stalled at ${p.ovr}.`
+        else if (result === false) e.outcome = `Red flag missed: ${p.name} became a ${p.ovr}.`
+      } else {
+        const tag = e.kind === 'pick' ? `Pick ${e.round ? `Rd ${e.round}` : ''}`.trim() : 'Your call'
+        if (result === true) e.outcome = `${tag}: ${p.name} is a ${p.ovr} OVR${p.ovr >= 88 ? ' star' : ' contributor'} — that one landed.`
+        else if (result === false) e.outcome = `${tag}: ${p.name} stalled at ${p.ovr} OVR.`
+      }
     }
     if (result !== undefined && e.hit === undefined) {
       e.hit = result

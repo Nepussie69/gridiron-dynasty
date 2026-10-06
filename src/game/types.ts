@@ -458,6 +458,8 @@ export interface LedgerEntry {
   conviction?: boolean
   /** Conviction (G2): your club passed, he hit anyway — a vindication. */
   vindication?: boolean
+  /** K4: this advice entry is one of your red-flag calls (you took him off the board). */
+  redFlag?: boolean
   /** Develop entries (G3): OVR points banked for a player. */
   gain?: number
   /** Contract entries (G2): the AAV you signed him for, and his OVR at signing. */
@@ -495,6 +497,8 @@ export interface CareerState {
   scoutTrust?: Record<string, 'fade' | 'normal' | 'lean'>
   /** G2: the prospects you've tagged as conviction calls this draft (max 3). */
   conviction?: { season: number; ids: string[] }
+  /** K4: the prospects you've red-flagged this draft (max 2). */
+  redFlags?: { season: number; ids: string[] }
   /** K1: this week's game-plan wrinkle per side, plus the last few weeks of film. */
   wrinkles?: {
     season: number

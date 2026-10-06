@@ -6,6 +6,7 @@ import { ensureDraftPicks } from './picks'
 import { pushLedger } from './ledger'
 import { departmentGrade } from './department'
 import { convictionPick } from './conviction'
+import { redFlagIds } from './redflag'
 import { makeCharacter } from './character'
 import { type World } from './generate'
 import { clamp, hash32, makeRng } from './rng'
@@ -214,7 +215,15 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
     const advising = !!career && career.teamId === teamId && !canDraft(career) && (career.userBoard?.length ?? 0) > 0
     const advice: BoardAdvice | undefined = advising ? { board: career!.userBoard!, weight: adviceWeight(career!) } : undefined
     // The user's club drafts from the department grade (G1), not public consensus.
-    const gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    let gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    // K4: your club's simulated picks skip prospects you red-flagged.
+    if (gradeOf && career) {
+      const flagged = redFlagIds(world, career)
+      if (flagged.length) {
+        const base = gradeOf
+        gradeOf = (p: DraftProspect) => (flagged.includes(p.id) ? -999 : base(p))
+      }
+    }
     let prospect = bestAvailableFor(world, teamId, advice, gradeOf)
     // G2: in advise mode the Director may pound the table for a conviction call.
     if (prospect && career && teamId === career.teamId && !canDraft(career)) {

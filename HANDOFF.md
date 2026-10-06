@@ -151,6 +151,31 @@ game's guardrails intact.
   - Key files: `src/game/engine/progress.ts`, `src/store/gameStore.ts`.
   - X5: personnel gates 7–8 respread (leadership wall) — GM ~8–13 across seeds.
 
+- **L8 "The staff room" DONE** (Y1–Y9; spec `NEXT_PHASE_L8.md`; build green, lint = 5 baseline warnings):
+  - K1 **Weekly wrinkle** — `engine/wrinkle.ts` (`OFF_WRINKLES`/`DEF_WRINKLES`, `canWrinkle`, `wrinkleSides`,
+    `wrinkleEdge`, `wrinkleBonus`); pick one wrinkle per side each week. A fresh wrinkle gives +1.0 and decays as
+    opponents get film (`[1.0, 0.6, 0.3, 0.0]` by uses in the last 4 weeks; rotating stays fresh). `pickWrinkle`
+    store action, picks appended to `history` (last 8) after the user's game in `advanceWeek`, `wrinkleBonus` folded
+    into `applyUserCoaching`; `components/WrinkleCard.tsx` on Game Plan.
+  - K2 **Install plan** — `engine/install.ts` (`INSTALL_OPTIONS`, `canInstall`, `installEdge`, `installSides`,
+    `installBonus`); an offseason choice of Lean (weeks 1–8 hot, then flat) or Full (slow start, strong finish),
+    locked once chosen. `chooseInstall`; `applyUserCoaching` sums wrinkle + install per side and clamps the combined
+    bonus to [−0.6, +1.5]; `components/InstallCard.tsx` on Game Plan.
+  - K3 **Starter pitch** — `engine/pitch.ts` (`canPitch`, `pitchSide`, `judgePitch`); a position coach (developRoom
+    without callPlays) pitches a starter once a week; the coordinator's accept chance scales with leadership rep and
+    the OVR gap. Accepted pitches call `setStarterInDepth` and bank `pitches.accepted` (≤ +3 leadership at season
+    end); Pitch buttons on `DepthChart.tsx`.
+  - K4 **Red flag** — `engine/redflag.ts` (`MAX_RED_FLAGS = 2`, `canRedFlag`, `redFlagIds`, `logRedFlags`,
+    `redFlagPayout`); up to 2 prospects taken off your club's board, mutually exclusive with Conviction. Your club's
+    simulated picks skip them in `simUntilUser` (a wrapped `gradeOf` returning −999; `bestAvailableFor` untouched).
+    A rival picking one logs an `advice` entry graded after 2 NFL seasons with the hit test flipped (`ovr < 75`),
+    paying evaluation on a hit (cap +3/season) and profile on a miss; `toggleRedFlag`; 🚩 toggle + "Red flags n/2"
+    chip on Scouting; Ledger "Red flag" / "Red flag held" badges.
+  - Key files: `src/game/engine/wrinkle.ts`, `src/game/engine/install.ts`, `src/game/engine/pitch.ts`,
+    `src/game/engine/redflag.ts`, `src/components/WrinkleCard.tsx`, `src/components/InstallCard.tsx`
+    (plus `draft.ts`, `ledger.ts`, `store/gameStore.ts`, `screens/Scouting.tsx`, `screens/DepthChart.tsx`,
+    `screens/Ledger.tsx` wiring).
+
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.
 

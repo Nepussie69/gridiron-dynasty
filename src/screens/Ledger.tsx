@@ -145,6 +145,8 @@ export function Ledger() {
                       <Badge tone={meta.tone}>{meta.label}</Badge>
                       {e.conviction && <Badge tone="gold">Conviction</Badge>}
                       {e.vindication && <Badge tone="win">Called it</Badge>}
+                      {e.redFlag && <Badge tone="warn">Red flag</Badge>}
+                      {e.redFlag && e.hit === true && <Badge tone="win">Red flag held</Badge>}
                       <span className="truncate font-600 text-ink">{e.name}</span>
                       <span className="font-cond text-[11px] font-700 uppercase text-muted">{e.pos} · {e.college}</span>
                     </div>

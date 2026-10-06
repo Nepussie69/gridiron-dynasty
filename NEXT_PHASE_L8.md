@@ -13,9 +13,9 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | Y4 | Install plan: UI | P2 | ✅ done — verified (P2) |
 | Y5 | Starter pitch (position coach): engine + store | P3 | ✅ done — verified (P3) |
 | Y6 | Starter pitch: depth chart UI | P3 | ✅ done — verified (P3) |
-| Y7 | Red flag (take him off the board): engine + ledger | P4 | in progress (P4) |
-| Y8 | Red flag: draft wiring + UI | P4 | in progress (P4) |
-| Y9 | HANDOFF.md docs | P4 | in progress (P4) |
+| Y7 | Red flag (take him off the board): engine + ledger | P4 | ✅ done — verified (P4) |
+| Y8 | Red flag: draft wiring + UI | P4 | ✅ done — verified (P4) |
+| Y9 | HANDOFF.md docs | P4 | ✅ done — verified (P4) |
 
 ## Phase goal
 
@@ -142,3 +142,6 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
 - **P3** (browser, NFL position coach, offense): a defensive position is refused; the second pitch in a week is refused; a big gap is refused ("won't bench a 89 for a 71"); Watson (70) over
   Flacco (72) was accepted and became QB1; `pitches.accepted` counts; Pitch buttons render on Depth Chart. Claude fixes: (1) pitching a player who already starts (e.g. WR2 → WR1)
   is refused, which closes a free-leadership loop; (2) at multi-starter positions the pitch is judged against the **last** starter (the one who gets benched), not the best.
+- **P4** (browser, Asst Dir): a red flag on a conviction prospect is refused; the 3rd flag is refused (max 2); both flagged prospects (#1 and #2 on the board) were drafted by other clubs (SEA, PHI)
+  and logged as red-flag ledger entries; the "Red flags" chip renders on Scouting. Grading flips to hit = OVR < 75 after 2 seasons. Claude fix: red flags are limited to the **top 64 of the class**
+  by consensus grade (`isRedFlaggable`). Flagging obvious late-round busts would otherwise farm +2 evaluation a season.

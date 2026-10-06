@@ -92,7 +92,8 @@ import {
 } from '../game/engine/draft'
 import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
-import { MAX_CONVICTION, canConvict, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
+import { MAX_CONVICTION, canConvict, convictionIds, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
+import { MAX_RED_FLAGS, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus } from '../game/engine/install'
 import { canPitch, judgePitch } from '../game/engine/pitch'
@@ -377,6 +378,8 @@ interface GameStore {
   setScoutTrust: (staffId: string, level: 'fade' | 'normal' | 'lean') => void
   /** G2: tag/untag a prospect as a conviction call for this draft (max 3). */
   toggleConviction: (prospectId: string) => void
+  /** K4: add/remove a prospect from your red-flag list for this draft (max 2). */
+  toggleRedFlag: (prospectId: string) => void
   /** K1: pick (or clear) this week's game-plan wrinkle for a side. */
   pickWrinkle: (side: 'off' | 'def', id: string) => void
   /** K2: choose this offseason's install plan for the coming season. */
@@ -786,6 +789,8 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     // G2: log conviction calls for anyone drafted before the class rolls over.
     logConvictionPicks(world, career)
+    // K4: log red-flag calls for anyone another club drafted.
+    logRedFlags(world, career)
     runAIFreeAgency(world, career.teamId)
     runAITrades(world)
     world.season += 1
@@ -950,6 +955,10 @@ export const useGame = create<GameStore>((set, get) => ({
     if (current.includes(prospectId)) {
       ids = current.filter((id) => id !== prospectId)
     } else {
+      if (redFlagIds(world, career).includes(prospectId)) {
+        get().showToast('He is red-flagged — clear the flag first.')
+        return
+      }
       if (current.length >= MAX_CONVICTION) {
         get().showToast(`Pound the table is full — ${MAX_CONVICTION} calls per draft.`)
         return
@@ -958,6 +967,36 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     set({
       career: { ...career, conviction: { season: world.season, ids } },
+      tick: get().tick + 1,
+    })
+    get().save()
+  },
+
+  toggleRedFlag: (prospectId) => {
+    const career = get().career
+    if (!career || !canRedFlag(career)) return
+    // Flagging an obvious late-rounder proves nothing (and would farm reputation).
+    if (!redFlagIds(world, career).includes(prospectId) && !isRedFlaggable(world, prospectId)) {
+      get().showToast('Save red flags for prospects the league rates — the top 64 of the class.')
+      return
+    }
+    if (convictionIds(world, career).includes(prospectId)) {
+      get().showToast('He is a conviction call — a prospect can only be one.')
+      return
+    }
+    const current = career.redFlags?.season === world.season ? career.redFlags.ids : []
+    let ids: string[]
+    if (current.includes(prospectId)) {
+      ids = current.filter((id) => id !== prospectId)
+    } else {
+      if (current.length >= MAX_RED_FLAGS) {
+        get().showToast(`Red flags are full — ${MAX_RED_FLAGS} per draft.`)
+        return
+      }
+      ids = [...current, prospectId]
+    }
+    set({
+      career: { ...career, redFlags: { season: world.season, ids } },
       tick: get().tick + 1,
     })
     get().save()
@@ -1294,6 +1333,9 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career || !userOnClock(world, career)) return
     const prospect = world.draft.find((d) => d.id === id)
     if (!prospect) return
+    if (redFlagIds(world, career).includes(prospect.id)) {
+      get().showToast(`${prospect.name} is on your red-flag list — drafting him anyway.`)
+    }
     const round = currentRound(world)
     const player = makePick(world, prospect, career.teamId, career.gmName)
     pushLedger(career, {
@@ -1310,6 +1352,7 @@ export const useGame = create<GameStore>((set, get) => ({
       note: `Drafted ${prospect.name} (${prospect.pos}, ${prospect.college})`,
     })
     logConvictionPicks(world, career)
+    logRedFlags(world, career)
     set({ career: { ...career }, tick: get().tick + 1 })
     announceDraftPicks(world, career)
     resolveTradePicks(world, career)
@@ -1319,6 +1362,7 @@ export const useGame = create<GameStore>((set, get) => ({
     simUntilUser(world, get().career)
     const career = get().career
     if (career) logConvictionPicks(world, career)
+    if (career) logRedFlags(world, career)
     if (career) announceDraftPicks(world, career)
     if (career) resolveTradePicks(world, career)
     bump(set, get)
@@ -1330,6 +1374,7 @@ export const useGame = create<GameStore>((set, get) => ({
     world.draftState.complete = true
     const career = get().career
     if (career) logConvictionPicks(world, career)
+    if (career) logRedFlags(world, career)
     if (career) announceDraftPicks(world, career)
     if (career) resolveTradePicks(world, career)
     bump(set, get)
@@ -2411,6 +2456,22 @@ function runEndOfRegularSeason(
       careerNext = { ...careerNext, reputation: repC }
     }
     for (const line of payout.lines) {
+      careerNext = logMoment(careerNext, { week: careerNext.week, text: line, tone: 'win' })
+    }
+    // K4: red-flag calls that matured this season pay out evaluation/profile.
+    const rfPayout = redFlagPayout(newly)
+    if (Object.keys(rfPayout.rep).length) {
+      const repR: Reputation = { ...careerNext.reputation }
+      for (const [k, v] of Object.entries(rfPayout.rep)) {
+        ;(repR as unknown as Record<string, number>)[k] = clamp(
+          ((repR as unknown as Record<string, number>)[k] ?? 0) + (v as number),
+          0,
+          100,
+        )
+      }
+      careerNext = { ...careerNext, reputation: repR }
+    }
+    for (const line of rfPayout.lines) {
       careerNext = logMoment(careerNext, { week: careerNext.week, text: line, tone: 'win' })
     }
     // K3: the coordinator who bought your pitches vouches for your eye — a
