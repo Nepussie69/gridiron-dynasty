@@ -13,15 +13,14 @@ _Written 2026-10-06 by Claude Opus 5.5 at the end of a long orchestration sessio
 - Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
 
 ### Sending a push to Flash
-The wrapper is `~/.claude/bin/ds` (OpenCode CLI). Default model `opencode-go/deepseek-v4.1-flash`. Use this runner (it adds a 45-minute hard timeout). Recreate it in the scratchpad:
-```bash
-#!/bin/zsh
-# push.sh <prompt-file>
-cd "/Users/aaron/Documents/deepseek-harness/untitled folder"
-perl -e 'alarm shift; exec @ARGV' 2700 ~/.claude/bin/ds -m ${DS_ROUTE:-opencode-go/deepseek-v4.1-flash} -d "$PWD" "$(cat $1)" 2>&1 | tail -30
-```
-Run it with Bash `run_in_background: true`, plus a **Monitor** stall-watch: if the `opencode-cli run` process sits at 0% CPU for 8 min with `git diff --quiet src`, it's hung, so kill it and retry.
-Flash hung twice on `opencode-go`. The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient account funds"**, so don't use it unless the user tops up.
+Use **`~/.claude/bin/ds-push <prompt-file> [label]`** (added 2026-10-06). It runs `opencode-cli run --standalone --auto --format json -m opencode-go/deepseek-v4.1-flash` with watchdogs and auto-retry:
+- **startup hang** (no event within 120 s) and **idle hang** (no event and no change under `src/` for 600 s) → kill the process tree and retry, up to 3 tries; a 2700 s hard cap per try;
+- a retry prepends a note telling Flash to inspect `git status`/`git diff` first and continue without redoing work;
+- status lines start with `[push]` (follow them with a Monitor); the per-try event logs are `$PUSH_LOG_DIR` (default `$TMPDIR/ds-push`)`/<label>.tryN.jsonl`; at the end it prints Flash's final report. Exit 3 = gave up.
+- Env overrides: `STARTUP`, `IDLE`, `HARD`, `MAX_TRIES`, `DS_ROUTE` (model).
+Run it with Bash `run_in_background: true`. **Hang diagnosis:** a hung run logs *nothing* in `~/.local/share/opencode/log/opencode.log` after "cli starting" (it never gets its first model response), so a fast retry is the right fix.
+Startup hangs come in bursts (2026-10-06: 3 pings in a row hung while another Flash run was active), so avoid running two Flash jobs at once.
+The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient account funds"**, so don't use it unless the user tops up.
 
 **Prompt template** (fill the task list):
 > You are the IMPLEMENTER for the Gridiron Dynasty repo in the current directory. The active spec is NEXT_PHASE_X.md — read it fully. IGNORE all other NEXT_PHASE*.md files.
@@ -51,15 +50,12 @@ Flash hung twice on `opencode-go`. The alternative route `opencode/deepseek-v4.1
 | L7 Middle of the building (shadow board, extension talks, cap memo, combine) | NEXT_PHASE_L7.md | ✅ | 307531d |
 | L7.5 Economy (AI depth swaps → cap use ~0.8, user owns re-signs, expiring warning, gates 7–8 respread) | NEXT_PHASE_L7_5.md | ✅ | 24de32c |
 | L8 Staff room (weekly wrinkle, install plan, starter pitch, red flag) | NEXT_PHASE_L8.md | ✅ | 9f4e40d |
-| **L9 The long game** | NEXT_PHASE_L9.md | **P1 ✅ (1f5859b); P2, P3 not sent** | 1f5859b |
-| **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | **drafted, not sent** | — |
+| **L9 The long game** | NEXT_PHASE_L9.md | **✅ all pushes (P3 verified)** | see git log |
+| **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | **spec final (push plan added), not sent** | — |
 
 ### Immediate next steps
-1. **Send L9 P2** (tasks Z1b, Z1c, Z2, Z3). Z1b/Z1c are **bugs the smoke probe found**: (a) starting-pool free agents signed by AI never enter `world.players`, so they never age/develop/retire and lookups miss them;
-   (b) AI rosters can exceed 60. Then Z2/Z3 are staff awards. After it lands, run `await __careerSmoke(6,'personnel')` and `(6,'coach')`: the "not the canonical player object" and ">60 roster" violations must be gone.
-2. **Send L9 P3** (Z4 owner counteroffer, Z5 rivalry games, Z6 docs).
-3. **Send L9.5** in pushes (suggested: P1 = R1+R2 game-plan wiring + one-side plans; P2 = R3+R4 ratings + box scores; P3 = R5–R8 staff groups, budget, sortable roster, Fit fix).
-   **R1 is a real bug:** the user's DEFENSIVE game plan is currently applied to the OPPONENT.
+1. **Send L9.5** in its three pushes (P1 = R1+R2, P2 = R3+R4, P3 = R5–R8; see the spec's PUSHES section) and check its progress table for what's already done. **R1 is a real bug:** the user's DEFENSIVE game plan is applied to the OPPONENT.
+   R1 check: an extreme user def plan (aggression 2) must raise the user's own sacks/blitzes, not the opponent's.
 
 ## 4. Pacing & balance (current, measured on committed code)
 - Personnel → GM: seeds 20261004 13 · 2222 8 · 33333 8 · 5150 10 · 777 9 · 111 17 (a weak-roster outlier). Coach → HC ~10–11.
@@ -78,3 +74,12 @@ Flash hung twice on `opencode-go`. The alternative route `opencode/deepseek-v4.1
 ## 6. Key files added across these phases
 engine: tradeTree, seed, scenarios, objectives, department, conviction, room, portfolio, shadow, negotiation, capMemo, combine, depth, wrinkle, install, pitch, redflag (`src/game/engine/`).
 components: RoomCard, InterviewPrep, PortfolioCard, ShadowBoardCard, ExtensionTalks, CombineCard, WrinkleCard, InstallCard. Smoke probe: `careerSmoke` in `src/store/gameStore.ts`.
+
+## 7. Continuing in OpenCode (if Claude usage runs out)
+A ready OpenCode chat exists: open the **OpenCode app** → this project → session **"Gridiron Dynasty — Orchestrator (Claude backup)"** (model `opencode-go/deepseek-v4.1-flash`, DeepSeek Flash 4.1).
+It has already read this file. Rules for that orchestrator:
+- **Same workflow:** spec → push → verify → commit. It can either send pushes to Flash with `~/.claude/bin/ds-push` (needs a bash timeout of 45+ min) or implement a push itself if that's simpler.
+- **No browser pane there.** Verification = `npm run build` + `npm run lint` (exactly 5 warnings) + reading the diff; for in-game checks, give the user the exact console snippet
+  (e.g. `await __careerSmoke(6,'coach')`) to paste into the browser devtools at http://127.0.0.1:5173 and read back the result.
+- Guardrails in §4 still apply. Commit with the trailer `Co-Authored-By: DeepSeek Flash 4.1 (OpenCode) <noreply@opencode.ai>` instead of Claude's.
+- When Claude is available again, Claude resumes from this file plus `git log`.

@@ -12,9 +12,9 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx, Cap.tsx, ui/kit.tsx, MatchV
 | Z1c | **Bug:** AI rosters can exceed 60 | P2 | ✅ done — verified (P2) |
 | Z2 | Staff awards: engine + season-end wiring | P2 | ✅ done — verified (P2) |
 | Z3 | Staff awards: Awards screen + recap + résumé | P2 | ✅ done — verified (P2) |
-| Z4 | Owner counteroffer when a rival club comes calling | P3 | not started |
-| Z5 | Rivalry games against your NPC rivals' clubs | P3 | not started |
-| Z6 | HANDOFF.md docs | P3 | not started |
+| Z4 | Owner counteroffer when a rival club comes calling | P3 | ✅ done — verified (P3) |
+| Z5 | Rivalry games against your NPC rivals' clubs | P3 | ✅ done — verified (P3) |
+| Z6 | HANDOFF.md docs | P3 | ✅ done — verified (P3) |
 
 ## Phase goal
 
@@ -134,3 +134,6 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   the user's club: it's already trimmed at the start of `runAIFreeAgency` and the AI never signs for it. **Staff awards:** the spec's Rising Star formula (`objectives×10 + summed rep gain`) let the user win 6/6 seasons
   (+2 profile a year, free pacing). Orchestrator rescaled it to `repGain/5 + objectives×1.5`, the same scale as a rival's single rep delta (+3–6/season): the user now wins in strong seasons only (2/6 on each path).
   Awards screen: the "Front Office & Staff Awards" card, collapsible history and gold "You" badge all render. GMs without a staff entry show as "{Team} GM" per spec.
+- **P3** (browser): first Flash run hung at startup (killed after 8 min idle, retried OK). Smoke probe on both paths: 0 errors, 0 violations; `rivalWins` tracked and capped at 2.
+  Counteroffer: `counterOffer` null at jobSecurity 54, for a cheap owner, and with no offers; the card shows above the job offers (win-now BAL owner text), **Accept counter** gives salary ×1.25, +15 security, +1 leadership,
+  clears offers, closes the modal, logs the moment; a second accept is a no-op. Rivalry banner renders on the Dashboard. Orchestrator fix: the meddling-owner line no longer assumes the owner's gender.

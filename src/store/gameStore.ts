@@ -46,6 +46,8 @@ import {
   computeStaffAwards,
   type StaffAward,
 } from '../game/engine/staffAwards'
+import { counterOffer } from '../game/engine/counter'
+import { rivalFor } from '../game/engine/rivalry'
 import { recordGameStats, boxScore, recordBoxLines } from '../game/engine/stats'
 import { simLeagueGames } from '../game/engine/leagueSim'
 import {
@@ -420,6 +422,8 @@ interface GameStore {
   importSaveText: (text: string) => Promise<void>
 
   acceptOffer: (offer: JobOffer, pitch?: string[]) => void
+  /** L9 Z4: accept the current owner's counteroffer and stay put. */
+  acceptCounter: () => void
   declineOffers: () => void
 
   userOnClock: () => boolean
@@ -668,6 +672,30 @@ export const useGame = create<GameStore>((set, get) => ({
       if (margin >= 17) nextCareer = logMoment(nextCareer, { week, text: `Blew out the ${oppTeam.name} ${myScore}-${oppScore}.`, tone: 'win' })
       else if (margin >= 1 && margin <= 3) nextCareer = logMoment(nextCareer, { week, text: `Won a thriller over the ${oppTeam.name}, ${myScore}-${oppScore}.`, tone: 'win' })
       else if (margin <= -17) nextCareer = logMoment(nextCareer, { week, text: `Routed by the ${oppTeam.name}, ${myScore}-${oppScore}.`, tone: 'loss' })
+    }
+    // L9 Z5: a rivalry game against a rival's club — the result sticks.
+    if (sim && userGame) {
+      const isHome = userGame.homeId === c.teamId
+      const oppId = isHome ? userGame.awayId : userGame.homeId
+      const rival = rivalFor(world, oppId)
+      if (rival) {
+        const myScore = isHome ? sim.homeScore : sim.awayScore
+        const oppScore = isHome ? sim.awayScore : sim.homeScore
+        const oppName = world.byId[oppId].name
+        if (myScore > oppScore) {
+          const already = nextCareer.rivalWins?.season === world.season ? nextCareer.rivalWins.wins : 0
+          if (already < 2) {
+            nextCareer = {
+              ...nextCareer,
+              reputation: { ...nextCareer.reputation, profile: clamp(nextCareer.reputation.profile + 1, 0, 100) },
+              rivalWins: { season: world.season, wins: already + 1 },
+            }
+          }
+          nextCareer = logMoment(nextCareer, { week, text: `Beat ${rival.name}'s ${oppName}.`, tone: 'win' })
+        } else if (myScore < oppScore) {
+          nextCareer = logMoment(nextCareer, { week, text: `${rival.name} got the better of you.`, tone: 'loss' })
+        }
+      }
     }
     // The week's ONE big decision (#2). Generated from the new week's state.
     nextCareer = { ...nextCareer, dilemma: currentDilemma(world, nextCareer) ?? undefined }
@@ -1333,6 +1361,29 @@ export const useGame = create<GameStore>((set, get) => ({
       if (matched.length) msg += ` Your pitch landed: ${matched.join(', ')}.`
     }
     get().showToast(msg)
+    get().save()
+  },
+  acceptCounter: () => {
+    const career = get().career
+    if (!career) return
+    const counter = career.counter
+    // The counter is only live for the season that produced it, and only once.
+    if (!counter || counter.season !== world.season || counter.taken) return
+    const team = world.byId[career.teamId]
+    const next: CareerState = {
+      ...career,
+      salary: Math.round(career.salary * 1.25),
+      jobSecurity: clamp(career.jobSecurity + 15, 0, 100),
+      reputation: { ...career.reputation, leadership: clamp(career.reputation.leadership + 1, 0, 100) },
+      counter: { ...counter, taken: true },
+    }
+    const withMoment = logMoment(next, {
+      week: next.week,
+      text: `You stayed: the ${team.name} owner matched with a raise.`,
+      tone: 'win',
+    })
+    set({ career: withMoment, offers: [], modal: 'none', tick: get().tick + 1 })
+    get().showToast(`The ${team.name} matched the offer. You are staying.`)
     get().save()
   },
   declineOffers: () => set({ offers: [], modal: 'none' }),
@@ -2590,6 +2641,13 @@ function runEndOfRegularSeason(
   }
 
   const offers = careerNext ? generateJobOffers(world, careerNext) : []
+  // L9 Z4: if a rival club comes calling, the current owner may counter to keep
+  // you — once a season, and only for owners who invest in their people.
+  if (careerNext && (!careerNext.counter || careerNext.counter.season !== world.season)) {
+    if (counterOffer(world, careerNext, offers)) {
+      careerNext = { ...careerNext, counter: { season: world.season, taken: false } }
+    }
+  }
   world.phase = 'offseason'
 
   const rec = world.standings[careerNext?.teamId ?? 'BUF']

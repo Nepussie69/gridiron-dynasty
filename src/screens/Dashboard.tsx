@@ -14,7 +14,8 @@ import {
 } from '../game/selectors'
 import { useGame, useWorld, type ScreenId } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
-import { ownerPersonality, ownerPersonalityLabel } from '../game/engine/people'
+import { ownerPersonality, ownerPersonalityLabel, rivalTitle } from '../game/engine/people'
+import { rivalFor } from '../game/engine/rivalry'
 import { hasRoom } from '../game/engine/room'
 import { CulturePanel } from '../components/CulturePanel'
 import { OfficeScene } from '../components/OfficeScene'
@@ -46,6 +47,7 @@ export function Dashboard() {
   const { out: schedule } = scheduleFor(league, activeTeamId)
   const next = schedule.find((g) => g.week >= career.week)
   const opp = next ? league.byId[next.opponentId] : null
+  const rival = opp ? rivalFor(league, opp.id) : undefined
 
   const stars = [...roster].sort((a, b) => b.ovr - a.ovr).slice(0, 5)
   const news = league.news.slice(0, 5)
@@ -136,6 +138,14 @@ export function Dashboard() {
 
       <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
         <div className="space-y-5">
+          {/* L9 Z5: a rivalry week against a rival's club. */}
+          {rival && opp && (
+            <Card className="border-gold/60 bg-gold/10">
+              <div className="font-cond text-sm font-700 uppercase leading-snug text-ink">
+                Rivalry week: {rival.name} ({rivalTitle(rival)}) and the {opp.name}
+              </div>
+            </Card>
+          )}
           {/* Next game */}
           {next && opp && (
             <Card pad={false} className="overflow-hidden">

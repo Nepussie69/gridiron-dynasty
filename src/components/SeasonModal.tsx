@@ -4,6 +4,7 @@ import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { ladderFor, tierFor } from '../game/engine/career'
 import { portfolioItems } from '../game/engine/portfolio'
+import { counterOffer } from '../game/engine/counter'
 import type { JobOffer } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { InterviewPrep } from './InterviewPrep'
@@ -17,6 +18,7 @@ export function SeasonModal() {
   const career = useGame((s) => s.career)
   const dismiss = useGame((s) => s.dismissModal)
   const acceptOffer = useGame((s) => s.acceptOffer)
+  const acceptCounter = useGame((s) => s.acceptCounter)
   const decline = useGame((s) => s.declineOffers)
   const [prep, setPrep] = useState<JobOffer | null>(null)
 
@@ -235,6 +237,9 @@ export function SeasonModal() {
   if (modal === 'offers') {
     const current = career ? tierFor(career.path, career.level).title : ''
     const canPitch = career ? portfolioItems(league, career).length > 0 : false
+    const myTeam = career ? league.byId[career.teamId] : null
+    const liveCounter = !!career && career.counter?.season === league.season && !career.counter.taken
+    const counter = liveCounter && career ? counterOffer(league, career, offers) : null
     return (
       <>
       <Shell onClose={decline}>
@@ -246,6 +251,20 @@ export function SeasonModal() {
             reputation fit decides it. Win the room or stay put as {current}.
           </p>
         </div>
+        {counter && myTeam && (
+          <div className="mb-3 rounded-xl border border-gold/60 bg-gold/10 p-3">
+            <div className="mb-1 flex items-center gap-1.5">
+              <Award size={14} className="text-gold" />
+              <div className="font-display text-lg font-700 uppercase leading-none text-ink">
+                Counteroffer — stay with the {myTeam.name}
+              </div>
+            </div>
+            <p className="text-sm text-ink-2">{counter.text}</p>
+            <Button variant="primary" className="mt-2 w-full" onClick={acceptCounter}>
+              Accept counter
+            </Button>
+          </div>
+        )}
         <div className="space-y-3">
           {offers.map((o) => {
             const team = league.byId[o.teamId]

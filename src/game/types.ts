@@ -543,6 +543,10 @@ export interface CareerState {
   earnedTraits?: EarnedTrait[]
   /** L9 Z2: staff awards the user has won, newest last. */
   honors?: { season: number; award: string }[]
+  /** L9 Z4: the owner's counteroffer, live until accepted or the season turns. */
+  counter?: { season: number; taken?: boolean }
+  /** L9 Z5: rivalry wins this season (the profile reward caps at 2). */
+  rivalWins?: { season: number; wins: number }
   /** The boss who is shaping you (#11). */
   mentor?: { name: string; philosophy: string; teamId: string }
   /** People you developed who now run their own programs (#11). */

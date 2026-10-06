@@ -179,6 +179,28 @@ game's guardrails intact.
     (plus `draft.ts`, `ledger.ts`, `store/gameStore.ts`, `screens/Scouting.tsx`, `screens/DepthChart.tsx`,
     `screens/Ledger.tsx` wiring).
 
+- **L9 "The long game" DONE** (Z1–Z5; spec `NEXT_PHASE_L9.md`; build green, lint = 5 baseline warnings):
+  - Z1 **Smoke probe** — `careerSmoke(seasons, path, seed)` in `store/gameStore.ts`, registered as
+    `window.__careerSmoke` in `main.tsx` (DEV block). Drives every L5–L8 feature through the store for N
+    seasons and reports `errors`, `violations` and a per-action `featuresExercised` count.
+  - Z1b/Z1c **Probe bug fixes** — `indexPlayers` adopts signed free agents into `world.players`; the W1
+    top-up in `runAIFreeAgency` re-trims rosters to 53 (no more 60+ clubs).
+  - Z2/Z3 **Staff awards** — `engine/staffAwards.ts` (`computeStaffAwards`): Executive / Coach / Assistant
+    Coach of the Year + Rising Star, deterministic from standings + `World.lastWins`. Player honors feed
+    `CareerState.honors`, +2 profile each (+1 more for Exec/Coach, capped +3), moments, news, portfolio
+    entries; Awards screen "Front Office & Staff Awards" card, SeasonModal gold line. **Rising Star:** the
+    user scores `repGain/5 + objectives×1.5` (rescaled in P2 — the original `×10` let the user win 6/6).
+  - Z4 **Owner counteroffer** — `engine/counter.ts` (`counterOffer`): with offers on the table,
+    `jobSecurity ≥ 55` and a non-cheap owner, the current owner counters (`+25%` salary, `+15` job security,
+    `+1` leadership). `CareerState.counter`, store `acceptCounter()`, and a "Counteroffer — stay with the
+    {Team}" card + Accept counter button in both the SeasonModal offers branch and the Career offers list.
+  - Z5 **Rivalry games** — `engine/rivalry.ts` (`rivalFor`, `isRivalryGame`); Dashboard "Rivalry week"
+    banner; in `advanceWeek` a win over a rival's club pays +1 profile (max +2/season via
+    `CareerState.rivalWins`) and logs "Beat {rival}'s {Opp}."; a loss logs "{rival} got the better of you."
+    with no penalty.
+  - Key files: `src/game/engine/staffAwards.ts`, `src/game/engine/counter.ts`, `src/game/engine/rivalry.ts`,
+    and the `__careerSmoke` probe (`src/store/gameStore.ts` + `src/main.tsx`).
+
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.
 

@@ -40,6 +40,7 @@ import { recordOf, recordStr } from '../game/selectors'
 import { formatSeed } from '../game/engine/seed'
 import { scenarioById } from '../game/engine/scenarios'
 import { portfolioItems } from '../game/engine/portfolio'
+import { counterOffer } from '../game/engine/counter'
 import type { JobOffer } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { CareerRhythm } from '../components/CareerRhythm'
@@ -65,10 +66,15 @@ export function Career() {
   const career = useGame((s) => s.career)!
   const offers = useGame((s) => s.offers)
   const acceptOffer = useGame((s) => s.acceptOffer)
+  const acceptCounter = useGame((s) => s.acceptCounter)
   const declineOffers = useGame((s) => s.declineOffers)
   const setScreen = useGame((s) => s.setScreen)
   const showToast = useGame((s) => s.showToast)
   const [prep, setPrep] = useState<JobOffer | null>(null)
+
+  const myTeam = league.byId[career.teamId]
+  const liveCounter = career.counter?.season === league.season && !career.counter.taken
+  const counter = liveCounter ? counterOffer(league, career, offers) : null
 
   function copySeed() {
     try {
@@ -416,6 +422,20 @@ export function Career() {
               <h3 className="font-display text-lg font-700 uppercase tracking-wide">Job Offers</h3>
               {offers.length > 0 && <Badge tone="gold">{offers.length} new</Badge>}
             </div>
+            {counter && (
+              <div className="mb-3 rounded-lg border border-gold/60 bg-gold/10 p-3">
+                <div className="mb-1 flex items-center gap-1.5">
+                  <Star size={13} className="text-gold" />
+                  <div className="font-cond text-sm font-700 uppercase text-ink">
+                    Counteroffer — stay with the {myTeam.name}
+                  </div>
+                </div>
+                <p className="text-xs text-ink-2">{counter.text}</p>
+                <Button size="sm" variant="primary" className="mt-2 w-full" onClick={acceptCounter}>
+                  Accept counter
+                </Button>
+              </div>
+            )}
             {offers.length === 0 ? (
               <p className="text-sm text-muted">
                 No offers on the table. Offers arrive during the offseason once your reputation clears the next rung.
