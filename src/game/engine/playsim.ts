@@ -10,6 +10,7 @@ import type { Player, Position } from '../types'
 import { attributesFor } from '../data/ratings'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
 import { coachEffect } from './coaching'
+import { depthGroup } from './depth'
 import { planEffects } from './gameplan'
 import { masteryMultiplier } from './playbook'
 import { mod, schemeFit, styleProfile } from './style'
@@ -139,10 +140,7 @@ function avg(list: number[]) {
 }
 
 function topGroup(world: World, teamId: string, positions: Position[], n: number): Player[] {
-  return (world.roster[teamId] ?? [])
-    .filter((p) => positions.includes(p.pos) && !p.injured)
-    .sort((a, b) => b.ovr - a.ovr)
-    .slice(0, n)
+  return depthGroup(world, teamId, positions, n)
 }
 
 /**

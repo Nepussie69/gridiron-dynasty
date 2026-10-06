@@ -101,6 +101,28 @@ game's guardrails intact.
     `src/components/PortfolioCard.tsx` (plus `draft.ts`, `career.ts`, `store/gameStore.ts` wiring).
   - U15 Personnel gates 5–8 retuned after the draft fix (GM median ≈ season 10 across 6 seeds).
 
+- **L6.5 "Playtest fixes" DONE** (V1–V8; spec `NEXT_PHASE_L6_5.md`; build green, lint = 5 baseline warnings):
+  - V1/V2 **Cap fix** — `buildWorld` now targets `capForSeason(season) × (0.79–0.86)` dollars, so stars sit on
+    real deals (Allen $48.9M) and clubs use ~80–94% of the cap; `repairCrushedContracts` restates crushed saves
+    once (news item logged). V3 — Trade Center player rows show real `contract.capHit` per year.
+  - V2b **JSON import re-link** — `relinkPlayers(w)` at the top of `migrateWorld` makes every roster/squad/IR entry
+    `===` its `world.players` entry after an export→import.
+  - V4/V5 **Deal finder** — `findDeals(world, teamId, playerId)` in `trade.ts` shops a player and returns the best
+    acceptable package per club (max 6, `evaluateTrade`-accepted only); "Find deals" button + "Deals for {name}"
+    panel in `Trades.tsx` (Load deal fills the builder).
+  - V6 **Depth engine** — new `engine/depth.ts` (`STARTERS`, `depthAt`, `depthGroup`, `moveInDepth`,
+    `setStarterInDepth`, `resetDepth`) + optional `World.depth` (team → position → ordered player ids).
+  - V7 **Sim reads depth** — `playsim` `topGroup` and `statAlloc` `group` now use `depthGroup`, so even an AI club
+    with no stored order fields 2 OT / 2 OG / 1 C by default; the league-sim worker snapshot carries `world.depth`.
+  - V8 **Depth chart UI** — `DepthChart.tsx` rebuilt: one card per position (Tackles OT, Guards OG, Center C,
+    Edge DE, Interior DT + QB/RB/WR/TE/LB/CB/S/K/P); **every** player listed with a Bench divider at
+    `STARTERS[pos]`, injured OUT badge, ▲/▼ move buttons and a Start button, plus a "Reset to ratings" header
+    button. Editable only for the user's own club when the role can `gameManagement`/`callPlays` or is GM;
+    everyone else sees read-only + "The head coach sets the depth chart." Store gains `moveDepth`, `setStarter`,
+    `resetDepthChart`.
+  - Key files: `src/game/engine/depth.ts`, `src/game/engine/playsim.ts`, `src/game/engine/statAlloc.ts`,
+    `src/game/engine/trade.ts`, `src/screens/DepthChart.tsx`, `src/screens/Trades.tsx`, `src/store/gameStore.ts`.
+
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.
 

@@ -98,6 +98,7 @@ import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGa
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
+import { moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
 import {
   advanceContacts,
   advanceRivals,
@@ -135,7 +136,7 @@ import {
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
-import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, ScenarioId, SeasonMoment, SeasonQuestion } from '../game/types'
+import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, Position, ScenarioId, SeasonMoment, SeasonQuestion } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { loadRealData, getRealData } from '../game/data/realData'
 import { NFL_TEAMS } from '../game/data/nflTeams'
@@ -340,6 +341,11 @@ interface GameStore {
   setActiveTeam: (id: string) => void
   selectPlayer: (id: string | null) => void
   selectProspect: (id: string | null) => void
+  /** Depth chart: move a player up/down or promote him to starter for your club. */
+  moveDepth: (pos: Position, playerId: string, dir: -1 | 1) => void
+  setStarter: (pos: Position, playerId: string) => void
+  /** Depth chart: drop your club's stored order and fall back to ratings. */
+  resetDepthChart: () => void
   startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId }) => void
   resetCareer: () => void
   advanceWeek: () => void
@@ -452,6 +458,28 @@ export const useGame = create<GameStore>((set, get) => ({
   setActiveTeam: (activeTeamId) => set({ activeTeamId }),
   selectPlayer: (selectedPlayerId) => set({ selectedPlayerId }),
   selectProspect: (selectedProspectId) => set({ selectedProspectId }),
+
+  moveDepth: (pos, playerId, dir) => {
+    const career = get().career
+    if (!career) return
+    moveInDepth(world, career.teamId, pos, playerId, dir)
+    bump(set, get)
+    get().save()
+  },
+  setStarter: (pos, playerId) => {
+    const career = get().career
+    if (!career) return
+    setStarterInDepth(world, career.teamId, pos, playerId)
+    bump(set, get)
+    get().save()
+  },
+  resetDepthChart: () => {
+    const career = get().career
+    if (!career) return
+    resetDepth(world, career.teamId)
+    bump(set, get)
+    get().save()
+  },
 
   startCareer: ({ name, path: chosenPath, archetype, teamId: chosenTeamId, startLevel = 0, seed, scenarioId }) => {
     world = buildWorld(seed ?? (Date.now() % 2147483647), getRealData())

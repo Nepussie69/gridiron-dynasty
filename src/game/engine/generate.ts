@@ -61,6 +61,8 @@ export interface World {
   practiceSquad: Record<string, Player[]>
   /** Players on injured reserve, keyed by team. */
   ir: Record<string, Player[]>
+  /** Stored depth-chart order per team and position (ordered player ids). */
+  depth?: Record<string, Partial<Record<Position, string[]>>>
   /** NPCs who began the climb the same year you did (#12). */
   rivals: import('../types').Rival[]
   /** The current era: market drift that changes over decades (#18). */

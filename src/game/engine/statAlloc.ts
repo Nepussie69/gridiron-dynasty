@@ -7,9 +7,10 @@
 // and playbook familiarity. The result: full league-wide box scores cheaply.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { GameStatLine, Player } from '../types'
+import type { GameStatLine, Player, Position } from '../types'
 import { attributesFor } from '../data/ratings'
 import { coachEffect } from './coaching'
+import { depthGroup } from './depth'
 import type { Game, World } from './generate'
 import { clamp, makeRng, type Rng } from './rng'
 import { currentSeason, recordGameStats } from './stats'
@@ -47,10 +48,7 @@ function weight(p: Player, role: 'pass' | 'rush' | 'rec' | 'def', scheme: string
 
 /** Top N by position group, with weights. */
 function group(world: World, teamId: string, positions: string[], n: number, role: 'pass' | 'rush' | 'rec' | 'def', scheme: string) {
-  const list = (world.roster[teamId] ?? [])
-    .filter((p) => positions.includes(p.pos) && !p.injured)
-    .sort((a, b) => b.ovr - a.ovr)
-    .slice(0, n)
+  const list = depthGroup(world, teamId, positions as Position[], n)
   return { items: list, weights: list.map((p) => weight(p, role, scheme)) }
 }
 

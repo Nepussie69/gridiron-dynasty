@@ -1,54 +1,115 @@
-import { rosterOf } from '../game/selectors'
-import type { Player, Position } from '../game/types'
+import { Fragment, type ReactNode } from 'react'
+import { ChevronDown, ChevronUp, RotateCcw } from 'lucide-react'
+import { cn } from '../lib/cn'
+import { capabilities, isGM } from '../game/engine/capabilities'
+import { STARTERS, depthAt } from '../game/engine/depth'
+import type { World } from '../game/engine/generate'
+import type { Position } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card, OvrBadge, PageHeader } from '../ui/kit'
+import { Badge, Button, Card, OvrBadge, PageHeader } from '../ui/kit'
 
-// Offensive / defensive depth chart formation, grouped by unit.
-const OFF_GROUPS: { label: string; positions: Position[] }[] = [
-  { label: 'Quarterback', positions: ['QB'] },
-  { label: 'Running Back', positions: ['RB'] },
-  { label: 'Wide Receiver', positions: ['WR'] },
-  { label: 'Tight End', positions: ['TE'] },
-  { label: 'Offensive Line', positions: ['OT', 'OG', 'C'] },
+// One card per position, so `depthAt` drives each card directly.
+type CardDef = { label: string; pos: Position }
+
+const OFF_CARDS: CardDef[] = [
+  { label: 'Quarterback', pos: 'QB' },
+  { label: 'Running Back', pos: 'RB' },
+  { label: 'Wide Receiver', pos: 'WR' },
+  { label: 'Tight End', pos: 'TE' },
+  { label: 'Tackles', pos: 'OT' },
+  { label: 'Guards', pos: 'OG' },
+  { label: 'Center', pos: 'C' },
 ]
-const DEF_GROUPS: { label: string; positions: Position[] }[] = [
-  { label: 'Defensive Line', positions: ['DE', 'DT'] },
-  { label: 'Linebackers', positions: ['LB'] },
-  { label: 'Cornerbacks', positions: ['CB'] },
-  { label: 'Safeties', positions: ['S'] },
+const DEF_CARDS: CardDef[] = [
+  { label: 'Edge', pos: 'DE' },
+  { label: 'Interior', pos: 'DT' },
+  { label: 'Linebackers', pos: 'LB' },
+  { label: 'Cornerbacks', pos: 'CB' },
+  { label: 'Safeties', pos: 'S' },
 ]
-const ST_GROUPS: { label: string; positions: Position[] }[] = [{ label: 'Specialists', positions: ['K', 'P'] }]
+const ST_CARDS: CardDef[] = [
+  { label: 'Kicker', pos: 'K' },
+  { label: 'Punter', pos: 'P' },
+]
 
 export function DepthChart() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
+  const career = useGame((s) => s.career)
   const selectPlayer = useGame((s) => s.selectPlayer)
-  const roster = rosterOf(league, activeTeamId)
+  const moveDepth = useGame((s) => s.moveDepth)
+  const setStarter = useGame((s) => s.setStarter)
+  const resetDepthChart = useGame((s) => s.resetDepthChart)
   const staff = league.staff[activeTeamId] ?? []
 
-  const byPos = (positions: Position[]) =>
-    roster
-      .filter((p) => positions.includes(p.pos))
-      .sort((a, b) => b.ovr - a.ovr)
+  const editable =
+    !!career &&
+    activeTeamId === career.teamId &&
+    (isGM(career) || capabilities(career).can.has('gameManagement') || capabilities(career).can.has('callPlays'))
 
   return (
     <div>
       <PageHeader
         eyebrow="Team"
         title="Depth Chart"
-        subtitle="Set your starters. Click a player to view his full profile and make moves."
+        subtitle={
+          editable
+            ? 'Set your starters. Move players up or down, or start anyone; click a player for his full profile.'
+            : 'The head coach sets the depth chart. Click a player to view his full profile.'
+        }
         right={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <Badge tone="team">OFF: {staff.find((s) => s.role === 'Offensive Coordinator')?.scheme ?? 'Balanced'}</Badge>
             <Badge tone="info">DEF: {staff.find((s) => s.role === 'Defensive Coordinator')?.scheme ?? 'Multiple'}</Badge>
+            {editable && (
+              <Button variant="default" size="sm" onClick={resetDepthChart} title="Drop your order and fall back to ratings">
+                <RotateCcw size={13} /> Reset to ratings
+              </Button>
+            )}
           </div>
         }
       />
 
+      {!editable && (
+        <div className="mb-4 rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs text-muted">
+          The head coach sets the depth chart.
+        </div>
+      )}
+
       <div className="space-y-5">
-        <Unit title="Offense" accent="var(--team)" groups={OFF_GROUPS} byPos={byPos} onSelect={selectPlayer} />
-        <Unit title="Defense" accent="#0b62ff" groups={DEF_GROUPS} byPos={byPos} onSelect={selectPlayer} />
-        <Unit title="Special Teams" accent="#c99a2e" groups={ST_GROUPS} byPos={byPos} onSelect={selectPlayer} />
+        <Unit
+          title="Offense"
+          accent="var(--team)"
+          cards={OFF_CARDS}
+          world={league}
+          teamId={activeTeamId}
+          editable={editable}
+          onSelect={selectPlayer}
+          onMove={moveDepth}
+          onStart={setStarter}
+        />
+        <Unit
+          title="Defense"
+          accent="#0b62ff"
+          cards={DEF_CARDS}
+          world={league}
+          teamId={activeTeamId}
+          editable={editable}
+          onSelect={selectPlayer}
+          onMove={moveDepth}
+          onStart={setStarter}
+        />
+        <Unit
+          title="Special Teams"
+          accent="#c99a2e"
+          cards={ST_CARDS}
+          world={league}
+          teamId={activeTeamId}
+          editable={editable}
+          onSelect={selectPlayer}
+          onMove={moveDepth}
+          onStart={setStarter}
+        />
       </div>
     </div>
   )
@@ -57,15 +118,23 @@ export function DepthChart() {
 function Unit({
   title,
   accent,
-  groups,
-  byPos,
+  cards,
+  world,
+  teamId,
+  editable,
   onSelect,
+  onMove,
+  onStart,
 }: {
   title: string
   accent: string
-  groups: { label: string; positions: Position[] }[]
-  byPos: (p: Position[]) => Player[]
+  cards: CardDef[]
+  world: World
+  teamId: string
+  editable: boolean
   onSelect: (id: string) => void
+  onMove: (pos: Position, playerId: string, dir: -1 | 1) => void
+  onStart: (pos: Position, playerId: string) => void
 }) {
   return (
     <div>
@@ -74,35 +143,78 @@ function Unit({
         <h3 className="font-display text-xl font-700 uppercase tracking-wide">{title}</h3>
       </div>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {groups.map((g) => {
-          const players = byPos(g.positions)
+        {cards.map((c) => {
+          const players = depthAt(world, teamId, c.pos)
+          const starters = STARTERS[c.pos] ?? 1
           return (
-            <Card key={g.label} pad={false} className="overflow-hidden">
+            <Card key={c.pos} pad={false} className="overflow-hidden">
               <div className="border-b border-line bg-surface-2 px-3 py-1.5">
-                <span className="label">{g.label}</span>
+                <span className="label">{c.label}</span>
               </div>
               <div className="divide-y divide-line/60">
-                {players.slice(0, 4).map((p, i) => (
-                  <button
-                    key={p.id}
-                    onClick={() => onSelect(p.id)}
-                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition hover:bg-[var(--team-soft)]"
-                  >
-                    <span
-                      className="grid h-5 w-5 shrink-0 place-items-center rounded font-cond text-[10px] font-700"
-                      style={{
-                        background: i === 0 ? accent : '#eaf0f8',
-                        color: i === 0 ? '#fff' : '#5c6f86',
-                      }}
-                    >
-                      {i + 1}
-                    </span>
-                    <OvrBadge value={p.ovr} size={26} />
-                    <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
-                    <span className="flex-1 truncate text-sm font-600 text-ink">{p.name}</span>
-                    {p.injured && <Badge tone="loss">OUT</Badge>}
-                  </button>
-                ))}
+                {players.map((p, i) => {
+                  const starter = i < starters
+                  return (
+                    <Fragment key={p.id}>
+                      {i === starters && (
+                        <div className="flex items-center gap-2 bg-surface-2 px-3 py-1">
+                          <span className="h-px flex-1 bg-line" />
+                          <span className="font-cond text-[9px] font-700 uppercase tracking-wider text-muted">Bench</span>
+                          <span className="h-px flex-1 bg-line" />
+                        </div>
+                      )}
+                      <div className="flex w-full items-center gap-2 px-3 py-2 transition hover:bg-[var(--team-soft)]">
+                        <button
+                          type="button"
+                          onClick={() => onSelect(p.id)}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                        >
+                          <span
+                            className="grid h-5 w-5 shrink-0 place-items-center rounded font-cond text-[10px] font-700"
+                            style={{
+                              background: starter ? accent : '#eaf0f8',
+                              color: starter ? '#fff' : '#5c6f86',
+                            }}
+                          >
+                            {i + 1}
+                          </span>
+                          <OvrBadge value={p.ovr} size={26} />
+                          <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
+                          <span className="flex-1 truncate text-sm font-600 text-ink">{p.name}</span>
+                          {p.injured && <Badge tone="loss">OUT</Badge>}
+                        </button>
+                        {editable && (
+                          <div className="flex shrink-0 items-center gap-1">
+                            {!starter && (
+                              <Button
+                                variant="team"
+                                size="sm"
+                                title="Make starter"
+                                onClick={() => onStart(c.pos, p.id)}
+                              >
+                                Start
+                              </Button>
+                            )}
+                            <IconBtn
+                              title="Move up"
+                              disabled={i === 0}
+                              onClick={() => onMove(c.pos, p.id, -1)}
+                            >
+                              <ChevronUp size={14} />
+                            </IconBtn>
+                            <IconBtn
+                              title="Move down"
+                              disabled={i === players.length - 1}
+                              onClick={() => onMove(c.pos, p.id, 1)}
+                            >
+                              <ChevronDown size={14} />
+                            </IconBtn>
+                          </div>
+                        )}
+                      </div>
+                    </Fragment>
+                  )
+                })}
                 {!players.length && <div className="px-3 py-3 text-xs text-muted">No players</div>}
               </div>
             </Card>
@@ -110,5 +222,32 @@ function Unit({
         })}
       </div>
     </div>
+  )
+}
+
+function IconBtn({
+  children,
+  title,
+  disabled,
+  onClick,
+}: {
+  children: ReactNode
+  title: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'grid h-6 w-6 place-items-center rounded-md border border-line bg-surface text-ink-2 transition',
+        'hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30',
+      )}
+    >
+      {children}
+    </button>
   )
 }

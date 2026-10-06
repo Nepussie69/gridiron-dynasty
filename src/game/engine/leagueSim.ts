@@ -91,6 +91,7 @@ export async function simLeagueGames(
         staff: world.staff,
         staffTenure: world.staffTenure,
         seed: world.seed,
+        depth: world.depth,
       },
       games,
     })

@@ -18,6 +18,7 @@ interface SlimWorld {
   staff: World['staff']
   staffTenure: World['staffTenure']
   seed: number
+  depth?: World['depth']
 }
 
 interface WeekRequest {

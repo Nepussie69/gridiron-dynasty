@@ -13,10 +13,10 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | V2b | **Bug:** JSON save import un-links roster from players | ✅ done — verified (P2) |
 | V4 | Deal finder: engine | ✅ done — verified (P2) |
 | V5 | Deal finder: "Find deals" button + offers panel | ✅ done — verified (P2) |
-| V6 | Depth chart: stored order + engine helper | in progress (P3) |
-| V7 | Sim reads the depth chart | in progress (P3) |
-| V8 | Depth chart UI: OT / OG / C split, all players, ▲▼ move, set starter | in progress (P3) |
-| V9 | HANDOFF.md docs | in progress (P3) |
+| V6 | Depth chart: stored order + engine helper | ✅ done — verified (P3) |
+| V7 | Sim reads the depth chart | ✅ done — verified (P3) |
+| V8 | Depth chart UI: OT / OG / C split, all players, ▲▼ move, set starter | ✅ done — verified (P3) |
+| V9 | HANDOFF.md docs | ✅ done — verified (P3) |
 
 ## What the playtest found
 
@@ -147,3 +147,7 @@ Pushes: **P1 = V1–V3** (cap fix; the orchestrator re-runs the balance probe af
 - **P2** (browser): after a JSON export→import every roster entry `===` its `world.players` entry (V2b). Find deals on Myles Garrett (CLE) → 6 offers
   (e.g. PIT: Highsmith + Killebrew + Rd 4; CIN: Tee Higgins + Rd 2 + Rd 3); Load deal fills the builder and the verdict is "They accept". Claude fixed the panel
   value line, which showed unrounded partner-view numbers labelled as the user's; it now reads "Value back {userValue} · for {shopped value}", rounded.
+- **P3** (browser, CLE GM): the depth chart shows Tackles / Guards / Center / Edge / Interior cards plus Reset to ratings, with ▲▼ on every row. Making Deshaun Watson
+  the starter → `depthAt` QB1 = Watson, and in the next game Watson threw 30 passes while Flacco didn't play. The OL always fields 2 OT / 2 OG / 1 C.
+  **Calibration drift:** `__simTest(150)` = 24.9 pts / 68.9% comp / 2.91 sacks (before P3: ~23.0 / 65.7% / 3.5). Most likely cause: DL now forced to 2 DE + 2 DT
+  (pass rush down). Not tuned; this is a user decision (see the summary).
