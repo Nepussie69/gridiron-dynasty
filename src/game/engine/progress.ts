@@ -1,5 +1,5 @@
 import type { CareerState, Player, Recommendation } from '../types'
-import { tickContractYear, marketAAV, capScale, capForSeason } from './cap'
+import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT } from './cap'
 import { coachEffect } from './coaching'
 import { generateProspectClass, type World } from './generate'
 import { ledgerFreeAgent } from './picks'
@@ -352,7 +352,7 @@ function priceFor(p: Player, season: number, posBias = 1): number {
   return Math.round((marketAAV(p.ovr, p.pos, p.age) * capScale(season) * posBias) / 100_000) * 100_000
 }
 
-export function runAIFreeAgency(world: World) {
+export function runAIFreeAgency(world: World, skipTeamId?: string) {
   trimNflRosters(world)
   const rng = makeRng(world.seed + world.season * 90001)
   const needed: Record<string, number> = { QB: 3, RB: 3, WR: 6, TE: 3, OT: 4, OG: 4, C: 2, DE: 4, DT: 4, LB: 6, CB: 6, S: 4, K: 1, P: 1 }
@@ -389,6 +389,29 @@ export function runAIFreeAgency(world: World) {
         counts[pos] = (counts[pos] ?? 0) + 1
         deficit--
         ledgerFreeAgent(world, t.id, 'gained', cand.ovr)
+      }
+    }
+    // W1: top up toward the cap floor. The need-filling above can leave AI
+    // payrolls far below the floor; sign up to three more best-OVR bodies.
+    if (t.id !== skipTeamId) {
+      const usedCap = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
+      let topUps = 0
+      while (topUps < 3 && roster.length < 53 && usedCap() < capLimit * CAP_FLOOR_PCT) {
+        const cand = freeCopy.find((p) => {
+          if (taken.has(p.id) || p.pos === 'K' || p.pos === 'P') return false
+          const bias = world.era?.positionBias?.[p.pos as import('../types').Position] ?? 1
+          return usedCap() + priceFor(p, world.season, bias) <= capLimit * 0.95
+        })
+        if (!cand) break
+        const bias = world.era?.positionBias?.[cand.pos] ?? 1
+        const annual = priceFor(cand, world.season, bias)
+        taken.add(cand.id)
+        cand.teamId = t.id
+        cand.contract = { ...cand.contract, annual, years: 2, base: [annual, annual], capHit: annual }
+        world.roster[t.id].push(cand)
+        counts[cand.pos] = (counts[cand.pos] ?? 0) + 1
+        ledgerFreeAgent(world, t.id, 'gained', cand.ovr)
+        topUps++
       }
     }
     void rng

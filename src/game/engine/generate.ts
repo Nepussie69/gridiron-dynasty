@@ -557,6 +557,15 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     if (p.generated === undefined) p.generated = !(p.attrs && Object.keys(p.attrs).length > 0)
   }
 
+  // The draft has 224+ picks (with comp picks) but the real class only holds
+  // 220 prospects, so top it up. Generated ids would collide with the real
+  // class (`d${season}_${i}`), so remap them to a distinct namespace.
+  let draft = data ? realProspectClass(rng, data.cfb, season) : generateProspectClass(rng, season)
+  if (draft.length < 260) {
+    const extra = generateProspectClass(rng, season, 260 - draft.length)
+    draft = draft.concat(extra.map((p, i) => ({ ...p, id: `dx${season}_${i}` })))
+  }
+
   return {
     seed,
     season,
@@ -570,7 +579,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     staffPool: generateStaffPool(rng, 44),
     standings,
     news: buildNews('BUF', 'Buffalo Bills', 'NFL'),
-    draft: data ? realProspectClass(rng, data.cfb, season) : generateProspectClass(rng, season),
+    draft,
     freeAgents,
     schedule,
     deadMoney,

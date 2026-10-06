@@ -731,7 +731,7 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     // G2: log conviction calls for anyone drafted before the class rolls over.
     logConvictionPicks(world, career)
-    runAIFreeAgency(world)
+    runAIFreeAgency(world, career.teamId)
     runAITrades(world)
     world.season += 1
     world.week = 1

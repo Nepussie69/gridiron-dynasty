@@ -302,7 +302,7 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
     initDraft(world)
     if (canDraft(career)) simulateRestOfDraft(world, career)
     runUDFAs(world)
-    runAIFreeAgency(world)
+    runAIFreeAgency(world, career.teamId)
     runAITrades(world)
     enforceCapCompliance(world)
 

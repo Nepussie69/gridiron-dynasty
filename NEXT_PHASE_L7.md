@@ -7,11 +7,11 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 
 | Task | What | Push | Status |
 |---|---|---|---|
-| W0 | First draft class topped up to ≥ 260 prospects | P1 | in progress (P1) |
-| W1 | AI clubs spend toward the cap floor | P1 | in progress (P1) |
-| W2 | Shadow board: types + engine | P2 | not started |
-| W3 | Shadow board: store + season-end grading | P2 | not started |
-| W4 | Shadow board: UI | P2 | not started |
+| W0 | First draft class topped up to ≥ 260 prospects | P1 | ✅ done — verified (P1) |
+| W1 | AI clubs spend toward the cap floor | P1 | ✅ done — verified (P1) |
+| W2 | Shadow board: types + engine | P2 | in progress (P2) |
+| W3 | Shadow board: store + season-end grading | P2 | in progress (P2) |
+| W4 | Shadow board: UI | P2 | in progress (P2) |
 | W5 | Extension talks: engine | P3 | not started |
 | W6 | Extension talks: store + ledger | P3 | not started |
 | W7 | Extension talks: UI | P3 | not started |
@@ -188,3 +188,8 @@ Never run `npm run dev` or any watch command. No git commands.
 - Do not remove the existing `extendPlayer` action.
 - Every new save field is optional; old saves must load. No new dependencies. Do not fix the baseline lint warnings. Do not reformat unrelated code.
 - Do not edit any NEXT_PHASE*.md.
+
+## Verification log
+- **P1** (browser + probe, seed 20261004): the first draft class has 260 prospects (40 `dx` fills), all ids unique. Probe 14 seasons: GM in season 10, overCap 0.
+  **W1 effect is small:** capUsedPct 0.591 → 0.611. AI rosters average 54.8 players, so the `roster.length < 53` guard blocks most top-ups.
+  A real fix needs AI clubs to release cheap depth to make room (a balance decision, raised with the user; not done here).
