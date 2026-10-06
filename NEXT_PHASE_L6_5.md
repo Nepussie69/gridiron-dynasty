@@ -17,6 +17,7 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | V7 | Sim reads the depth chart | ✅ done — verified (P3) |
 | V8 | Depth chart UI: OT / OG / C split, all players, ▲▼ move, set starter | ✅ done — verified (P3) |
 | V9 | HANDOFF.md docs | ✅ done — verified (P3) |
+| V10 | Calibration: DL picks its best 4 unless the user set DL starters | in progress (P4) |
 
 ## What the playtest found
 
@@ -151,3 +152,23 @@ Pushes: **P1 = V1–V3** (cap fix; the orchestrator re-runs the balance probe af
   the starter → `depthAt` QB1 = Watson, and in the next game Watson threw 30 passes while Flacco didn't play. The OL always fields 2 OT / 2 OG / 1 C.
   **Calibration drift:** `__simTest(150)` = 24.9 pts / 68.9% comp / 2.91 sacks (before P3: ~23.0 / 65.7% / 3.5). Most likely cause: DL now forced to 2 DE + 2 DT
   (pass rush down). Not tuned; this is a user decision (see the summary).
+
+---
+
+## V10 — Calibration fix: defensive line picks its best 4 (user chose option 1)
+
+**Why:** After P3, `__simTest(150)` drifted to 24.9 pts / 68.9% comp / 2.91 sacks (was ~23.0 / 65.7% / 3.5). `depthGroup` now forces every DL to 2 DE + 2 DT
+via the `STARTERS` quotas, which weakens pass rushes compared with the old "best 4 across DE+DT".
+
+**Change (`src/game/engine/depth.ts`, `depthGroup` only):** a position's starter quota applies only when the position is a "fixed slot" position, or when the club
+has a stored order for it.
+```ts
+/** Positions pooled by rating unless the club set an explicit order (keeps sim calibration). */
+const POOLED: Position[] = ['DE', 'DT']
+```
+In `depthGroup`, for each `pos`: `const quota = POOLED.includes(pos) && !world.depth?.[teamId]?.[pos] ? 0 : (STARTERS[pos] ?? 1)`.
+Rank = `i < quota ? 0 : 1`, then OVR desc, exactly as now. With quota 0 every DE/DT ranks 1, so the group is the best-by-OVR 4, the same as before P3.
+Once the user moves or starts a DE or DT, that position's order is stored, its quota applies, and the user's starters play.
+Do NOT change the OL, WR/TE or any other behaviour, `STARTERS`, or `depthAt`. The Depth Chart UI is unchanged.
+
+**Acceptance:** build + lint at 5 warnings. The orchestrator re-runs `__simTest(150,'NFL')`; the target is back near ~23 pts / ~66% / ~3.4 sacks.
