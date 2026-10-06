@@ -149,6 +149,7 @@ game's guardrails intact.
   - X3 **Expiring-contracts warning** — `advanceWeek` pushes a one-per-season `'Roster'` news item at week 12 (id
     `expiring_${season}`) for contract-owning roles: "{n} contracts expire after this season" with up to 6 names/OVR.
   - Key files: `src/game/engine/progress.ts`, `src/store/gameStore.ts`.
+  - X5: personnel gates 7–8 respread (leadership wall) — GM ~8–13 across seeds.
 
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.

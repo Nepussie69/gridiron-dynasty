@@ -11,7 +11,7 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | X2 | AI stops re-signing the user's club when the user owns contracts | P1 | ✅ done — verified |
 | X3 | Week-12 "expiring contracts" inbox warning | P1 | ✅ done — verified |
 | X4 | HANDOFF.md docs | P1 | ✅ done — verified |
-| X5 | Personnel gates 7–8 respread (leadership wall) | P2 | in progress (P2) |
+| X5 | Personnel gates 7–8 respread (leadership wall) | P2 | ✅ done — verified |
 
 ## Problems (found while verifying L7)
 
@@ -90,3 +90,4 @@ which personnel earns.
 Old gates after X1: 14 · never · never · 9 · 10.
 **Acceptance:** build + lint at 5 warnings. The orchestrator re-runs the probe on the committed code and expects the same numbers.
 Append one line under the L7.5 entry in HANDOFF.md: "X5: personnel gates 7–8 respread (leadership wall) — GM ~8–13 across seeds."
+- **X5** (probe on the committed code): GM 20261004: 13 · 2222: 8 · 33333: 8 · 5150: 10 · 777: 9, matching the runtime trial exactly. Coach HC@11 (seed 20261004), league capUsed 0.90.
