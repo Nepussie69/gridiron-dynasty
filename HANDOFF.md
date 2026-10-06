@@ -123,6 +123,21 @@ game's guardrails intact.
   - Key files: `src/game/engine/depth.ts`, `src/game/engine/playsim.ts`, `src/game/engine/statAlloc.ts`,
     `src/game/engine/trade.ts`, `src/screens/DepthChart.tsx`, `src/screens/Trades.tsx`, `src/store/gameStore.ts`.
 
+- **L7 "The middle of the building" DONE** (W0–W11; spec `NEXT_PHASE_L7.md`; build green, lint = 5 baseline warnings):
+  - W0–W1 **Housekeeping** — the first draft class tops up to ≥ 260 prospects (appended `dx` ids, unique);
+    AI clubs spend toward the cap floor in `runAIFreeAgency` (now takes `skipTeamId` so the user's club is exempt).
+  - G1 **Shadow board** — `engine/shadow.ts` (rank up to 10 non-own players; hits graded at season end, feed the
+    Ledger + origin note) + `components/ShadowBoardCard.tsx` on Free Agency and Trades.
+  - G2 **Extension talks** — `engine/negotiation.ts` (Hardball/Market/Loyal agents, `judgeOffer`, `buildExtension`)
+    + `components/ExtensionTalks.tsx` from the Cap screen; 3 tries/season, GM sign-off below `manageCap`.
+  - G3 **3-year cap memo** — `engine/capMemo.ts` (forecast bucket + up to 3 priorities + intent, graded a year later)
+    + `CapMemoCard` on Cap.
+  - G4 **Combine week** — `engine/combine.ts` (20-hour offseason budget; interview at 0.85 via `revealFacet`, workout,
+    film; up to 12 prospects) + `combineAction` in the store + `components/CombineCard.tsx` on Scouting.
+  - Key files: `src/game/engine/shadow.ts`, `src/game/engine/negotiation.ts`, `src/game/engine/capMemo.ts`,
+    `src/game/engine/combine.ts`, `src/components/ShadowBoardCard.tsx`, `src/components/ExtensionTalks.tsx`,
+    `src/components/CombineCard.tsx`.
+
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.
 

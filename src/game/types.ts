@@ -503,6 +503,8 @@ export interface CareerState {
   capMemo?: CapMemo
   /** G3: your room's focus players, practice plan, and banked reps. */
   room?: { focus: string[]; plan: 'concentrate' | 'spread'; reps: number }
+  /** G4: this offseason's combine-week budget (20 hours, up to 12 prospects). */
+  combine?: { season: number; hoursLeft: number; seen: string[] }
   /** The region you're assigned to scout (drives information scope). */
   scoutRegion?: string
   /** Weekly time budget (#5). Reset each week. */

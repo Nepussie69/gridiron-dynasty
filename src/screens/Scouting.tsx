@@ -13,6 +13,7 @@ import { MAX_CONVICTION, canConvict, convictionIds } from '../game/engine/convic
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { AccessBadge } from '../components/AccessBadge'
+import { CombineCard } from '../components/CombineCard'
 import { DataTable, type Column } from '../components/DataTable'
 import { Badge, Button, Card, PageHeader, Stat } from '../ui/kit'
 
@@ -206,6 +207,8 @@ export function Scouting() {
         </Card>
         <Card><Stat label="Reputation" value={overallRep(career.reputation)} sub="drives your next job" /></Card>
       </div>
+
+      <CombineCard className="mb-4" />
 
       <div className="mb-3 flex flex-wrap items-center gap-1">
         {POS_FILTERS.map((p) => (

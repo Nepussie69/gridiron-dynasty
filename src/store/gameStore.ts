@@ -121,6 +121,7 @@ import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/
 import { canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import { buildExtension, judgeOffer, type ExtensionOffer } from '../game/engine/negotiation'
 import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
+import { applyCombine, type CombineKind } from '../game/engine/combine'
 import {
   WEEK_HOURS,
   weeklyActions,
@@ -417,6 +418,8 @@ interface GameStore {
   toggleShadowBoard: (playerId: string) => void
   /** G3: file this offseason's cap memo (manageCap rungs). */
   fileCapMemo: (bucket: 'tight' | 'comfortable' | 'flush', priorityIds: string[], note: string) => void
+  /** G4: spend combine-week hours on a prospect (interview / workout / film). */
+  combineAction: (prospectId: string, kind: CombineKind) => void
 
   // Practice squad & injured reserve
   signToPracticeSquad: (id: string) => void
@@ -1410,6 +1413,21 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     set({ career: { ...career, capMemo: memo } })
     get().showToast('Cap memo filed. It will be graded at the end of next season.')
+    bump(set, get)
+    get().save()
+  },
+
+  combineAction: (prospectId, kind) => {
+    const career = get().career
+    if (!career) return
+    const rng = makeRng(world.seed + world.season * 433 + hash32(prospectId + kind, 3))
+    const result = applyCombine(world, career, prospectId, kind, rng)
+    if ('error' in result) {
+      get().showToast(result.error)
+      return
+    }
+    set({ career: result.career })
+    get().showToast(result.message)
     bump(set, get)
     get().save()
   },

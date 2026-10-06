@@ -17,9 +17,9 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | W7 | Extension talks: UI | P3 | ✅ done — verified (P3) |
 | W8 | Cap memo: engine + store + grading | P4 | ✅ done — verified (P4) |
 | W9 | Cap memo: UI | P4 | ✅ done — verified (P4) |
-| W10 | Combine week: engine + store | P5 | in progress (P5) |
-| W11 | Combine week: UI | P5 | in progress (P5) |
-| W12 | HANDOFF.md docs | P5 | in progress (P5) |
+| W10 | Combine week: engine + store | P5 | ✅ done — verified (P5) |
+| W11 | Combine week: UI | P5 | ✅ done — verified (P5) |
+| W12 | HANDOFF.md docs | P5 | ✅ done — verified (P5) |
 
 ## Phase goal
 
@@ -202,3 +202,5 @@ Never run `npm run dev` or any watch command. No git commands.
 - **P4** (browser, GM): filing is blocked in season and allowed in the offseason (the form shows on Cap); a second filing the same offseason is ignored; graded at the next
   season's end with a ledger + moment line. Claude fix: the roster reward is capped at +3 total (the spec allowed +2 forecast + 3 priorities = 5, breaking the phase guardrail).
   **Found, pre-existing:** `runAIResign` also re-signs the USER's club players, so a memo priority can be "extended" without the user acting (saw 2/2 when only 1 was extended by hand).
+- **P5** (browser, Asst Dir): the Combine Week card is hidden in season, shown in the offseason before the draft, and gone after the draft. Film moved a prospect's grade 95 → 91 (= truth);
+  an interview revealed a facet at 85% confidence; workouts drained hours to "Not enough combine hours left" (2 h left, 4 prospects seen). HANDOFF.md updated.
