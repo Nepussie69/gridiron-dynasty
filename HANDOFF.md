@@ -138,6 +138,18 @@ game's guardrails intact.
     `src/game/engine/combine.ts`, `src/components/ShadowBoardCard.tsx`, `src/components/ExtensionTalks.tsx`,
     `src/components/CombineCard.tsx`.
 
+- **L7.5 "League economy fixes" DONE** (X1–X4; spec `NEXT_PHASE_L7_5.md`; build green, lint = 5 baseline warnings):
+  - X1 **Depth-for-talent swaps** — the W1 cap-floor top-up in `runAIFreeAgency` (`engine/progress.ts`) now runs on a
+    full roster: when under the floor it releases the lowest-OVR non-starter (above `ROSTER_FLOOR`, `capHit` ≤ $2M, ≥ 3
+    OVR below the target, and below `STARTERS[pos]` in `depthAt`) and signs the best-OVR free agent in his place; released
+    players go to `world.freeAgents` (never re-picked as `cand` in the same pass).
+  - X2 **User club keeps its own re-signings** — `runAIResign(world, skipTeamId?)` skips the user's club;
+    `runEndOfRegularSeason` passes `career.teamId` only when the role can `negotiate`/`manageCap` (GM/owner), so scouts
+    and coaches still get an NPC front office. Not passed from `balance.ts` or the dev probe.
+  - X3 **Expiring-contracts warning** — `advanceWeek` pushes a one-per-season `'Roster'` news item at week 12 (id
+    `expiring_${season}`) for contract-owning roles: "{n} contracts expire after this season" with up to 6 names/OVR.
+  - Key files: `src/game/engine/progress.ts`, `src/store/gameStore.ts`.
+
 ## In progress
 - (none) — **all four layers complete.** User said they will test L4 after the build.
 

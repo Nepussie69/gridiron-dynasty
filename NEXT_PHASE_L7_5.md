@@ -7,10 +7,10 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 
 | Task | What | Push | Status |
 |---|---|---|---|
-| X1 | AI clubs swap cheap depth for better free agents when under the cap floor | P1 | in progress (P1) |
-| X2 | AI stops re-signing the user's club when the user owns contracts | P1 | in progress (P1) |
-| X3 | Week-12 "expiring contracts" inbox warning | P1 | in progress (P1) |
-| X4 | HANDOFF.md docs | P1 | in progress (P1) |
+| X1 | AI clubs swap cheap depth for better free agents when under the cap floor | P1 | ✅ done — verified |
+| X2 | AI stops re-signing the user's club when the user owns contracts | P1 | ✅ done — verified |
+| X3 | Week-12 "expiring contracts" inbox warning | P1 | ✅ done — verified |
+| X4 | HANDOFF.md docs | P1 | ✅ done — verified |
 
 ## Problems (found while verifying L7)
 
@@ -62,3 +62,10 @@ Never run `npm run dev` or any watch command. No git commands.
 - Do not change `trimNflRosters`, `priceFor`, `marketAAV`, `fitToCap`, the need-filling part of `runAIFreeAgency`, reputation gates, objectives, or sim calibration.
 - Do not pass `skipTeamId` to `runAIResign` from balance.ts or the dev probes.
 - Every new save field is optional. No new dependencies. Do not fix the baseline lint warnings. Do not reformat unrelated code. Do not edit any NEXT_PHASE*.md.
+
+## Verification log
+- **X1** probe: capUsedPct 0.59–0.61 → **0.76–0.84** across 5 seeds; overCap 0; avg roster ~55; avgNflPoints ~21.
+- **X2/X3** (browser): a GM career gets "3 contracts expire after this season" in week 12, and un-extended players reach free agency (0/3 kept). A scout career has no warning, and the NPC front office still re-signs (1/3).
+- **Pacing regression (needs a user decision):** personnel → GM by seed: 20261004: 14 · 111: never (14) · 2222: never (16, stuck at L6 all career) · 33333: 9 · 5150: 10.
+  Better-funded AI clubs make the probe's club win less, so it stalls at **Director of Player Personnel** (the gate for Asst GM is roster 55 / leadership 52 / profile 60).
+  The probe does not use L6/L7 rep sources (shadow board, extension talks, conviction), so real play is faster. Fix options are presented to the user.

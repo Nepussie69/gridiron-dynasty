@@ -656,6 +656,24 @@ export const useGame = create<GameStore>((set, get) => ({
         world.news.unshift({ id: `media_${world.season}_${world.week}_${world.news.length}`, week: world.week, season: world.season, category: m.category, headline: m.headline, body: m.body, teamId: nextCareer.teamId, read: false })
       }
     }
+    // X3: once a season (week 12), warn a contract-owning user about expiring deals.
+    const ownsContracts = capabilities(career).can.has('negotiate') || capabilities(career).can.has('manageCap')
+    if (ownsContracts && world.phase === 'regular' && world.week === 12 && !world.news.some((n) => n.id === `expiring_${world.season}`)) {
+      const expiring = (world.roster[career.teamId] ?? []).filter((p) => p.contract.years <= 1 && p.ovr >= 70)
+      if (expiring.length) {
+        const names = [...expiring].sort((a, b) => b.ovr - a.ovr).slice(0, 6).map((p) => `${p.name} (${p.pos}, ${p.ovr})`).join(', ')
+        world.news.unshift({
+          id: `expiring_${world.season}`,
+          week: world.week,
+          season: world.season,
+          category: 'Roster',
+          headline: `${expiring.length} contracts expire after this season`,
+          body: `${names}… Extend them from the Cap screen or they hit free agency.`,
+          teamId: career.teamId,
+          read: false,
+        })
+      }
+    }
     set({ career: nextCareer, match: sim, tick: get().tick + 1 })
     setLivePlan(null)
     get().save()
@@ -1997,7 +2015,12 @@ function runEndOfRegularSeason(
       })
     }
   }
-  runAIResign(world)
+  // A GM/owner who owns contracts negotiates his own re-signings; only an NPC
+  // front office (scout, coach) has the AI handle them.
+  const ownsContracts = career
+    ? capabilities(career).can.has('negotiate') || capabilities(career).can.has('manageCap')
+    : false
+  runAIResign(world, ownsContracts && career ? career.teamId : undefined)
   tickAllContracts(world)
 
   // Coaching continuity: a settled staff ages up; a churned side resets to year 1.

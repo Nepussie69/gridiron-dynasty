@@ -2,6 +2,7 @@ import type { CareerState, Player, Recommendation } from '../types'
 import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT } from './cap'
 import { coachEffect } from './coaching'
 import { generateProspectClass, type World } from './generate'
+import { depthAt, STARTERS } from './depth'
 import { ledgerFreeAgent } from './picks'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
@@ -211,11 +212,12 @@ export function ensureProspectPools(world: World) {
  * Before free agency opens, AI clubs re-sign their own best expiring players
  * (within the cap) instead of letting the whole roster walk.
  */
-export function runAIResign(world: World) {
+export function runAIResign(world: World, skipTeamId?: string) {
   const rng = makeRng(world.seed + world.season * 5051)
   const capLimit = capForSeason(world.season)
   for (const t of world.teams) {
     if (t.tier !== 'NFL') continue
+    if (t.id === skipTeamId) continue
     const roster = world.roster[t.id] ?? []
     const used = () => roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
     const expiring = roster.filter((p) => p.contract.years <= 1 && p.ovr >= 72).sort((a, b) => b.ovr - a.ovr)
@@ -396,13 +398,34 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
     if (t.id !== skipTeamId) {
       const usedCap = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
       let topUps = 0
-      while (topUps < 3 && roster.length < 53 && usedCap() < capLimit * CAP_FLOOR_PCT) {
+      while (topUps < 3 && usedCap() < capLimit * CAP_FLOOR_PCT) {
         const cand = freeCopy.find((p) => {
           if (taken.has(p.id) || p.pos === 'K' || p.pos === 'P') return false
           const bias = world.era?.positionBias?.[p.pos as import('../types').Position] ?? 1
           return usedCap() + priceFor(p, world.season, bias) <= capLimit * 0.95
         })
         if (!cand) break
+        // A full roster swaps cheap depth for the better free agent instead of
+        // passing. Release the worst non-starter at a position we can spare.
+        if (roster.length >= 53) {
+          const release = [...roster]
+            .sort((a, b) => a.ovr - b.ovr)
+            .find(
+              (p) =>
+                (counts[p.pos] ?? 0) > (ROSTER_FLOOR[p.pos] ?? 2) &&
+                p.contract.capHit <= 2_000_000 &&
+                p.ovr <= cand.ovr - 3 &&
+                depthAt(world, t.id, p.pos).findIndex((x) => x.id === p.id) >= STARTERS[p.pos],
+            )
+          if (!release) break
+          const idx = roster.indexOf(release)
+          if (idx < 0) break
+          roster.splice(idx, 1)
+          counts[release.pos] -= 1
+          release.teamId = null
+          release.contract = { ...release.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+          world.freeAgents.push(release)
+        }
         const bias = world.era?.positionBias?.[cand.pos] ?? 1
         const annual = priceFor(cand, world.season, bias)
         taken.add(cand.id)
