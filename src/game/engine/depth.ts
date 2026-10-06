@@ -14,6 +14,9 @@ export const STARTERS: Record<Position, number> = {
   QB: 1, RB: 1, WR: 3, TE: 1, OT: 2, OG: 2, C: 1, DE: 2, DT: 2, LB: 3, CB: 2, S: 2, K: 1, P: 1,
 }
 
+/** Positions pooled by rating unless the club set an explicit order (keeps sim calibration). */
+const POOLED: Position[] = ['DE', 'DT']
+
 /**
  * Players at one position in depth order: the stored order first (still on the
  * roster), then the rest by OVR. Includes injured players.
@@ -41,8 +44,8 @@ export function depthGroup(world: World, teamId: string, positions: Position[], 
   const ranked: { p: Player; rank: number }[] = []
   for (const pos of positions) {
     const list = depthAt(world, teamId, pos).filter((p) => !p.injured)
-    const starters = STARTERS[pos] ?? 1
-    list.forEach((p, i) => ranked.push({ p, rank: i < starters ? 0 : 1 }))
+    const quota = POOLED.includes(pos) && !world.depth?.[teamId]?.[pos] ? 0 : (STARTERS[pos] ?? 1)
+    list.forEach((p, i) => ranked.push({ p, rank: i < quota ? 0 : 1 }))
   }
   ranked.sort((a, b) => a.rank - b.rank || b.p.ovr - a.p.ovr)
   return ranked.slice(0, n).map((r) => r.p)

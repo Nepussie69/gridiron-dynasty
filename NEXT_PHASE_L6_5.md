@@ -17,7 +17,7 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | V7 | Sim reads the depth chart | ✅ done — verified (P3) |
 | V8 | Depth chart UI: OT / OG / C split, all players, ▲▼ move, set starter | ✅ done — verified (P3) |
 | V9 | HANDOFF.md docs | ✅ done — verified (P3) |
-| V10 | Calibration: DL picks its best 4 unless the user set DL starters | in progress (P4) |
+| V10 | Calibration: DL picks its best 4 unless the user set DL starters | ✅ done — verified (P4) |
 
 ## What the playtest found
 
@@ -172,3 +172,8 @@ Once the user moves or starts a DE or DT, that position's order is stored, its q
 Do NOT change the OL, WR/TE or any other behaviour, `STARTERS`, or `depthAt`. The Depth Chart UI is unchanged.
 
 **Acceptance:** build + lint at 5 warnings. The orchestrator re-runs `__simTest(150,'NFL')`; the target is back near ~23 pts / ~66% / ~3.4 sacks.
+- **P4 / V10** (browser): the change applied exactly as specced. **Correction to the P3 note:** the "drift" was a measurement error. The pre-P3 baseline (23.0 pts)
+  came from seed 33333 at n=60, and the post-P3 number from seed 4242 at n=150. Same-seed comparison on the current code with `__simTest(150)` after starting a career:
+  33333 → 23.2 pts / 67.1% / 3.32 sacks (baseline 23.0 / 65.7 / 3.5); 20261004 → 23.2 / 66.2 / 4.09; 111 → 25.1 / 65.7 / 4.06; 4242 → 24.5 / 68.8 / 2.79.
+  Calibration holds, and the league-to-league spread is about 23–25 pts. V10 is kept anyway: it restores pre-P3 DL selection for clubs that haven't set DL starters.
+  Note: `__simTest` with no career loaded runs on the placeholder world (no real data) and gives ~29.6 pts, so always start a career before measuring.
