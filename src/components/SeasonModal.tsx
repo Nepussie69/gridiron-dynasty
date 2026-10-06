@@ -25,6 +25,7 @@ export function SeasonModal() {
   if (modal === 'seasonReview' && summary) {
     const champ = summary.champion ? league.byId[summary.champion] : null
     const scout = summary.scout
+    const myAwards = (summary.staffAwards ?? []).filter((a) => a.isUser)
     return (
       <Shell onClose={dismiss}>
         <div className="mb-4 flex items-center gap-3">
@@ -47,6 +48,13 @@ export function SeasonModal() {
             </div>
           </div>
         </div>
+
+        {myAwards.length > 0 && (
+          <div className="mb-3 flex items-center gap-1.5 font-cond text-sm font-700 text-gold">
+            <Award size={14} />
+            You were named {myAwards.map((a) => a.award).join(', ')}.
+          </div>
+        )}
 
         {/* #20: the season in 90 seconds — question, moments, fingerprints, ghost. */}
         {summary.question && (

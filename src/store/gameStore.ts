@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   buildWorld,
   fitToCap,
+  indexPlayers,
   regenerateSchedule,
   teamStrength,
   zeroRecord,
@@ -39,6 +40,12 @@ import {
   type AwardHistory,
   type SeasonHonors,
 } from '../game/engine/awards'
+import {
+  COACH_OF_YEAR,
+  EXEC_OF_YEAR,
+  computeStaffAwards,
+  type StaffAward,
+} from '../game/engine/staffAwards'
 import { recordGameStats, boxScore, recordBoxLines } from '../game/engine/stats'
 import { simLeagueGames } from '../game/engine/leagueSim'
 import {
@@ -296,6 +303,8 @@ export interface SeasonSummary {
   ghost?: { actualWins: number; ghostWins: number; delta: number }
   // #11 ambitions
   ambitions?: { label: string; done: boolean }[]
+  /** L9 Z2: this season's front-office/staff award winners. */
+  staffAwards?: StaffAward[]
 }
 
 /** The persisted payload. Kept independent of store internals for migration. */
@@ -808,6 +817,8 @@ export const useGame = create<GameStore>((set, get) => ({
     regenerateSchedule(world)
     refreshProspectClass(world)
     enforceCapCompliance(world)
+    // Z1b: adopt every roster/practice-squad/IR/free-agent player into `players`.
+    indexPlayers(world)
     // If a firing was never resolved, take the default road back (#17).
     const resolved = career.wilderness && !career.wilderness.path ? applyWilderness(world, career, 'consult') : career
     // #11/#20: a fresh season question, clean moment log, and a new ambition slate.
@@ -2007,6 +2018,9 @@ function relinkPlayers(w: World): void {
 /** Bring a legacy save up to the current world shape (new fields + pick ownership). */
 function migrateWorld(w: World): World {
   relinkPlayers(w)
+  // Z1b: legacy saves can hold roster/PS/IR/free-agent players with no canonical
+  // `players` entry; adopt them so development and lookups can see everyone.
+  indexPlayers(w)
   w.staffTenure ??= {}
   w.draft ??= []
   w.draftPicks ??= []
@@ -2513,6 +2527,9 @@ function runEndOfRegularSeason(
       contacts: advanceContacts(careerNext.contacts ?? [], rngPeople),
       tree: growCoachingTree(world, careerNext, rngPeople).tree ?? careerNext.tree,
     }
+    // Z2: stamp each rival's reputation before they advance, so the Rising Star
+    // award can score the year-over-year gain.
+    world.rivals = world.rivals.map((r) => ({ ...r, prevReputation: r.reputation }))
     world.rivals = advanceRivals(world, makeRng(world.seed + world.season * 719))
     for (const m of mediaItems(world, careerNext, makeRng(world.seed + world.season * 811))) {
       pushCareerNews(world, careerNext, m)
@@ -2526,6 +2543,52 @@ function runEndOfRegularSeason(
     careerNext = { ...careerNext, earnedTraits: traits }
     careerNext = { ...careerNext, userBoard: [], stretch: undefined, setPieceDone: undefined, dilemma: undefined }
   }
+
+  // ── L9 Z2: staff awards (deterministic, no rng) ────────────────────────────
+  if (careerNext) {
+    const cn = careerNext
+    const before = career?.reputation
+    const repGain = Math.round(
+      (Object.keys(cn.reputation) as (keyof Reputation)[]).reduce(
+        (s, k) => s + (cn.reputation[k] - (before ? before[k] : 0)),
+        0,
+      ),
+    )
+    const seasonAwards = computeStaffAwards(world, cn, graded.doneCount, repGain)
+    world.staffAwards = [...(world.staffAwards ?? []), ...seasonAwards].slice(-40)
+    // Write this season's win totals so next year's awards can score improvement.
+    world.lastWins = Object.fromEntries(world.teams.map((t) => [t.id, world.standings[t.id]?.wins ?? 0]))
+
+    const userAwards = seasonAwards.filter((a) => a.isUser)
+    if (userAwards.length) {
+      // +2 profile per honour, +1 more for Exec/Coach of the Year; the whole
+      // feature is capped at +3 profile in a season (reputation guardrail).
+      const gain = Math.min(
+        3,
+        userAwards.reduce(
+          (s, a) => s + (a.award === EXEC_OF_YEAR || a.award === COACH_OF_YEAR ? 3 : 2),
+          0,
+        ),
+      )
+      careerNext = {
+        ...cn,
+        reputation: { ...cn.reputation, profile: clamp(cn.reputation.profile + gain, 0, 100) },
+      }
+      for (const a of userAwards) {
+        careerNext = {
+          ...careerNext,
+          honors: [...(careerNext.honors ?? []), { season: world.season, award: a.award }],
+        }
+        careerNext = logMoment(careerNext, { week: careerNext.week, text: `You were named ${a.award}.`, tone: 'win' })
+        pushCareerNews(world, careerNext, {
+          category: 'Career',
+          headline: `You were named ${a.award}`,
+          body: `${a.award} for the ${world.season} season. ${a.line}`,
+        })
+      }
+    }
+  }
+
   const offers = careerNext ? generateJobOffers(world, careerNext) : []
   world.phase = 'offseason'
 
@@ -2578,6 +2641,7 @@ function runEndOfRegularSeason(
     question,
     ghost: ghost ? { actualWins: ghost.actualWins, ghostWins: ghost.ghostWins, delta: ghost.delta } : undefined,
     ambitions: (careerNext?.ambitions ?? []).map((a) => ({ label: a.label, done: !!a.done })),
+    staffAwards: (world.staffAwards ?? []).filter((a) => a.season === world.season),
   }
 
   set({

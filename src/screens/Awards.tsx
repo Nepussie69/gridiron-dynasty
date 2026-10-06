@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Award, Trophy } from 'lucide-react'
+import { Award, ChevronDown, Trophy } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { getAwards } from '../store/gameStore'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
 import type { AwardWinner, HofInductee, SeasonHonors } from '../game/engine/awards'
+import type { StaffAward } from '../game/engine/staffAwards'
 
 export function Awards() {
   const world = useWorld()
@@ -36,43 +37,116 @@ export function Awards() {
       />
 
       {tab === 'honors' ? (
-        !current ? (
-          <Card className="py-12 text-center text-sm text-muted">
-            No honors yet. Awards are selected from production at the end of each season.
-          </Card>
-        ) : (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-              <AwardCard winner={current.mvp} label="MVP" world={world} />
-              <AwardCard winner={current.opoy} label="Offensive POY" world={world} />
-              <AwardCard winner={current.dpoy} label="Defensive POY" world={world} />
-              <AwardCard winner={current.oroy} label="Offensive ROY" world={world} />
-              <AwardCard winner={current.droy} label="Defensive ROY" world={world} />
-            </div>
+        <div className="space-y-5">
+          <StaffAwardsCard world={world} />
+          {!current ? (
+            <Card className="py-12 text-center text-sm text-muted">
+              No honors yet. Awards are selected from production at the end of each season.
+            </Card>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+                <AwardCard winner={current.mvp} label="MVP" world={world} />
+                <AwardCard winner={current.opoy} label="Offensive POY" world={world} />
+                <AwardCard winner={current.dpoy} label="Defensive POY" world={world} />
+                <AwardCard winner={current.oroy} label="Offensive ROY" world={world} />
+                <AwardCard winner={current.droy} label="Defensive ROY" world={world} />
+              </div>
 
-            <AllProCard team={current.firstTeam} season={current.season} world={world} />
-            <AllProCard team={current.secondTeam} season={current.season} world={world} />
+              <AllProCard team={current.firstTeam} season={current.season} world={world} />
+              <AllProCard team={current.secondTeam} season={current.season} world={world} />
 
-            {seasons.length > 1 && (
-              <Card>
-                <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Past MVPs</h3>
-                <div className="space-y-1">
-                  {seasons.slice(1).map((s) => (
-                    <div key={s.season} className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm">
-                      <span className="w-12 font-cond font-700 text-muted">{s.season}</span>
-                      <span className="flex-1 truncate font-600 text-ink">{s.mvp?.name ?? '—'}</span>
-                      <span className="font-cond text-xs text-muted">{s.mvp?.team ?? ''}</span>
-                      <span className="text-xs text-muted">{s.mvp?.value ?? ''}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            )}
-          </div>
-        )
+              {seasons.length > 1 && (
+                <Card>
+                  <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Past MVPs</h3>
+                  <div className="space-y-1">
+                    {seasons.slice(1).map((s) => (
+                      <div key={s.season} className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm">
+                        <span className="w-12 font-cond font-700 text-muted">{s.season}</span>
+                        <span className="flex-1 truncate font-600 text-ink">{s.mvp?.name ?? '—'}</span>
+                        <span className="font-cond text-xs text-muted">{s.mvp?.team ?? ''}</span>
+                        <span className="text-xs text-muted">{s.mvp?.value ?? ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+            </>
+          )}
+        </div>
       ) : (
         <HallOfFame history={history} world={world} />
       )}
+    </div>
+  )
+}
+
+function StaffAwardsCard({ world }: { world: ReturnType<typeof useWorld> }) {
+  const [open, setOpen] = useState(false)
+  const all = world.staffAwards ?? []
+  if (!all.length) {
+    return (
+      <Card className="py-8 text-center text-sm text-muted">
+        No staff awards yet. The front office and coaching honours are named at the end of each season.
+      </Card>
+    )
+  }
+  const latestSeason = Math.max(...all.map((a) => a.season))
+  const latest = all.filter((a) => a.season === latestSeason)
+  const earlierSeasons = [...new Set(all.filter((a) => a.season < latestSeason).map((a) => a.season))].sort(
+    (a, b) => b - a,
+  )
+  return (
+    <Card pad={false}>
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <span className="label flex items-center gap-1">
+          <Award size={11} /> Front Office &amp; Staff Awards
+        </span>
+        <span className="font-cond text-xs text-muted">{latestSeason}</span>
+      </div>
+      <div className="divide-y divide-line">
+        {latest.map((a) => (
+          <StaffAwardRow key={a.award} a={a} world={world} />
+        ))}
+      </div>
+      {earlierSeasons.length > 0 && (
+        <>
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="flex w-full items-center justify-center gap-1 border-t border-line px-4 py-2 font-cond text-xs font-700 uppercase text-muted hover:text-ink"
+          >
+            {open ? 'Hide history' : `History (${earlierSeasons.length})`}
+            <ChevronDown size={12} className={cn('transition', open && 'rotate-180')} />
+          </button>
+          {open &&
+            earlierSeasons.map((season) => (
+              <div key={season} className="border-t border-line px-4 py-2">
+                <div className="label mb-1">{season}</div>
+                {all
+                  .filter((a) => a.season === season)
+                  .map((a) => (
+                    <StaffAwardRow key={`${season}_${a.award}`} a={a} world={world} compact />
+                  ))}
+              </div>
+            ))}
+        </>
+      )}
+    </Card>
+  )
+}
+
+function StaffAwardRow({ a, world, compact }: { a: StaffAward; world: ReturnType<typeof useWorld>; compact?: boolean }) {
+  const team = world.byId[a.teamId]
+  return (
+    <div className={cn('flex items-center gap-3', compact ? 'py-1' : 'px-4 py-2.5')}>
+      <span className="w-40 shrink-0 font-cond text-[11px] font-700 uppercase text-muted">{a.award}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {team && <TeamCrest team={team} size={compact ? 18 : 22} />}
+        <span className="truncate font-600 text-ink">{a.name}</span>
+        <span className="font-cond text-[11px] text-muted">{team?.abbr ?? a.teamId}</span>
+        {a.isUser && <Badge tone="gold">You</Badge>}
+      </div>
+      {!compact && <span className="hidden font-cond text-[11px] text-muted sm:block">{a.line}</span>}
     </div>
   )
 }

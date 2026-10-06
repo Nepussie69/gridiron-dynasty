@@ -8,7 +8,7 @@ import { departmentGrade } from './department'
 import { convictionPick } from './conviction'
 import { redFlagIds } from './redflag'
 import { makeCharacter } from './character'
-import { type World } from './generate'
+import { type World, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
 
 export const DRAFT_ROUNDS = 7
@@ -334,4 +334,6 @@ export function runUDFAs(world: World) {
     world.roster[team.id].push(player)
     prospect.draftedBy = team.id
   }
+  // Z1b: every UDFA signed must also be a canonical `world.players` entry.
+  indexPlayers(world)
 }

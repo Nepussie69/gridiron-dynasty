@@ -8,10 +8,10 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx, Cap.tsx, ui/kit.tsx, MatchV
 | Task | What | Push | Status |
 |---|---|---|---|
 | Z1 | Career smoke-test probe `__careerSmoke` | P1 | ✅ done — verified (P1) |
-| Z1b | **Bug:** signed starting-pool free agents never enter `world.players` | P2 | not started |
-| Z1c | **Bug:** AI rosters can exceed 60 | P2 | not started |
-| Z2 | Staff awards: engine + season-end wiring | P2 | not started |
-| Z3 | Staff awards: Awards screen + recap + résumé | P2 | not started |
+| Z1b | **Bug:** signed starting-pool free agents never enter `world.players` | P2 | ✅ done — verified (P2) |
+| Z1c | **Bug:** AI rosters can exceed 60 | P2 | ✅ done — verified (P2) |
+| Z2 | Staff awards: engine + season-end wiring | P2 | ✅ done — verified (P2) |
+| Z3 | Staff awards: Awards screen + recap + résumé | P2 | ✅ done — verified (P2) |
 | Z4 | Owner counteroffer when a rival club comes calling | P3 | not started |
 | Z5 | Rivalry games against your NPC rivals' clubs | P3 | not started |
 | Z6 | HANDOFF.md docs | P3 | not started |
@@ -81,7 +81,7 @@ At the end of each regular season (`runEndOfRegularSeason`, after standings are 
 | **Executive of the Year** | every club's GM (the user if `isGM(career)` at their club; otherwise the club's `'General Manager'` staff member, or `"{Team} GM"` if none) | `wins + 0.5 × (wins − lastWins)` |
 | **Coach of the Year** | every club's head coach (the user if HC) | `wins + 0.5 × (wins − lastWins)` |
 | **Assistant Coach of the Year** | every club's OC and DC (the user if coordinator, on their `unitFocus` side) | OC: league rank by `pointsFor` (1 = best); DC: by `pointsAgainst` (1 = fewest). Score = `33 − rank`; take the best |
-| **Rising Star** | the user (only if personnel level ≤ 6 or coach level ≤ 5), plus every rival with `level <= 6` | user: `objectivesDone × 10 + overall rep gain this season`; rival: `reputation − prevReputation` (store `prevReputation` before `advanceRivals`) |
+| **Rising Star** | the user (only if personnel level ≤ 6 or coach level ≤ 5), plus every rival with `level <= 6` | user: `overall rep gain this season / 5 + objectivesDone × 1.5` (orchestrator fix in P2: the original `×10 + summed gain` let the user win every season); rival: `reputation − prevReputation` (store `prevReputation` before `advanceRivals`) |
 
 `lastWins` comes from a new optional `World.lastWins?: Record<string, number>`, written at the end of the award step (wins this season) and read next season (missing → treat improvement as 0).
 Ties go to the higher `wins`, then alphabetical. **Deterministic, no rng.**
@@ -130,3 +130,7 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
 - **P1** (browser, real data): `__careerSmoke(6,'personnel')`: 0 errors; it exercised setScoutTrust, conviction, red flag, combine and findDeals and climbed to L5. Violations: unlinked roster entries (1–20 per season)
   and IND at 61 players. `__careerSmoke(6,'coach')`: 0 errors; it exercised wrinkle ×108, pitch ×36, drills ×72, install, room, extensions and shadow board, and climbed to HC (L7). Violations: unlinked
   entries (1–21 per season). Root cause: signed starting-pool free agents never enter `world.players` (fix Z1b). Roster cap fix Z1c.
+- **P2** (browser): Z1b/Z1c fixed: `__careerSmoke(6,'personnel')` and `(6,'coach')` (seed 4242) both 0 errors, **0 violations** (no unlinked roster entries, no roster over 60). The second `trimNflRosters` can't touch
+  the user's club: it's already trimmed at the start of `runAIFreeAgency` and the AI never signs for it. **Staff awards:** the spec's Rising Star formula (`objectives×10 + summed rep gain`) let the user win 6/6 seasons
+  (+2 profile a year, free pacing). Orchestrator rescaled it to `repGain/5 + objectives×1.5`, the same scale as a rival's single rep delta (+3–6/season): the user now wins in strong seasons only (2/6 on each path).
+  Awards screen: the "Front Office & Staff Awards" card, collapsible history and gold "You" badge all render. GMs without a staff entry show as "{Team} GM" per spec.

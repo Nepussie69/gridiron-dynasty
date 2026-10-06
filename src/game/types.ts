@@ -541,6 +541,8 @@ export interface CareerState {
   contacts?: Contact[]
   /** Traits earned by deeds, not spent (#10). */
   earnedTraits?: EarnedTrait[]
+  /** L9 Z2: staff awards the user has won, newest last. */
+  honors?: { season: number; award: string }[]
   /** The boss who is shaping you (#11). */
   mentor?: { name: string; philosophy: string; teamId: string }
   /** People you developed who now run their own programs (#11). */
@@ -683,5 +685,7 @@ export interface Rival {
   teamId: string
   reputation: number
   startSeason: number
+  /** L9 Z2: reputation before last season's advance, for the Rising Star award. */
+  prevReputation?: number
 }
 

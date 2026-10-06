@@ -69,6 +69,10 @@ export interface World {
   era: { id: string; label: string; positionBias: Partial<Record<Position, number>>; capSpike: number }
   /** Free agents lost/gained last cycle, used to award compensatory picks. */
   compLedger: Record<string, { lost: number; gained: number }>
+  /** L9 Z2: the last 40 front-office/staff awards, newest last. */
+  staffAwards?: import('./staffAwards').StaffAward[]
+  /** L9 Z2: wins by team at the end of last season, for year-over-year awards. */
+  lastWins?: Record<string, number>
 }
 
 // Backwards-compatible alias used by screen/selector imports.
@@ -550,6 +554,17 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
 
   const schedule = buildSchedule(rng, NFL_TEAMS, 18, 1, true)
 
+  // Z1b: free agents cut from the starting rosters must also live in `players`,
+  // or they never age/develop/retire and can't be found by trades or the ledger.
+  {
+    const seen = new Set(allPlayers.map((p) => p.id))
+    for (const p of freeAgents) {
+      if (seen.has(p.id)) continue
+      seen.add(p.id)
+      allPlayers.push(p)
+    }
+  }
+
   // Give every player a hidden character. Real-data players keep theirs hidden
   // from negative narratives; generated players can be the subject of them.
   for (const p of allPlayers) {
@@ -601,6 +616,25 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
 
 export function zeroRecord(teamId: string): TeamRecord {
   return { teamId, wins: 0, losses: 0, ties: 0, pointsFor: 0, pointsAgainst: 0, streak: 0 }
+}
+
+/**
+ * Z1b: make sure every player who lives on a roster, practice squad, IR list or
+ * free-agent pool also has a canonical entry in `world.players`. Without this,
+ * players signed out of the starting pool (or added by AI moves) exist only in
+ * `roster[*]`, so development and `findPlayer` never see them.
+ */
+export function indexPlayers(world: World): void {
+  const seen = new Set(world.players.map((p) => p.id))
+  const adopt = (p: Player) => {
+    if (seen.has(p.id)) return
+    seen.add(p.id)
+    world.players.push(p)
+  }
+  for (const list of Object.values(world.roster)) for (const p of list) adopt(p)
+  for (const list of Object.values(world.practiceSquad ?? {})) for (const p of list) adopt(p)
+  for (const list of Object.values(world.ir ?? {})) for (const p of list) adopt(p)
+  for (const p of world.freeAgents) adopt(p)
 }
 
 /** Team strength used by the simulation (top-22 weighted overall). */

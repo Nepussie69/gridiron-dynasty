@@ -1,7 +1,7 @@
 import type { CareerState, Player, Recommendation } from '../types'
 import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT } from './cap'
 import { coachEffect } from './coaching'
-import { generateProspectClass, type World } from './generate'
+import { generateProspectClass, indexPlayers, type World } from './generate'
 import { depthAt, STARTERS } from './depth'
 import { ledgerFreeAgent } from './picks'
 import { bustRisk, devModifier } from './character'
@@ -440,6 +440,10 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
     void rng
   }
   world.freeAgents = world.freeAgents.filter((p) => !taken.has(p.id))
+  // Z1c: the X1 top-up can push a roster past 53; trim again at the very end.
+  trimNflRosters(world)
+  // Z1b: adopt any newly signed players into `world.players`.
+  indexPlayers(world)
 }
 
 export function prospectRound(grade: number) {

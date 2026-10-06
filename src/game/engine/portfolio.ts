@@ -133,6 +133,18 @@ export function portfolioItems(world: World, career: CareerState): PortfolioItem
     })
   }
 
+  // L9 Z2: staff awards the user won are résumé gold.
+  for (const h of career.honors ?? []) {
+    items.push({
+      id: `honor_${h.season}_${h.award}`,
+      label: `${h.award} ${h.season}`,
+      detail: `Named ${h.award} for the ${h.season} season.`,
+      tags: ['winner'],
+      strength: 3,
+      season: h.season,
+    })
+  }
+
   return items
     .sort((a, b) => b.strength - a.strength || b.season - a.season)
     .slice(0, 12)
