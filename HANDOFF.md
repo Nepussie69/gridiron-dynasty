@@ -1,5 +1,8 @@
 # HANDOFF — Gridiron Dynasty
 
+> **New chat? Read `ORCHESTRATION_HANDOVER.md` first** — workflow (Claude plans/verifies, DeepSeek Flash implements), current status, and the next pushes to send (L9 P2/P3, then L9.5).
+
+
 ## Objective
 NFL-only front-office career sim. Current push: build the 20-idea "shape of the game"
 roadmap (a Claude-generated list) in agreed layers, keeping build/lint green and the
