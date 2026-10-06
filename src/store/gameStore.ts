@@ -120,6 +120,7 @@ import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummar
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
 import { canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import { buildExtension, judgeOffer, type ExtensionOffer } from '../game/engine/negotiation'
+import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
 import {
   WEEK_HOURS,
   weeklyActions,
@@ -141,7 +142,7 @@ import {
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
-import type { CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, Position, ScenarioId, SeasonMoment, SeasonQuestion } from '../game/types'
+import type { CapMemo, CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
@@ -414,6 +415,8 @@ interface GameStore {
   offerExtension: (playerId: string, offer: ExtensionOffer) => void
   /** G1: add/remove a non-own player from the shadow board (proScout rungs). */
   toggleShadowBoard: (playerId: string) => void
+  /** G3: file this offseason's cap memo (manageCap rungs). */
+  fileCapMemo: (bucket: 'tight' | 'comfortable' | 'flush', priorityIds: string[], note: string) => void
 
   // Practice squad & injured reserve
   signToPracticeSquad: (id: string) => void
@@ -1390,6 +1393,27 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  fileCapMemo: (bucket, priorityIds, note) => {
+    const career = get().career
+    if (!career || !canFileMemo(world, career)) return
+    const roster = world.roster[career.teamId] ?? []
+    const priorities = priorityIds
+      .map((id) => roster.find((p) => p.id === id))
+      .filter((p): p is Player => !!p && p.contract.years <= 2)
+      .slice(0, 3)
+      .map((p) => ({ playerId: p.id, signedThrough: p.contract.signedThrough }))
+    const memo: CapMemo = {
+      filedSeason: world.season,
+      bucket,
+      priorities,
+      note: note.slice(0, 120),
+    }
+    set({ career: { ...career, capMemo: memo } })
+    get().showToast('Cap memo filed. It will be graded at the end of next season.')
+    bump(set, get)
+    get().save()
+  },
+
   // ── Practice squad & injured reserve ──────────────────────────────────────
   signToPracticeSquad: (id) => {
     const career = get().career
@@ -2166,6 +2190,32 @@ function runEndOfRegularSeason(
         shadowBoard: pruneShadowBoard(world, career)
           .filter((e) => !hitIds.has(e.playerId))
           .map((e) => ({ ...e, ovrAtAdd: world.players.find((x) => x.id === e.playerId)?.ovr ?? e.ovrAtAdd, season: world.season })),
+      }
+    }
+    // G3: grade the cap memo filed last offseason now that this season is done.
+    const capMemo = careerNext.capMemo
+    if (capMemo && !capMemo.graded) {
+      const memoGrade = gradeCapMemo(world, careerNext)
+      if (memoGrade) {
+        const repMemo: Reputation = { ...careerNext.reputation }
+        for (const [k, v] of Object.entries(memoGrade.rep)) {
+          ;(repMemo as unknown as Record<string, number>)[k] = clamp(
+            ((repMemo as unknown as Record<string, number>)[k] ?? 0) + (v as number),
+            0,
+            100,
+          )
+        }
+        pushLedger(careerNext, {
+          kind: 'advice',
+          name: 'Cap memo',
+          pos: '—',
+          college: '—',
+          note: memoGrade.summary,
+        })
+        careerNext = { ...careerNext, reputation: repMemo, capMemo: { ...capMemo, graded: true } }
+        for (const line of memoGrade.lines) {
+          careerNext = logMoment(careerNext, { week: careerNext.week, text: line, tone: 'info' })
+        }
       }
     }
     if (demoted) {

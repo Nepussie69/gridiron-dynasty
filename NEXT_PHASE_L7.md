@@ -15,11 +15,11 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 | W5 | Extension talks: engine | P3 | ✅ done — verified (P3) |
 | W6 | Extension talks: store + ledger | P3 | ✅ done — verified (P3) |
 | W7 | Extension talks: UI | P3 | ✅ done — verified (P3) |
-| W8 | Cap memo: engine + store + grading | P4 | in progress (P4) |
-| W9 | Cap memo: UI | P4 | in progress (P4) |
-| W10 | Combine week: engine + store | P5 | not started |
-| W11 | Combine week: UI | P5 | not started |
-| W12 | HANDOFF.md docs | P5 | not started |
+| W8 | Cap memo: engine + store + grading | P4 | ✅ done — verified (P4) |
+| W9 | Cap memo: UI | P4 | ✅ done — verified (P4) |
+| W10 | Combine week: engine + store | P5 | in progress (P5) |
+| W11 | Combine week: UI | P5 | in progress (P5) |
+| W12 | HANDOFF.md docs | P5 | in progress (P5) |
 
 ## Phase goal
 
@@ -199,3 +199,6 @@ Never run `npm run dev` or any watch command. No git commands.
 - **P3** (browser, L6 + L8): 80%-of-ask lowballs are rejected by Loyal/Market/Hardball agents, and 100% + mid guarantees sign (contract extends 3 yrs, ledger `contract` entry).
   The 3-tries limit works ("His camp has stopped taking calls"). At L6 the GM vetoes a 120%-of-market offer. The Cap screen Extend button opens Extension Talks
   (agent style, ask, tries, years, AAV slider, guarantees, projected cap hit). Judgment call noted: a Loyal agent with a happy player + high guarantees signs at ~75% of market.
+- **P4** (browser, GM): filing is blocked in season and allowed in the offseason (the form shows on Cap); a second filing the same offseason is ignored; graded at the next
+  season's end with a ledger + moment line. Claude fix: the roster reward is capped at +3 total (the spec allowed +2 forecast + 3 priorities = 5, breaking the phase guardrail).
+  **Found, pre-existing:** `runAIResign` also re-signs the USER's club players, so a memo priority can be "extended" without the user acting (saw 2/2 when only 1 was extended by hand).

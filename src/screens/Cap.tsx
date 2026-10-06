@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
+import { FileText, Lock } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { capSavings, deadMoney } from '../game/engine/cap'
 import { canSignFreeAgents } from '../game/engine/career'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
+import { canFileMemo, spaceBucket, type SpaceBucket } from '../game/engine/capMemo'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
@@ -43,6 +45,8 @@ export function Cap() {
             : 'Contract moves unlock at Director of Player Personnel. You can review the books now.'}
         </div>
       )}
+
+      <CapMemoCard className="mb-4" />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
@@ -167,5 +171,202 @@ function HealthRow({ label, value, good }: { label: string; value: number; good:
       </div>
       <RatingBar value={value} color={good ? '#05914f' : '#d98207'} />
     </div>
+  )
+}
+
+const MEMO_BUCKETS: { id: SpaceBucket; label: string; sub: string }[] = [
+  { id: 'tight', label: 'Tight', sub: 'under $5M' },
+  { id: 'comfortable', label: 'Comfortable', sub: '$5\u201325M' },
+  { id: 'flush', label: 'Flush', sub: 'over $25M' },
+]
+
+/**
+ * G3: the 3-year cap memo.
+ *
+ * In the offseason a manageCap rung forecasts next season's year-end cap space,
+ * names up to three priority extensions, and writes one sentence of intent. The
+ * memo locks once filed. It grades a year later, so it shows as a locked plan
+ * until then.
+ */
+function CapMemoCard({ className }: { className?: string }) {
+  const league = useWorld()
+  const career = useGame((s) => s.career)!
+  const fileCapMemo = useGame((s) => s.fileCapMemo)
+  const [bucket, setBucket] = useState<SpaceBucket>('comfortable')
+  const [picked, setPicked] = useState<string[]>([])
+  const [note, setNote] = useState('')
+
+  if (!capabilities(career).can.has('manageCap')) return null
+
+  const memo = career.capMemo
+  const canFile = canFileMemo(league, career)
+  const summary = capSummary(league, career.teamId)
+  const roster = league.roster[career.teamId] ?? []
+  const eligible = roster.filter((p) => p.contract.years <= 2)
+
+  const togglePick = (id: string) =>
+    setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length >= 3 ? cur : [...cur, id]))
+
+  // Locked: a memo for this offseason is already on file.
+  if (!canFile) {
+    if (!memo) return null
+    return (
+      <Card className={className}>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="flex items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
+            <Lock size={15} className="text-[var(--team)]" /> Cap Memo
+          </h3>
+          <Badge tone={memo.graded ? 'win' : 'info'}>{memo.graded ? 'Graded' : 'Filed'}</Badge>
+        </div>
+        <p className="mb-3 text-sm text-muted">
+          Filed for {memo.filedSeason}. Graded at the end of {memo.filedSeason + 1}.
+        </p>
+
+        <div className="mb-3 rounded-lg border border-line bg-surface-2 p-3">
+          <div className="label">Forecast: next season&apos;s year-end space</div>
+          <div className="font-display text-xl font-700 uppercase text-ink">
+            {MEMO_BUCKETS.find((b) => b.id === memo.bucket)?.label ?? memo.bucket}
+          </div>
+        </div>
+
+        <div className="mb-3">
+          <div className="label mb-1.5">Priority extensions</div>
+          {memo.priorities.length ? (
+            <div className="space-y-1.5">
+              {memo.priorities.map((pr) => {
+                const p = roster.find((x) => x.id === pr.playerId)
+                const extended = !!p && p.contract.signedThrough > pr.signedThrough
+                return (
+                  <div
+                    key={pr.playerId}
+                    className="flex items-center justify-between rounded-lg border border-line px-2.5 py-1.5"
+                  >
+                    <span className="truncate text-sm font-600 text-ink">
+                      {p ? `${p.name} · ${p.pos}` : 'Departed'}
+                    </span>
+                    <span
+                      className={cn(
+                        'font-cond text-[11px] font-700 uppercase',
+                        extended ? 'text-win' : p ? 'text-muted' : 'text-loss',
+                      )}
+                    >
+                      {extended ? 'Extended' : p ? 'Not extended' : 'Left club'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-muted">No priority extensions named.</p>
+          )}
+        </div>
+
+        {memo.note && (
+          <p className="rounded-lg bg-surface-2 p-3 text-sm italic text-ink-2">&ldquo;{memo.note}&rdquo;</p>
+        )}
+      </Card>
+    )
+  }
+
+  // Open: the offseason form.
+  return (
+    <Card className={className}>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="flex items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
+          <FileText size={15} className="text-[var(--team)]" /> Cap Memo
+        </h3>
+        <Badge tone="team">Offseason</Badge>
+      </div>
+      <p className="mb-3 text-sm text-muted">
+        Commit in public: forecast next season&apos;s year-end cap space and name up to three priority
+        extensions. The memo locks once filed and grades a year from now.
+      </p>
+
+      <div className="mb-3">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="label">Forecast: next season&apos;s year-end space</span>
+          <span className="font-cond text-xs text-muted">
+            today {money(summary.space)} · {spaceBucket(summary.space)}
+          </span>
+        </div>
+        <div className="flex gap-1.5">
+          {MEMO_BUCKETS.map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              onClick={() => setBucket(b.id)}
+              className={cn(
+                'flex-1 rounded-lg border py-1.5 text-center transition',
+                bucket === b.id
+                  ? 'border-[var(--team)] bg-[var(--team-soft)]'
+                  : 'border-line bg-surface-2 hover:border-line-strong',
+              )}
+            >
+              <span className="block font-cond text-sm font-700 text-ink">{b.label}</span>
+              <span className="block font-cond text-[10px] font-700 uppercase text-muted">{b.sub}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mb-3">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="label">Priority extensions</span>
+          <span className="font-cond text-xs text-muted">
+            {picked.length}/3 · {eligible.length} eligible
+          </span>
+        </div>
+        {eligible.length ? (
+          <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+            {eligible.map((p) => {
+              const on = picked.includes(p.id)
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => togglePick(p.id)}
+                  className={cn(
+                    'rounded-lg border px-2.5 py-1 text-left transition',
+                    on
+                      ? 'border-[var(--team)] bg-[var(--team-soft)]'
+                      : 'border-line bg-surface-2 hover:border-line-strong',
+                  )}
+                >
+                  <span className="block text-xs font-600 text-ink">{p.name}</span>
+                  <span className="block font-cond text-[10px] font-700 uppercase text-muted">
+                    {p.pos} · {p.contract.years} yr{p.contract.years === 1 ? '' : 's'} left
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-muted">
+            No players are extension-eligible (2 years or fewer) right now.
+          </p>
+        )}
+      </div>
+
+      <div className="mb-3">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="label">Intent</span>
+          <span className="font-cond text-[10px] font-700 uppercase text-faint">{note.length}/120</span>
+        </div>
+        <input
+          type="text"
+          maxLength={120}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="One sentence: what this cap plan is for."
+          className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none focus:border-[var(--team)]"
+        />
+      </div>
+
+      <div className="flex items-center justify-end border-t border-line pt-3">
+        <Button variant="primary" onClick={() => fileCapMemo(bucket, picked, note)}>
+          File memo
+        </Button>
+      </div>
+    </Card>
   )
 }

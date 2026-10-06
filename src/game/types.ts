@@ -211,6 +211,16 @@ export interface ShadowEntry {
   season: number
 }
 
+/** G3: a cap-space forecast + priority extensions filed in the offseason. */
+export interface CapMemo {
+  filedSeason: number
+  bucket: 'tight' | 'comfortable' | 'flush'
+  priorities: { playerId: string; signedThrough: number }[]
+  note: string
+  /** Set once the memo has been graded at the end of the following season. */
+  graded?: boolean
+}
+
 /**
  * Character: the second rating film can't show. It drives whether a player
  * develops or busts — never his current on-field rating — so the sim's
@@ -489,6 +499,8 @@ export interface CareerState {
   shadowBoard?: ShadowEntry[]
   /** G2: extension-talk bookkeeping per player (3 tries per season, then closed). */
   talks?: Record<string, { season: number; tries: number; closed?: boolean }>
+  /** G3: the cap memo filed last offseason, graded at the end of the following season. */
+  capMemo?: CapMemo
   /** G3: your room's focus players, practice plan, and banked reps. */
   room?: { focus: string[]; plan: 'concentrate' | 'spread'; reps: number }
   /** The region you're assigned to scout (drives information scope). */
