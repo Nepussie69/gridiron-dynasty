@@ -297,8 +297,8 @@ interface PlayOutcome {
 // Set by the store during a live game so player calls bend the sim. Empty plan
 // (the default) means AI-vs-AI behaviour for both sides.
 export interface LivePlan {
-  offTeamId: string
-  defTeamId: string
+  /** The user's club — the only team whose plans the sim reads. */
+  teamId: string
   off: import('./gameplan').GamePlan
   def: import('./gameplan').GamePlan
 }
@@ -306,16 +306,14 @@ let LIVE_PLAN: LivePlan | null = null
 export function setLivePlan(p: LivePlan | null) {
   LIVE_PLAN = p
 }
-function planFor(teamId: string): import('./gameplan').GamePlan | null {
-  if (!LIVE_PLAN) return null
-  if (teamId === LIVE_PLAN.offTeamId) return LIVE_PLAN.off
-  if (teamId === LIVE_PLAN.defTeamId) return LIVE_PLAN.def
-  return null
+function planFor(teamId: string, side: 'off' | 'def'): import('./gameplan').GamePlan | null {
+  if (!LIVE_PLAN || teamId !== LIVE_PLAN.teamId) return null
+  return side === 'off' ? LIVE_PLAN.off : LIVE_PLAN.def
 }
 
 /** Fold the DC's live plan into coverage tightness, ball-hawking, and risk. */
 function applyDefPlan(defId: string, dStyle: DefenseStyle) {
-  const plan = planFor(defId)
+  const plan = planFor(defId, 'def')
   if (!plan) return { compMult: 1, coverMult: 1, intMult: 1, bigPlayRisk: 1 }
   const eff = planEffects(plan, true)
   // Zone (coverage 0) gives up more catches underneath but fewer explosives;
@@ -354,7 +352,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const qbFit = qb ? schemeFit(qb, ocScheme, 'OFF') : 0.5
   const pressure = avg(dl.map((p) => Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70)))
   const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70))
-  const blitz = rng() < clamp(dStyle.blitz + (planFor(defId) ? planEffects(planFor(defId)!, true).blitz : 0), 0, 0.8)
+  const blitz = rng() < clamp(dStyle.blitz + (planFor(defId, 'def') ? planEffects(planFor(defId, 'def')!, true).blitz : 0), 0, 0.8)
   const pressureEdge = pressure - protection + (blitz ? 9 : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1), 0.02, 0.13)
@@ -393,7 +391,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const coverage = coverSkill * dStyle.coverage * planOverrides.coverMult + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
-  const offPassBias = planFor(offId)?.passBias ?? 0
+  const offPassBias = planFor(offId, 'off')?.passBias ?? 0
   const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) : 0
   const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction
 
@@ -459,7 +457,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // Real NFL run distribution, tilted by line + back vs. front seven, plus back style.
   const styleEdge = cStyle.power * 14 + cStyle.elusiveness * 10 + (cFit - 0.5) * 12
   // A pass-heavy offense runs against lighter boxes — make them pay on the ground.
-  const offPassBiasRun = planFor(offId)?.passBias ?? 0
+  const offPassBiasRun = planFor(offId, 'off')?.passBias ?? 0
   const boxLight = Math.max(0, offPassBiasRun) * 1.8
   const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight
   const gains: string[] = []
@@ -534,7 +532,7 @@ export function simulatePlayByPlay(world: World, homeId: string, awayId: string,
   void playTime
   // Tempo is re-read each play so a live plan change takes effect immediately.
   const baseTimeScale = (id: string) => {
-    const p = planFor(id)
+    const p = planFor(id, 'off')
     return p ? planEffects(p, false).timeScale : 1
   }
 
@@ -598,7 +596,7 @@ export function simulatePlayByPlay(world: World, homeId: string, awayId: string,
     }
 
     const style = offStyle(world, offId)
-    const offPlan = planFor(offId)
+    const offPlan = planFor(offId, 'off')
     const planPassAdj = offPlan ? planEffects(offPlan, false).passAdj : 0
     const concept = pickConcept(rng, style, down, distance, passAdj + planPassAdj)
     const isFourth = down === 4

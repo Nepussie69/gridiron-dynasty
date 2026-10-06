@@ -9,20 +9,25 @@ import {
 import { Badge, Card, RatingBar } from '../ui/kit'
 
 /**
- * The plan editor: preset buttons plus four dials. Shared by the pre-game
- * "Game Plan" tab and the in-game overlay so the mental model is identical.
+ * The plan editor: preset buttons plus the dials for one side. Shared by the
+ * pre-game "Game Plan" tab and the in-game overlay so the mental model is
+ * identical. Offense edits only Run/Pass + Tempo; defense only Pass Rush +
+ * Coverage. Hidden dials keep their current values.
  */
 export function PlanEditor({
   plan,
   onChange,
+  side,
   compact = false,
 }: {
   plan: GamePlan
   onChange: (p: GamePlan) => void
+  side: 'off' | 'def'
   compact?: boolean
 }) {
   const eff = planEffects(plan, false)
   const defEff = planEffects(plan, true)
+  const presets = PLAN_PRESETS.filter((p) => p.side === side)
 
   const dial = (
     label: string,
@@ -60,7 +65,7 @@ export function PlanEditor({
         <div>
           <div className="label mb-2">Presets</div>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-            {PLAN_PRESETS.map((p) => {
+            {presets.map((p) => {
               const active = JSON.stringify(p.plan) === JSON.stringify(plan)
               return (
                 <button
@@ -81,21 +86,35 @@ export function PlanEditor({
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {dial('Run / Pass', 'passBias', -2, 2, 0.2, 'Run heavy', 'Pass heavy')}
-        {dial('Tempo', 'tempo', -1, 1, 0.2, 'Drain clock', 'Hurry up')}
-        {dial('Pass Rush', 'aggression', 0, 2, 0.2, 'Conservative', 'All-out blitz')}
-        {dial('Coverage', 'coverage', 0, 2, 0.2, 'Soft zone', 'Press man')}
+        {side === 'off' ? (
+          <>
+            {dial('Run / Pass', 'passBias', -2, 2, 0.2, 'Run heavy', 'Pass heavy')}
+            {dial('Tempo', 'tempo', -1, 1, 0.2, 'Drain clock', 'Hurry up')}
+          </>
+        ) : (
+          <>
+            {dial('Pass Rush', 'aggression', 0, 2, 0.2, 'Conservative', 'All-out blitz')}
+            {dial('Coverage', 'coverage', 0, 2, 0.2, 'Soft zone', 'Press man')}
+          </>
+        )}
       </div>
 
       <div className="rounded-lg bg-surface-2 p-3">
         <div className="label mb-1.5">What this does</div>
         <div className="grid gap-2 text-xs text-ink-2 sm:grid-cols-2">
-          <MiniBar label="Pass tendency" value={50 + eff.passAdj * 400} />
-          <MiniBar label="Blitz rate" value={50 + defEff.blitz * 250} />
-          <MiniBar label="Clock used/play" value={50 + (eff.timeScale - 1) * 220} />
-          <MiniBar label="Big-play risk" value={50 + (defEff.bigPlayRisk - 1) * 220} />
+          {side === 'off' ? (
+            <>
+              <MiniBar label="Pass tendency" value={50 + eff.passAdj * 400} />
+              <MiniBar label="Clock used/play" value={50 + (eff.timeScale - 1) * 220} />
+            </>
+          ) : (
+            <>
+              <MiniBar label="Blitz rate" value={50 + defEff.blitz * 250} />
+              <MiniBar label="Big-play risk" value={50 + (defEff.bigPlayRisk - 1) * 220} />
+            </>
+          )}
         </div>
-        <div className="mt-2 text-[11px] text-muted">{describePlan(plan)}</div>
+        <div className="mt-2 text-[11px] text-muted">{describePlan(plan, side)}</div>
       </div>
 
       {!compact && (

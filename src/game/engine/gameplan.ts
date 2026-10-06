@@ -22,20 +22,24 @@ export const BALANCED_PLAN: GamePlan = { passBias: 0, tempo: 0, aggression: 0.5,
 
 export interface PlanPreset {
   id: string
+  side: 'off' | 'def'
   label: string
   blurb: string
   plan: GamePlan
 }
 
 export const PLAN_PRESETS: PlanPreset[] = [
-  { id: 'balanced', label: 'Balanced', blurb: 'Standard calls. Take what the defense gives.', plan: { ...BALANCED_PLAN } },
-  { id: 'run-heavy', label: 'Run Heavy', blurb: 'Lean on the ground game. Shorten the game.', plan: { passBias: -1.6, tempo: -0.35, aggression: 0.5, coverage: 1 } },
-  { id: 'air-it-out', label: 'Air It Out', blurb: 'Pass-first. Push the ball downfield.', plan: { passBias: 1.6, tempo: 0.4, aggression: 0.5, coverage: 1 } },
-  { id: 'clock-killer', label: 'Clock Killer', blurb: 'Deliberate tempo, run the ball, protect the lead.', plan: { passBias: -1.2, tempo: -1, aggression: 0.4, coverage: 0 } },
-  { id: 'hurry-up', label: 'Hurry Up', blurb: 'Fast tempo, throw to stop the clock.', plan: { passBias: 1.2, tempo: 1, aggression: 0.5, coverage: 1 } },
-  { id: 'blitz', label: 'All-Out Blitz', blurb: 'Send the house. Risk the big play for pressure.', plan: { passBias: 0, tempo: 0.3, aggression: 2, coverage: 1.6 } },
-  { id: 'bend-dont-break', label: "Bend Don't Break", blurb: 'Soft zone, no big plays, tackle in front.', plan: { passBias: 0, tempo: -0.4, aggression: 0.2, coverage: 0 } },
-  { id: 'stack-box', label: 'Stack the Box', blurb: 'Sell out to stop the run. Dare them to throw.', plan: { passBias: 0.2, tempo: 0, aggression: 1.4, coverage: 0.4 } },
+  // ── Offense ────────────────────────────────────────────────────────────────
+  { id: 'balanced', side: 'off', label: 'Balanced', blurb: 'Standard calls. Take what the defense gives.', plan: { ...BALANCED_PLAN } },
+  { id: 'run-heavy', side: 'off', label: 'Run Heavy', blurb: 'Lean on the ground game. Shorten the game.', plan: { passBias: -1.6, tempo: -0.35, aggression: 0.5, coverage: 1 } },
+  { id: 'air-it-out', side: 'off', label: 'Air It Out', blurb: 'Pass-first. Push the ball downfield.', plan: { passBias: 1.6, tempo: 0.4, aggression: 0.5, coverage: 1 } },
+  { id: 'clock-killer', side: 'off', label: 'Clock Killer', blurb: 'Deliberate tempo, run the ball, protect the lead.', plan: { passBias: -1.2, tempo: -1, aggression: 0.4, coverage: 0 } },
+  { id: 'hurry-up', side: 'off', label: 'Hurry Up', blurb: 'Fast tempo, throw to stop the clock.', plan: { passBias: 1.2, tempo: 1, aggression: 0.5, coverage: 1 } },
+  // ── Defense ────────────────────────────────────────────────────────────────
+  { id: 'balanced-def', side: 'def', label: 'Balanced', blurb: 'Standard calls. Take what the offense gives.', plan: { ...BALANCED_PLAN } },
+  { id: 'blitz', side: 'def', label: 'All-Out Blitz', blurb: 'Send the house. Risk the big play for pressure.', plan: { passBias: 0, tempo: 0.3, aggression: 2, coverage: 1.6 } },
+  { id: 'bend-dont-break', side: 'def', label: "Bend Don't Break", blurb: 'Soft zone, no big plays, tackle in front.', plan: { passBias: 0, tempo: -0.4, aggression: 0.2, coverage: 0 } },
+  { id: 'stack-box', side: 'def', label: 'Stack the Box', blurb: 'Sell out to stop the run. Dare them to throw.', plan: { passBias: 0.2, tempo: 0, aggression: 1.4, coverage: 0.4 } },
 ]
 
 // ── How a plan bends the sim ─────────────────────────────────────────────────
@@ -74,13 +78,16 @@ export function planEffects(plan: GamePlan, defensive: boolean): PlanEffects {
   }
 }
 
-/** One-line read of the plan for the UI. */
-export function describePlan(plan: GamePlan): string {
+/** One-line read of the plan for the UI, describing only the given side's dials. */
+export function describePlan(plan: GamePlan, side: 'off' | 'def'): string {
+  if (side === 'def') {
+    const def =
+      plan.aggression > 1.5 ? 'all-out pressure' : plan.aggression > 0.9 ? 'aggressive' : plan.aggression < 0.3 ? 'conservative' : 'balanced pressure'
+    const cov = plan.coverage <= 0.3 ? 'soft zone' : plan.coverage >= 1.7 ? 'press man' : 'mixed coverage'
+    return `${def}, ${cov}`
+  }
   const pass =
     plan.passBias > 1.3 ? 'pass-heavy' : plan.passBias > 0.4 ? 'pass-leaning' : plan.passBias < -1.3 ? 'run-heavy' : plan.passBias < -0.4 ? 'run-leaning' : 'balanced'
   const tempo = plan.tempo > 0.5 ? 'hurry-up' : plan.tempo < -0.5 ? 'clock-draining' : 'normal tempo'
-  const def =
-    plan.aggression > 1.5 ? 'all-out pressure' : plan.aggression > 0.9 ? 'aggressive' : plan.aggression < 0.3 ? 'conservative' : 'balanced pressure'
-  const cov = plan.coverage <= 0.3 ? 'soft zone' : plan.coverage >= 1.7 ? 'press man' : 'mixed coverage'
-  return `${pass}, ${tempo} · ${def}, ${cov}`
+  return `${pass}, ${tempo}`
 }

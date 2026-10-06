@@ -615,8 +615,7 @@ export const useGame = create<GameStore>((set, get) => ({
       (g) => !g.played && g.week === week && (g.homeId === career.teamId || g.awayId === career.teamId),
     )
     if (userGameForPlan) {
-      const isHome = userGameForPlan.homeId === career.teamId
-      setLivePlan({ offTeamId: career.teamId, defTeamId: isHome ? userGameForPlan.awayId : userGameForPlan.homeId, off: plan.off, def: plan.def })
+      setLivePlan({ teamId: career.teamId, off: plan.off, def: plan.def })
     }
     // The user's game is simulated play-by-play so it can be watched in 2D.
     applyUserCoaching(career)
@@ -1932,10 +1931,8 @@ function startLiveSim(
   if (!game) return
   // The live path runs the same coaching edges as a normal advance.
   applyUserCoaching(career)
-  const isHome = game.homeId === career.teamId
   setLivePlan({
-    offTeamId: career.teamId,
-    defTeamId: isHome ? game.awayId : game.homeId,
+    teamId: career.teamId,
     off,
     def,
   })
@@ -2786,7 +2783,7 @@ export function dominanceProbe(games = 60) {
     let w = 0
     for (const m of matchups) {
       setUserCoaching(null)
-      setLivePlan({ offTeamId: m.h, defTeamId: m.a, off: p.off, def: BALANCED_PLAN })
+      setLivePlan({ teamId: m.h, off: p.off, def: BALANCED_PLAN })
       const sim = simulatePlayByPlay(world, m.h, m.a, m.seed)
       pts += sim.homeScore
       if (sim.homeScore > sim.awayScore) w++

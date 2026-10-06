@@ -67,7 +67,7 @@ export function GamePlanScreen() {
               </h3>
               <Badge tone="team" className="ml-auto">{side === 'off' ? coaches.ocScheme : coaches.dcScheme}</Badge>
             </div>
-            <PlanEditor plan={plan} onChange={(p) => setDefaultPlan(side, p)} />
+            <PlanEditor plan={plan} onChange={(p) => setDefaultPlan(side, p)} side={side} />
           </Card>
 
           <SchemeFitReport teamId={team.id} side={side} />
@@ -109,14 +109,14 @@ export function GamePlanScreen() {
                 <div className="label mb-0.5">{coaches.oc} · OC</div>
                 <div className="text-ink-2">{coaches.ocScheme}</div>
                 <div className="mt-1 text-xs text-muted">
-                  {describePlan(defaultPlan.off)}
+                  {describePlan(defaultPlan.off, 'off')}
                 </div>
               </div>
               <div className="rounded-lg bg-surface-2 p-3">
                 <div className="label mb-0.5">{coaches.dc} · DC</div>
                 <div className="text-ink-2">{coaches.dcScheme}</div>
                 <div className="mt-1 text-xs text-muted">
-                  {describePlan(defaultPlan.def)}
+                  {describePlan(defaultPlan.def, 'def')}
                 </div>
               </div>
             </div>

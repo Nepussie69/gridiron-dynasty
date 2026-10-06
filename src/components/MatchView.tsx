@@ -370,6 +370,7 @@ export function MatchView() {
           </div>
           <PlanEditor
             compact
+            side={planSide}
             plan={planSide === 'off' ? (liveGame?.off ?? BALANCED_PLAN) : (liveGame?.def ?? BALANCED_PLAN)}
             onChange={(p) => setPlan(planSide, p)}
           />

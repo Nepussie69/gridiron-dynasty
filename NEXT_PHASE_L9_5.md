@@ -6,8 +6,8 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate (L9 sh
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| R1 | **Bug:** game plans are wired to the wrong teams | P1 | not started |
-| R2 | Offense plan shows only offense dials, defense plan only defense dials | P1 | not started |
+| R1 | **Bug:** game plans are wired to the wrong teams | P1 | ✅ done — verified (P1) |
+| R2 | Offense plan shows only offense dials, defense plan only defense dials | P1 | ✅ done — verified (P1) |
 | R3 | Team rating comparison on the Game Plan "Up Next" card | P2 | not started |
 | R4 | Store a box score for every user game + "Box" button on Schedule | P2 | not started |
 | R5 | Staff screen: role groups (filter tabs) for current staff and hiring candidates | P3 | not started |
@@ -68,3 +68,7 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
 No changes to sim constants, gates, objectives, capabilities, evaluateTrade, contract pricing. No git commands. Every new save field is optional. Do not edit NEXT_PHASE*.md.
 
 ## Verification log
+- **P1** (browser, BAL vs IND, 150 seeded games each; the `ds-push` runner hit 2 startup hangs on `--standalone`, so it now uses the shared service by default). **Before R1:** an extreme user DEF plan raised the USER's
+  passing yards 265 → 376 (the opponent's defense ran the user's plan). **After R1:** neutral 221/224 (user/opp pass yds) · user Balanced = identical to neutral · user DEF blitz+press → opp 290, user 226 ·
+  user DEF soft zone → opp 186, user 217 · user OFF Air It Out → user 299, opp 221. Plans now only affect the side they belong to. R2: offense tab shows Run/Pass + Tempo + 5 presets, defense shows Pass Rush + Coverage + 4 presets; notes are one-sided.
+  **Watch:** soft zone (opp 17.5 pts) vs all-out blitz (24.1) against this opponent: check that no defensive preset is dominant across opponents (a balance question for a later phase; planEffects untouched).
