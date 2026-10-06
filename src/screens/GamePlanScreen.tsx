@@ -6,6 +6,7 @@ import { PlanEditor } from '../components/PlanEditor'
 import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
 import { WrinkleCard } from '../components/WrinkleCard'
+import { InstallCard } from '../components/InstallCard'
 import { canWrinkle } from '../game/engine/wrinkle'
 import { coachLabels } from '../game/engine/playsim'
 import { recordOf, scheduleFor } from '../game/selectors'
@@ -71,6 +72,7 @@ export function GamePlanScreen() {
 
           <SchemeFitReport teamId={team.id} side={side} />
           {canWrinkle(career) && <WrinkleCard />}
+          <InstallCard />
           <CulturePanel teamId={team.id} />
         </div>
 

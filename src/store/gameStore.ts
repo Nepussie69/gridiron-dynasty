@@ -94,6 +94,7 @@ import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
+import { canInstall, installBonus } from '../game/engine/install'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
 import { evaluateTrade, executeTrade, type TradeAsset } from '../game/engine/trade'
@@ -377,6 +378,8 @@ interface GameStore {
   toggleConviction: (prospectId: string) => void
   /** K1: pick (or clear) this week's game-plan wrinkle for a side. */
   pickWrinkle: (side: 'off' | 'def', id: string) => void
+  /** K2: choose this offseason's install plan for the coming season. */
+  chooseInstall: (plan: 'lean' | 'full') => void
   /** G3: add/remove a player from your room's focus list (max 3). */
   toggleRoomFocus: (playerId: string) => void
   /** G3: choose your room's practice plan (Concentrate or Spread). */
@@ -973,6 +976,14 @@ export const useGame = create<GameStore>((set, get) => ({
     if (pick[side] === id) delete pick[side]
     else pick[side] = id
     set({ career: { ...career, wrinkles: { ...current, pick } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  chooseInstall: (plan) => {
+    const career = get().career
+    if (!career || !canInstall(world, career)) return
+    if (plan !== 'lean' && plan !== 'full') return
+    set({ career: { ...career, install: { season: world.season + 1, plan } }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -1744,17 +1755,19 @@ function applyUserCoaching(career: CareerState | null) {
     return
   }
   const holdsRole = career.path === 'coach' && career.level >= 2
-  // K1 can apply even outside the normal coaching-skill path; an HC or
-  // coordinator always holds the role, so in practice this is the same.
-  if (!holdsRole && !canWrinkle(career)) {
+  // K1/K2 can apply even outside the normal coaching-skill path; an HC,
+  // coordinator or installer always holds the role, so in practice this is the same.
+  if (!holdsRole && !canWrinkle(career) && !capabilities(career).can.has('installScheme')) {
     setUserCoaching(null)
     return
   }
   const b = holdsRole
     ? userBonusFromSkills(career.skills, true, career.unitFocus === 'both' ? 'both' : career.unitFocus ?? 'both')
     : NO_USER_BONUS
-  // K1/K2: the extra per-side bonus is clamped so it can never blow up the sim.
-  const extra = wrinkleBonus(career, world.week)
+  // K1/K2: the combined per-side bonus is clamped so it can never blow up the sim.
+  const wrinkle = wrinkleBonus(career, world.week)
+  const install = installBonus(career, world)
+  const extra = { off: wrinkle.off + install.off, def: wrinkle.def + install.def }
   setUserCoaching({
     teamId: career.teamId,
     off: b.off + clamp(extra.off, -0.6, 1.5),

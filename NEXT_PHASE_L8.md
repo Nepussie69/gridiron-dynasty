@@ -9,10 +9,10 @@ _Lint baseline: exactly 5 warnings (PlayerTable.tsx:39, Cap.tsx:22, ui/kit.tsx:3
 |---|---|---|---|
 | Y1 | Weekly wrinkle: engine | P1 | ✅ done — verified (P1) |
 | Y2 | Weekly wrinkle: store + sim hook + UI | P1 | ✅ done — verified (P1) |
-| Y3 | Install plan: engine + store + sim hook | P2 | in progress (P2) |
-| Y4 | Install plan: UI | P2 | in progress (P2) |
-| Y5 | Starter pitch (position coach): engine + store | P3 | not started |
-| Y6 | Starter pitch: depth chart UI | P3 | not started |
+| Y3 | Install plan: engine + store + sim hook | P2 | ✅ done — verified (P2) |
+| Y4 | Install plan: UI | P2 | ✅ done — verified (P2) |
+| Y5 | Starter pitch (position coach): engine + store | P3 | in progress (P3) |
+| Y6 | Starter pitch: depth chart UI | P3 | in progress (P3) |
 | Y7 | Red flag (take him off the board): engine + ledger | P4 | not started |
 | Y8 | Red flag: draft wiring + UI | P4 | not started |
 | Y9 | HANDOFF.md docs | P4 | not started |
@@ -137,3 +137,5 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
 ## Verification log
 - **P1** (browser, NFL coordinator, offense): same wrinkle 5 weeks → 1.0 / 0.6 / 0.3 / 0 / 0; rotating 4 wrinkles stays 1.0 every week; history persists across weeks (8 kept);
   an offense coordinator can't pick a defensive wrinkle; the WrinkleCard renders on Game Plan with edge chips. `__simTest(150)` seed 33333: 22.9 pts / 67.6% / 3.33 sacks (AI-only, unchanged).
+- **P2** (browser, off. coordinator): install is blocked in season; the card shows in the offseason; Full chosen then Lean ignored (locked for 2027). Curve next season (off/def):
+  w1 −0.4/0 · w4 −0.4/0 · w5 0.2/0 · w8 0.2/0 · w9 0.8/0 · w15 0.8/0. Wrinkle + install are summed then clamped to [−0.6, +1.5] in `applyUserCoaching` (a fresh wrinkle +1.0 plus late Full +0.8 = 1.8 → 1.5).
