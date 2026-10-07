@@ -10,8 +10,8 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
-import { simulatePlayByPlay, createGame, runToMoment, answerMoment, finishGame, setUserCoaching, setLivePlan, type GameSim, type GameCtx, type GameState, type Moment } from '../game/engine/playsim'
-import { DEFAULT_CALL_SHEET, type CallSheet } from '../game/engine/decisions'
+import { simulatePlayByPlay, createGame, runToMoment, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, type GameSim, type GameCtx, type GameState, type Moment } from '../game/engine/playsim'
+import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, type CallSheet } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, userBonusFromSkills } from '../game/engine/coaching'
 import {
@@ -272,6 +272,21 @@ function growPlaybookFromGame(world: World, sim: GameSim) {
     }
   }
 }
+
+/** L10 G8: fold a completed user game's snaps into the season tendency book. */
+function updateUserBook(world: World, sim: GameSim, teamId: string) {
+  if (world.userBook && (world.userBook.season !== world.season || world.userBook.teamId !== teamId)) {
+    world.userBook = undefined
+  }
+  if (!world.userBook) world.userBook = { season: world.season, teamId, book: emptyBook() }
+  const book = world.userBook.book
+  for (const p of sim.plays) {
+    if (p.type !== 'run' && p.type !== 'pass') continue
+    const bucket = bucketFor(p.down ?? 1, p.distance ?? 10, p.startYard)
+    if (p.offId === teamId && p.offClass) book.off[bucket][p.offClass] += 1
+    else if (p.defId === teamId && p.defCall) book.def[bucket][p.defCall] += 1
+  }
+}
 // Teach the stats layer to stamp each season with the scheme played.
 setSchemeLookup((teamId, level) => (level === 'NFL' || level === 'CFB' ? schemeFor(teamId, 'off') : ''))
 
@@ -365,6 +380,8 @@ interface GameStore {
   setDefaultPlan: (side: 'off' | 'def', plan: GamePlan) => void
   /** L10 G4: the user's 4th-down / 2-point / timeout call sheet. */
   setCallSheet: (sheet: CallSheet) => void
+  /** L10 G10: the user's opening script (ordered concept names, max 8). */
+  setScript: (concepts: string[]) => void
   /** Opt-in: run the whole league's games through true play-by-play (Web Worker). */
   leaguePbp: boolean
   setLeaguePbp: (v: boolean) => void
@@ -478,6 +495,13 @@ function bump(set: (p: Partial<GameStore>) => void, get: () => GameStore) {
 /** Mark a weekly-checklist task complete on the career (immutably). */
 function withFlag(career: CareerState, key: string): CareerState {
   return { ...career, weekFlags: { ...(career.weekFlags ?? {}), [key]: true } }
+}
+
+/** The club the user plays this week, or null on a bye. */
+function weekOpponent(world: World, teamId: string): string | null {
+  const g = world.schedule.find((x) => !x.played && x.week === world.week && (x.homeId === teamId || x.awayId === teamId))
+  if (!g) return null
+  return g.homeId === teamId ? g.awayId : g.homeId
 }
 
 export const useGame = create<GameStore>((set, get) => ({
@@ -655,6 +679,8 @@ export const useGame = create<GameStore>((set, get) => ({
       userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
       growPlaybookFromGame(world, sim)
+      // L10 G8: every user snap feeds the tendency book opponents will exploit.
+      updateUserBook(world, sim, career.teamId)
       // L10 G5: grade the user's fourth-down and two-point calls; keep the film
       // on the game (one season, cleared with the box).
       const film = gradeGame(world, sim, career.teamId)
@@ -861,6 +887,16 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  setScript: (concepts) => {
+    const career = get().career
+    if (!career) return
+    // Only concepts the club's scheme actually runs, capped at eight.
+    const valid = new Set(offStyle(world, career.teamId).concepts.map((c) => c.name))
+    const script = concepts.filter((c) => valid.has(c)).slice(0, 8)
+    set({ career: withFlag({ ...career, script }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
   setLeaguePbp: (v) => {
     set({ leaguePbp: v, tick: get().tick + 1 })
     get().showToast(v ? 'Authentic league sim ON — every game runs play-by-play.' : 'Fast league sim restored.')
@@ -919,6 +955,9 @@ export const useGame = create<GameStore>((set, get) => ({
     seasonCareer.devBaseline = snapshotDevBaseline(world, seasonCareer)
     // K1: opponents' film resets with the new season.
     seasonCareer.wrinkles = seasonCareer.wrinkles ? { season: world.season, history: [] } : undefined
+    // L10 G8: opponents start a new book on your tendencies; the old read is stale.
+    world.userBook = undefined
+    seasonCareer.oppRead = undefined
     // G3: a new season empties the rep bank and drops anyone who left the room.
     if (hasRoom(seasonCareer)) {
       const still = new Set(roomPlayers(world, seasonCareer).map((p) => p.id))
@@ -1217,6 +1256,7 @@ export const useGame = create<GameStore>((set, get) => ({
     let note = ''
     let jobSecurity = career.jobSecurity
     let nextRoom: CareerState['room']
+    let nextOppRead: CareerState['oppRead']
     switch (id) {
       case 'film':
         skills.evaluation = clamp(skills.evaluation + 1, 0, 99)
@@ -1263,6 +1303,25 @@ export const useGame = create<GameStore>((set, get) => ({
         skills.scheme = clamp(skills.scheme + 1, 0, 99)
         note = 'Film session: +Scheme.'
         break
+      case 'tendencies': {
+        const oppId = weekOpponent(world, career.teamId)
+        if (!oppId) {
+          get().showToast('No opponent this week to scout.')
+          return
+        }
+        const prev = career.oppRead
+        if (prev && prev.week === world.week && prev.oppId === oppId && prev.sharp) {
+          get().showToast('Your read on this opponent is already sharp.')
+          return
+        }
+        // First purchase this week is fuzzy; a second sharpens it.
+        const sharp = !!prev && prev.week === world.week && prev.oppId === oppId
+        nextOppRead = { week: world.week, oppId, sharp }
+        note = sharp
+          ? `Sharp film read on the ${world.byId[oppId].name} — their tendencies are clear.`
+          : `Scouted the ${world.byId[oppId].name} — a fuzzy read on their tendencies.`
+        break
+      }
       case 'scouts':
         updateStaffLedgers(world, career.teamId)
         rep.profile = clamp(rep.profile + 1, 0, 100)
@@ -1278,7 +1337,7 @@ export const useGame = create<GameStore>((set, get) => ({
         break
     }
     let nextCareer = withFlag(
-      { ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity, ...(nextRoom ? { room: nextRoom } : {}) },
+      { ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity, ...(nextRoom ? { room: nextRoom } : {}), ...(nextOppRead ? { oppRead: nextOppRead } : {}) },
       'hours',
     )
     if (id === 'drills') nextCareer = withFlag(nextCareer, 'drills')
@@ -1978,12 +2037,17 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const scope = capabilities(career).planScope
   if (scope === 'none') return undefined
   const callSheet = career.callSheet ?? DEFAULT_CALL_SHEET
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet }
+  // G10: the script is an offense-side tool; a defensive coordinator never runs it.
+  const hasOff = scope === 'both' || career.unitFocus !== 'def'
+  const script = hasOff ? career.script ?? [] : []
+  const scriptEdgeMult = career.install?.season === world.season && career.install.plan === 'full' ? 1.5 : 1
+  const oppRead = career.oppRead
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet,
+    callSheet, script, scriptEdgeMult, oppRead,
   }
 }
 
@@ -2144,6 +2208,8 @@ function migrateWorld(w: World): World {
   w.compLedger ??= {}
   w.rivals ??= []
   w.era ??= { id: 'modern', label: 'Modern Spread Era', positionBias: {}, capSpike: 1 }
+  // L10 G8: a tendency book from a past season is stale — drop it.
+  if (w.userBook && w.userBook.season !== w.season) w.userBook = undefined
   // The college universe is gone: drop any CFB/FCS teams and their data so a
   // legacy save opens as a clean 32-club NFL world.
   const nflTeams = w.teams.filter((t) => t.tier === 'NFL')
@@ -2219,6 +2285,8 @@ function migrateCareer(c: CareerState): CareerState {
     c.level < minLevel
       ? { ...c, path, level: minLevel, tier: 'NFL', salary: salaryFor(path, minLevel) }
       : { ...c, path }
+  // L10 G10: optional opening script defaults to empty.
+  base.script ??= []
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
     const sheet = base.callSheet ?? DEFAULT_CALL_SHEET
@@ -2975,7 +3043,7 @@ export function gameDayEquivalence(n = 20) {
     const seed = world.seed + i * 7919 + 101
     const a = simulatePlayByPlay(world, career.teamId, opp.id, seed, ctx)
     const s = createGame(world, career.teamId, opp.id, seed, ctx)
-    for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId)
+    for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId, 'standing')
     const b = finishGame(s)
     if (pick(a) === pick(b)) identical++
     total++

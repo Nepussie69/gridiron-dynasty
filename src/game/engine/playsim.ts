@@ -11,8 +11,8 @@ import { attributesFor } from '../data/ratings'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
 import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
-import { planEffects } from './gameplan'
-import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, type CallSheet, type Situation } from './decisions'
+import { planEffects, BALANCED_PLAN } from './gameplan'
+import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { masteryMultiplier } from './playbook'
 import { mod, schemeFit, styleProfile } from './style'
 
@@ -44,7 +44,7 @@ function clutchFor(world: World, offId: string, down: number, yard: number): num
 }
 
 import type { World } from './generate'
-import { clamp, makeRng, type Rng } from './rng'
+import { clamp, hash32, makeRng, type Rng } from './rng'
 
 export interface Play {
   n: number
@@ -71,6 +71,10 @@ export interface Play {
   pressure?: boolean
   bigPlay?: boolean
   timeUsed?: number
+  /** L10 G8: offensive class of this snap (run / short / deep), for the tendency book. */
+  offClass?: OffClass
+  /** L10 G8: the defensive call used on this snap, for the tendency book. */
+  defCall?: DefCall
   // attribution for individual stats
   qbId?: string
   tackleIds?: string[]
@@ -190,7 +194,7 @@ function sampleYards(rng: Rng, isPass: boolean, edge: number, stack: string[], y
 }
 
 // ── Coaching schemes ─────────────────────────────────────────────────────────
-interface Concept {
+export interface Concept {
   name: string
   type: 'run' | 'pass'
   depth: number // intended air yards (pass) or target gap (run)
@@ -270,7 +274,7 @@ const DEF_STYLES: Record<string, DefenseStyle> = {
   'Blitz Heavy': { blitz: 0.5, manCoverage: 0.7, runFit: 0.94, coverage: 0.98 },
 }
 
-function offStyle(world: World, teamId: string): OffenseStyle {
+export function offStyle(world: World, teamId: string): OffenseStyle {
   const oc = (world.staff[teamId] ?? []).find((s) => s.role === 'Offensive Coordinator')
   return OFF_STYLES[oc?.scheme ?? ''] ?? OFF_STYLES['Pro Style']
 }
@@ -352,6 +356,152 @@ function pickConcept(rng: Rng, style: OffenseStyle, down: number, distance: numb
   return pool[Math.floor(rng() * pool.length)]
 }
 
+// ── L10 G8/G9: tendencies, the call matrix, and the AI's counter-calls ────────
+
+function coordRating(world: World, teamId: string, role: 'Offensive Coordinator' | 'Defensive Coordinator'): number {
+  return (world.staff[teamId] ?? []).find((x) => x.role === role)?.rating ?? 74
+}
+
+function normalizeDist<T extends string>(dist: Record<T, number>, keys: readonly T[]): Record<T, number> {
+  let total = 0
+  for (const k of keys) total += Math.max(0, dist[k] ?? 0)
+  const out = {} as Record<T, number>
+  if (total <= 0) {
+    for (const k of keys) out[k] = 1 / keys.length
+    return out
+  }
+  for (const k of keys) out[k] = Math.max(0, dist[k] ?? 0) / total
+  return out
+}
+
+function weightedPick<T extends string>(rng: Rng, dist: Record<T, number>, keys: readonly T[]): T {
+  let total = 0
+  for (const k of keys) total += Math.max(0, dist[k] ?? 0)
+  if (total <= 0) return keys[0]
+  let r = rng() * total
+  for (const k of keys) {
+    r -= Math.max(0, dist[k] ?? 0)
+    if (r <= 0) return k
+  }
+  return keys[keys.length - 1]
+}
+
+/** An AI club's derived tendencies in one bucket (G8): offense class + defensive call. */
+export function aiTendency(world: World, teamId: string, bucket: Bucket): { off: Record<OffClass, number>; def: Record<DefCall, number> } {
+  const style = offStyle(world, teamId)
+  const d = defStyle(world, teamId)
+  // pickConcept forces a throw on 3rd & long; otherwise the OC's pass rate rules.
+  const pPass = bucket === '3rd-long' ? 1 : clamp(style.passRate, 0, 1)
+  let run = 0
+  let short = 0
+  let deep = 0
+  for (const c of style.concepts) {
+    if (c.type === 'run') run += 1
+    else if (c.depth >= 9) deep += 1
+    else short += 1
+  }
+  const offRaw: Record<OffClass, number> = { run: run * (1 - pPass), short: short * pPass, deep: deep * pPass }
+  let blitz = d.blitz
+  let stack = Math.max(0, d.runFit - 1) * 4
+  if (bucket === '3rd-long') blitz *= 1.35
+  if (bucket === 'redzone') stack += 0.15
+  const defRaw: Record<DefCall, number> = { blitz, man: d.manCoverage, zone: 1 - d.manCoverage, stack }
+  return { off: normalizeDist(offRaw, OFF_CLASSES), def: normalizeDist(defRaw, DEF_CALLS) }
+}
+
+/** The user's tendency book, but only when it belongs to this season and club. */
+function userBookFor(world: World, s: GameState) {
+  const t = s.ctx?.userTeamId
+  if (!t) return null
+  const ub = world.userBook
+  if (!ub || ub.season !== world.season || ub.teamId !== t) return null
+  return ub.book
+}
+
+/** G8: how hard a coordinator leans on your tendencies (higher-rated DCs exploit more). */
+function exploitWeight(rating: number): number {
+  return clamp(0.15 + (rating - 60) / 200, 0.1, 0.35)
+}
+
+function exploitDefCall(world: World, s: GameState, dist: Record<DefCall, number>, bucket: Bucket, rating: number) {
+  const book = userBookFor(world, s)
+  if (!book) return
+  const top = topKey(book.off[bucket], OFF_CLASSES)
+  if (top.total < 8) return
+  let sum = 0
+  for (const k of DEF_CALLS) sum += Math.max(0, dist[k] ?? 0)
+  dist[bestCounterCall(top.key)] += exploitWeight(rating) * sum
+}
+
+function exploitOffClass(world: World, s: GameState, dist: Record<OffClass, number>, bucket: Bucket, rating: number) {
+  const book = userBookFor(world, s)
+  if (!book) return
+  const top = topKey(book.def[bucket], DEF_CALLS)
+  if (top.total < 8) return
+  let sum = 0
+  for (const k of OFF_CLASSES) sum += Math.max(0, dist[k] ?? 0)
+  dist[bestCounterClass(top.key)] += exploitWeight(rating) * sum
+}
+
+/** The AI defense's call, drawn after the user's answer (G9). */
+function drawAIDefCall(world: World, s: GameState, defId: string, bucket: Bucket): DefCall {
+  const dist = { ...aiTendency(world, defId, bucket).def }
+  exploitDefCall(world, s, dist, bucket, coordRating(world, defId, 'Defensive Coordinator'))
+  return weightedPick(s.rng, dist, DEF_CALLS)
+}
+
+/** The AI offense's class, drawn after the user's defCall (G9). */
+function drawAIOffClass(world: World, s: GameState, offId: string, bucket: Bucket): OffClass {
+  const dist = { ...aiTendency(world, offId, bucket).off }
+  exploitOffClass(world, s, dist, bucket, coordRating(world, offId, 'Offensive Coordinator'))
+  return weightedPick(s.rng, dist, OFF_CLASSES)
+}
+
+function pickConceptOfClass(rng: Rng, style: OffenseStyle, cls: OffClass): Concept {
+  const list = style.concepts.filter((c) => offClassFor(c.type, c.depth) === cls)
+  const pool = list.length ? list : style.concepts
+  return pool[Math.floor(rng() * pool.length)]
+}
+
+/** G9: the user's three call cards — the first run, short pass, and deep pass. */
+function callCards(style: OffenseStyle): Concept[] {
+  const cards: Concept[] = []
+  const add = (c: Concept | undefined) => { if (c && !cards.includes(c)) cards.push(c) }
+  add(style.concepts.find((c) => c.type === 'run'))
+  add(style.concepts.find((c) => c.type === 'pass' && c.depth <= 8))
+  add(style.concepts.find((c) => c.type === 'pass' && c.depth >= 9))
+  for (const c of style.concepts) {
+    if (cards.length >= 3) break
+    add(c)
+  }
+  return cards.slice(0, 3)
+}
+
+function downDistance(down: number, distance: number, yard: number): string {
+  const suf = down === 1 ? 'st' : down === 2 ? 'nd' : down === 3 ? 'rd' : 'th'
+  const yd = yard >= 50 ? `their ${100 - yard}` : `your ${yard}`
+  return `${down}${suf} & ${distance} at ${yd}`
+}
+
+/** G8: the scouted read shown on a card (fuzzy ±15%, sharp ±5%). */
+/** Read-line verbs for a defense's habit (the DEF_CALL_LABELs stay as button text). */
+const DEF_VERB: Record<DefCall, string> = { blitz: 'blitz', man: 'play man coverage', zone: 'play zone coverage', stack: 'stack the box' }
+
+function tendencyRead(world: World, s: GameState, oppId: string, side: 'off' | 'def', bucket: Bucket): string {
+  const read = s.ctx?.oppRead
+  if (!read || read.week !== world.week || read.oppId !== oppId) return 'No read on their tendencies'
+  const span = read.sharp ? 0.05 : 0.15
+  const rng = makeRng(world.seed + world.week * 31 + hash32(oppId + bucket, 9))
+  if (side === 'def') {
+    const top = topKey(aiTendency(world, oppId, bucket).def, DEF_CALLS)
+    const pct = clamp(top.share + (rng() * 2 - 1) * span, 0, 1)
+    return `They ${DEF_VERB[top.key]} ${Math.round(pct * 100)}% of the time on ${BUCKET_LABEL[bucket]}`
+  }
+  const top = topKey(aiTendency(world, oppId, bucket).off, OFF_CLASSES)
+  const pct = clamp(top.share + (rng() * 2 - 1) * span, 0, 1)
+  return `They ${OFF_CLASS_LABEL[top.key]} ${Math.round(pct * 100)}% of the time on ${BUCKET_LABEL[bucket]}`
+}
+
 /** L10 F2: how much a pass-leaning user plan is read by the defense, per point of passBias. */
 const PASS_LEAN_PRESSURE = 4
 const PASS_LEAN_COMP = 0.024
@@ -369,7 +519,7 @@ function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
   return !!env?.adjust[teamId]?.includes(fix)
 }
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv): PlayOutcome {
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   const qb = topGroup(world, offId, ['QB'], 1, env?.qbOverride)[0]
@@ -400,7 +550,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
-  const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult, 0.02, 0.13)
+  const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1), 0.02, 0.13)
 
   // Target selection: a scheme-fitting, style-appropriate receiver gets more looks.
   const scored = wrs.map((w) => {
@@ -442,14 +592,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
   const offPassBias = planFor(offId, 'off')?.passBias ?? 0
   const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) : 0
-  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction - passLean * PASS_LEAN_EDGE
+  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5
 
   // Completion probability based on real league rate vs. this matchup. Coordinator
   // quality shifts it: a great OC helps, a great DC hurts.
   const coachShift = (ocEff.offEdge - dcEff.defEdge) * 0.003
   const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) : 0
   let compProb = clamp(
-    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP,
+    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012,
     0.42,
     0.74,
   )
@@ -489,7 +639,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id }
 }
 
-function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv): PlayOutcome {
+function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   const rb = topGroup(world, offId, ['RB'], 2)
@@ -524,7 +674,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const boxLight = Math.max(0, offPassBiasRun) * 1.8
   // G6 quick game: throwing it quick comes at the expense of the run game.
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + (call?.edge ?? 0) * 1.6
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -616,11 +766,19 @@ export interface DecisionLog {
   margin: number
   outcome?: string
   ep?: number
+  /** L10 G9: the opponent's call on a `call`/`defCall` snap, for the film grade. */
+  vs?: string
 }
 export interface GameCtx {
   userTeamId: string
   scope: 'off' | 'def' | 'both' | 'hc' // 'hc' = head coach; 'off'/'def'/'both' = coordinator focus
   callSheet: CallSheet
+  /** G10: the user's opening script (concept names, in order). */
+  script?: string[]
+  /** G10: 1.5 when the club ran a full install this season. */
+  scriptEdgeMult?: number
+  /** G8: the opponent film read purchased this week. */
+  oppRead?: { week: number; oppId: string; sharp: boolean }
 }
 export interface GameState {
   rng: Rng
@@ -668,6 +826,19 @@ export interface GameState {
   clockMode: Record<string, 'use' | 'save' | undefined>
   /** Whether the one clock moment for this game has been resolved. */
   clockChecked: boolean
+  // ── L10 G8/G9/G10 ─────────────────────────────────────────────────────────
+  /** Standing concepts per call moment (so a paused game draws the RNG once). */
+  callConcepts: Record<string, Concept>
+  /** G10: how many of the script's snaps have been used. */
+  scriptUsed: number
+  /** G10: the class of the last scripted snap, for predictability. */
+  scriptLastClass: OffClass | null
+  /** G10: consecutive scripted snaps of the same class. */
+  scriptClassRun: number
+  /** G10: which user offensive possession we're on (edge only on the first). */
+  userDrive: number
+  /** Moments already written to the decision log, so a re-run never double-logs. */
+  logged: Record<string, true>
   /** Halftime bookkeeping so rng only draws once per phase. */
   halfAdjustDone: boolean
   qbChangeChecked: boolean
@@ -688,6 +859,8 @@ function swapPossession(s: GameState) {
   // A two-minute mode only lasts as long as the possession that chose it.
   s.twoMinMode = null
   s.twoMinChecked = false
+  // G10: the opening script's edge only applies on the user's first drive.
+  if (s.ctx && s.offId === s.ctx.userTeamId) s.userDrive += 1
 }
 
 function baseTimeScale(id: string): number {
@@ -701,9 +874,12 @@ function pushPlay(s: GameState, p: Omit<Play, 'n' | 'qtr' | 'clock' | 'offId' | 
 
 // ── Decision points (L10 G2) ──────────────────────────────────────────────────
 const MOMENT_CAPS: Record<MomentKind, number> = {
-  fourth: 3, two: 2, call: 3, defCall: 3, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1,
+  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1,
 }
+/** Cap on the big moments. Play calls (call/defCall) have their own caps and do
+ *  not count here, so they can never crowd out halftime or a late 2-point try. */
 const TOTAL_MOMENT_CAP = 8
+const isPlayCall = (k: MomentKind) => k === 'call' || k === 'defCall'
 
 interface DecisionSpec {
   kind: MomentKind
@@ -742,6 +918,17 @@ function logDecision(s: GameState, id: string, spec: DecisionSpec, choiceId: str
 }
 
 /**
+ * Log a decision at most once. A step can raise a second moment after the
+ * first (a `call` after a 4th-down `go`), and on resume the whole step re-runs —
+ * the guard keeps the log honest without touching the RNG stream.
+ */
+function logOnce(s: GameState, id: string, spec: DecisionSpec, choiceId: string, source: 'user' | 'standing') {
+  if (s.logged[id]) return
+  s.logged[id] = true
+  logDecision(s, id, spec, choiceId, source)
+}
+
+/**
  * Resolve a decision point that sits at the start of a step, before any rng
  * draw. Returns the choice, or null after setting `s.pending` (step returns
  * immediately, so the RNG stream is untouched until the user answers).
@@ -750,11 +937,11 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
   const id = `${spec.kind}-${s.plays.length}`
   const isUser = !!s.ctx && spec.teamId === s.ctx.userTeamId
   if (isUser && s.answers[id]) {
-    logDecision(s, id, spec, s.answers[id], s.autoAnswered?.[id] ? 'standing' : 'user')
+    logOnce(s, id, spec, s.answers[id], s.autoAnswered?.[id] ? 'standing' : 'user')
     return s.answers[id]
   }
   const canAsk = isUser && scopeAllows(s.ctx!.scope, spec.side) && spec.ask &&
-    s.momentsUsed < TOTAL_MOMENT_CAP && (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind]
+    (isPlayCall(spec.kind) || s.momentsUsed < TOTAL_MOMENT_CAP) && (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind]
   if (canAsk) {
     const us = spec.teamId === s.homeId ? s.homeScore : s.awayScore
     const them = spec.teamId === s.homeId ? s.awayScore : s.homeScore
@@ -763,11 +950,11 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
       down: spec.down, distance: spec.distance, yard: spec.yard, us, them,
       title: spec.title, options: spec.options, defaultId: spec.defaultId, staffRead: spec.staffRead,
     }
-    s.momentsUsed += 1
+    if (!isPlayCall(spec.kind)) s.momentsUsed += 1
     s.kindUsed[spec.kind] = (s.kindUsed[spec.kind] ?? 0) + 1
     return null
   }
-  if (isUser) logDecision(s, id, spec, spec.defaultId, 'standing')
+  if (isUser) logOnce(s, id, spec, spec.defaultId, 'standing')
   return spec.defaultId
 }
 
@@ -1096,11 +1283,19 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     twoMinChecked: false,
     clockMode: {},
     clockChecked: false,
+    callConcepts: {},
+    scriptUsed: 0,
+    scriptLastClass: null,
+    scriptClassRun: 0,
+    userDrive: 0,
+    logged: {},
     halfAdjustDone: false,
     qbChangeChecked: false,
     twoMinDrives: 0,
   }
   s.defId = s.offId === homeId ? awayId : homeId
+  // G10: if the user receives the opening kick, this is their first drive.
+  if (ctx && s.offId === ctx.userTeamId) s.userDrive = 1
   // opening kickoff
   pushPlay(s, { type: 'kickoff', concept: 'Kickoff', yards: 0, result: 'Touchback', startYard: 25, endYard: 25, down: null, distance: null, timeUsed: 5 })
   return s
@@ -1189,6 +1384,7 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
       type: 'pat', concept: 'Two-point try', yards: out.yards,
       result: good ? 'Two-point try good' : 'Two-point try failed',
       turnover: !good, startYard: 98, endYard: 98, down: null, distance: null, timeUsed: out.timeUsed,
+      offClass: offClassFor(concept.type, concept.depth),
     })
   } else {
     const pat = resolvePAT(world, s.rng, offId)
@@ -1261,8 +1457,99 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // G6 quick game throws more; G7 protect throws safer.
   const quickPassAdj = hasFix(envFor(s), offId, 'quickGame') ? 0.1 : 0
   const modePassAdj = s.twoMinMode === 'protect' ? -0.15 : 0
-  const concept = pickConcept(s.rng, style, s.down, s.distance, s.passAdj + planPassAdj + quickPassAdj + modePassAdj)
   const isFourth = s.down === 4
+  const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj
+
+  // ── L10 G9/G10: the snap's concept and any call-matrix edge. The `call` and
+  //    `defCall` decisions sit before the penalty rng; the AI's counter-call is
+  //    drawn only after the user answers (or the standing order is taken).
+  const bucket = bucketFor(s.down, s.distance, s.yard)
+  const marginOf = (id: string) => (id === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
+  const offIsUser = !!s.ctx && offId === s.ctx.userTeamId
+  const defIsUser = !!s.ctx && defId === s.ctx.userTeamId
+  let concept: Concept
+  let call: CallEffect | undefined
+  let userDefCall: DefCall | undefined
+
+  const callTriggered = offIsUser && (!isFourth || fourthChoice === 'go') && (
+    (s.down === 3 && s.distance <= 3) ||
+    (s.yard >= 80 && s.down >= 3) ||
+    (s.qtr === 4 && s.clock <= 120 && marginOf(s.offId) >= -8 && marginOf(s.offId) <= 0)
+  )
+  const defCallTriggered = defIsUser && (
+    (s.down === 3 && s.yard >= 40) ||
+    (s.qtr === 4 && s.clock <= 120 && marginOf(s.ctx!.userTeamId) >= 1 && marginOf(s.ctx!.userTeamId) <= 8)
+  )
+
+  if (callTriggered) {
+    // The standing concept is what pickConcept would have chosen — one draw, and
+    // it is stored so a paused game never redraws it.
+    const id = `call-${s.plays.length}`
+    let standing = s.callConcepts[id]
+    if (!standing) {
+      standing = pickConcept(s.rng, style, s.down, s.distance, passAdj)
+      s.callConcepts[id] = standing
+    }
+    const read = tendencyRead(world, s, s.defId, 'def', bucket)
+    const choice = decide(s, {
+      kind: 'call', side: 'off', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
+      yard: s.yard, title: `Call the play — ${downDistance(s.down, s.distance, s.yard)}`,
+      options: callCards(style).map((c) => ({ id: c.name, label: c.name, hint: read })),
+      defaultId: standing.name, staffRead: read, ask: true, margin: marginOf(s.offId),
+    })
+    if (choice === null) return 'moment'
+    concept = style.concepts.find((c) => c.name === choice) ?? standing
+    const aiDef = drawAIDefCall(world, s, s.defId, bucket)
+    // The matrix only applies to a call the user made; a standing order plays the
+    // snap exactly as fast sim would (no edge either way).
+    const last = s.decisions[s.decisions.length - 1]
+    if (last && last.momentId === id && last.source === 'user') {
+      call = callEffect(offClassFor(concept.type, concept.depth), aiDef)
+      last.outcome = call.edge > 0 ? 'won' : call.edge < 0 ? 'lost' : 'push'
+      last.vs = aiDef
+    }
+  } else if (defCallTriggered) {
+    const id = `defCall-${s.plays.length}`
+    const userTeam = s.ctx!.userTeamId
+    const standing = defCallForPlan(planFor(userTeam, 'def') ?? BALANCED_PLAN)
+    const read = tendencyRead(world, s, s.offId, 'off', bucket)
+    const choice = decide(s, {
+      kind: 'defCall', side: 'def', teamId: userTeam, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
+      yard: s.yard, title: `Defensive call — ${downDistance(s.down, s.distance, s.yard)}`,
+      options: DEF_CALLS.map((d) => ({ id: d, label: DEF_CALL_LABEL[d], hint: read })),
+      defaultId: standing, staffRead: read, ask: true, margin: marginOf(userTeam),
+    })
+    if (choice === null) return 'moment'
+    userDefCall = choice as DefCall
+    const aiCls = drawAIOffClass(world, s, s.offId, bucket)
+    concept = pickConceptOfClass(s.rng, style, aiCls)
+    const last = s.decisions[s.decisions.length - 1]
+    if (last && last.momentId === id && last.source === 'user') {
+      call = callEffect(aiCls, userDefCall)
+      last.outcome = call.edge > 0 ? 'won' : call.edge < 0 ? 'lost' : 'push'
+      last.vs = aiCls
+    }
+  } else {
+    const script = s.ctx?.script
+    const scripted = offIsUser && script && script.length > 0 && s.scriptUsed < script.length
+      ? style.concepts.find((c) => c.name === script[s.scriptUsed])
+      : undefined
+    if (scripted) {
+      concept = scripted
+      const offCls = offClassFor(scripted.type, scripted.depth)
+      if (s.scriptLastClass === offCls) s.scriptClassRun += 1
+      else { s.scriptLastClass = offCls; s.scriptClassRun = 1 }
+      // Three of the same class in a row and the defense sits on it.
+      const aiDef = s.scriptClassRun >= 3 ? bestCounterCall(offCls) : drawAIDefCall(world, s, s.defId, bucket)
+      const base = s.userDrive <= 1 ? (s.scriptUsed < 4 ? 2 : 1) : 0
+      const scriptedEdge = base * (s.ctx?.scriptEdgeMult ?? 1)
+      const eff = callEffect(offCls, aiDef)
+      call = { edge: eff.edge + scriptedEdge, sackMult: eff.sackMult }
+      s.scriptUsed += 1
+    } else {
+      concept = pickConcept(s.rng, style, s.down, s.distance, passAdj)
+    }
+  }
 
   // Defensive penalty (~3.5%) — 5 yards and an automatic first down.
   const defDisc = ocEffect(world, defId).discipline
@@ -1331,8 +1618,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   const env = envFor(s)
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env)
-    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call)
+    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call)
 
   // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
@@ -1362,7 +1649,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     offS.firstDowns += 1
     if (s.down === 3) offS.thirdDownConv += 1
   }
-  pushPlay(s, { ...out, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance })
+  pushPlay(s, { ...out, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
 
   if (out.turnover) {
     swapPossession(s)

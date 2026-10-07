@@ -15,9 +15,9 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate: find 
 | G5 | Film grade for 4th-down and 2-point calls + season reward (idea 10, part 1) | P2 | ✅ done — verified (P2) |
 | G6 | Halftime adjustments + QB change (ideas 5, 9b) | P3 | ✅ done — verified (P3) |
 | G7 | Two-minute drill, timeouts, clock moment (idea 7) | P3 | ✅ done — verified (P3) |
-| G8 | Tendency books, scouting action, self-scout panel (idea 6) | P4 | not started |
-| G9 | Play-call cards (offense) and defensive calls (idea 4) | P4 | not started |
-| G10 | Opening script (idea 3) | P4 | not started |
+| G8 | Tendency books, scouting action, self-scout panel (idea 6) | P4 | ✅ done — verified (P4) |
+| G9 | Play-call cards (offense) and defensive calls (idea 4) | P4 | ✅ done — verified (P4) |
+| G10 | Opening script (idea 3) | P4 | ✅ done — verified (P4) |
 | G11 | Matchup assignments (idea 8) | P5 | not started |
 | G12 | Workload and DL rotation (idea 9a) | P5 | not started |
 | G13 | Film grade for every decision kind (idea 10, part 2) + `__decisionProbe` + docs | P5 | not started |
@@ -36,7 +36,7 @@ Fast sim (Advance Week) answers every moment with the user's **standing orders**
 5. **Rung scope** (`capabilities(career).planScope`): `'both'` (head coach) answers every moment; `'own-side'` (coordinator) answers only moments on `career.unitFocus`'s side
    (`'off'` → offense calls, 2-minute, offense halftime fixes; `'def'` → defensive calls, defense halftime fixes; `'both'` focus → both sides' calls but still no HC-only moments).
    HC-only moments: `fourth`, `two`, `clock`, `qbChange`. `'none'` → no game day (fast sim only).
-6. **At most 8 user moments per game** (plus per-kind caps listed in G1). Past a cap, the standing order answers silently and the decision is logged with `source: 'standing'`.
+6. **At most 8 big moments per game** (plus per-kind caps listed in G1). Play calls (`call`/`defCall`, cap 2 each) have their own caps and don't count toward the 8 (orchestrator change in P4). Past a cap, the standing order answers silently and the decision is logged with `source: 'standing'`.
 7. Every new save field is optional (`??=` defaults in `migrateCareer`/`migrateWorld`). Game-day session state is **not** saved: reloading mid-game returns you to the pre-game week.
 
 ### Baseline (seed 33333, `__simTest(200,'NFL')` before L10)
@@ -337,3 +337,10 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   starter morale 57 → 49, logged once, roster entry still the canonical player object. `__careerSmoke` coach/personnel 0 errors / 0 violations.
   **Orchestrator fixes:** (1) Flash overwrote `HANDOFF.md` with a scratch plan — restored from git (future prompts forbid editing it); (2) the QB-switch morale hit replaced the roster entry with a copy
   (`{ ...roster[i] }`), breaking the L9 canonical-object invariant — it now mutates the player in place.
+- **P4** (Flash; first launch lost to a dropped connection, second to a macOS Documents-permission revocation, third finished in 14 min; browser-verified by Claude on 2026-10-07).
+  `__simTest` unchanged from P3 (23.8 / 66.8% / 64.5 / 1.75: AI-vs-AI untouched); `__gameDayEquivalence` 20/20. HC moments per game: fourth 2.6, two 1.3, halftime 1.0, twoMinute 1.2, call 1.9, defCall 2.0, clock 0.15, qbChange 0.08.
+  Coached a game: the call card reads "Call the play — 3rd & 2 at your 46" (RPO Run / RPO Pass / Quick Slant) with a scouted read. Opponent film: 1st buy fuzzy, 2nd sharp. Script and Self-Scout cards render; the user book is saved.
+  "Always X" call policies vs standing orders (60 games, 6 opps): standing +2.62 margin; call run +4.17 / short +2.45 / deep +2.62; def blitz +2.87 / man +2.10 / zone +2.32 / stack +2.10 (none beyond +1.6). The P5 `__decisionProbe` will re-check with more games.
+  **Orchestrator fixes:** (1) the call matrix applied to standing-order answers too (my P4 prompt said so, against the spec), so a fast-sim user lost ~3.7 pts/game; it now applies only to calls the user makes (and scripted snaps).
+  Standing-ctx margin is now +0.37 vs −0.98 with no ctx (noise). (2) call/defCall were eating the 8-moment budget (halftime 1.0 → 0.55, two-point 1.7 → 0.1); they now have their own caps (2 each). (3) `__gameDayEquivalence` answers with `'standing'`.
+  (4) The read line was ungrammatical ("They Zone coverage 40%…"), now "They play zone coverage 40% of the time on 3rd & short". `__careerSmoke` coach/personnel 0/0.

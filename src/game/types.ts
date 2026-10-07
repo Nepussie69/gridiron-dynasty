@@ -571,6 +571,10 @@ export interface CareerState {
   scenario?: ScenarioId
   /** L10 G2: the head coach's standing orders for 4th down and 2-point tries. */
   callSheet?: import('./engine/decisions').CallSheet
+  /** L10 G8: this week's opponent film read (a second purchase this week makes it sharp). */
+  oppRead?: { week: number; oppId: string; sharp: boolean }
+  /** L10 G10: the opening script, an ordered list of concept names (max 8). */
+  script?: string[]
   /** OVR at season start by playerId, for young players on your side (F5). */
   devBaseline?: Record<string, number>
   history: { season: number; team: string; role: string; record: string; outcome: string }[]

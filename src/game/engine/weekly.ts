@@ -33,6 +33,7 @@ export function weeklyActions(career: CareerState): WeeklyAction[] {
   if (c.has('crossCheck') || c.has('rankBoard')) out.push({ id: 'crosscheck', label: 'Cross-check reports', blurb: 'Compare the staff board.', cost: 6 })
   if (c.has('developRoom')) out.push({ id: 'drills', label: 'Run drills', blurb: 'Develop a young player.', cost: 10 })
   if (c.has('callPlays')) out.push({ id: 'install', label: 'Film session', blurb: 'Prep the game plan.', cost: 8 })
+  if (c.has('callPlays')) out.push({ id: 'tendencies', label: 'Opponent film', blurb: "Study this week's opponent tendencies.", cost: 8 })
   if (c.has('assignScouts') || c.has('hireStaff')) out.push({ id: 'scouts', label: 'Scouts meeting', blurb: "Learn a scout's bias.", cost: 8 })
   if (c.has('negotiate') || c.has('signFreeAgents')) out.push({ id: 'agent', label: 'Agent calls', blurb: 'Advance a negotiation.', cost: 8 })
   if (c.has('setExpectations') || c.has('hireStaff')) out.push({ id: 'owner', label: 'Owner meeting', blurb: 'Manage the mandate; +job security.', cost: 6 })

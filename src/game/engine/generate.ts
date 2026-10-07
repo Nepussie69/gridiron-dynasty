@@ -89,6 +89,8 @@ export interface World {
   staffAwards?: import('./staffAwards').StaffAward[]
   /** L9 Z2: wins by team at the end of last season, for year-over-year awards. */
   lastWins?: Record<string, number>
+  /** L10 G8: the user's tendency book for this season (offense classes + defensive calls). */
+  userBook?: { season: number; teamId: string; book: import('./decisions').TendencyBook }
 }
 
 // Backwards-compatible alias used by screen/selector imports.
