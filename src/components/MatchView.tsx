@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Pause, Play, SkipForward, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Eye, Pause, Play, SkipForward, X } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { coachLabels, type Play as PlayEvent, type Moment } from '../game/engine/playsim'
+import { coachLabels, type GameState, type Play as PlayEvent, type Moment } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
+import { capabilities } from '../game/engine/capabilities'
 import { originTag } from '../game/selectors'
-import { useGame, useWorld } from '../store/gameStore'
+import { useGame, useWorld, type GameDay } from '../store/gameStore'
+import { PlanEditor } from './PlanEditor'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
 const OFF_COLOR = '#0b62ff'
@@ -130,6 +132,7 @@ export function MatchView() {
   const matchSeq = useGame((s) => s.matchSeq)
   const closeMatch = useGame((s) => s.closeMatch)
   const gameDay = useGame((s) => s.gameDay)
+  const gameDayAdvance = useGame((s) => s.gameDayAdvance)
   const answerGameMoment = useGame((s) => s.answerGameMoment)
   const simGameDayToEnd = useGame((s) => s.simGameDayToEnd)
   const abandonGameDay = useGame((s) => s.abandonGameDay)
@@ -213,6 +216,11 @@ export function MatchView() {
   const answer = (choiceId: string) => {
     setPlaying(true)
     void answerGameMoment(choiceId)
+  }
+
+  const advance = (stop: 'play' | 'drive' | 'moment') => {
+    setPlaying(true)
+    void gameDayAdvance(stop)
   }
 
   const simToEnd = () => {
@@ -367,24 +375,32 @@ export function MatchView() {
 
       {gameDay && (
         <div className="border-t border-white/10 bg-[#0d1a2b] p-3">
-          {showMoment && moment ? (
-            <MomentCard moment={moment} onAnswer={answer} onSim={simToEnd} />
-          ) : (
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="font-display text-sm font-700 uppercase tracking-wide text-white">Coaching</span>
-              <span className="text-[11px] text-white/60">
-                Playing out the game — it pauses the moment a call is yours.
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="ml-auto !text-white hover:!bg-white/10"
-                onClick={simToEnd}
-              >
+          {showMoment && moment && (
+            <div className="mb-2">
+              <MomentCard moment={moment} fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)} onAnswer={answer} />
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-display text-sm font-700 uppercase tracking-wide text-white">Game day</span>
+            <span className="text-[11px] text-white/60">
+              {moment ? 'Make your call to continue.' : 'Advance the game.'}
+            </span>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('play')}>
+                Next play
+              </Button>
+              <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('drive')}>
+                Next drive
+              </Button>
+              <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('moment')}>
+                Next moment
+              </Button>
+              <Button size="sm" variant="ghost" className="!text-white hover:!bg-white/10" onClick={simToEnd}>
                 <SkipForward size={14} /> Sim to end (standing orders)
               </Button>
             </div>
-          )}
+          </div>
+          <GameDayPlanPanel gameDay={gameDay} />
         </div>
       )}
 
@@ -400,6 +416,13 @@ export function MatchView() {
             <ul className="mt-1 space-y-0.5">
               {match.film.lines.map((l, i) => (
                 <li key={i} className="text-[11px] text-white/60">• {l}</li>
+              ))}
+            </ul>
+          )}
+          {match.planChanges && match.planChanges.length > 0 && (
+            <ul className="mt-1 space-y-0.5">
+              {match.planChanges.map((c, i) => (
+                <li key={i} className="text-[11px] text-white/60">• Switched to {c.preset} at Q{c.qtr} {c.clock}</li>
               ))}
             </ul>
           )}
@@ -431,42 +454,107 @@ export function MatchView() {
   )
 }
 
-function MomentCard({ moment, onAnswer, onSim }: { moment: Moment; onAnswer: (id: string) => void; onSim: () => void }) {
+/** L11.5 Q3: a collapsible in-game plan editor, limited to the side(s) you coach. */
+function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
+  const career = useGame((s) => s.career)
+  const setGameDayPlan = useGame((s) => s.setGameDayPlan)
+  const [open, setOpen] = useState(false)
+  const [side, setSide] = useState<'off' | 'def'>('off')
+  if (!career) return null
+  const caps = capabilities(career)
+  const focus = career.unitFocus ?? 'both'
+  const hasOff = caps.planScope === 'both' || focus !== 'def'
+  const hasDef = caps.planScope === 'both' || focus !== 'off'
+  if (!hasOff && !hasDef) return null
+  const active: 'off' | 'def' = side === 'off' && hasOff ? 'off' : hasDef ? 'def' : 'off'
+  return (
+    <div className="mt-2 rounded-lg border border-white/10 bg-black/20">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
+        <ClipboardList size={14} className="text-white/70" />
+        <span className="font-display text-xs font-700 uppercase tracking-wide text-white">Game plan</span>
+        <span className="hidden text-[11px] text-white/50 sm:inline">
+          Change how you play — it applies from the next snap.
+        </span>
+        <span className="ml-auto text-white/60">{open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
+      </button>
+      {open && (
+        <div className="border-t border-white/10 p-3">
+          {hasOff && hasDef && (
+            <div className="mb-3 inline-flex rounded-lg bg-white/10 p-0.5">
+              {(['off', 'def'] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSide(s)}
+                  className={cn(
+                    'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
+                    active === s ? 'bg-white text-ink' : 'text-white/70 hover:text-white',
+                  )}
+                >
+                  {s === 'off' ? 'Offense' : 'Defense'}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="rounded-lg bg-white p-3">
+            <PlanEditor plan={gameDay.plan[active]} onChange={(p) => setGameDayPlan(active, p)} side={active} />
+          </div>
+          {gameDay.changes.length > 0 && (
+            <ul className="mt-2 space-y-0.5">
+              {gameDay.changes.map((c, i) => (
+                <li key={i} className="text-[11px] text-white/50">
+                  Switched to {c.preset} at Q{c.qtr} {c.clock}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MomentCard({ moment, fieldPos, onAnswer }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void }) {
   return (
     <div className="rounded-xl border border-[#c99a2e]/70 bg-black/30 p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Badge tone="gold">Your call</Badge>
         <span className="font-display text-base font-700 uppercase text-white">{moment.title}</span>
-        <span className="font-cond text-xs text-white/60">Q{moment.qtr} · {moment.clock}</span>
-        <span className="ml-auto font-display text-base font-700 tnum text-white">{moment.us}-{moment.them}</span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="rounded-full bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum text-white/80">
+            Q{moment.qtr} {moment.clock}
+          </span>
+          <span className="rounded-full bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum text-white/80">
+            {moment.us}-{moment.them}
+          </span>
+          <span className="rounded-full bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum text-white/80">
+            {fieldPos}
+          </span>
+        </div>
       </div>
-      {moment.staffRead && <div className="mb-2 text-[11px] text-white/60">{moment.staffRead}</div>}
-      <div className="flex flex-wrap gap-2">
+      {moment.staffRead && (
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] text-white/60">
+          <Eye size={12} className="shrink-0" />
+          <span>{moment.staffRead}</span>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         {moment.options.map((o) => (
           <button
             key={o.id}
             onClick={() => onAnswer(o.id)}
-            className="flex flex-col items-start rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-left transition hover:bg-white/20"
+            className="flex flex-col items-start gap-0.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-left transition hover:bg-white/20"
           >
-            <span className="font-cond text-sm font-700 uppercase text-white">
-              {o.label}
+            <span className="flex w-full items-center gap-1.5">
+              <span className="font-cond text-sm font-700 uppercase text-white">{o.label}</span>
               {o.id === moment.defaultId && (
-                <span className="ml-2 rounded bg-white/20 px-1 py-px font-cond text-[9px] font-700 uppercase text-white/80">
+                <span className="ml-auto rounded bg-white/20 px-1 py-px font-cond text-[9px] font-700 uppercase text-white/80">
                   Standing order
                 </span>
               )}
             </span>
-            <span className="text-[11px] text-white/60">{o.hint}</span>
+            {o.hint && <span className="text-[11px] leading-snug text-white/60">{o.hint}</span>}
           </button>
         ))}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="ml-auto !text-white hover:!bg-white/10"
-          onClick={onSim}
-        >
-          <SkipForward size={14} /> Sim to end (standing orders)
-        </Button>
       </div>
     </div>
   )
@@ -552,4 +640,13 @@ function yardName(yard: number) {
   if (yard === 50) return '50'
   if (yard < 50) return `${yard}`
   return `${100 - yard}`
+}
+
+/** L11.5 Q1: where the ball is, tagged with the possessing club ("BUF 32", "NE 45"). */
+function gameDayFieldPos(world: World, state: GameState, yard: number): string {
+  const defId = state.offId === state.homeId ? state.awayId : state.homeId
+  const offAbbr = world.byId[state.offId]?.abbr ?? ''
+  const defAbbr = world.byId[defId]?.abbr ?? ''
+  if (yard === 50) return '50'
+  return yard < 50 ? `${offAbbr} ${yard}` : `${defAbbr} ${100 - yard}`
 }

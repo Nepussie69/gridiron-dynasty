@@ -10,7 +10,7 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
-import { simulatePlayByPlay, createGame, runToMoment, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, type GameSim, type GameCtx, type GameState, type Moment } from '../game/engine/playsim'
+import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, userBonusFromSkills } from '../game/engine/coaching'
@@ -208,6 +208,10 @@ export interface GameDay {
   gameId: string
   state: GameState
   moment: Moment | null
+  /** L11.5 Q3: the live plan for the rest of this game (next week uses defaultPlan). */
+  plan: { off: GamePlan; def: GamePlan }
+  /** L11.5 Q3: every mid-game plan switch, shown in the post-game film card. */
+  changes: PlanChange[]
 }
 
 let world: World = buildWorld(20261004)
@@ -372,6 +376,10 @@ interface GameStore {
   /** The user's game in progress, coached moment by moment (not persisted). */
   gameDay: GameDay | null
   startGameDay: () => void
+  /** L11.5 Q2: advance the live game by play, drive, or to the next moment. */
+  gameDayAdvance: (stop: 'play' | 'drive' | 'moment') => Promise<void>
+  /** L11.5 Q3: adjust one side of the live plan for the rest of the game. */
+  setGameDayPlan: (side: 'off' | 'def', plan: GamePlan) => void
   answerGameMoment: (choiceId: string) => Promise<void>
   simGameDayToEnd: () => Promise<void>
   abandonGameDay: () => void
@@ -868,26 +876,61 @@ export const useGame = create<GameStore>((set, get) => ({
     )
     if (!game) return
     const { off, def } = get().defaultPlan
-    setLivePlan({ teamId: career.teamId, off, def })
+    // The live game gets its own copy, so mid-game edits never touch next week's plan.
+    const plan = { off: { ...off }, def: { ...def } }
+    setLivePlan({ teamId: career.teamId, off: plan.off, def: plan.def })
     applyUserCoaching(career)
     const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, ctx)
-    const moment = runToMoment(world, state)
+    // L11.5 Q2: run out the first drive so the user sees the game start.
+    const moment = runUntil(world, state, 'drive')
     set({
-      gameDay: { gameId: game.id, state, moment },
+      gameDay: { gameId: game.id, state, moment, plan, changes: [] },
       match: finishGame(state),
       matchSeq: get().matchSeq + 1,
       tick: get().tick + 1,
     })
-    // A game with no user moment left to call (e.g. the caps were spent) is
-    // already over — record it straight away on standing orders.
-    if (!moment) void get().simGameDayToEnd()
+    // A game that ended during the opening drive (e.g. no user moments left)
+    // is already over — record it straight away on standing orders.
+    if (state.done) void get().simGameDayToEnd()
+  },
+
+  setGameDayPlan: (side, plan) => {
+    const gd = get().gameDay
+    const career = get().career
+    if (!gd || !career) return
+    const next = { ...gd.plan, [side]: plan }
+    // Apply from the next snap for the rest of the game (never next week).
+    setLivePlan({ teamId: career.teamId, off: next.off, def: next.def })
+    const preset = PLAN_PRESETS.find((p) => p.side === side && JSON.stringify(p.plan) === JSON.stringify(plan))?.label ?? 'Custom'
+    const clock = clockText(gd.state.clock)
+    const last = gd.changes[gd.changes.length - 1]
+    const changes: PlanChange[] =
+      last && last.side === side && last.preset === preset
+        ? [...gd.changes.slice(0, -1), { ...last, qtr: gd.state.qtr, clock }]
+        : [...gd.changes, { qtr: gd.state.qtr, clock, side, preset }]
+    set({ gameDay: { ...gd, plan: next, changes }, tick: get().tick + 1 })
+  },
+
+  gameDayAdvance: async (stop) => {
+    const gd = get().gameDay
+    if (!gd) return
+    // Never advance the sim while a moment is waiting to be answered.
+    if (gd.state.pending) return
+    const moment = runUntil(world, gd.state, stop)
+    if (!gd.state.done) {
+      set({ gameDay: { ...gd, moment }, match: finishGame(gd.state), tick: get().tick + 1 })
+      return
+    }
+    await finishGameDay(set, get)
   },
 
   answerGameMoment: async (choiceId) => {
     const gd = get().gameDay
     if (!gd) return
     answerMoment(gd.state, choiceId)
-    await resolveGameDay(set, get)
+    // L11.5 Q2: no more automatic run-to-moment after an answer — resolve the
+    // call with one play, then hand control back to the navigation bar.
+    await get().gameDayAdvance('play')
   },
 
   simGameDayToEnd: async () => {
@@ -899,7 +942,7 @@ export const useGame = create<GameStore>((set, get) => ({
       answerMoment(gd.state, m.defaultId, 'standing')
       m = runToMoment(world, gd.state)
     }
-    await resolveGameDay(set, get)
+    await finishGameDay(set, get)
   },
 
   abandonGameDay: () => {
@@ -2174,24 +2217,26 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
 }
 
 /**
- * Advance the game-day sim to its next moment, or — once the game is over —
- * record the finished result through `advanceWeek` as the user's game.
+ * Record a completed game-day sim through `advanceWeek` exactly as a fast-simmed
+ * user game would be (L11.5 Q2/Q3).
  */
-async function resolveGameDay(
+async function finishGameDay(
   set: (p: Partial<GameStore>) => void,
   get: () => GameStore,
 ) {
   const gd = get().gameDay
   if (!gd) return
-  const moment = runToMoment(world, gd.state)
-  if (moment) {
-    set({ gameDay: { ...gd, moment }, match: finishGame(gd.state), tick: get().tick + 1 })
-    return
-  }
   const sim = finishGame(gd.state)
+  if (gd.changes.length) sim.planChanges = gd.changes
   setLivePlan(null)
   set({ gameDay: null, match: sim, tick: get().tick + 1 })
   await get().advanceWeek({ userSim: sim })
+}
+
+/** L11.5 Q3: game clock as `m:ss`, for the film-card plan changes. */
+function clockText(sec: number): string {
+  const s = Math.max(0, Math.floor(sec))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
 /**

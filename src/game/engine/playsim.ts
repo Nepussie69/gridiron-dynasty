@@ -100,8 +100,18 @@ export interface GameSim {
   decisions?: DecisionLog[]
   /** L10 G5: film grade of the user's calls, for the post-game view. */
   film?: { grade: number; letter: string; lines: string[]; userCalls?: number }
+  /** L11.5 Q3: mid-game plan switches, for the post-game film card. */
+  planChanges?: PlanChange[]
   homeLines?: { playerId: string; line: import('../types').GameStatLine }[]
   awayLines?: { playerId: string; line: import('../types').GameStatLine }[]
+}
+
+/** L11.5 Q3: one mid-game change to the user's live plan. */
+export interface PlanChange {
+  qtr: number
+  clock: string
+  side: 'off' | 'def'
+  preset: string
 }
 
 export interface TeamGameStats {
@@ -199,6 +209,8 @@ export interface Concept {
   type: 'run' | 'pass'
   depth: number // intended air yards (pass) or target gap (run)
   yac: number // yards-after-catch appetite 0-1
+  /** L11.5 Q1: one-line plain-English description for the moment card. */
+  description: string
 }
 
 interface OffenseStyle {
@@ -210,51 +222,51 @@ const OFF_STYLES: Record<string, OffenseStyle> = {
   'Air Raid': {
     passRate: 0.62,
     concepts: [
-      { name: 'Four Verticals', type: 'pass', depth: 20, yac: 0.4 },
-      { name: 'Y-Cross', type: 'pass', depth: 12, yac: 0.6 },
-      { name: 'Mesh', type: 'pass', depth: 6, yac: 0.8 },
-      { name: 'Smash', type: 'pass', depth: 11, yac: 0.5 },
-      { name: 'RB Screen', type: 'pass', depth: 1, yac: 1.0 },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0 },
+      { name: 'Four Verticals', type: 'pass', depth: 20, yac: 0.4, description: 'Four receivers go deep: a shot at a big play' },
+      { name: 'Y-Cross', type: 'pass', depth: 12, yac: 0.6, description: 'A deep crossing route behind the linebackers' },
+      { name: 'Mesh', type: 'pass', depth: 6, yac: 0.8, description: 'Two receivers cross underneath: quick, safe yards' },
+      { name: 'Smash', type: 'pass', depth: 11, yac: 0.5, description: 'Corner route over a short curl: beats cover 2' },
+      { name: 'RB Screen', type: 'pass', depth: 1, yac: 1.0, description: 'Dump to the back behind blockers: punishes the blitz' },
+      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
     ],
   },
   'Pro Style': {
     passRate: 0.5,
     concepts: [
-      { name: 'Play Action Deep', type: 'pass', depth: 22, yac: 0.3 },
-      { name: 'PA Cross', type: 'pass', depth: 14, yac: 0.5 },
-      { name: 'Bootleg', type: 'pass', depth: 8, yac: 0.7 },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0 },
-      { name: 'Power', type: 'run', depth: 3, yac: 0 },
+      { name: 'Play Action Deep', type: 'pass', depth: 22, yac: 0.3, description: 'Fake the run, then throw deep' },
+      { name: 'PA Cross', type: 'pass', depth: 14, yac: 0.5, description: 'Fake the run, hit a crosser over the middle' },
+      { name: 'Bootleg', type: 'pass', depth: 8, yac: 0.7, description: 'QB rolls out away from the run fake' },
+      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
+      { name: 'Power', type: 'run', depth: 3, yac: 0, description: 'Pulling guard leads a run off tackle' },
     ],
   },
   Spread: {
     passRate: 0.55,
     concepts: [
-      { name: 'Four Verts', type: 'pass', depth: 17, yac: 0.4 },
-      { name: 'Quick Slant', type: 'pass', depth: 5, yac: 0.9 },
-      { name: 'RPO Bubble', type: 'pass', depth: 2, yac: 1.0 },
-      { name: 'Outside Zone', type: 'run', depth: 5, yac: 0 },
-      { name: 'QB Draw', type: 'run', depth: 4, yac: 0 },
+      { name: 'Four Verts', type: 'pass', depth: 17, yac: 0.4, description: 'Four receivers go deep: a shot at a big play' },
+      { name: 'Quick Slant', type: 'pass', depth: 5, yac: 0.9, description: 'One-step slant: ball out fast' },
+      { name: 'RPO Bubble', type: 'pass', depth: 2, yac: 1.0, description: 'QB reads the defense: hand off or flip a bubble screen' },
+      { name: 'Outside Zone', type: 'run', depth: 5, yac: 0, description: 'Stretch run to the edge' },
+      { name: 'QB Draw', type: 'run', depth: 4, yac: 0, description: 'Show pass, then the QB runs up the middle' },
     ],
   },
   'West Coast': {
     passRate: 0.53,
     concepts: [
-      { name: 'Mesh', type: 'pass', depth: 6, yac: 0.9 },
-      { name: 'Slant', type: 'pass', depth: 5, yac: 0.9 },
-      { name: 'RB Screen', type: 'pass', depth: 1, yac: 1.0 },
-      { name: 'Bootleg', type: 'pass', depth: 8, yac: 0.7 },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0 },
+      { name: 'Mesh', type: 'pass', depth: 6, yac: 0.9, description: 'Two receivers cross underneath: quick, safe yards' },
+      { name: 'Slant', type: 'pass', depth: 5, yac: 0.9, description: 'One-step slant: ball out fast' },
+      { name: 'RB Screen', type: 'pass', depth: 1, yac: 1.0, description: 'Dump to the back behind blockers: punishes the blitz' },
+      { name: 'Bootleg', type: 'pass', depth: 8, yac: 0.7, description: 'QB rolls out away from the run fake' },
+      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
     ],
   },
   'RPO Heavy': {
     passRate: 0.47,
     concepts: [
-      { name: 'RPO Pass', type: 'pass', depth: 8, yac: 0.8 },
-      { name: 'Quick Slant', type: 'pass', depth: 5, yac: 0.9 },
-      { name: 'RPO Run', type: 'run', depth: 4, yac: 0 },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0 },
+      { name: 'RPO Pass', type: 'pass', depth: 8, yac: 0.8, description: 'QB reads a linebacker, then throws behind him' },
+      { name: 'Quick Slant', type: 'pass', depth: 5, yac: 0.9, description: 'One-step slant: ball out fast' },
+      { name: 'RPO Run', type: 'run', depth: 4, yac: 0, description: 'QB reads the edge, then hands off or keeps it' },
+      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
     ],
   },
 }
@@ -487,9 +499,17 @@ function downDistance(down: number, distance: number, yard: number): string {
 /** Read-line verbs for a defense's habit (the DEF_CALL_LABELs stay as button text). */
 const DEF_VERB: Record<DefCall, string> = { blitz: 'blitz', man: 'play man coverage', zone: 'play zone coverage', stack: 'stack the box' }
 
+/** L11.5 Q1: one-line description of each defensive call for the moment card. */
+const DEF_CALL_DESC: Record<DefCall, string> = {
+  blitz: 'Send extra rushers — pressure, but risk the big play',
+  man: 'Man coverage — tight on the receivers, back to the ball',
+  zone: 'Zone coverage — keep everything in front',
+  stack: 'Stack the box — sell out to stop the run',
+}
+
 function tendencyRead(world: World, s: GameState, oppId: string, side: 'off' | 'def', bucket: Bucket): string {
   const read = s.ctx?.oppRead
-  if (!read || read.week !== world.week || read.oppId !== oppId) return 'No read on their tendencies'
+  if (!read || read.week !== world.week || read.oppId !== oppId) return 'No scouting read — buy Opponent film to see their tendencies'
   const span = read.sharp ? 0.05 : 0.15
   const rng = makeRng(world.seed + world.week * 31 + hash32(oppId + bucket, 9))
   if (side === 'def') {
@@ -1564,8 +1584,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const read = tendencyRead(world, s, s.defId, 'def', bucket)
     const choice = decide(s, {
       kind: 'call', side: 'off', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
-      yard: s.yard, title: `Call the play — ${downDistance(s.down, s.distance, s.yard)}`,
-      options: callCards(style).map((c) => ({ id: c.name, label: c.name, hint: read })),
+      yard: s.yard, title: downDistance(s.down, s.distance, s.yard),
+      options: callCards(style).map((c) => ({ id: c.name, label: c.name, hint: c.description })),
       defaultId: standing.name, staffRead: read, ask: true, margin: marginOf(s.offId),
     })
     if (choice === null) return 'moment'
@@ -1586,8 +1606,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const read = tendencyRead(world, s, s.offId, 'off', bucket)
     const choice = decide(s, {
       kind: 'defCall', side: 'def', teamId: userTeam, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
-      yard: s.yard, title: `Defensive call — ${downDistance(s.down, s.distance, s.yard)}`,
-      options: DEF_CALLS.map((d) => ({ id: d, label: DEF_CALL_LABEL[d], hint: read })),
+      yard: s.yard, title: downDistance(s.down, s.distance, s.yard),
+      options: DEF_CALLS.map((d) => ({ id: d, label: DEF_CALL_LABEL[d], hint: DEF_CALL_DESC[d] })),
       defaultId: standing, staffRead: read, ask: true, margin: marginOf(userTeam),
     })
     if (choice === null) return 'moment'
@@ -1775,15 +1795,37 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   return 'continue'
 }
 
-/** Advance until the user must decide (returns the Moment; state.pending is set) or the game ends. */
+/**
+ * Advance the game until a decision is due or it ends. Delegates to `runUntil`
+ * so the paused and full-sim paths share one loop (L10 G1).
+ */
 export function runToMoment(world: World, s: GameState): Moment | null {
+  return runUntil(world, s, 'moment')
+}
+
+/**
+ * Advance the game, stopping between steps at the requested granularity (L11.5
+ * Q2). The stop is only ever observed *between* steps — never inside one — so
+ * the RNG stream and every resolved play are exactly what a full run-to-moment
+ * would draw.
+ *  - `'play'`   → one step that produces a play (or a moment), then stop.
+ *  - `'drive'`  → until the possession changes, a moment, or the game ends.
+ *  - `'moment'` → until the next moment or the game ends.
+ */
+export function runUntil(world: World, s: GameState, stop: 'play' | 'drive' | 'moment'): Moment | null {
   for (;;) {
+    if (s.done) return null
+    const playsBefore = s.plays.length
+    const offBefore = s.offId
     const r = step(world, s)
     if (r === 'moment') return s.pending
     if (r === 'done') {
       s.done = true
       return null
     }
+    if (stop === 'moment') continue
+    if (stop === 'play' && s.plays.length > playsBefore) return null
+    if (stop === 'drive' && s.offId !== offBefore) return null
   }
 }
 

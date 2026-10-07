@@ -6,9 +6,9 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| Q1 | Neater, easier-to-read moment card | P1 | not started |
-| Q2 | Game-day navigation: Next play / Next drive / Next moment | P1 | not started |
-| Q3 | Adjust the offensive and defensive game plan during the game | P1 | not started |
+| Q1 | Neater, easier-to-read moment card | P1 | ✅ done — verified (P1) |
+| Q2 | Game-day navigation: Next play / Next drive / Next moment | P1 | ✅ done — verified (P1) |
+| Q3 | Adjust the offensive and defensive game plan during the game | P1 | ✅ done — verified (P1) |
 | Q4 | More offensive and defensive plan presets (balanced) | P2 | not started |
 | Q5 | Coordinator recommendations ("what the OC/DC think we should do") | P2 | not started |
 | Q6 | Weekly hours: show what each action actually does | P2 | not started |
@@ -140,3 +140,7 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
 - Do not edit `ORCHESTRATION_HANDOVER.md`, `OPENCODE_CONTINUE.md`, any `NEXT_PHASE*.md` or `IDEAS_*.md`. `HANDOFF.md`: append only (one "L11.5" section, in the last push).
 
 ## Verification log
+- **P1** (Flash 9 min; browser-verified by Claude on 2026-10-07). `__gameDayEquivalence(20)` 20/20; `__simTest` unchanged (23.8 / 66.8% / 64.5). Game day starts after the first drive (or at the first moment);
+  Next play adds exactly one play; Next drive runs to a change of possession or stops early at a moment ("3rd & 1 at their 1"); a mid-game switch to Hurry Up was logged (Q1 13:27). The card shows chips
+  (Q1 9:48 · 0-0 · IND 1), the read once, a grid of options with descriptions and the Standing order tag; the nav bar disables Next while a call is pending. `__careerSmoke` coach 0/0.
+  **Orchestrator polish:** concept descriptions rewritten to explain each play ("Quick slant" → "One-step slant: ball out fast"; "Screen to the back" → "Dump to the back behind blockers: punishes the blitz").
