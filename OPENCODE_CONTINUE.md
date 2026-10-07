@@ -15,12 +15,13 @@ You plan, verify and commit. You can implement small pushes yourself, or delegat
 | L9.5 P3 (R5 staff role tabs, R6 staff budget, R7 sortable roster, R8 Fit fix for defenders) | ✅ committed (Claude verified it in the browser on 2026-10-07) |
 | **L10 Game day** (`NEXT_PHASE_L10.md`, 5 pushes) | ✅ all committed |
 | **L11 In-season roster life** (`NEXT_PHASE_L11.md`, 2 pushes) | ✅ all committed |
+| **L11.5 Playtest 3** (`NEXT_PHASE_L11_5.md`, 4 pushes) | spec written, NOT sent yet (user was playing) |
 
 ## Step 1: done
 L9.5 is complete and committed. Nothing is waiting for review.
 
 ## Next
-- **L11 is done.** Ask the user what the next phase should be.
+- **L11.5 is specced but not sent.** Ask the user if they're done playing, then send P1 (Q1–Q3) with `~/.claude/bin/ds-push`, verify, commit, and continue P2–P4.
 - Verification gotchas: wait for real data before `__simTest`; use 500+ games for balance comparisons (see `ORCHESTRATION_HANDOVER.md` §2).
 
 ## Guardrails (unchanged)
