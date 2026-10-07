@@ -4092,3 +4092,98 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
     avgMargin: +(margin / made).toFixed(1),
   }
 }
+
+/**
+ * Dev-only probe (L12 S4): how a game's production is shared between players,
+ * against NFL bands. AI-vs-AI games on the current world; prints ✅/❌ per row.
+ */
+export function statShape(games = 200) {
+  const nfl = world.teams.filter((t) => t.tier === 'NFL').map((t) => t.id)
+  const pos = new Map(world.players.map((p) => [p.id, p.pos]))
+  const med = (a: number[]) => {
+    const s = [...a].sort((x, y) => x - y)
+    return s.length ? s[s.length >> 1] : 0
+  }
+  const share = (a: number[], f: (x: number) => boolean) => (a.length ? a.filter(f).length / a.length : 0)
+  const topShare: number[] = []
+  const topTargets: number[] = []
+  const withCatch: number[] = []
+  const rb1Share: number[] = []
+  const rb2Share: number[] = []
+  const qbShare: number[] = []
+  const rb1Yds: number[] = []
+  const rb1Car: number[] = []
+  const tackles: number[] = []
+  const topTackler: number[] = []
+  const tgPos: Record<string, number> = { WR: 0, TE: 0, RB: 0 }
+  const tkPos: Record<string, number> = { LB: 0, DL: 0, S: 0, CB: 0 }
+  const skPos: Record<string, number> = { DL: 0, LB: 0, DB: 0 }
+  const inPos: Record<string, number> = { CB: 0, S: 0, LB: 0, DL: 0 }
+  const group = (p?: string) => (p === 'DE' || p === 'DT' ? 'DL' : p ?? '')
+  setLivePlan(null)
+  for (let g = 0; g < games; g++) {
+    const home = nfl[g % nfl.length]
+    const away = nfl[(g * 7 + 5) % nfl.length]
+    if (home === away) continue
+    const sim = simulatePlayByPlay(world, home, away, world.seed + 7000 + g)
+    const box = boxScore(world, sim)
+    for (const team of [home, away]) {
+      const rows = box.filter((b) => b.teamId === team)
+      const tg = rows.reduce((s, b) => s + (b.line.targets ?? 0), 0)
+      const top = rows.reduce((m, b) => Math.max(m, b.line.targets ?? 0), 0)
+      if (tg) {
+        topShare.push(top / tg)
+        topTargets.push(top)
+      }
+      withCatch.push(rows.filter((b) => (b.line.rec ?? 0) > 0).length)
+      const rushes = rows.reduce((s, b) => s + (b.line.rushAtt ?? 0), 0)
+      const rbs = rows.filter((b) => pos.get(b.playerId) === 'RB').sort((x, y) => (y.line.rushAtt ?? 0) - (x.line.rushAtt ?? 0))
+      if (rushes) {
+        rb1Share.push((rbs[0]?.line.rushAtt ?? 0) / rushes)
+        rb2Share.push((rbs[1]?.line.rushAtt ?? 0) / rushes)
+        qbShare.push(rows.filter((b) => pos.get(b.playerId) === 'QB').reduce((s, b) => s + (b.line.rushAtt ?? 0), 0) / rushes)
+      }
+      rb1Yds.push(rbs[0]?.line.rushYds ?? 0)
+      rb1Car.push(rbs[0]?.line.rushAtt ?? 0)
+      tackles.push(rows.reduce((s, b) => s + (b.line.tackles ?? 0), 0))
+      topTackler.push(rows.reduce((m, b) => Math.max(m, b.line.tackles ?? 0), 0))
+      for (const b of rows) {
+        const p = pos.get(b.playerId)
+        const gp = group(p)
+        if (p && tgPos[p] !== undefined) tgPos[p] += b.line.targets ?? 0
+        if (tkPos[gp] !== undefined) tkPos[gp] += b.line.tackles ?? 0
+        const sk = gp === 'CB' || gp === 'S' ? 'DB' : gp
+        if (skPos[sk] !== undefined) skPos[sk] += b.line.defSacks ?? 0
+        if (inPos[gp] !== undefined) inPos[gp] += b.line.defInts ?? 0
+      }
+    }
+  }
+  const frac = (o: Record<string, number>) => {
+    const t = Object.values(o).reduce((a, b) => a + b, 0) || 1
+    return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, +(v / t).toFixed(2)]))
+  }
+  const tg = frac(tgPos)
+  const tk = frac(tkPos)
+  const sk = frac(skPos)
+  const it = frac(inPos)
+  const within = (v: number, lo: number, hi: number) => (v >= lo && v <= hi ? '✅' : '❌')
+  const rows: [string, number | string, string, string][] = [
+    ['Top receiver share of targets (median)', +med(topShare).toFixed(2), '0.22–0.32', within(med(topShare), 0.22, 0.32)],
+    ['Top receiver share (p90)', +[...topShare].sort((a, b) => a - b)[Math.floor(topShare.length * 0.9)].toFixed(2), '≤ 0.45', within([...topShare].sort((a, b) => a - b)[Math.floor(topShare.length * 0.9)], 0, 0.45)],
+    ['15+ target games', +share(topTargets, (x) => x >= 15).toFixed(3), '≤ 0.05', within(share(topTargets, (x) => x >= 15), 0, 0.05)],
+    ['Players with a catch (median)', med(withCatch), '≥ 5', within(med(withCatch), 5, 99)],
+    ['Targets WR / TE / RB', `${tg.WR} / ${tg.TE} / ${tg.RB}`, '~0.62 / 0.20 / 0.18', within(tg.WR, 0.55, 0.7) === '✅' && within(tg.RB, 0.1, 0.22) === '✅' ? '✅' : '❌'],
+    ['RB1 share of team rushes', +med(rb1Share).toFixed(2), '0.50–0.65', within(med(rb1Share), 0.5, 0.65)],
+    ['RB2 share', +med(rb2Share).toFixed(2), '0.15–0.30', within(med(rb2Share), 0.15, 0.3)],
+    ['QB share of rushes', +med(qbShare).toFixed(2), '0.08–0.18', within(med(qbShare), 0.08, 0.18)],
+    ['RB1 rush yards (median)', med(rb1Yds), '50–75', within(med(rb1Yds), 50, 75)],
+    ['RB1 100-yard games', +share(rb1Yds, (x) => x >= 100).toFixed(2), '0.12–0.25', within(share(rb1Yds, (x) => x >= 100), 0.12, 0.25)],
+    ['RB1 30+ carry games', +share(rb1Car, (x) => x >= 30).toFixed(3), '≤ 0.02', within(share(rb1Car, (x) => x >= 30), 0, 0.02)],
+    ['Tackles credited per team-game', med(tackles), '45–60', within(med(tackles), 45, 60)],
+    ['Tackles LB / S / CB / DL', `${tk.LB} / ${tk.S} / ${tk.CB} / ${tk.DL}`, '0.35–0.45 / 0.18–0.26 / 0.15–0.22 / 0.15–0.22', within(tk.LB, 0.35, 0.45) === '✅' && within(tk.S, 0.18, 0.26) === '✅' ? '✅' : '❌'],
+    ['Top tackler (median)', med(topTackler), '7–10', within(med(topTackler), 7, 10)],
+    ['Sacks DL / LB / DB', `${sk.DL} / ${sk.LB} / ${sk.DB}`, '0.70–0.85 / 0.10–0.25 / ≤0.08', within(sk.DL, 0.7, 0.85)],
+    ['INTs CB / S / LB', `${it.CB} / ${it.S} / ${it.LB}`, '0.40–0.55 / 0.30–0.45 / 0.08–0.18', within(it.CB, 0.4, 0.55) === '✅' && within(it.S, 0.3, 0.47) === '✅' ? '✅' : '❌'],
+  ]
+  return rows.map(([measure, value, band, ok]) => ({ measure, value, band, ok }))
+}

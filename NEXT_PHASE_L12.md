@@ -12,10 +12,10 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | R3 | "Engine composites": the exact scores the sim builds from ratings (QB accuracy, separation, pass rush…) as sortable columns | P1 | ✅ done — verified (P1) |
 | W1 | Practice week: Balanced / Install / Sharpen / Rest, each week | P2 | not started |
 | W2 | Keys to the game: pick 2 before kickoff, graded after, builds trust | P2 | not started |
-| S1 | Realistic target shares (weighted pick, no argmax) | P3 | not started |
-| S2 | Realistic carry split (RB1 / RB2 / QB runs) | P3 | not started |
-| S3 | Realistic tackle / sack / INT credit by position (bookkeeping, incl. tackles on completions) | P3 | not started |
-| S4 | `__statShape` probe vs NFL bands; box-score table layout fix | P3 | not started |
+| S1 | Realistic target shares (weighted pick, no argmax) | P3 | ✅ done — verified (P3) |
+| S2 | Realistic carry split (RB1 / RB2 / QB runs) | P3 | ✅ done — verified (P3) |
+| S3 | Realistic tackle / sack / INT credit by position (bookkeeping, incl. tackles on completions) | P3 | ✅ done — verified (P3) |
+| S4 | `__statShape` probe vs NFL bands; box-score table layout fix | P3 | ✅ done — verified (P3) |
 | E0 | Every player carries every rating his position uses (generated players included) | P4 | not started |
 | E1 | Offense ratings in the sim: QB, RB, receivers, OL | P4 | not started |
 | E2 | Defense, kicking and general ratings in the sim: DL, LB, CB, S, K/P, STA, TGH | P5 | not started |
@@ -236,3 +236,11 @@ After every task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && n
   **Orchestrator fix:** coverage grade formula re-anchored (Flash flagged that the spec's line couldn't hit both reference points): `95 − (ratingAllowed − 39.6)·0.573 + 4·INT` → 0/5 = 95, 6/7 110 yds TD = 27, 3/6 30 yds = 81.
   **Also (user request, Claude):** the field uses each club's color (a readable one: Browns orange, Cowboys silver; the away club switches if they clash), the home end zone is on the left and the away one on the right,
   and away possessions are drawn mirrored (right to left). Drive tags: Punt / Missed FG / Turnover (turnover only on a run or pass).
+- **P3** (Flash 15 min, ran out of steps mid-S1; finished and tuned by Claude on 2026-10-07). `__statShape(150)` all 16 rows ✅: top receiver 0.29 of targets (p90 0.36, 15+ target games 3.7%), 5 players with a catch,
+  targets WR/TE/RB 0.63/0.21/0.16, RB1/RB2/QB rushes 0.57/0.26/0.18, RB1 65 yds (100-yd games 12%), 47 tackles per team-game (LB/S/CB/DL 0.41/0.26/0.20/0.14), top tackler 10, sacks DL/LB 0.84/0.16,
+  INTs CB/S/LB 0.40/0.47/0.13. `__simTest(200)` seed 33333: 23.7 pts / 67.5% / 65.2 plays / 1.55 sacks / 0.97 INT / 4.92 ypc (seed 2222: 24.6). `__gameDayEquivalence(20)` 20/20.
+  **What it took (Claude):** (1) sacks were counted as "any pass play with negative yards", so completions for a loss counted as sacks — now `isSack()` (result starts with "Sack") in team stats, film and halftime reads;
+  (2) the target pick reused the top receiver's own draw (biased) — now the sum of the existing draws mod 1; (3) checkdowns gained route-model yards (RB 10.8 yds/target) — completions to an RB ×0.55 and to a TE ×0.85
+  (`TARGET_TUNE`: tau 160, rbPrior −34) → RB 5.0 / TE 7.3 / WR 8.2 yds per target; (4) Flash's run change dropped the user's 'feature' +1 edge and the 'committee' draw — both restored;
+  (5) LBs held 28% of INTs — a linebacker in coverage keeps the pick 25% of the time (DBs 60%). Box score: `table-fixed`, fixed numeric widths, "ALW", 8 rows, defense sorted by tackles.
+  **Open (needs the user's OK):** team passing yards are ~265/team-game vs ~220 in the NFL, so the top receiver's yards run high (median ~100); fixing it means retuning team calibration.

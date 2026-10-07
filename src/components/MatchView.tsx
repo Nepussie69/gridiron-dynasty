@@ -747,7 +747,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
-        { k: 'defYdsAllowed', l: 'YDS ALW' },
+        { k: 'defYdsAllowed', l: 'ALW' },
         { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
       ]} />}
     </div>
@@ -757,24 +757,31 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
 interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player> }
 interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string }
 function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx }) {
-  const sorted = [...rows].sort((a, b) => (b.line[cols[1]?.k as keyof typeof b.line] as number ?? 0) - (a.line[cols[1]?.k as keyof typeof a.line] as number ?? 0))
+  // Lead with the volume stat: yards for offense, tackles for defense.
+  const sortKey = (title === 'Defense' ? cols[0]?.k : cols[1]?.k) as keyof GameStatLine
+  const sorted = [...rows].sort((a, b) => ((b.line[sortKey] as number) ?? 0) - ((a.line[sortKey] as number) ?? 0))
+  const wide = (k: string) => k === 'passComp' || k === 'passerRating'
   return (
-    <div className="mb-2">
+    <div className="mb-3">
       <div className="label mb-0.5 !text-white/50">{title}</div>
-      <table className="w-full text-[11px] tnum">
+      <table className="w-full table-fixed text-[11px] tnum">
+        <colgroup>
+          <col />
+          {cols.map((c) => <col key={c.k} className={wide(c.k) ? 'w-11' : 'w-8'} />)}
+        </colgroup>
         <thead>
           <tr className="text-white/40">
-            <th className="text-left font-500">{title === 'Defense' ? 'Player' : 'Player'}</th>
-            {cols.map((c) => <th key={c.k} className="w-10 text-right font-500">{c.l}</th>)}
+            <th className="text-left font-500">Player</th>
+            {cols.map((c) => <th key={c.k} className="whitespace-nowrap text-right font-500">{c.l}</th>)}
           </tr>
         </thead>
         <tbody>
-          {sorted.slice(0, 6).map((b) => {
+          {sorted.slice(0, 8).map((b) => {
             const p = fp.byId.get(b.playerId)
             const tag = fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null
             return (
               <tr key={b.playerId} className="text-white/85">
-                <td className="truncate">
+                <td className="truncate pr-1" title={b.name}>
                   {b.name}
                   {tag && (
                     <span className="ml-1 rounded bg-[var(--team-soft)] px-1 py-px font-cond text-[9px] font-700 uppercase tracking-wide text-[var(--team)]">
@@ -783,7 +790,7 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
                   )}
                 </td>
                 {cols.map((c) => (
-                  <td key={c.k} className="text-right">
+                  <td key={c.k} className="whitespace-nowrap text-right">
                     {c.fmt ? c.fmt(b.line) : (b.line[c.k as keyof typeof b.line] as number ?? 0)}
                   </td>
                 ))}

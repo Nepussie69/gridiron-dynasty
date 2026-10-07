@@ -11,6 +11,7 @@
 
 import type { World } from './generate'
 import type { GameSim, Play } from './playsim'
+import { isSack } from './playsim'
 import { attributesFor } from '../data/ratings'
 import { depthGroup } from './depth'
 import {
@@ -127,7 +128,7 @@ function halftimeImproved(plays: Play[], teamId: string, fix: string): boolean {
   const half = (p: Play) => (p.qtr <= 2 ? 0 : 1)
   if (fix === 'maxProtect') {
     const sacks = [0, 0]
-    for (const p of plays) if (p.offId === teamId && p.type === 'pass' && p.yards < 0) sacks[half(p)] += 1
+    for (const p of plays) if (p.offId === teamId && isSack(p)) sacks[half(p)] += 1
     return sacks[0] >= 1 && sacks[1] < sacks[0]
   }
   if (fix === 'quickGame') {
@@ -178,7 +179,7 @@ function passerRating(plays: Play[], qbId: string, qMin: number, qMax: number): 
   let att = 0, comp = 0, yds = 0, td = 0, ints = 0
   for (const p of plays) {
     if (p.qbId !== qbId || p.type !== 'pass' || p.qtr < qMin || p.qtr > qMax) continue
-    if (p.yards < 0) continue // sack
+    if (isSack(p)) continue
     att += 1
     if (p.turnover) { ints += 1; continue }
     if (p.result === 'Incomplete') continue

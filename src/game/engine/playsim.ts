@@ -539,6 +539,8 @@ interface SimEnv {
   intMult: number
   /** L10 G11/G12: current quarter, the user's club, and their matchup/usage settings. */
   qtr: number
+  /** L12 S3: seconds left in the quarter (deterministic, for out-of-bounds credit). */
+  clock?: number
   userTeamId?: string
   matchups?: MatchupSet
   usage?: UsageSet
@@ -562,7 +564,50 @@ function coverDefender(target: Player | undefined, concept: Concept, wrs: Player
   return pick(cbs, slot)?.id ?? pick(saf, slot)?.id
 }
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {
+/** A sack (not a completion for a loss, which also has negative yards). */
+export function isSack(p: { type: string; result: string }): boolean {
+  return p.type === 'pass' && p.result.startsWith('Sack')
+}
+
+/** L12 S1: softmax temperature for target share, and the RB checkdown role prior. */
+/** L12 S1 tuning: softmax temperature, RB checkdown prior, and how much tighter a 2nd/3rd read is. */
+export const TARGET_TUNE = { tau: 160, rbPrior: -34, readPenalty: 0, rbYds: 0.55, teYds: 0.85 }
+
+/**
+ * L12 S3: the single tackler on a run, weighted LB/DL/S/CB with the mix shifting
+ * toward the secondary on big gains and the front on losses. Deterministic hash
+ * of the play number — never an rng draw.
+ */
+function runTackler(n: number, defId: string, gain: number, lbs: Player[], dl: Player[], saf: Player[], cbs: Player[]): string | undefined {
+  const w = { lb: 45, dl: 25, s: 20, cb: 10 }
+  if (gain >= 10) { w.lb -= 10; w.s += 6; w.cb += 4 }
+  else if (gain <= 0) { w.dl += 12; w.lb -= 12 }
+  const groups: [Player[], number][] = [[lbs, w.lb], [dl, w.dl], [saf, w.s], [cbs, w.cb]]
+  const valid = groups.filter(([list, wt]) => list.length > 0 && wt > 0)
+  if (!valid.length) return undefined
+  const total = valid.reduce((a, [, wt]) => a + wt, 0)
+  let roll = (hash32(`${n}:${defId}:run`) / 4294967296) * total
+  let group = valid[valid.length - 1][0]
+  for (const [list, wt] of valid) {
+    if (roll < wt) { group = list; break }
+    roll -= wt
+  }
+  return group[hash32(`${n}:${defId}:runtackle`) % group.length]?.id
+}
+
+/**
+ * L12 S3: the single tackler on a completion — the coverage defender 55%, a
+ * safety 25%, a linebacker 20%. Deterministic hash of the play number.
+ */
+function passTackler(n: number, defId: string, coverId: string | undefined, saf: Player[], lbs: Player[]): string | undefined {
+  const roll = hash32(`${n}:${defId}:passtackle`) % 100
+  if (roll < 55 && coverId) return coverId
+  if (roll < 80 && saf.length) return saf[hash32(`${n}:${defId}:safety`) % saf.length]?.id
+  if (lbs.length) return lbs[hash32(`${n}:${defId}:linebacker`) % lbs.length]?.id
+  return coverId ?? saf[0]?.id ?? lbs[0]?.id
+}
+
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
@@ -611,7 +656,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const defPlan = planFor(defId, 'def')
   // G6 third-down heat: extra blitz on the opponent's 3rd downs.
   const heat = hasFix(env, defId, 'thirdDownHeat') && env?.down === 3 ? 0.15 : 0
-  const blitz = rng() < clamp(dStyle.blitz + (defPlan ? planEffects(defPlan, true).blitz : 0) + heat, 0, 0.8)
+  const blitzRoll = rng()
+  const blitz = blitzRoll < clamp(dStyle.blitz + (defPlan ? planEffects(defPlan, true).blitz : 0) + heat, 0, 0.8)
   // A pass-heavy plan is predictable: the defense pins its ears back and sits
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
@@ -622,7 +668,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
   const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1), 0.02, 0.13)
 
-  // Target selection: a scheme-fitting, style-appropriate receiver gets more looks.
+  // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
+  // more looks, but the ball is spread by a softmax draw over those scores rather
+  // than an argmax. No rng draw is added or removed: the scored map keeps its one
+  // draw per receiver, and the highest-scored receiver's own draw is reused as the
+  // uniform. RB1 joins the pool as a checkdown with a role prior (no draw).
   const scored = wrs.map((w) => {
     const a = mkAttrs(w)
     const st = styleProfile(w)
@@ -630,10 +680,31 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const route = longBall ? (a.DRR ?? w.ovr) : concept.depth >= 7 ? (a.MRR ?? w.ovr) : (a.SRR ?? w.ovr)
     const styleBonus = longBall ? st.deepBias * 14 : st.yacBias * 10 + st.contested * 6
     const fit = schemeFit(w, ocScheme, 'OFF')
-    return { w, score: route * 0.6 + (a.SPD ?? w.ovr) * 0.25 + styleBonus + (fit - 0.5) * 16 + rng() * 12 }
+    const r = rng()
+    return { w, score: route * 0.6 + (a.SPD ?? w.ovr) * 0.25 + styleBonus + (fit - 0.5) * 16 + r * 12, r }
   })
+  if (rb && !scored.some((s) => s.w.id === rb.id)) {
+    const a = mkAttrs(rb)
+    const longBall = concept.depth >= 12
+    const route = longBall ? (a.DRR ?? rb.ovr) : concept.depth >= 7 ? (a.MRR ?? rb.ovr) : (a.SRR ?? rb.ovr)
+    scored.push({ w: rb, score: route * 0.6 + (a.SPD ?? rb.ovr) * 0.25 + TARGET_TUNE.rbPrior, r: -1 })
+  }
   scored.sort((a, b) => b.score - a.score)
-  const target = scored[0]?.w ?? rb
+  const maxScore = scored[0]?.score ?? 0
+  const weights = scored.map((s) => Math.exp((s.score - maxScore) / TARGET_TUNE.tau))
+  const totalW = weights.reduce((x, y) => x + y, 0) || 1
+  // Uniform from the existing per-receiver draws: their sum mod 1 is uniform and
+  // nearly independent of the ranking (reusing one receiver's own draw is biased).
+  // No rng draw is added.
+  const drawSum = scored.reduce((acc, x) => acc + (x.r >= 0 ? x.r : 0), 0)
+  const uniform = drawSum - Math.floor(drawSum)
+  let accW = 0
+  let target = scored[0]?.w ?? rb
+  let readRank = 0
+  for (let i = 0; i < scored.length; i++) {
+    accW += weights[i] / totalW
+    if (uniform < accW) { target = scored[i].w; readRank = i; break }
+  }
   const tA = target ? mkAttrs(target) : {}
   const tStyle = target ? styleProfile(target) : styleProfile({ traits: [''] } as Player)
   // Q7: pick the coverage defender now, from the same groups, with no rng draw.
@@ -641,7 +712,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
 
   if (rng() < sackChance) {
     const y = -Math.round(6 + rng() * 6)
-    const sackId = dl[rng() < 0.5 ? 0 : Math.min(1, dl.length - 1)]?.id
+    // Always consume the DL pick draw so the rng stream is unchanged.
+    const dlPick = dl[rng() < 0.5 ? 0 : Math.min(1, dl.length - 1)]?.id
+    // L12 S3: on a blitz sack, 30% of the time a linebacker gets the credit
+    // (deterministic hash of the play number).
+    const blitzLb = blitz && lbs.length && hash32(`${n}:${defId}:blitzsack`) % 100 < 55
+      ? lbs[hash32(`${n}:${defId}:blitzlb`) % lbs.length]?.id
+      : undefined
+    const sackId = blitzLb ?? dlPick
     return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, pressure: true, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId, coverId }
   }
 
@@ -650,7 +728,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     (concept.depth > 14 ? (tA.DRR ?? 70) : concept.depth > 7 ? (tA.MRR ?? 70) : (tA.SRR ?? 70)) * 0.5 +
     (tA.SPD ?? 70) * 0.3 +
     (tA.AGI ?? 70) * 0.2 +
-    tStyle.deepBias * (concept.depth >= 12 ? 6 : -2)
+    tStyle.deepBias * (concept.depth >= 12 ? 6 : -2) -
+    Math.min(readRank, 3) * TARGET_TUNE.readPenalty
   const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
   const zoneCov = avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
   // G11 targetWeakCB: on 35% of passes the coverage keys their weakest corner
@@ -700,9 +779,16 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
 
   if (rng() < intProb) {
     const ballHawk = [...cbs, ...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
+    const bestSaf = [...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
+    // L12 S3: the coverage defender gets the pick 60% of the time, otherwise a
+    // ball-hawk (mostly a safety). Deterministic (no rng).
+    const ir = hash32(`${n}:${defId}:int`) % 100
+    // A linebacker in coverage holds on to fewer picks than a defensive back.
+    const coverIsLb = !!coverId && lbs.some((p) => p.id === coverId)
+    const intId = coverId && ir < (coverIsLb ? 25 : 60) ? coverId : bestSaf && (ir < 85 || !ballHawk) ? bestSaf.id : ballHawk?.id
     return {
       type: 'pass', concept: concept.name, yards: 0, result: 'Interception!', turnover: true,
-      timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId: ballHawk?.id, coverId,
+      timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId, coverId,
       targetId: target?.id,
     }
   }
@@ -717,18 +803,27 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if (gain > 0) gain += Math.round(tStyle.yacBias * 2.5 * (0.5 + rng()) + tStyle.elusiveness * (1 + rng() * 3))
     if (yard >= 88) gain += 4
     else if (yard >= 80) gain += 2
+    // L12 S1: checkdowns and tight-end throws are underneath targets — scale their
+    // yards to NFL yards-per-target (RB ~5.5, TE ~7) instead of the route model's.
+    if (target?.pos === 'RB' && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
+    else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
     gain = clamp(gain, -8, 85)
     const big = gain >= 25
+    // L12 S3: a completion is stopped by one defender — the coverage defender most
+    // often, support otherwise. No credit on a score or a late sideline catch.
+    const late = (env?.qtr ?? 0) >= 4 && (env?.clock ?? 9999) <= 120
+    const outOfBounds = late && hash32(`${n}:${offId}:oob`) % 100 < 35
+    const stopped = yard + gain < 100 && !outOfBounds ? passTackler(n, defId, coverId, saf, lbs) : undefined
     return {
       type: 'pass', concept: concept.name, yards: gain, result: big ? 'Explosive play!' : 'Complete',
       turnover: false, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: big,
-      timeUsed: 24 + Math.floor(rng() * 16), qbId: qb?.id, coverId,
+      timeUsed: 24 + Math.floor(rng() * 16), qbId: qb?.id, coverId, tackleIds: stopped ? [stopped] : undefined,
     }
   }
   return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
 }
 
-function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {
+function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only.
@@ -739,23 +834,49 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const usage = env?.usage
   const rb = topGroup(world, offId, ['RB'], 2)
   void dcEff
+  const qb = topGroup(world, offId, ['QB'], 1)[0]
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const dl = topGroup(world, defId, ['DE', 'DT'], 4)
   const lbs = topGroup(world, defId, ['LB'], 3)
+  const saf = topGroup(world, defId, ['S'], 2)
+  const cbs = topGroup(world, defId, ['CB'], 3)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
-  // G12 RB workload. 'normal' is exactly what AI clubs do (RB1 carries, no extra
-  // risk). 'feature' rides RB1 harder (+1 edge, injury risk after the game);
-  // 'committee' gives RB2 40% of the carries so RB1 is fresh in the 4th (+1 there).
-  let carrier = rb[0]
+  // L12 S2: split carries RB1 / RB2 / QB from deterministic role weights, shifted
+  // by the user's usage, a mobile QB, and short yardage. The pick is a hash of
+  // (play.n, offId) — never an rng draw. QB runs use his own legs for elusiveness.
   let runEdgeBonus = 0
+  let w1 = 0.6
+  let w2 = 0.27
+  let wq = 0.13
+  // G12 workload (user only): 'feature' rides RB1 harder (+1 edge); 'committee'
+  // keeps its original draw — RB2 takes 40% of carries and RB1 is fresh in the 4th.
+  let committeePick: Player | undefined
   if (userOff && usage) {
-    if (usage.rb === 'feature') runEdgeBonus = 1
-    else if (usage.rb === 'committee') {
-      if (rb[1] && rng() < 0.4) carrier = rb[1]
-      else if ((env?.qtr ?? 1) >= 4) runEdgeBonus = 1
+    if (usage.rb === 'feature') {
+      w1 += 0.15
+      runEdgeBonus = 1
+    } else if (usage.rb === 'committee') {
+      if (rb[1] && rng() < 0.4) committeePick = rb[1]
+      else {
+        committeePick = rb[0]
+        if ((env?.qtr ?? 1) >= 4) runEdgeBonus = 1
+      }
     }
   }
+  const qbStyle = qb ? styleProfile(qb) : undefined
+  if (qbStyle) wq += qbStyle.scramble * 0.12
+  if (distance <= 2) w1 += 0.12
+  if (!rb[1]) { w1 += w2; w2 = 0 }
+  if (!qb) { w2 += wq; wq = 0 }
+  const wTot = w1 + w2 + wq || 1
+  const roll = hash32(`${n}:${offId}`) / 4294967296
+  let carrier = rb[0]
+  if (committeePick) carrier = committeePick
+  else if (roll < w1 / wTot) carrier = rb[0]
+  else if (roll < (w1 + w2) / wTot && rb[1]) carrier = rb[1]
+  else if (qb) carrier = qb
+  else if (rb[1]) carrier = rb[1]
   const cA = carrier ? mkAttrs(carrier) : {}
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
@@ -771,7 +892,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     ? runDefBase * (1 + (dp.aggression - 0.5) * 0.06 - (dp.coverage <= 0 ? 0.03 : 0))
     : runDefBase) * boxMult
   const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4))
-  const elusiveness = (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2
+  const elusiveness = carrier?.pos === 'QB'
+    ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1
+    : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2
 
   // Real NFL run distribution, tilted by line + back vs. front seven, plus back style.
   const styleEdge = cStyle.power * 14 + cStyle.elusiveness * 10 + (cFit - 0.5) * 12
@@ -793,8 +916,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   gain = clamp(gain, -10, 90)
   const isBig = gain >= 20
   const fumble = rng() < 0.011 * (1 - cStyle.power * 0.2)
-  const tacklers = [...lbs, ...dl].filter(Boolean).map((p) => p.id)
-  const tackleIds = fumble ? [] : tacklers
+  // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
+  const tackler = fumble ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
+  const tackleIds = tackler ? [tackler] : []
   return {
     type: 'run', concept: concept.name, yards: gain, result: isBig ? 'Big run!' : 'Rush',
     turnover: fumble, carrierId: carrier?.id, bigPlay: isBig,
@@ -1134,7 +1258,7 @@ function diagnose(plays: Play[], teamId: string): Diagnosis[] {
   let explosives = 0
   for (const p of plays) {
     if (p.offId === teamId) {
-      if (p.type === 'pass' && p.yards < 0) sacksTaken += 1
+      if (isSack(p)) sacksTaken += 1
       else if (p.type === 'run') { rushAtt += 1; rushYds += Math.max(0, p.yards) }
     } else if (p.defId === teamId) {
       if (p.type === 'run') { oppRushAtt += 1; oppRushYds += Math.max(0, p.yards) }
@@ -1199,7 +1323,7 @@ function firstHalfPasserRating(plays: Play[], qbId: string): number | null {
   let att = 0, comp = 0, yds = 0, td = 0, ints = 0
   for (const p of plays) {
     if (p.qbId !== qbId || p.type !== 'pass') continue
-    if (p.yards < 0) continue // sack
+    if (isSack(p)) continue
     att += 1
     if (p.turnover) { ints += 1; continue }
     if (p.result === 'Incomplete') continue
@@ -1267,7 +1391,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage }
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */
@@ -1482,8 +1606,8 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
     const concept = pickConcept(s.rng, style, 4, 2, 0)
     const env = envFor(s)
     const out = concept.type === 'pass'
-      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98), env)
-      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98), env)
+      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n)
+      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n)
     s.clock -= out.timeUsed * s.pace
     const good = !out.turnover && out.yards >= 2
     if (good) {
@@ -1730,8 +1854,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   const env = envFor(s)
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call)
-    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n)
+    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n)
 
   // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
@@ -1744,9 +1868,9 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   offS.plays += 1
   if (isPass) {
     offS.passAtt += 1
-    if (out.yards < 0) { offS.sacksTaken += 1; defS.sacks += 1 }
+    if (isSack(out)) { offS.sacksTaken += 1; defS.sacks += 1 }
     else if (out.turnover) { offS.ints += 1; defS.ints += 1 }
-    else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += Math.max(0, out.yards) }
+    else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += out.yards }
   } else {
     offS.rushAtt += 1
     offS.rushYds += Math.max(0, out.yards)

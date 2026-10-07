@@ -119,6 +119,9 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         add(play.carrierId, off, 'recYds', play.yards)
         if (play.result === 'TOUCHDOWN!') add(play.carrierId, off, 'recTD', 1)
       }
+      // L12 S3: a completion is stopped by one defender (no credit on a score —
+      // the resolver already withholds tackleIds there).
+      if (isComp && play.tackleIds?.length) add(play.tackleIds[0], def, 'tackles', 1)
       // Q7: coverage credit goes to the defender on the target.
       if (play.coverId && play.targetId) {
         add(play.coverId, def, 'defTargets', 1)
