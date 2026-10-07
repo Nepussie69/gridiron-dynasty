@@ -2,12 +2,43 @@ import { useState } from 'react'
 import { Briefcase, Star, UserPlus } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
-import type { StaffMember } from '../game/types'
+import type { StaffMember, StaffRole } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { coachEffect, staffGrade } from '../game/engine/coaching'
 import { openCandidates, schemesForRole, type HireCandidate } from '../game/engine/hiring'
 import { learnedBias } from '../game/engine/scoutBias'
+
+type RoleGroup = 'all' | 'hc' | 'coord' | 'pos' | 'front'
+
+const ROLE_GROUPS: { id: RoleGroup; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'hc', label: 'Head Coach' },
+  { id: 'coord', label: 'Coordinators' },
+  { id: 'pos', label: 'Position Coaches' },
+  { id: 'front', label: 'Front Office & Scouting' },
+]
+
+const ROLE_GROUP_KEY = 'gd.staff.roleGroup'
+
+function groupOf(role: StaffRole): Exclude<RoleGroup, 'all'> {
+  if (role === 'Head Coach') return 'hc'
+  if (
+    role === 'Offensive Coordinator' ||
+    role === 'Defensive Coordinator' ||
+    role === 'Special Teams Coordinator'
+  ) {
+    return 'coord'
+  }
+  if (role === 'QB Coach' || role === 'OL Coach' || role === 'DL Coach' || role === 'Secondary Coach') {
+    return 'pos'
+  }
+  return 'front' // Scout, Director of Player Personnel, General Manager
+}
+
+function inGroup(role: StaffRole, group: RoleGroup): boolean {
+  return group === 'all' || groupOf(role) === group
+}
 
 export function Staff() {
   const league = useWorld()
@@ -16,6 +47,23 @@ export function Staff() {
 
   const staff = league.staff[activeTeamId] ?? []
   const [tab, setTab] = useState<'staff' | 'market'>('staff')
+  const [roleGroup, setRoleGroup] = useState<RoleGroup>(() => {
+    try {
+      const saved = localStorage.getItem(ROLE_GROUP_KEY) as RoleGroup | null
+      if (saved && ROLE_GROUPS.some((g) => g.id === saved)) return saved
+    } catch {
+      /* localStorage unavailable */
+    }
+    return 'all'
+  })
+  const pickGroup = (g: RoleGroup) => {
+    setRoleGroup(g)
+    try {
+      localStorage.setItem(ROLE_GROUP_KEY, g)
+    } catch {
+      /* localStorage unavailable */
+    }
+  }
 
   const payroll = staff.reduce((s, m) => s + m.annual, 0)
   const effect = coachEffect(league, activeTeamId)
@@ -23,8 +71,12 @@ export function Staff() {
   const hireStaff = useGame((s) => s.hireStaff)
   const fireStaff = useGame((s) => s.fireStaff)
   const candidates = openCandidates(league, career.teamId, career.reputation)
-  // Simple budget: the program can carry staff worth up to prestige-scaled payroll.
-  const localeBudget = Math.max(0, Math.round(league.byId[career.teamId].prestige * 0.28 * 1_000_000) - payroll)
+  const visibleStaff = staff.filter((m) => inGroup(m.role, roleGroup))
+  const visibleCandidates = candidates
+    .filter((c) => inGroup(c.role, roleGroup))
+    .sort((a, b) => b.rating - a.rating)
+  // Display-only headroom: prestige-scaled staff budget minus current payroll.
+  const localeBudget = Math.max(0, Math.round((18 + league.byId[career.teamId].prestige * 0.3) * 1_000_000) - payroll)
 
   return (
     <div>
@@ -68,16 +120,34 @@ export function Staff() {
         </Card>
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        <span className="label mr-1">Role Group</span>
+        {ROLE_GROUPS.map((g) => (
+          <button
+            key={g.id}
+            onClick={() => pickGroup(g.id)}
+            className={cn(
+              'rounded-md border px-3 py-1 font-cond text-[11px] font-700 uppercase tracking-wide transition',
+              roleGroup === g.id ? 'border-transparent bg-ink text-white' : 'border-line text-muted hover:bg-surface-2',
+            )}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+
       {tab === 'staff' ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {staff.map((m) => (
+          {visibleStaff.map((m) => (
             <StaffCard key={m.id} member={m} onAction={() => fireStaff(m.id)} actionLabel="Let Go" />
           ))}
-          {!staff.length && (
+          {!visibleStaff.length && (
             <Card className="grid place-items-center border-dashed text-center text-sm text-muted">
               <div>
                 <Briefcase size={22} className="mx-auto mb-2 text-faint" />
-                No staff yet. Hire coordinators and position coaches on the Hiring Market tab.
+                {staff.length
+                  ? 'No staff in this role group.'
+                  : 'No staff yet. Hire coordinators and position coaches on the Hiring Market tab.'}
               </div>
             </Card>
           )}
@@ -93,13 +163,18 @@ export function Staff() {
             </div>
           </Card>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {candidates.map((c) => (
+            {visibleCandidates.map((c) => (
               <HireCard
                 key={c.id}
                 candidate={c}
                 onHire={(salary, scheme) => hireStaff(c.id, salary, scheme)}
               />
             ))}
+            {!visibleCandidates.length && (
+              <Card className="grid place-items-center border-dashed text-center text-sm text-muted">
+                No candidates in this role group.
+              </Card>
+            )}
           </div>
         </>
       )}

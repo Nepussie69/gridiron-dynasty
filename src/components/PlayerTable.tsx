@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import type { Contract, Player } from '../game/types'
@@ -7,6 +7,47 @@ import { fitLabel, schemeFit } from '../game/engine/style'
 import { masteryLabel, masteryProgress } from '../game/engine/playbook'
 import { useGame } from '../store/gameStore'
 import { Badge, DevBadge, OvrBadge, RatingBar } from '../ui/kit'
+
+type SortKey = 'name' | 'age' | 'ovr' | 'pot' | 'dev' | 'pbk' | 'cap' | 'dead' | 'yrs' | 'fit'
+type SortDir = 'asc' | 'desc'
+
+const DEV_RANK: Record<string, number> = {
+  'X-Factor': 6,
+  Superstar: 5,
+  Star: 4,
+  Starter: 3,
+  Depth: 2,
+  Backup: 1,
+}
+
+/** Value used to sort a row by column, mirroring DataTable's `sortValue`. */
+function sortValue(p: Player, key: SortKey, scheme?: string, defScheme?: string): number | string {
+  switch (key) {
+    case 'name':
+      return p.name
+    case 'age':
+      return p.age
+    case 'ovr':
+      return p.ovr
+    case 'pot':
+      return p.pot
+    case 'dev':
+      return DEV_RANK[p.dev] ?? 0
+    case 'pbk':
+      return masteryProgress(p)
+    case 'cap':
+      return p.contract.capHit
+    case 'dead':
+      return deadMoney(p.contract)
+    case 'yrs':
+      return p.contract.years
+    case 'fit': {
+      if (p.side === 'ST') return -1
+      const useScheme = p.side === 'DEF' ? defScheme : scheme
+      return useScheme ? schemeFit(p, useScheme, p.side === 'DEF' ? 'DEF' : 'OFF') : -1
+    }
+  }
+}
 
 /**
  * Dead money if released now, plus the cap savings — with a colour cue so you
@@ -28,7 +69,7 @@ export function FitBadge({ player, scheme, defScheme }: { player: Player; scheme
   if (player.side === 'ST') return <span className="text-faint">—</span>
   const useScheme = player.side === 'DEF' ? defScheme : scheme
   if (!useScheme) return <span className="text-faint">—</span>
-  const fit = fitLabel(player, useScheme)
+  const fit = fitLabel(player, useScheme, player.side === 'DEF' ? 'DEF' : 'OFF')
   return (
     <Badge tone={fit === 'Ideal' ? 'win' : fit === 'Good' ? 'info' : 'loss'}>
       {fit}
@@ -68,6 +109,35 @@ export function PlayerTable({
   emptyText = 'No players to show.',
 }: Props) {
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [dir, setDir] = useState<SortDir>('asc')
+
+  const sorted = useMemo(() => {
+    if (!sortKey) return players
+    const copy = [...players]
+    copy.sort((a, b) => {
+      const va = sortValue(a, sortKey, scheme, defScheme)
+      const vb = sortValue(b, sortKey, scheme, defScheme)
+      const cmp =
+        typeof va === 'string' || typeof vb === 'string'
+          ? String(va).localeCompare(String(vb))
+          : (va as number) - (vb as number)
+      return dir === 'asc' ? cmp : -cmp
+    })
+    return copy
+  }, [players, sortKey, dir, scheme, defScheme])
+
+  const toggle = (key: SortKey) => {
+    if (sortKey !== key) {
+      setSortKey(key)
+      setDir('asc')
+    } else if (dir === 'asc') {
+      setDir('desc')
+    } else {
+      setSortKey(null)
+      setDir('asc')
+    }
+  }
 
   if (!players.length) {
     return <div className="py-10 text-center text-sm text-muted">{emptyText}</div>
@@ -80,24 +150,24 @@ export function PlayerTable({
           <tr className="border-b border-line text-left">
             {rank && <Th className="w-8">#</Th>}
             <Th className="w-10 sticky left-0 bg-surface"></Th>
-            <Th className="sticky left-10 bg-surface">Player</Th>
-            <Th className="w-12 text-right">Age</Th>
+            <Th className="sticky left-10 bg-surface" onClick={() => toggle('name')} active={sortKey === 'name'} dir={dir}>Player</Th>
+            <Th className="w-12 text-right" onClick={() => toggle('age')} active={sortKey === 'age'} dir={dir}>Age</Th>
             {showPhysicals && <Th className="w-24">Ht/Wt</Th>}
-            {showFit && <Th className="w-20 text-center">Fit</Th>}
+            {showFit && <Th className="w-20 text-center" onClick={() => toggle('fit')} active={sortKey === 'fit'} dir={dir}>Fit</Th>}
             {showCollege && <Th className="w-40">College</Th>}
-            <Th className="w-14 text-center">Dev</Th>
-            <Th className="w-14 text-center">OVR</Th>
-            <Th className="w-14 text-center">POT</Th>
-            <Th className="w-24 text-center">Playbook</Th>
+            <Th className="w-14 text-center" onClick={() => toggle('dev')} active={sortKey === 'dev'} dir={dir}>Dev</Th>
+            <Th className="w-14 text-center" onClick={() => toggle('ovr')} active={sortKey === 'ovr'} dir={dir}>OVR</Th>
+            <Th className="w-14 text-center" onClick={() => toggle('pot')} active={sortKey === 'pot'} dir={dir}>POT</Th>
+            <Th className="w-24 text-center" onClick={() => toggle('pbk')} active={sortKey === 'pbk'} dir={dir}>Playbook</Th>
             {showMorale && <Th className="w-20">Morale</Th>}
-            {showContract && <Th className="w-20 text-right">Cap Hit</Th>}
-            {showDeadMoney && <Th className="w-20 text-right">Dead $</Th>}
-            {showContract && <Th className="w-14 text-right">Yrs</Th>}
+            {showContract && <Th className="w-20 text-right" onClick={() => toggle('cap')} active={sortKey === 'cap'} dir={dir}>Cap Hit</Th>}
+            {showDeadMoney && <Th className="w-20 text-right" onClick={() => toggle('dead')} active={sortKey === 'dead'} dir={dir}>Dead $</Th>}
+            {showContract && <Th className="w-14 text-right" onClick={() => toggle('yrs')} active={sortKey === 'yrs'} dir={dir}>Yrs</Th>}
             {right && <Th className="w-36 text-right">Action</Th>}
           </tr>
         </thead>
         <tbody>
-          {players.map((p, i) => (
+          {sorted.map((p, i) => (
             <tr
               key={p.id}
               onClick={() => selectPlayer(p.id)}
@@ -179,9 +249,37 @@ export function PlaybookCell({ player }: { player: Player }) {
   )
 }
 
-function Th({ children, className }: { children?: ReactNode; className?: string }) {  return (
-    <th className={cn('label whitespace-nowrap px-2 py-2 font-700', className)}>
-      {children}
+function Th({
+  children,
+  className,
+  onClick,
+  active,
+  dir,
+}: {
+  children?: ReactNode
+  className?: string
+  onClick?: () => void
+  active?: boolean
+  dir?: SortDir
+}) {
+  return (
+    <th
+      onClick={onClick}
+      className={cn(
+        'label whitespace-nowrap px-2 py-2 font-700',
+        onClick && 'cursor-pointer select-none hover:text-ink-2',
+        active && 'text-ink',
+        className,
+      )}
+    >
+      {onClick ? (
+        <span className="inline-flex items-center gap-0.5">
+          {children}
+          {active && <span className="text-[9px] leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
+        </span>
+      ) : (
+        children
+      )}
     </th>
   )
 }

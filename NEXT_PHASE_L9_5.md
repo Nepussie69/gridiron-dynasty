@@ -10,10 +10,10 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate (L9 sh
 | R2 | Offense plan shows only offense dials, defense plan only defense dials | P1 | ✅ done — verified (P1) |
 | R3 | Team rating comparison on the Game Plan "Up Next" card | P2 | ✅ done — verified (P2) |
 | R4 | Store a box score for every user game + "Box" button on Schedule | P2 | ✅ done — verified (P2) |
-| R5 | Staff screen: role groups (filter tabs) for current staff and hiring candidates | P3 | not started |
-| R6 | Staff budget headroom formula (shows $0 for most clubs) | P3 | not started |
-| R7 | Sortable roster table columns (asc → desc → default) | P3 | not started |
-| R8 | **Bug:** the Fit column shows "—" for every defender | P3 | not started |
+| R5 | Staff screen: role groups (filter tabs) for current staff and hiring candidates | P3 | ✅ done — verified (P3) |
+| R6 | Staff budget headroom formula (shows $0 for most clubs) | P3 | ✅ done — verified (P3) |
+| R7 | Sortable roster table columns (asc → desc → default) | P3 | ✅ done — verified (P3) |
+| R8 | **Bug:** the Fit column shows "—" for every defender | P3 | ✅ done — verified (P3) |
 
 ## R1 — Game plan wiring bug (critical)
 `src/game/engine/playsim.ts` keeps `LIVE_PLAN = { offTeamId, defTeamId, off, def }`, and `planFor(teamId)` returns `off` for `offTeamId` and `def` for `defTeamId`.
@@ -76,3 +76,6 @@ No changes to sim constants, gates, objectives, capabilities, evaluateTrade, con
   R3: `teamRatings` BAL 84.6/84.3/84.5 vs IND 79.7/79.5/79.6 (OFF/DEF/OVR); shown on Up Next. R4: after a real `advanceWeek`, `game.box` holds 23 player lines + team totals that match the final;
   the Schedule **Box** modal shows both strips + box scores; **Replay** has the tooltip. Note: the spec's slices total 23 players (11 OFF + 12 DEF), not 22; harmless.
   **Open question for later:** the sim's `TeamGameStats.sacks` showed identical home/away values in every test game, while the box score's `defSacks` differ, so `TeamGameStats.sacks` may be miscounted. Not fixed here.
+- **P3** (Flash; reviewed by the OpenCode backup chat, then browser-verified by Claude on 2026-10-07): R5: all 5 role tabs filter both My Staff and the Hiring Market (Coordinators shows only OC/DC/ST;
+  Position Coaches only QB/OL/DL coaches), and the choice persists in `localStorage` (`gd.staff.roleGroup`). R6: CLE budget shows **$13.8M of headroom** (was $0). R7: Age ▲ 21,22… ▼ 41,35… then back to default.
+  R8: the roster Fit column labels every non-specialist (51 Ideal/Good, 2 "—" for K/P); defenders were all "—" before. `__careerSmoke(6,'coach')` and `(6,'personnel')`: 0 errors, 0 violations. **L9.5 complete.**

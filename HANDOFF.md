@@ -201,15 +201,18 @@ game's guardrails intact.
   - Key files: `src/game/engine/staffAwards.ts`, `src/game/engine/counter.ts`, `src/game/engine/rivalry.ts`,
     and the `__careerSmoke` probe (`src/store/gameStore.ts` + `src/main.tsx`).
 
-- **L9.5 "Playtest 2 fixes" IN PROGRESS** (spec `NEXT_PHASE_L9_5.md`; P1 committed `e5dba86`):
+- **L9.5 "Playtest 2 fixes" ✅ DONE** (spec `NEXT_PHASE_L9_5.md`; P1 committed `e5dba86`):
   - R1 **Game-plan wiring** — `LivePlan = { teamId, off, def }`, `planFor(teamId, side)`; the user's plan applies to the user's club only. ✅ committed.
   - R2 **One side per plan** — `PlanEditor` `side` prop; offense shows Run/Pass + Tempo + 5 presets, defense Pass Rush + Coverage + 4 presets. ✅ committed.
   - R3 **Team ratings** — `teamRatings(world, teamId)` in `engine/depth.ts` (OFF/DEF/OVR from the depth-group slices); Game Plan "Up Next" card shows both clubs' OFF/DEF/OVR + two matchup lines with ▲/▼ edge chips. ✅ done.
   - R4 **Box scores** — optional `Game.box` (`players` + team totals) stored in `advanceWeek` right after `boxScore`, cleared in `startNextSeason`; `BoxScore` exported from `MatchView.tsx`; Schedule "Box" button + modal with a team-totals strip; "Watch" → "Replay (Re-simulated — may differ from the final.)". ✅ done.
-  - Next: R5–R8 (P3). Build green; lint = 5 baseline warnings after every task.
+  - R5 **Staff role groups** — `Staff.tsx` role-filter tabs (All · Head Coach · Coordinators · Position Coaches · Front Office & Scouting) above both the current-staff grid and the hiring candidates; candidates sorted by OVR desc within a group; selection remembered in `localStorage` (try/catch). ✅ done.
+  - R6 **Staff budget headroom** — `localeBudget = Math.max(0, Math.round((18 + prestige * 0.3) * 1_000_000) - payroll)` (display-only, no enforcement). ✅ done.
+  - R7 **Sortable roster** — `PlayerTable.tsx` headers cycle asc → desc → default with ▲/▼ (Player, Age, OVR, POT, Dev, Playbook %, Cap Hit, Dead $, Yrs, Fit), mirroring `DataTable`'s `sortValue`; local state. ✅ done.
+  - R8 **Fit for defenders** — `fitLabel(player, scheme, side)` now passes side to `schemeFit` so DEF uses `DEF_FIT`; `FitBadge` and `PlayerProfile` pass the player's side; Roster already passes the DC scheme as `defScheme`. ✅ done.
 
 ## In progress
-- **L9.5** — R3/R4 done, awaiting orchestrator verification; R5–R8 not started.
+- **L9.5** — ✅ R1–R8 done and verified (P1 e5dba86, P2 7842153, P3 committed after them).
 
 ## Next move
 1. Await user's test pass on L4 (voices card on Career).

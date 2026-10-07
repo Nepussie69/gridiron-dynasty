@@ -107,8 +107,8 @@ export function schemeFit(p: Player, scheme?: string, side: 'OFF' | 'DEF' = 'OFF
 }
 
 /** Human-readable fit label for the UI. */
-export function fitLabel(p: Player, scheme?: string): 'Ideal' | 'Good' | 'Poor' {
-  const f = schemeFit(p, scheme)
+export function fitLabel(p: Player, scheme?: string, side: 'OFF' | 'DEF' = 'OFF'): 'Ideal' | 'Good' | 'Poor' {
+  const f = schemeFit(p, scheme, side)
   return f >= 0.95 ? 'Ideal' : f >= 0.65 ? 'Good' : 'Poor'
 }
 

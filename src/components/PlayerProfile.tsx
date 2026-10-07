@@ -33,7 +33,7 @@ export function PlayerProfile() {
         s.role === (player.side === 'DEF' ? 'Defensive Coordinator' : 'Offensive Coordinator'),
       )?.scheme
     : undefined
-  const fit = schemeLabel ? fitLabel(player, schemeLabel) : null
+  const fit = schemeLabel ? fitLabel(player, schemeLabel, player.side === 'DEF' ? 'DEF' : 'OFF') : null
   void schemeFit
 
   return (
