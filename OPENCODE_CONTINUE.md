@@ -1,6 +1,6 @@
 # Handoff to ChatGPT (Codex) or any backup orchestrator — start here
 
-_Written 2026-10-07 ~22:45 AEDT by Claude Opus 5.5. Background and workflow: `ORCHESTRATION_HANDOVER.md`. Setup steps for the user: `SWITCH_TO_CODEX.md`._
+_Final handoff, 2026-10-07 ~22:55 AEDT by Claude Opus 5.5. Background and workflow: `ORCHESTRATION_HANDOVER.md`. Setup steps for the user: `SWITCH_TO_CODEX.md`._
 
 ## Your role
 You are the **orchestrator**: plan, send pushes to DeepSeek Flash, verify, commit, report. Flash writes most of the code:
@@ -17,7 +17,7 @@ Prompts are ready in `.claude/prompts/`. Small fixes you can make yourself.
 | L12 P1 + R4: roster Ratings / Stats tabs, glossary, composites, coverage grade | ✅ committed |
 | UI by Claude: game-day one-page layout, club colors + each club on its own end, My Career tabs, OT/OG/C/DE/DT chips | ✅ committed |
 | **L12 P3 realistic stat lines** | ✅ `7f2871b` — `__statShape(150)` all 16 NFL bands pass; calibration 23.7 pts |
-| **Play animation** (runs with handoffs and cuts, routes + throw + catch + run after catch, scrambles, sacks, fumbles, INT/punt returns, kicks through the posts) | ⏳ **next**: engine written, untracked: `src/components/playAnim.ts` (backup `.claude/prompts/playAnim.ts.bak`). Apply the MatchView wiring with `python3 .claude/prompts/animpatch.py`, then build/lint/check and commit both files. |
+| **Play animation** (runs, routes, catch + YAC, scrambles, sacks, fumbles, returns, kicks) | ✅ `da93a7e` — builds, lint 4; only one mid-play frame was checked: **first ask the user to watch a coached game and report anything odd** (see checklist below) |
 | L12 P2: practice week + keys to the game | ⏳ then: `.claude/prompts/l12p2.txt` |
 | L12 P4: every rating counts, offense (E0, E1) | ⏳ then: `.claude/prompts/l12p4.txt` |
 | L12 P5: defense/general ratings + recalibrate (E2, E3) | ⏳ then: `.claude/prompts/l12p5.txt` |
@@ -25,11 +25,10 @@ Prompts are ready in `.claude/prompts/`. Small fixes you can make yourself.
 
 The user's standing instruction: **"keep going through all the pushes"**. Keep the status board at the top of `ROADMAP_L13_L15.md` current.
 
-## Play-animation step (do this first)
-1. `python3 .claude/prompts/animpatch.py` (prints `ok`). It imports `./playAnim` into `src/components/MatchView.tsx`, replaces the two-keyframe dots with a requestAnimationFrame clock, and draws the ball (with lift on throws/kicks), the carrier highlight, goalposts and penalty flags.
-2. `npx tsc --noEmit -p tsconfig.app.json` → if it reports unused names (e.g. `useMemo`/`CENTER_Y`), remove them. `npm run build`; `npm run lint` should drop to **4** warnings (the patch removes one `set-state-in-effect`). From then on prompts' "exactly 5" means 4 — the prompt files already say so.
-3. Ask the user to open a coached game (Play next game → coach it) and check: runs show a handoff and a cut; passes show routes, the throw arcing, the catch and a run after it; an away-team drive runs right-to-left; punts show a return; a field goal flies through posts.
-4. Commit `src/components/playAnim.ts` + `MatchView.tsx`.
+## First: animation check with the user
+Lint baseline is now **4 warnings** (prompts already say 4). Ask the user to coach a game at http://127.0.0.1:5173 and confirm: runs show a handoff and a cut; passes show routes, the ball arcing, the catch and a run after it;
+an away-team drive runs right-to-left; punts show a return; field goals fly at the posts; fumbles/interceptions show a recovery/return. Fix anything reported in `src/components/playAnim.ts` (visual only, no sim impact).
+Then send L12 P2 (`~/.claude/bin/ds-push .claude/prompts/l12p2.txt l12p2`), then P4, then P5.
 
 ## Verifying in the game (you can't see the browser)
 Ask the user to paste into the console at http://127.0.0.1:5173 (View → Developer → JavaScript Console), **after** loading a career and waiting ~5 s for real ratings (`__world().roster.BAL[0].name` shows a real name):

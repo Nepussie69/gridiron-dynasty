@@ -12,7 +12,8 @@
 | L12 R4 | Ratings inline in Overview, roster Stats tab, coverage grade 0–100 | ✅ done |
 | UI | Field: team colors, each club on its own end | ✅ done |
 | UI | Game-day screen redesign (one page, plays by drive, tabs) | ✅ done |
-| L12 P2 | Practice week, keys to the game | 📝 specced |
+| UI | Play animation (runs, routes, YAC, scrambles, sacks, fumbles, returns, kicks) | ✅ done |
+| L12 P2 | Practice week, keys to the game | ⏳ next (prompt ready) |
 | L12 P3 | Realistic stat lines: target shares, carry split, tackles/sacks/INTs by position, box-score layout | ✅ done |
 | L12 P4–P5 | Every rating counts in the sim, then recalibrate | 📝 specced |
 | L13 | Personnel packages, special-teams calls | 🗺 outlined |
