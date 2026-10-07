@@ -3,7 +3,6 @@ import { ArrowUp, Briefcase, CheckCircle2, Circle, Copy, Repeat2, Star, Target, 
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import {
-  isGM,
   ladderFor,
   masteryCarryOver,
   overallRep,
@@ -51,7 +50,7 @@ import { LegacyCard } from '../components/LegacyCard'
 import { PortfolioCard } from '../components/PortfolioCard'
 import { InterviewPrep } from '../components/InterviewPrep'
 import { VoicesCard } from '../components/VoicesCard'
-import { Badge, Button, Card, PageHeader, RatingBar, TeamCrest } from '../ui/kit'
+import { Badge, Button, Card, RatingBar, TeamCrest } from '../ui/kit'
 
 const REP_LABELS: { key: keyof Reputation; label: string; desc: string }[] = [
   { key: 'evaluation', label: 'Evaluation', desc: 'Scouting eye and talent ID' },
@@ -60,6 +59,8 @@ const REP_LABELS: { key: keyof Reputation; label: string; desc: string }[] = [
   { key: 'results', label: 'Results', desc: 'Wins, playoffs, titles' },
   { key: 'profile', label: 'Profile', desc: 'Connections and pedigree' },
 ]
+
+type CareerTab = 'week' | 'progress' | 'people' | 'legacy' | 'role'
 
 export function Career() {
   const league = useWorld()
@@ -71,6 +72,7 @@ export function Career() {
   const setScreen = useGame((s) => s.setScreen)
   const showToast = useGame((s) => s.showToast)
   const [prep, setPrep] = useState<JobOffer | null>(null)
+  const [tab, setTab] = useState<CareerTab>('week')
 
   const myTeam = league.byId[career.teamId]
   const liveCounter = career.counter?.season === league.season && !career.counter.taken
@@ -109,163 +111,370 @@ export function Career() {
       .filter((o) => !o.done && o.id !== 'security')
       .sort((a, b) => b.current / b.target - a.current / a.target)[0] ?? objectives.find((o) => !o.done)
 
+  const tabs: { id: CareerTab; label: string; badge?: number }[] = [
+    { id: 'week', label: 'This Week', badge: offers.length || undefined },
+    { id: 'progress', label: 'Progress' },
+    { id: 'people', label: 'People' },
+    { id: 'legacy', label: 'Legacy' },
+    { id: 'role', label: 'Role' },
+  ]
+
   return (
     <div>
-      <PageHeader
-        eyebrow={`${career.path === 'coach' ? 'Coaching' : 'Personnel'} Track · Season ${league.season} · Week ${league.week}`}
-        title="My Career"
-        subtitle={current.blurb}
-        right={
-          <div className="flex items-center gap-2">
-            {career.scenario && career.scenario !== 'climb' && (
-              <Badge tone="gold">{scenarioById(career.scenario).title}</Badge>
-            )}
-            <div className="flex rounded-lg bg-surface-2 p-0.5">
-              <Badge tone="team">
-                {isGM(career) ? 'General Manager' : `${current.title}`}
-              </Badge>
-            </div>
-          </div>
-        }
-      />
-
-      {/* Identity strip */}
-      <Card pad={false} className="mb-5 overflow-hidden">
+      {/* ── Identity: one strip with everything at a glance ───────────────── */}
+      <Card pad={false} className="mb-4 overflow-hidden">
         <div
-          className="flex flex-wrap items-center gap-4 p-5"
+          className="flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-4"
           style={{ background: `linear-gradient(115deg, ${team.primary}, ${team.secondary})` }}
         >
-          <TeamCrest team={team} size={56} />
+          <TeamCrest team={team} size={52} />
           <div className="min-w-0">
-            <div className="label !text-white/70">{career.gmName}</div>
+            <div className="label !text-white/70">
+              {career.gmName} · {career.path === 'coach' ? 'Coaching' : 'Personnel'} track · Season {league.season} · Week {league.week}
+            </div>
             <div className="font-display text-3xl font-700 uppercase leading-none text-white">{current.title}</div>
-            <div className="font-cond text-sm text-white/80">
-              {team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name} · {team.conference}
+            <div className="mt-0.5 font-cond text-sm text-white/85">
+              {team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name} · {VERB_BLURB[current.verb]}
             </div>
           </div>
-          <div className="ml-auto flex flex-wrap gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {career.scenario && career.scenario !== 'climb' && (
+              <span className="rounded-md bg-black/25 px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-white">
+                {scenarioById(career.scenario).title}
+              </span>
+            )}
             <HeadStat label="Overall Rep" value={overall} />
-            <HeadStat label="Salary" value={money(career.salary)} />
+            <HeadStat label="Next rung" value={next ? `${Math.round(Math.min(1, prog.pct) * 100)}%` : 'Top'} />
             <HeadStat label="Record" value={recordStr(rec)} />
+            <HeadStat label="Salary" value={money(career.salary)} />
             <HeadStat label="Hit Rate" value={`${hitRate}%`} />
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/15 px-5 pb-4 pt-3">
-          <div>
-            <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/70">
-              This rung&apos;s verb
-            </span>
-            <div className="font-display text-sm font-700 uppercase tracking-wide text-white">
-              {VERB_BLURB[current.verb]}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/70">
-              World seed {formatSeed(league.seed)}
-            </span>
-            <button
-              type="button"
-              onClick={copySeed}
-              className="inline-flex items-center gap-1 rounded-md border border-white/25 px-2 py-1 font-cond text-[10px] font-700 uppercase tracking-wide text-white/90 transition hover:bg-white/10"
-            >
-              <Copy size={12} /> Copy
-            </button>
           </div>
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
-        <div className="space-y-5">
-          <WeeklyChecklist />
-          <CareerRhythm />
-          {/* The ladder */}
-          <Card>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-display text-lg font-700 uppercase tracking-wide">
-                {career.path === 'coach' ? 'Coaching Ladder' : 'Personnel Ladder'}
-              </h3>
-              <Badge tone="team">Level {career.level + 1} of {ladder.length}</Badge>
-            </div>
-            <div className="space-y-1">
-              {ladder.map((rung) => {
-                const done = rung.level < career.level
-                const active = rung.level === career.level
-                return (
-                  <div
-                    key={rung.level}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg border px-3 py-2',
-                      active ? 'border-transparent bg-[var(--team-soft)]' : done ? 'border-line opacity-70' : 'border-line',
-                    )}
-                  >
-                    {done ? (
-                      <CheckCircle2 size={18} className="text-win" />
-                    ) : active ? (
-                      <Star size={18} style={{ color: 'var(--team)' }} />
-                    ) : (
-                      <Circle size={18} className="text-faint" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className={cn('font-cond text-sm font-700 uppercase', active ? 'text-ink' : 'text-ink-2')}>
-                        {rung.title}
+      {/* ── Tabs ─────────────────────────────────────────────────────────── */}
+      <div className="mb-4 flex flex-wrap items-center gap-1 rounded-xl border border-line bg-surface p-1">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={cn(
+              'flex items-center gap-1.5 rounded-lg px-3.5 py-2 font-cond text-sm font-700 uppercase tracking-wide transition',
+              tab === t.id ? 'bg-ink text-white' : 'text-ink-2 hover:bg-surface-2',
+            )}
+          >
+            {t.label}
+            {t.badge ? <span className="rounded-full bg-gold px-1.5 text-[10px] text-ink">{t.badge}</span> : null}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={copySeed}
+          title="Copy the world seed"
+          className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-muted hover:bg-surface-2"
+        >
+          <Copy size={12} /> Seed {formatSeed(league.seed)}
+        </button>
+      </div>
+
+      {tab === 'week' && (
+        <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+          <div className="space-y-4">
+            {(offers.length > 0 || counter) && (
+              <>
+                <Card>
+                  <div className="mb-3 flex items-center gap-2">
+                    <Briefcase size={16} className="text-muted" />
+                    <h3 className="font-display text-lg font-700 uppercase tracking-wide">Job Offers</h3>
+                    {offers.length > 0 && <Badge tone="gold">{offers.length} new</Badge>}
+                  </div>
+                  {counter && (
+                    <div className="mb-3 rounded-lg border border-gold/60 bg-gold/10 p-3">
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <Star size={13} className="text-gold" />
+                        <div className="font-cond text-sm font-700 uppercase text-ink">
+                          Counteroffer — stay with the {myTeam.name}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted">{rung.blurb}</div>
+                      <p className="text-xs text-ink-2">{counter.text}</p>
+                      <Button size="sm" variant="primary" className="mt-2 w-full" onClick={acceptCounter}>
+                        Accept counter
+                      </Button>
                     </div>
-                    <div className="hidden text-right sm:block">
-                      <div className="label !text-[9px]">Requires</div>
-                      <div className="font-cond text-[11px] text-muted">
-                        {Object.entries(rung.gate).map(([k, v]) => `${k} ${v}`).join(' · ') || '—'}
-                      </div>
+                  )}
+                  {offers.length === 0 ? (
+                    <p className="text-sm text-muted">
+                      No offers on the table. Offers arrive during the offseason once your reputation clears the next rung.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {offers.map((o) => (
+                        <div key={o.id} className="rounded-lg border border-line p-3">
+                          <div className="flex items-center gap-2">
+                            <TeamCrest team={league.byId[o.teamId]} size={30} />
+                            <div className="min-w-0 flex-1">
+                              <div className="font-cond text-sm font-700 uppercase text-ink">{o.title}</div>
+                              <div className="text-xs text-muted">
+                                {league.byId[o.teamId].tier === 'NFL'
+                                  ? `${league.byId[o.teamId].city} ${league.byId[o.teamId].name}`
+                                  : league.byId[o.teamId].name}{' '}
+                                · {o.years} yrs · {money(o.salary)}/yr
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="label !text-[9px]">Interest</div>
+                              <div className="font-cond text-sm font-700 tnum text-ink">{o.interest}%</div>
+                            </div>
+                          </div>
+                          <p className="mt-2 text-xs text-muted">{o.note}</p>
+                          <div className="mt-2 flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="team"
+                              className="flex-1"
+                              onClick={() => (resume.length ? setPrep(o) : acceptOffer(o))}
+                            >
+                              <ArrowUp size={13} /> Accept
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                      <Button size="sm" variant="ghost" className="w-full" onClick={declineOffers}>
+                        Stay at {current.title}
+                      </Button>
+                    </div>
+                  )}
+                </Card>
+              </>
+            )}
+            <CareerRhythm />
+          </div>
+          <div className="space-y-4">
+            <WeeklyChecklist />
+            <Card>
+              <div className="label mb-1">Your job this week</div>
+              <p className="text-sm font-600 text-ink">
+                {jobThisWeek
+                  ? `${jobThisWeek.label} (${jobThisWeek.current}/${jobThisWeek.target})`
+                  : 'Every objective met — keep it rolling.'}
+              </p>
+            </Card>
+            <Card>
+              <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">This Season's Objectives</h3>
+              <div className="space-y-2">
+                {objectives.map((o) => (
+                  <div key={o.id} className="rounded-lg border border-line p-2.5">
+                    <div className="flex items-center gap-2">
+                      {o.done ? (
+                        <CheckCircle2 size={15} className="shrink-0 text-win" />
+                      ) : (
+                        <Circle size={15} className="shrink-0 text-faint" />
+                      )}
+                      <span className="flex-1 text-xs font-600 text-ink">{o.label}</span>
+                      <span className={cn('font-cond text-xs font-700 tnum', o.done ? 'text-win' : 'text-muted')}>
+                        {o.current}/{o.target}
+                      </span>
+                    </div>
+                    <div className="mt-1.5">
+                      <RatingBar
+                        value={(o.current / o.target) * 100}
+                        color={o.done ? '#05914f' : 'var(--team)'}
+                        height={5}
+                      />
                     </div>
                   </div>
-                )
-              })}
-            </div>
-          </Card>
-
-          {/* History */}
-          <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Career History</h3>
-            {career.history.length === 0 ? (
-              <p className="py-4 text-sm text-muted">
-                No seasons on record yet. Do your job, build your reputation, and the offers will come.
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-left">
-                      {['Season', 'Role', 'Team', 'Record', 'Outcome'].map((h) => (
-                        <th key={h} className="label px-2 py-2">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...career.history].reverse().map((h, i) => (
-                      <tr key={i} className="border-b border-line/60">
-                        <td className="px-2 py-1.5 font-cond font-700 text-ink">{h.season}</td>
-                        <td className="px-2 py-1.5 text-ink-2">{h.role}</td>
-                        <td className="px-2 py-1.5 text-ink-2">{league.byId[h.team]?.name ?? h.team}</td>
-                        <td className="px-2 py-1.5 font-cond tnum text-ink-2">{h.record}</td>
-                        <td className="px-2 py-1.5 text-muted">{h.outcome}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                ))}
               </div>
-            )}
-          </Card>
+            </Card>
+          </div>
         </div>
+      )}
 
-        {/* Right rail */}
-        <div className="space-y-5">
-          <CareerPeople />
-          <AmbitionsCard />
-          <GhostCard />
-          <LegacyCard />
-          <PortfolioCard />
-          <VoicesCard />
-          {/* Your role: what this job can actually do */}
+      {tab === 'progress' && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-4">
+            <Card>
+              <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Next Step</h3>
+              {next ? (
+                <>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="font-cond text-sm font-700 uppercase text-ink">{next.title}</span>
+                    <span className="font-cond text-xs text-muted">{next.tier}</span>
+                  </div>
+                  <RatingBar value={prog.pct * 100} color={prog.pct >= 1 ? '#05914f' : 'var(--team)'} height={10} />
+                  <div className="mt-2 text-xs text-muted">
+                    {prog.pct >= 1 ? 'Qualified — offers arrive in the offseason.' : `Needs: ${prog.missing.join(' · ')}`}
+                  </div>
+                  <p className="mt-3 rounded-lg bg-surface-2 p-3 text-xs leading-relaxed text-muted">
+                    {prog.pct >= 1
+                      ? 'You have earned a look at the next level.'
+                      : 'Win games, grade prospects accurately, and build your profile. Exceptional work earns offers faster.'}
+                  </p>
+                </>
+              ) : (
+                <div className="flex items-center gap-2 text-sm text-win">
+                  <CheckCircle2 size={18} /> You have reached the top of this ladder.
+                </div>
+              )}
+            </Card>
+            <Card>
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="font-display text-lg font-700 uppercase tracking-wide">Role Mastery</h3>
+                <span className="font-display text-xl font-700 tnum text-ink">{thisMastery}</span>
+              </div>
+              <RatingBar value={thisMastery} color={thisMastery >= 70 ? '#05914f' : thisMastery >= 45 ? 'var(--team)' : '#d98207'} height={8} />
+              <p className="mt-2 text-[11px] text-muted">
+                {thisMastery >= 75
+                  ? 'Thriving in this role. Excellence here gives you a head start at the next level.'
+                  : thisMastery >= 50
+                    ? 'Solid. Meet your objectives to build a stronger résumé for the next job.'
+                    : 'Struggling in this role. Your next step will be harder.'}
+              </p>
+              {next && (
+                <div className="mt-3 rounded-lg bg-surface-2 p-2.5 text-[11px] text-muted">
+                  Prior-role carry-over: <strong className="text-ink">
+                    +{Math.max(0, Math.round((masteryCarryOver(career).profile ?? 0)))} profile
+                  </strong> toward becoming {next.title}.
+                </div>
+              )}
+            </Card>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Card>
+                <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Reputation</h3>
+                <div className="space-y-3">
+                  {REP_LABELS.map(({ key, label, desc }) => (
+                    <div key={key}>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="font-cond text-xs font-600 uppercase text-ink-2">{label}</span>
+                        <span className="font-cond text-xs font-700 tnum text-ink">{Math.round(career.reputation?.[key] ?? 0)}</span>
+                      </div>
+                      <RatingBar value={career.reputation?.[key] ?? 0} color={(career.reputation?.[key] ?? 0) >= 70 ? '#05914f' : (career.reputation?.[key] ?? 0) >= 40 ? 'var(--team)' : '#d98207'} height={7} />
+                      <div className="mt-0.5 text-[10px] text-faint">{desc}</div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+              <Card>
+                <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Skills</h3>
+                <div className="space-y-3">
+                  {Object.entries(career.skills ?? {}) .map(([k, v]) => (
+                    <div key={k}>
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="font-cond text-xs font-600 uppercase text-ink-2">{k}</span>
+                        <span className="font-cond text-xs font-700 tnum text-ink">{v}</span>
+                      </div>
+                      <RatingBar value={v} color="#c99a2e" height={7} />
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </div>
+          </div>
+          <div className="space-y-4">
+            <Card>
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="font-display text-lg font-700 uppercase tracking-wide">
+                  {career.path === 'coach' ? 'Coaching Ladder' : 'Personnel Ladder'}
+                </h3>
+                <Badge tone="team">Level {career.level + 1} of {ladder.length}</Badge>
+              </div>
+              <div className="space-y-1">
+                {ladder.map((rung) => {
+                  const done = rung.level < career.level
+                  const active = rung.level === career.level
+                  return (
+                    <div
+                      key={rung.level}
+                      className={cn(
+                        'flex items-center gap-3 rounded-lg border px-3 py-2',
+                        active ? 'border-transparent bg-[var(--team-soft)]' : done ? 'border-line opacity-70' : 'border-line',
+                      )}
+                    >
+                      {done ? (
+                        <CheckCircle2 size={18} className="text-win" />
+                      ) : active ? (
+                        <Star size={18} style={{ color: 'var(--team)' }} />
+                      ) : (
+                        <Circle size={18} className="text-faint" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className={cn('font-cond text-sm font-700 uppercase', active ? 'text-ink' : 'text-ink-2')}>
+                          {rung.title}
+                        </div>
+                        <div className="text-xs text-muted">{rung.blurb}</div>
+                      </div>
+                      <div className="hidden text-right sm:block">
+                        <div className="label !text-[9px]">Requires</div>
+                        <div className="font-cond text-[11px] text-muted">
+                          {Object.entries(rung.gate).map(([k, v]) => `${k} ${v}`).join(' · ') || '—'}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {tab === 'people' && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-4">
+            <CareerPeople />
+          </div>
+          <div className="space-y-4">
+            <AmbitionsCard />
+            <VoicesCard />
+          </div>
+        </div>
+      )}
+
+      {tab === 'legacy' && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-4">
+            <LegacyCard />
+            <GhostCard />
+          </div>
+          <div className="space-y-4">
+            <PortfolioCard />
+            <Card>
+              <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Career History</h3>
+              {career.history.length === 0 ? (
+                <p className="py-4 text-sm text-muted">
+                  No seasons on record yet. Do your job, build your reputation, and the offers will come.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-line text-left">
+                        {['Season', 'Role', 'Team', 'Record', 'Outcome'].map((h) => (
+                          <th key={h} className="label px-2 py-2">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...career.history].reverse().map((h, i) => (
+                        <tr key={i} className="border-b border-line/60">
+                          <td className="px-2 py-1.5 font-cond font-700 text-ink">{h.season}</td>
+                          <td className="px-2 py-1.5 text-ink-2">{h.role}</td>
+                          <td className="px-2 py-1.5 text-ink-2">{league.byId[h.team]?.name ?? h.team}</td>
+                          <td className="px-2 py-1.5 font-cond tnum text-ink-2">{h.record}</td>
+                          <td className="px-2 py-1.5 text-muted">{h.outcome}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {tab === 'role' && (
+        <div className="grid gap-4 lg:grid-cols-2">
           <Card>
             <div className="mb-3 flex items-center justify-between">
               <h3 className="font-display text-lg font-700 uppercase tracking-wide">Your Role</h3>
@@ -293,193 +502,6 @@ export function Career() {
               </p>
             )}
           </Card>
-
-          {/* How well you're doing THIS job — feeds the next one */}
-          <Card>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-display text-lg font-700 uppercase tracking-wide">Role Mastery</h3>
-              <span className="font-display text-xl font-700 tnum text-ink">{thisMastery}</span>
-            </div>
-            <RatingBar value={thisMastery} color={thisMastery >= 70 ? '#05914f' : thisMastery >= 45 ? 'var(--team)' : '#d98207'} height={8} />
-            <p className="mt-2 text-[11px] text-muted">
-              {thisMastery >= 75
-                ? 'Thriving in this role. Excellence here gives you a head start at the next level.'
-                : thisMastery >= 50
-                  ? 'Solid. Meet your objectives to build a stronger résumé for the next job.'
-                  : 'Struggling in this role. Your next step will be harder.'}
-            </p>
-            {next && (
-              <div className="mt-3 rounded-lg bg-surface-2 p-2.5 text-[11px] text-muted">
-                Prior-role carry-over: <strong className="text-ink">
-                  +{Math.max(0, Math.round((masteryCarryOver(career).profile ?? 0)))} profile
-                </strong> toward becoming {next.title}.
-              </div>
-            )}
-          </Card>
-
-          {/* Next step */}
-          <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Next Step</h3>
-            {next ? (
-              <>
-                <div className="mb-1 flex items-center justify-between">
-                  <span className="font-cond text-sm font-700 uppercase text-ink">{next.title}</span>
-                  <span className="font-cond text-xs text-muted">{next.tier}</span>
-                </div>
-                <RatingBar value={prog.pct * 100} color={prog.pct >= 1 ? '#05914f' : 'var(--team)'} height={10} />
-                <div className="mt-2 text-xs text-muted">
-                  {prog.pct >= 1 ? 'Qualified — offers arrive in the offseason.' : `Needs: ${prog.missing.join(' · ')}`}
-                </div>
-                <p className="mt-3 rounded-lg bg-surface-2 p-3 text-xs leading-relaxed text-muted">
-                  {prog.pct >= 1
-                    ? 'You have earned a look at the next level.'
-                    : 'Win games, grade prospects accurately, and build your profile. Exceptional work earns offers faster.'}
-                </p>
-              </>
-            ) : (
-              <div className="flex items-center gap-2 text-sm text-win">
-                <CheckCircle2 size={18} /> You have reached the top of this ladder.
-              </div>
-            )}
-          </Card>
-
-          {/* The live nudge toward the next objective */}
-          <Card>
-            <p className="text-xs text-muted">
-              <span className="font-600 text-ink">Your job this week:</span>{' '}
-              {jobThisWeek
-                ? `${jobThisWeek.label} (${jobThisWeek.current}/${jobThisWeek.target})`
-                : 'Every objective met — keep it rolling.'}
-            </p>
-          </Card>
-
-          {/* Reputation */}
-          <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">This Season's Objectives</h3>
-            <div className="space-y-2">
-              {objectives.map((o) => (
-                <div key={o.id} className="rounded-lg border border-line p-2.5">
-                  <div className="flex items-center gap-2">
-                    {o.done ? (
-                      <CheckCircle2 size={15} className="shrink-0 text-win" />
-                    ) : (
-                      <Circle size={15} className="shrink-0 text-faint" />
-                    )}
-                    <span className="flex-1 text-xs font-600 text-ink">{o.label}</span>
-                    <span className={cn('font-cond text-xs font-700 tnum', o.done ? 'text-win' : 'text-muted')}>
-                      {o.current}/{o.target}
-                    </span>
-                  </div>
-                  <div className="mt-1.5">
-                    <RatingBar
-                      value={(o.current / o.target) * 100}
-                      color={o.done ? '#05914f' : 'var(--team)'}
-                      height={5}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Reputation */}
-          <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Reputation</h3>
-            <div className="space-y-3">
-              {REP_LABELS.map(({ key, label, desc }) => (
-                <div key={key}>
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="font-cond text-xs font-600 uppercase text-ink-2">{label}</span>
-                    <span className="font-cond text-xs font-700 tnum text-ink">{Math.round(career.reputation?.[key] ?? 0)}</span>
-                  </div>
-                  <RatingBar value={career.reputation?.[key] ?? 0} color={(career.reputation?.[key] ?? 0) >= 70 ? '#05914f' : (career.reputation?.[key] ?? 0) >= 40 ? 'var(--team)' : '#d98207'} height={7} />
-                  <div className="mt-0.5 text-[10px] text-faint">{desc}</div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Skills */}
-          <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Skills</h3>
-            <div className="space-y-3">
-              {Object.entries(career.skills ?? {}) .map(([k, v]) => (
-                <div key={k}>
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="font-cond text-xs font-600 uppercase text-ink-2">{k}</span>
-                    <span className="font-cond text-xs font-700 tnum text-ink">{v}</span>
-                  </div>
-                  <RatingBar value={v} color="#c99a2e" height={7} />
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Offers */}
-          <Card>
-            <div className="mb-3 flex items-center gap-2">
-              <Briefcase size={16} className="text-muted" />
-              <h3 className="font-display text-lg font-700 uppercase tracking-wide">Job Offers</h3>
-              {offers.length > 0 && <Badge tone="gold">{offers.length} new</Badge>}
-            </div>
-            {counter && (
-              <div className="mb-3 rounded-lg border border-gold/60 bg-gold/10 p-3">
-                <div className="mb-1 flex items-center gap-1.5">
-                  <Star size={13} className="text-gold" />
-                  <div className="font-cond text-sm font-700 uppercase text-ink">
-                    Counteroffer — stay with the {myTeam.name}
-                  </div>
-                </div>
-                <p className="text-xs text-ink-2">{counter.text}</p>
-                <Button size="sm" variant="primary" className="mt-2 w-full" onClick={acceptCounter}>
-                  Accept counter
-                </Button>
-              </div>
-            )}
-            {offers.length === 0 ? (
-              <p className="text-sm text-muted">
-                No offers on the table. Offers arrive during the offseason once your reputation clears the next rung.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {offers.map((o) => (
-                  <div key={o.id} className="rounded-lg border border-line p-3">
-                    <div className="flex items-center gap-2">
-                      <TeamCrest team={league.byId[o.teamId]} size={30} />
-                      <div className="min-w-0 flex-1">
-                        <div className="font-cond text-sm font-700 uppercase text-ink">{o.title}</div>
-                        <div className="text-xs text-muted">
-                          {league.byId[o.teamId].tier === 'NFL'
-                            ? `${league.byId[o.teamId].city} ${league.byId[o.teamId].name}`
-                            : league.byId[o.teamId].name}{' '}
-                          · {o.years} yrs · {money(o.salary)}/yr
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="label !text-[9px]">Interest</div>
-                        <div className="font-cond text-sm font-700 tnum text-ink">{o.interest}%</div>
-                      </div>
-                    </div>
-                    <p className="mt-2 text-xs text-muted">{o.note}</p>
-                    <div className="mt-2 flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="team"
-                        className="flex-1"
-                        onClick={() => (resume.length ? setPrep(o) : acceptOffer(o))}
-                      >
-                        <ArrowUp size={13} /> Accept
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-                <Button size="sm" variant="ghost" className="w-full" onClick={declineOffers}>
-                  Stay at {current.title}
-                </Button>
-              </div>
-            )}
-          </Card>
-
           <Card>
             <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Your Job</h3>
             <div className="space-y-2 text-sm text-ink-2">
@@ -496,7 +518,16 @@ export function Career() {
             </div>
           </Card>
         </div>
-      </div>
+      )}
+
+      {tab !== 'week' && offers.length > 0 && (
+        <button
+          onClick={() => setTab('week')}
+          className="mt-4 w-full rounded-xl border border-gold/60 bg-gold/10 px-4 py-2.5 text-left font-cond text-sm font-700 uppercase tracking-wide text-ink"
+        >
+          {offers.length} job offer{offers.length === 1 ? '' : 's'} waiting — open This Week
+        </button>
+      )}
       {prep && <InterviewPrep offer={prep} onCancel={() => setPrep(null)} />}
     </div>
   )
