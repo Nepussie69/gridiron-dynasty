@@ -291,14 +291,22 @@ export function MiniBars({
   items,
   max = 100,
 }: {
-  items: { label: string; value: number; color?: string }[]
+  items: { label: string; value: number; color?: string; title?: string; sim?: boolean }[]
   max?: number
 }) {
   return (
     <div className="space-y-2">
       {items.map((it) => (
-        <div key={it.label} className="flex items-center gap-3">
-          <div className="w-10 shrink-0 font-cond text-xs font-700 uppercase text-muted">{it.label}</div>
+        <div key={it.label} className="flex items-center gap-3" title={it.title}>
+          <div className="flex w-12 shrink-0 items-center gap-1">
+            <span className="font-cond text-xs font-700 uppercase text-muted">{it.label}</span>
+            {it.sim && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
+                title="Used by the game sim"
+              />
+            )}
+          </div>
           <div className="flex-1">
             <RatingBar value={it.value} max={max} color={it.color} height={8} />
           </div>

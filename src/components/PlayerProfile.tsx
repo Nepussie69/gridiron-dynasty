@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { money } from '../lib/format'
 import { attributesFor, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
+import { RATING_INFO, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel, schemeFit } from '../game/engine/style'
 import { careerTotals } from '../game/engine/stats'
 import { useGame, useWorld } from '../store/gameStore'
@@ -26,7 +27,12 @@ export function PlayerProfile() {
   const posGroups = order
     .filter((k) => attrs[k] !== undefined)
     .slice(0, 6)
-    .map((k) => ({ label: k, value: attrs[k] }))
+    .map((k) => ({
+      label: k,
+      value: attrs[k],
+      title: ratingTitle(k),
+      sim: !!RATING_INFO[k]?.sim,
+    }))
 
   const schemeLabel = team
     ? (league.staff[team.id] ?? []).find((s) =>

@@ -143,3 +143,17 @@ export function attributesFor(playerId: string, pos: Position, ovr: number): Rec
   if (out.AWR !== undefined) out.AWR = Math.max(45, Math.min(99, Math.round(ovr - 1)))
   return out
 }
+
+/**
+ * The same merge the sim uses: generated attributes first, then any exact
+ * ratings the player carries. Mirrors `mkAttrs` in `playsim.ts`/`statAlloc.ts`
+ * without importing from them (which keeps the engine files untouched).
+ */
+export function playerAttrs(p: {
+  id: string
+  pos: Position
+  ovr: number
+  attrs?: Record<string, number>
+}): Record<string, number> {
+  return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+}

@@ -6,9 +6,10 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| R1 | Roster **Ratings** tab: every rating as a column, click to sort ascending/descending | P1 | not started |
-| R2 | Rating glossary: full names + what each rating does in the sim (tooltips, help panel, player profile) | P1 | not started |
-| R3 | "Engine composites": the exact scores the sim builds from ratings (QB accuracy, separation, pass rush…) as sortable columns | P1 | not started |
+| R1 | Roster **Ratings** tab: every rating as a column, click to sort ascending/descending | P1 | ✅ done — verified (P1) |
+| R2 | Rating glossary: full names + what each rating does in the sim (tooltips, help panel, player profile) | P1 | ✅ done — verified (P1) |
+| R4 | Orchestrator polish (user request): key ratings inline in Overview when one position is filtered; a **Stats** tab (season stats by position, sortable) + a stat option in the sort dropdown; **coverage grade 0–100** per game (passer rating allowed when targeted, + INT/incompletions, − TD/explosives; INTs credited to the coverage defender) in the box score (COV), Stats tab and profile | P1 | not started |
+| R3 | "Engine composites": the exact scores the sim builds from ratings (QB accuracy, separation, pass rush…) as sortable columns | P1 | ✅ done — verified (P1) |
 | W1 | Practice week: Balanced / Install / Sharpen / Rest, each week | P2 | not started |
 | W2 | Keys to the game: pick 2 before kickoff, graded after, builds trust | P2 | not started |
 | E0 | Every player carries every rating his position uses (generated players included) | P3 | not started |
@@ -187,4 +188,7 @@ After every task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && n
 - Do not edit `ORCHESTRATION_HANDOVER.md`, `OPENCODE_CONTINUE.md`, any `NEXT_PHASE*.md`, `ROADMAP_*.md` or `IDEAS_*.md`. `HANDOFF.md`: append only (one "L12" section, in the last push).
 
 ## Verification log
-_(empty)_
+- **P1** (Flash 10 min; browser-verified by Claude on 2026-10-07). 48 rating keys in `RATING_INFO`, 28 with a `sim` line. Roster → Ratings → DL shows Pass rush / Run stop composites then SPD…PRC;
+  PMV sorts 87→… desc and 68→… asc; header tooltip "Power Moves — … sets the pass rush". Mahomes Accuracy 92 = hand calc. No sim file touched.
+  **Orchestrator fix:** the K/P Leg composite defaults to 78 (as the sim does), not 70. **Note:** real players carry no DRR/MRR/SRR/CIT/RTE, so those columns show the derived values the sim also uses.
+  **Also on 2026-10-07 (user request, Claude):** game-day screen redesign, one page, commit 5502792.

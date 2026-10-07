@@ -5,6 +5,8 @@ import { money } from '../lib/format'
 import { capUsed, rosterOf, teamAvgOvr } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { PlayerTable } from '../components/PlayerTable'
+import { RatingsTable } from '../components/RatingsTable'
+import { RATING_GROUPS, groupPositions } from '../game/data/ratingInfo'
 import { Badge, Button, Card, OvrBadge, PageHeader, Stat } from '../ui/kit'
 
 const SIDES = [
@@ -16,9 +18,17 @@ const SIDES = [
 
 const POSITIONS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
 
+const TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'ratings', label: 'Ratings' },
+] as const
+
+const RATING_POSITIONS = ['ALL', ...RATING_GROUPS.map((g) => g.id)]
+
 export function Roster() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
+  const [tab, setTab] = useState<(typeof TABS)[number]['id']>('overview')
   const [side, setSide] = useState<(typeof SIDES)[number]['id']>('ALL')
   const [pos, setPos] = useState('ALL')
   const [q, setQ] = useState('')
@@ -27,9 +37,14 @@ export function Roster() {
   const roster = rosterOf(league, activeTeamId)
 
   const filtered = useMemo(() => {
+    const groupPos = tab === 'ratings' ? groupPositions(pos) : null
     let out = roster.filter((p) => {
       if (side !== 'ALL' && p.side !== side) return false
-      if (pos !== 'ALL' && p.pos !== pos) return false
+      if (pos !== 'ALL') {
+        if (tab === 'ratings') {
+          if (groupPos && !groupPos.includes(p.pos)) return false
+        } else if (p.pos !== pos) return false
+      }
       if (q && !p.name.toLowerCase().includes(q.toLowerCase())) return false
       return true
     })
@@ -40,7 +55,7 @@ export function Roster() {
       return a.name.localeCompare(b.name)
     })
     return out
-  }, [roster, side, pos, q, sort])
+  }, [roster, side, pos, q, sort, tab])
 
   const avgAge = roster.length ? roster.reduce((s, p) => s + p.age, 0) / roster.length : 0
   const used = capUsed(roster)
@@ -51,7 +66,11 @@ export function Roster() {
       <PageHeader
         eyebrow="Team"
         title="Roster"
-        subtitle={`${roster.length} players · sorted by ${sort === 'ovr' ? 'overall' : sort}`}
+        subtitle={
+          tab === 'ratings'
+            ? `${filtered.length} shown · click a column header to sort`
+            : `${roster.length} players · sorted by ${sort === 'ovr' ? 'overall' : sort}`
+        }
         right={
           <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
             <Search size={16} className="text-faint" />
@@ -83,6 +102,24 @@ export function Roster() {
       <Card pad={false}>
         <div className="flex flex-wrap items-center gap-3 border-b border-line p-3">
           <div className="flex rounded-lg bg-surface-2 p-0.5">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => {
+                  setTab(t.id)
+                  setPos('ALL')
+                }}
+                className={cn(
+                  'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
+                  tab === t.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex rounded-lg bg-surface-2 p-0.5">
             {SIDES.map((s) => (
               <button
                 key={s.id}
@@ -98,7 +135,7 @@ export function Roster() {
           </div>
 
           <div className="flex flex-wrap gap-1">
-            {POSITIONS.map((p) => (
+            {(tab === 'overview' ? POSITIONS : RATING_POSITIONS).map((p) => (
               <button
                 key={p}
                 onClick={() => setPos(p)}
@@ -114,32 +151,45 @@ export function Roster() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
-            <span className="label">Sort</span>
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as typeof sort)}
-              className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
-            >
-              <option value="ovr">Overall</option>
-              <option value="age">Age</option>
-              <option value="cap">Cap Hit</option>
-              <option value="name">Name</option>
-            </select>
+            {tab === 'overview' && (
+              <>
+                <span className="label">Sort</span>
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as typeof sort)}
+                  className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
+                >
+                  <option value="ovr">Overall</option>
+                  <option value="age">Age</option>
+                  <option value="cap">Cap Hit</option>
+                  <option value="name">Name</option>
+                </select>
+              </>
+            )}
             <Badge tone="team">{filtered.length} shown</Badge>
           </div>
         </div>
 
-        <div className="p-2">
-          <PlayerTable
+        {tab === 'overview' ? (
+          <div className="p-2">
+            <PlayerTable
+              players={filtered}
+              showPhysicals
+              showFit
+              showDeadMoney
+              scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
+              defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
+              emptyText="No players match these filters."
+            />
+          </div>
+        ) : (
+          <RatingsTable
             players={filtered}
-            showPhysicals
-            showFit
-            showDeadMoney
+            group={pos}
             scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
             defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
-            emptyText="No players match these filters."
           />
-        </div>
+        )}
       </Card>
 
       {isNFL && (
