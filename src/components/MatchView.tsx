@@ -11,6 +11,7 @@ import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from './PlanEditor'
+import { buildPlayAnim, holderAt, liftAt, posAt } from './playAnim'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
 const CENTER_Y = 26.65
@@ -53,115 +54,6 @@ function jerseyColors(home: import('../game/types').Team, away: import('../game/
   return { home: homeC, away: awayC }
 }
 
-interface Dot {
-  key: string
-  side: 'off' | 'def'
-  fx: number
-  fy: number
-  ex: number
-  ey: number
-  role: string
-  hasBall?: boolean
-}
-
-function rnd(seed: number) {
-  const x = Math.sin(seed * 12.9898) * 43758.5453
-  return x - Math.floor(x)
-}
-
-/** Compute formation (f) and end-of-play (e) positions for all 22 players. */
-function buildDots(play: PlayEvent): Dot[] {
-  const losX = 10 + play.startYard
-  const gain = play.endYard - play.startYard
-  const ballX = 10 + play.endYard
-  const s = play.n * 7 + play.startYard
-  const ballY = CENTER_Y + (rnd(s) - 0.5) * 30
-  const isPass = play.type === 'pass'
-  const sack = play.pressure && gain < 0
-  const dots: Dot[] = []
-
-  // ── Offense (5 OL, QB, RB, 4 receivers) ──
-  const olY = [-2.6, -1.3, 0, 1.3, 2.6].map((d) => CENTER_Y + d)
-  olY.forEach((y, i) => {
-    dots.push({
-      key: `ol${i}`, side: 'off', role: 'OL',
-      fx: losX, fy: y,
-      ex: losX + Math.max(-1, Math.min(4, gain * 0.3)),
-      ey: y,
-    })
-  })
-  const qbX = losX - 6
-  dots.push({
-    key: 'qb', side: 'off', role: 'QB',
-    fx: qbX, fy: CENTER_Y,
-    ex: sack ? losX - 7 : isPass ? qbX + 1 : qbX,
-    ey: sack ? CENTER_Y + 2 : CENTER_Y,
-  })
-  dots.push({
-    key: 'rb', side: 'off', role: 'RB',
-    fx: losX - 9, fy: CENTER_Y + 3.5,
-    ex: isPass || sack ? losX - 6 : ballX,
-    ey: isPass || sack ? CENTER_Y + 4.5 : ballY,
-    hasBall: !isPass && !sack,
-  })
-
-  const recvY = [5, 48, 14, 39]
-  const recvRoles = ['WR', 'WR', 'SLOT', 'TE']
-  recvY.forEach((y, i) => {
-    const isTarget = play.targetId !== undefined && i === (play.n % 4)
-    const routeX = isPass ? losX + Math.min(play.passDepth ?? 8, 22) : losX + 2
-    dots.push({
-      key: `wr${i}`, side: 'off', role: recvRoles[i],
-      fx: losX, fy: y,
-      ex: isTarget ? ballX : routeX,
-      ey: isTarget ? ballY : y + (rnd(s + i) - 0.5) * 6,
-      hasBall: isPass && isTarget && play.result !== 'Incomplete' && !play.turnover && gain > 0,
-    })
-  })
-
-  // ── Defense (4 DL, 3 LB, 2 CB, 2 S) ──
-  const dlY = [21, 24.3, 28.8, 32].map((y) => y)
-  dlY.forEach((y, i) => {
-    dots.push({
-      key: `dl${i}`, side: 'def', role: 'DL',
-      fx: losX + 1.6, fy: y,
-      ex: losX + 2 + Math.max(0, gain * 0.3),
-      ey: y,
-    })
-  })
-  ;[16, CENTER_Y, 37].forEach((y, i) => {
-    dots.push({
-      key: `lb${i}`, side: 'def', role: 'LB',
-      fx: losX + 6, fy: y,
-      ex: ballX + 1.5,
-      ey: ballY + (i - 1) * 4,
-    })
-  })
-  ;[6, 47].forEach((y, i) => {
-    dots.push({
-      key: `cb${i}`, side: 'def', role: 'CB',
-      fx: losX + 4, fy: y,
-      ex: isPass ? losX + Math.min(play.passDepth ?? 10, 20) : ballX,
-      ey: isPass ? y : ballY + (i === 0 ? -3 : 3),
-    })
-  })
-  ;[15, 38].forEach((y, i) => {
-    dots.push({
-      key: `s${i}`, side: 'def', role: 'S',
-      fx: losX + 15, fy: y,
-      ex: ballX + 2,
-      ey: ballY + (i - 1) * 6,
-    })
-  })
-
-  return dots
-}
-
-function playDuration(play: PlayEvent) {
-  if (play.type === 'kickoff' || play.type === 'punt' || play.type === 'pat' || play.type === 'fg') return 900
-  if (play.type === 'end') return 200
-  return 1600
-}
 
 export function MatchView() {
   const world = useWorld()
@@ -178,7 +70,8 @@ export function MatchView() {
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
   const [speed, setSpeed] = useState(1)
-  const [phase, setPhase] = useState<'set' | 'move'>('set')
+  // Animation clock for the play on screen: t runs 0..1 after a short pre-snap beat.
+  const [clock, setClock] = useState<{ i: number; t: number }>({ i: -1, t: 0 })
   const timer = useRef<number | null>(null)
   const [tab, setTab] = useState<'plays' | 'box' | 'plan' | 'film'>('plays')
   const [boxTeam, setBoxTeam] = useState<string | null>(null)
@@ -193,18 +86,37 @@ export function MatchView() {
     setSpeed(1)
   }, [matchSeq])
 
-  // formation → movement per play
+  const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
+  const nextForAnim = match?.plays[idx + 1]
+  const anim = useMemo(() => {
+    if (!play) return null
+    return buildPlayAnim(play, {
+      next: nextForAnim,
+      targetPos: play.targetId ? byId.get(play.targetId)?.pos : undefined,
+      carrierIsQB: play.type === 'run' && !!play.carrierId && byId.get(play.carrierId)?.pos === 'QB',
+    })
+  }, [play, nextForAnim, byId])
+  const PRE_SNAP = 250
+
+  // Run the play's animation: a pre-snap beat, then t from 0 to 1.
   useEffect(() => {
-    if (!play) return
-    setPhase('set')
-    const t = window.setTimeout(() => setPhase('move'), 70)
-    return () => window.clearTimeout(t)
-  }, [idx, play])
+    if (!anim) return
+    let raf = 0
+    const start = performance.now() + PRE_SNAP / speed
+    const span = anim.duration / speed
+    const tick = (now: number) => {
+      const t = Math.max(0, Math.min(1, (now - start) / span))
+      setClock({ i: idx, t })
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [anim, idx, speed])
 
   // auto-advance
   useEffect(() => {
     if (!match || !playing || !play) return
-    const dur = playDuration(play) / speed + (play.type === 'end' ? 200 : 550)
+    const dur = ((anim?.duration ?? 1600) + PRE_SNAP) / speed + (play.type === 'end' ? 200 : 550)
     timer.current = window.setTimeout(() => {
       setIdx((i) => {
         if (i >= match.plays.length - 1) {
@@ -217,9 +129,7 @@ export function MatchView() {
     return () => {
       if (timer.current) window.clearTimeout(timer.current)
     }
-  }, [idx, playing, speed, match, play])
-
-  const dots = useMemo(() => (play ? buildDots(play) : []), [play])
+  }, [idx, playing, speed, match, play, anim])
 
   if (!match || !play) return null
 
@@ -233,7 +143,8 @@ export function MatchView() {
   const offColor = play.offId === match.homeId ? jerseys.home : jerseys.away
   const defColor = play.offId === match.homeId ? jerseys.away : jerseys.home
   const los = mx(10 + play.startYard)
-  const dur = phase === 'set' ? 0 : playDuration(play) / speed
+  const t = clock.i === idx ? clock.t : 0
+  const holder = anim ? holderAt(anim, t) : null
   // G3: pause the replay at the end of what has been simulated so the moment
   // can be called. Nothing shows until the animation catches up.
   const atEnd = idx >= match.plays.length - 1
@@ -337,26 +248,36 @@ export function MatchView() {
               <text x={115.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
                 {away.abbr}
               </text>
-              {(() => {
-                const sack = play.pressure && play.endYard < play.startYard
-                const bx = phase === 'set' ? mx(10 + play.startYard - 6) : sack ? mx(10 + play.startYard - 7) : mx(10 + play.endYard)
-                const by = phase === 'set' ? CENTER_Y : play.type === 'pass' || play.type === 'run' ? CENTER_Y + (rnd(play.n * 7 + play.startYard) - 0.5) * 30 : CENTER_Y
+              {anim?.posts && (
+                <g>
+                  <line x1={mx(119)} y1={CENTER_Y - 3.1} x2={mx(119)} y2={CENTER_Y + 3.1} stroke="#ffd34d" strokeWidth={0.45} />
+                  <line x1={mx(118)} y1={CENTER_Y} x2={mx(119)} y2={CENTER_Y} stroke="#ffd34d" strokeWidth={0.35} />
+                </g>
+              )}
+              {anim?.actors.map((a) => {
+                const pt = posAt(a.path, t)
+                const carrying = holder === a.key
                 return (
-                  <g style={{ transform: `translate(${bx}px, ${by}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}>
-                    <circle r={0.72} fill="#8a4b1f" stroke="#fff" strokeWidth={0.16} />
-                  </g>
-                )
-              })()}
-              {dots.map((d) => {
-                const x = mx(phase === 'set' ? d.fx : d.ex)
-                const y = phase === 'set' ? d.fy : d.ey
-                return (
-                  <g key={d.key} style={{ transform: `translate(${x}px, ${y}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}>
-                    {d.hasBall && <circle r={1.7} fill="#ffffff" opacity={0.25} />}
-                    <circle r={1.15} fill={d.side === 'off' ? offColor : defColor} stroke="#fff" strokeWidth={0.2} />
+                  <g key={a.key} transform={`translate(${mx(pt.x)} ${pt.y})`}>
+                    {carrying && <circle r={2} fill="#ffd34d" opacity={0.35} />}
+                    <circle r={1.15} fill={a.side === 'off' ? offColor : defColor} stroke={carrying ? '#ffd34d' : '#fff'} strokeWidth={carrying ? 0.35 : 0.2} />
                   </g>
                 )
               })}
+              {anim && (() => {
+                const b = posAt(anim.ball, t)
+                const lift = liftAt(anim, t)
+                const bx = mx(b.x)
+                return (
+                  <g>
+                    {lift > 0.02 && <ellipse cx={bx} cy={b.y} rx={0.6} ry={0.3} fill="#000" opacity={0.3} />}
+                    <ellipse cx={bx} cy={b.y - lift * 3.2} rx={0.78 * (1 + lift * 0.45)} ry={0.5 * (1 + lift * 0.45)} fill="#8a4b1f" stroke="#fff" strokeWidth={0.14} />
+                  </g>
+                )
+              })()}
+              {anim?.flag && t >= anim.flag.t && (
+                <rect x={mx(anim.flag.x) - 0.5} y={anim.flag.y - 0.5} width={1} height={1} fill="#ffd400" stroke="#000" strokeWidth={0.08} />
+              )}
             </svg>
           </div>
 
