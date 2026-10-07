@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Pause, Play, SkipForward, X } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { coachLabels, type Play as PlayEvent } from '../game/engine/playsim'
+import { coachLabels, type Play as PlayEvent, type Moment } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
-import { PlanEditor } from './PlanEditor'
-import { BALANCED_PLAN } from '../game/engine/gameplan'
 import { originTag } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, TeamCrest } from '../ui/kit'
@@ -129,13 +127,13 @@ function playDuration(play: PlayEvent) {
 export function MatchView() {
   const world = useWorld()
   const match = useGame((s) => s.match)
+  const matchSeq = useGame((s) => s.matchSeq)
   const closeMatch = useGame((s) => s.closeMatch)
-  const liveGame = useGame((s) => s.liveGame)
-  const setPlan = useGame((s) => s.setPlan)
-  const finishLiveGame = useGame((s) => s.finishLiveGame)
+  const gameDay = useGame((s) => s.gameDay)
+  const answerGameMoment = useGame((s) => s.answerGameMoment)
+  const simGameDayToEnd = useGame((s) => s.simGameDayToEnd)
+  const abandonGameDay = useGame((s) => s.abandonGameDay)
   const career = useGame((s) => s.career)
-  const [planSide, setPlanSide] = useState<'off' | 'def'>('off')
-  const [showPlan, setShowPlan] = useState(true)
 
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
@@ -145,14 +143,13 @@ export function MatchView() {
 
   const play = match?.plays[idx]
 
-  // reset to first play whenever a new game opens
+  // reset to first play whenever a fresh game opens (not when a coached game
+  // appends the next chunk of plays)
   useEffect(() => {
-    if (match) {
-      setIdx(0)
-      setPlaying(true)
-      setSpeed(1)
-    }
-  }, [match])
+    setIdx(0)
+    setPlaying(true)
+    setSpeed(1)
+  }, [matchSeq])
 
   // formation → movement per play
   useEffect(() => {
@@ -191,6 +188,37 @@ export function MatchView() {
   const coaches = coachLabels(world, play.offId)
   const los = 10 + play.startYard
   const dur = phase === 'set' ? 0 : playDuration(play) / speed
+  // G3: pause the replay at the end of what has been simulated so the moment
+  // can be called. Nothing shows until the animation catches up.
+  const atEnd = idx >= match.plays.length - 1
+  // The scoreboard follows the replay (the score after the play on screen), so a
+  // coached game never shows a score from further ahead than you've watched.
+  const nextPlay = match.plays[idx + 1]
+  const shownScore = nextPlay
+    ? { home: nextPlay.homeScore, away: nextPlay.awayScore }
+    : { home: match.homeScore, away: match.awayScore }
+  const moment = gameDay?.moment ?? null
+  const showMoment = !!gameDay && !!moment && atEnd
+
+  const onClose = () => {
+    if (gameDay) {
+      if (window.confirm('Abandon this game? Nothing will be recorded and the week is unchanged.')) {
+        abandonGameDay()
+      }
+      return
+    }
+    closeMatch()
+  }
+
+  const answer = (choiceId: string) => {
+    setPlaying(true)
+    void answerGameMoment(choiceId)
+  }
+
+  const simToEnd = () => {
+    setPlaying(false)
+    void simGameDayToEnd()
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex h-screen w-screen flex-col overflow-hidden bg-[#0a1626] text-white">
@@ -198,9 +226,9 @@ export function MatchView() {
       <div className="flex items-center gap-3 border-b border-white/10 bg-black/30 px-4 py-2.5">
         <TeamCrest team={away} size={30} />
         <span className="font-display text-lg font-700 uppercase">{away.name}</span>
-        <span className="font-display text-3xl font-700 tnum">{match.awayScore}</span>
+        <span className="font-display text-3xl font-700 tnum">{shownScore.away}</span>
         <span className="text-white/40">–</span>
-        <span className="font-display text-3xl font-700 tnum">{match.homeScore}</span>
+        <span className="font-display text-3xl font-700 tnum">{shownScore.home}</span>
         <span className="font-display text-lg font-700 uppercase">{home.name}</span>
         <TeamCrest team={home} size={30} />
 
@@ -216,7 +244,7 @@ export function MatchView() {
           </span>
         </div>
 
-        <button onClick={closeMatch} className="grid h-8 w-8 place-items-center rounded-lg bg-white/10 hover:bg-white/20">
+        <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg bg-white/10 hover:bg-white/20">
           <X size={16} />
         </button>
       </div>
@@ -337,50 +365,44 @@ export function MatchView() {
         </div>
       </div>
 
-      {showPlan && career && (
+      {gameDay && (
         <div className="border-t border-white/10 bg-[#0d1a2b] p-3">
-          <div className="mb-2 flex items-center gap-2">
-            <span className="font-display text-sm font-700 uppercase tracking-wide text-white">In-Game Plan</span>
-            <div className="flex rounded-md bg-white/10 p-0.5">
-              {(['off', 'def'] as const).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setPlanSide(s)}
-                  className={cn('rounded px-2.5 py-0.5 font-cond text-[11px] font-700 uppercase', planSide === s ? 'bg-white text-ink' : 'text-white/70')}
-                >
-                  {s === 'off' ? 'Offense' : 'Defense'}
-                </button>
-              ))}
-            </div>
-            <span className="text-[11px] text-white/50">Changes apply instantly — the game re-runs under your calls.</span>
-            {liveGame && (
-              <button
-                onClick={finishLiveGame}
-                className="ml-auto rounded-md bg-white px-3 py-1 font-cond text-[11px] font-700 uppercase text-ink hover:bg-white/90"
+          {showMoment && moment ? (
+            <MomentCard moment={moment} onAnswer={answer} onSim={simToEnd} />
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-display text-sm font-700 uppercase tracking-wide text-white">Coaching</span>
+              <span className="text-[11px] text-white/60">
+                Playing out the game — it pauses the moment a call is yours.
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="ml-auto !text-white hover:!bg-white/10"
+                onClick={simToEnd}
               >
-                Lock In Result
-              </button>
-            )}
-            <button
-              onClick={() => setShowPlan(false)}
-              className={cn('rounded-md bg-white/10 px-2 py-1 font-cond text-[11px] font-700 uppercase text-white/70 hover:bg-white/20', !liveGame && 'ml-auto')}
-            >
-              Hide
-            </button>
-          </div>
-          <PlanEditor
-            compact
-            side={planSide}
-            plan={planSide === 'off' ? (liveGame?.off ?? BALANCED_PLAN) : (liveGame?.def ?? BALANCED_PLAN)}
-            onChange={(p) => setPlan(planSide, p)}
-          />
+                <SkipForward size={14} /> Sim to end (standing orders)
+              </Button>
+            </div>
+          )}
         </div>
       )}
-      {!showPlan && career && (
-        <div className="border-t border-white/10 bg-[#0d1a2b] px-3 py-1.5">
-          <button onClick={() => setShowPlan(true)} className="font-cond text-[11px] font-700 uppercase text-white/60 hover:text-white">
-            Show in-game plan ▾
-          </button>
+
+      {match.film && !gameDay && (
+        <div className="border-t border-white/10 bg-[#0d1a2b] px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-display text-sm font-700 uppercase tracking-wide text-white">
+              Film grade: {match.film.letter}
+            </span>
+            <span className="font-cond text-[11px] text-white/50">{match.film.grade}/100</span>
+          </div>
+          {match.film.lines.length > 0 && (
+            <ul className="mt-1 space-y-0.5">
+              {match.film.lines.map((l, i) => (
+                <li key={i} className="text-[11px] text-white/60">• {l}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -404,6 +426,47 @@ export function MatchView() {
             <span className="shrink-0 font-cond tnum text-white/60">{p.homeScore}-{p.awayScore}</span>
           </button>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function MomentCard({ moment, onAnswer, onSim }: { moment: Moment; onAnswer: (id: string) => void; onSim: () => void }) {
+  return (
+    <div className="rounded-xl border border-[#c99a2e]/70 bg-black/30 p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Badge tone="gold">Your call</Badge>
+        <span className="font-display text-base font-700 uppercase text-white">{moment.title}</span>
+        <span className="font-cond text-xs text-white/60">Q{moment.qtr} · {moment.clock}</span>
+        <span className="ml-auto font-display text-base font-700 tnum text-white">{moment.us}-{moment.them}</span>
+      </div>
+      {moment.staffRead && <div className="mb-2 text-[11px] text-white/60">{moment.staffRead}</div>}
+      <div className="flex flex-wrap gap-2">
+        {moment.options.map((o) => (
+          <button
+            key={o.id}
+            onClick={() => onAnswer(o.id)}
+            className="flex flex-col items-start rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-left transition hover:bg-white/20"
+          >
+            <span className="font-cond text-sm font-700 uppercase text-white">
+              {o.label}
+              {o.id === moment.defaultId && (
+                <span className="ml-2 rounded bg-white/20 px-1 py-px font-cond text-[9px] font-700 uppercase text-white/80">
+                  Standing order
+                </span>
+              )}
+            </span>
+            <span className="text-[11px] text-white/60">{o.hint}</span>
+          </button>
+        ))}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto !text-white hover:!bg-white/10"
+          onClick={onSim}
+        >
+          <SkipForward size={14} /> Sim to end (standing orders)
+        </Button>
       </div>
     </div>
   )

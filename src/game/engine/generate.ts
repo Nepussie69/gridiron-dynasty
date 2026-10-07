@@ -38,6 +38,8 @@ export interface Game {
     players: PlayerBoxScore[]
     team: Record<string, GameBoxTotals>
   }
+  /** L10 G5: film grade of the user's decisions (kept with the box, one season). */
+  film?: { grade: number; letter: string; lines: string[]; userCalls?: number }
 }
 
 export interface World {

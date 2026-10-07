@@ -10,9 +10,9 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate: find 
 | F2 | **Balance:** "Bend Don't Break" beats every opponent; defensive plan rework + `__planMatrix` probe | P1 | ✅ done — verified (P1) |
 | G1 | Resumable sim: `createGame` / `runToMoment` / `answerMoment` / `finishGame` (idea 1) | P1 | ✅ done — verified (P1) |
 | G2 | Decisions module + call sheet: 4th down, 2-point tries, AI call sheets (idea 2, engine) | P1 | ✅ done — verified (P1) |
-| G3 | Game Day flow in the store + moment card in the match view (idea 1, UI) | P2 | not started |
-| G4 | Call-sheet editor on the Game Plan screen (idea 2, UI) | P2 | not started |
-| G5 | Film grade for 4th-down and 2-point calls + season reward (idea 10, part 1) | P2 | not started |
+| G3 | Game Day flow in the store + moment card in the match view (idea 1, UI) | P2 | ✅ done — verified (P2) |
+| G4 | Call-sheet editor on the Game Plan screen (idea 2, UI) | P2 | ✅ done — verified (P2) |
+| G5 | Film grade for 4th-down and 2-point calls + season reward (idea 10, part 1) | P2 | ✅ done — verified (P2) |
 | G6 | Halftime adjustments + QB change (ideas 5, 9b) | P3 | not started |
 | G7 | Two-minute drill, timeouts, clock moment (idea 7) | P3 | not started |
 | G8 | Tendency books, scouting action, self-scout panel (idea 6) | P4 | not started |
@@ -190,10 +190,10 @@ Coordinators see a read-only line "4th downs and 2-point tries belong to the hea
 `gradeGame(world, sim: GameSim, userTeamId): { grade: number /* 0–100 */; letter: string; lines: string[] } | null` (null when there were no user decisions).
 - For each `fourth` decision: `delta = EV(choice) − EV(best option)` from `fourthDownEV` (≤ 0). Line: "4th & 2 at their 38: went for it (+0.0 vs best)" / "punted (−1.4 EP vs going for it)".
 - For each `two` decision: `delta` from a 2-pt model (go2 EV = 2 × 0.48; kick EV = 0.94 × 1; chart situations count the chart choice as best).
-- `grade = clamp(80 + Σdelta × 8, 0, 100)`; `letter` from 93 A, 90 A−, 87 B+, 83 B, 80 B−, 77 C+, 73 C, 70 C−, 60 D, else F. User-made and standing decisions both count (the standing orders are yours too).
+- `grade = clamp(95 + Σdelta × 10, 0, 100)` (orchestrator change in P2: perfect calls = A); `letter` from 93 A, 90 A−, 87 B+, 83 B, 80 B−, 77 C+, 73 C, 70 C−, 60 D, else F. User-made and standing decisions both count (the standing orders are yours too).
 - Store the result on the user's `Game.film?: { grade: number; letter: string; lines: string[] }` (cleared each season with `box`), show it in the Schedule Box modal and as a card in the post-game
   match view ("Film grade: B+").
-- Season reward (in `runEndOfRegularSeason`, once): average film grade ≥ 87 → `leadership +2`; ≥ 80 → `leadership +1`. Push a `seasonMoments` line. (Within the +3 cap.)
+- Season reward (in `runEndOfRegularSeason`, once): only games with ≥ 1 call made in the moment (`film.userCalls > 0`) count, and it needs ≥ 4 such games; average ≥ 90 → `leadership +2`; ≥ 85 → `leadership +1` (orchestrator change in P2). Push a `seasonMoments` line. (Within the +3 cap.)
 **Acceptance (P2):** build + lint 5. Orchestrator: coach a full game in the browser (answer moments, sim to end), and check the result counts exactly once in standings, box, rivalry and stats;
 the Replay button still works; abandoning leaves the week unplayed; fast sim and "Sim to end" on a fresh week produce identical scores.
 
@@ -321,3 +321,11 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   G1: `__gameDayEquivalence(20)` 20/20; with a user ctx there are ~4–5 moments a game (fourth + two), and answering against the standing order changes results.
   Orchestrator fix: `two` moments only ask in the 2nd half or when the chart says go2 (they were spending both caps on Q1 PATs). G2: `__simTest` seed 33333 = 23.4 pts / 67.4% / 62.1 plays (in band);
   AI 4th-down go rate ~19%. `__careerSmoke(6,'coach')` 0 errors / 0 violations; `__balanceProbe(14,'coach')` seasonsToTop 10 (unchanged). Build + lint 5.
+- **P2** (Flash 14 min, hit its 100-step limit after finishing; browser-verified by Claude on 2026-10-07). Coached a full game as HC (BAL vs CLE): it paused at "4th & 8 at their 27" (Staff EV Go +0.6 · FG +1.2 · Punt −0.8,
+  standing order FG); answering **Go** was logged as a user call and the game moved on to a Q3 two-point moment; Sim to end recorded it **once** (1-0, PF/PA, box 25 lines, film, all week-1 games played, week → 2).
+  Abandon leaves the week unplayed. Sim to end on standing orders = fast sim (53-23 both). Call sheet card saves (`fourth: 'aggressive'`). Box modal shows the film grade. `__gameDayEquivalence` 10/10,
+  `__careerSmoke(6,'coach')` 0/0. **Orchestrator fixes:** (1) `advanceWeek` is a no-op while a game day is in progress (it would have double-simmed the user's game and skipped a week);
+  (2) the match-view scoreboard follows the replay (it showed the score at the pending moment while early plays were still animating); (3) film grade rescaled: `95 + Σdelta × 10`
+  (Flash/spec formula `80 + Σ×8` capped a perfect game at B− because deltas are ≤ 0), routine kicks/punts are left off the sheet, and `film.userCalls` counts real calls;
+  (4) `answerMoment(s, id, source)`: Sim to end and fast sim answer with `'standing'`, so "Coach, then Sim to end" doesn't count as coaching; (5) the season reward needs ≥ 4 coached games
+  (avg ≥ 90 → +2, ≥ 85 → +1). Note: coordinators get no moments yet (P2's moments are HC-only); P3+ must extend `decide()` so `'off'`/`'def'`/`'both'` scopes answer their side's moments.

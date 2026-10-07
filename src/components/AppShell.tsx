@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { inkOn, money, tint } from '../lib/format'
-import { SCREENS, useGame, useWorld, type ScreenId } from '../store/gameStore'
+import { SCREENS, useGame, useWorld, userCtx, type ScreenId } from '../store/gameStore'
 import { tierFor } from '../game/engine/career'
 import { accessFor } from '../game/engine/access'
 import { AccessBadge } from './AccessBadge'
@@ -202,6 +202,8 @@ export function TopBar() {
   const activeTeamId = useGame((s) => s.activeTeamId)
   const career = useGame((s) => s.career)
   const advanceWeek = useGame((s) => s.advanceWeek)
+  const startGameDay = useGame((s) => s.startGameDay)
+  const gameDay = useGame((s) => s.gameDay)
   const setScreen = useGame((s) => s.setScreen)
   const screen = useGame((s) => s.screen)
   const leaguePbp = useGame((s) => s.leaguePbp)
@@ -221,6 +223,14 @@ export function TopBar() {
   }, [league, activeTeamId, career, team.tier])
 
   const opp = next ? league.byId[next.opponentId] : null
+  const canCoach =
+    !!career &&
+    !gameDay &&
+    league.phase === 'regular' &&
+    !!userCtx(career) &&
+    league.schedule.some(
+      (g) => !g.played && g.week === league.week && (g.homeId === career.teamId || g.awayId === career.teamId),
+    )
 
   return (
     <header
@@ -281,10 +291,21 @@ export function TopBar() {
         <Activity size={13} /> {leaguePbp ? 'Authentic Sim' : 'Fast Sim'}
       </button>
 
+      {canCoach && (
+        <Button
+          variant="primary"
+          className="!border !border-white/40 !bg-black/20 !text-white hover:!bg-black/30"
+          onClick={startGameDay}
+          title="Coach this week's game moment by moment"
+        >
+          Coach the game
+        </Button>
+      )}
+
       <Button
         variant="primary"
         className="!bg-white !text-ink hover:!bg-white/90"
-        onClick={advanceWeek}
+        onClick={() => void advanceWeek()}
       >
         {league.phase === 'offseason'
           ? 'Start Next Season ▸'

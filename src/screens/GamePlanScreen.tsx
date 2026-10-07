@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { ClipboardList, Repeat } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { describePlan, type GamePlan } from '../game/engine/gameplan'
+import { DEFAULT_CALL_SHEET, type CallSheet, type FourthStyle } from '../game/engine/decisions'
+import { capabilities } from '../game/engine/capabilities'
 import { PlanEditor } from '../components/PlanEditor'
 import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
@@ -42,7 +44,7 @@ export function GamePlanScreen() {
       <PageHeader
         eyebrow={`${team.tier === 'NFL' ? `${team.conference} ${team.division}` : team.conference} · Week ${league.week}`}
         title="Game Plan"
-        subtitle="Set how you want to play before kickoff. Your plan is applied to every game until you change it — and you can adjust it live from the match view."
+        subtitle="Set how you want to play before kickoff. Your plan is applied to every game until you change it — fast sim plays it out with your standing orders."
         right={
           <div className="flex rounded-lg bg-surface-2 p-0.5">
             {(['off', 'def'] as const).map((s) => (
@@ -77,6 +79,7 @@ export function GamePlanScreen() {
           <SchemeFitReport teamId={team.id} side={side} />
           {canWrinkle(career) && <WrinkleCard />}
           <InstallCard />
+          <CallSheetCard />
           <CulturePanel teamId={team.id} />
         </div>
 
@@ -138,13 +141,106 @@ export function GamePlanScreen() {
             <div className="flex items-start gap-2 text-xs leading-relaxed text-muted">
               <Repeat size={14} className="mt-0.5 shrink-0" />
               <span>
-                Plans are saved and reused every week. During a game, open the match view to
-                change them live — the sim re-runs instantly so you can see the effect before
-                you finish the game.
+                Plans are saved and reused every week. When a game kicks off, “Coach the game”
+                pauses at the big moments so you can make the call — otherwise fast sim answers
+                them with these standing orders.
               </span>
             </div>
           </Card>
         </div>
+      </div>
+    </div>
+  )
+}
+
+const FOURTH_HINT: Record<FourthStyle, string> = {
+  conservative: 'Goes for it only on 4th & 1 past midfield.',
+  standard: 'Takes the best expected value — goes for it on 4th & short.',
+  aggressive: 'Goes for it on 4th & 6 or less when the numbers are close.',
+}
+
+function CallSheetCard() {
+  const career = useGame((s) => s.career)!
+  const setCallSheet = useGame((s) => s.setCallSheet)
+  const scope = capabilities(career).planScope
+  if (scope === 'none') return null
+  const sheet: CallSheet = career.callSheet ?? DEFAULT_CALL_SHEET
+  return (
+    <Card>
+      <div className="mb-3 flex items-center gap-2">
+        <ClipboardList size={16} className="text-muted" />
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Call Sheet</h3>
+      </div>
+      {scope === 'own-side' ? (
+        <p className="text-sm text-muted">4th downs and 2-point tries belong to the head coach.</p>
+      ) : (
+        <div className="space-y-3">
+          <CallSheetRow
+            label="4th down"
+            value={sheet.fourth}
+            onChange={(fourth) => setCallSheet({ ...sheet, fourth })}
+            options={(['conservative', 'standard', 'aggressive'] as FourthStyle[]).map((id) => ({
+              id,
+              label: id[0].toUpperCase() + id.slice(1),
+              hint: FOURTH_HINT[id],
+            }))}
+          />
+          <CallSheetRow
+            label="2-point tries"
+            value={sheet.twoPoint}
+            onChange={(twoPoint) => setCallSheet({ ...sheet, twoPoint })}
+            options={[
+              { id: 'chart', label: 'Chart', hint: 'Follow the chart by score and quarter.' },
+              { id: 'kick', label: 'Always kick', hint: 'Always take the extra point.' },
+            ]}
+          />
+          <CallSheetRow
+            label="Timeouts"
+            value={sheet.timeouts}
+            onChange={(timeouts) => setCallSheet({ ...sheet, timeouts })}
+            options={[
+              { id: 'save', label: 'Save', hint: 'Hold them for the end of the half.' },
+              { id: 'aggressive', label: 'Use aggressively', hint: 'Stop the clock when you need the ball.' },
+            ]}
+          />
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function CallSheetRow<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: { id: T; label: string; hint: string }[]
+  onChange: (v: T) => void
+}) {
+  return (
+    <div>
+      <div className="label mb-1">{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            className={cn(
+              'rounded-lg border px-3 py-1.5 text-left transition',
+              value === o.id
+                ? 'border-[var(--team)] bg-[var(--team-soft)]'
+                : 'border-line bg-surface-2 hover:border-line-strong',
+            )}
+          >
+            <div className={cn('font-cond text-xs font-700 uppercase tracking-wide', value === o.id ? 'text-ink' : 'text-muted')}>
+              {o.label}
+            </div>
+            <div className="text-[10px] leading-snug text-muted">{o.hint}</div>
+          </button>
+        ))}
       </div>
     </div>
   )

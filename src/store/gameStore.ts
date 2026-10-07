@@ -10,8 +10,8 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
-import { simulatePlayByPlay, createGame, runToMoment, answerMoment, finishGame, setUserCoaching, setLivePlan, type GameSim, type GameCtx } from '../game/engine/playsim'
-import { DEFAULT_CALL_SHEET } from '../game/engine/decisions'
+import { simulatePlayByPlay, createGame, runToMoment, answerMoment, finishGame, setUserCoaching, setLivePlan, type GameSim, type GameCtx, type GameState, type Moment } from '../game/engine/playsim'
+import { DEFAULT_CALL_SHEET, type CallSheet } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, userBonusFromSkills } from '../game/engine/coaching'
 import {
@@ -51,6 +51,7 @@ import { counterOffer } from '../game/engine/counter'
 import { rivalFor } from '../game/engine/rivalry'
 import { recordGameStats, boxScore, recordBoxLines, boxPlayerLines, boxTeamTotals } from '../game/engine/stats'
 import { simLeagueGames } from '../game/engine/leagueSim'
+import { gradeGame } from '../game/engine/film'
 import {
   developPlayers,
   evaluateScouting,
@@ -200,11 +201,11 @@ export const SCREENS: ScreenMeta[] = [
 
 export const MAX_SCOUT_POINTS = 6
 
-/** A game being managed live: we keep the game id and re-simulate deterministically. */
-export interface LiveGame {
+/** A game being coached play by play: the resumable sim plus the pending moment. */
+export interface GameDay {
   gameId: string
-  off: GamePlan
-  def: GamePlan
+  state: GameState
+  moment: Moment | null
 }
 
 let world: World = buildWorld(20261004)
@@ -349,15 +350,21 @@ interface GameStore {
   /** Set when the last load recovered from a problem (shown on the hub). */
   saveError: string | null
   match: GameSim | null
+  /** Bumped whenever a fresh replay opens, so the match view resets its playback. */
+  matchSeq: number
+  /** The user's game in progress, coached moment by moment (not persisted). */
+  gameDay: GameDay | null
+  startGameDay: () => void
+  answerGameMoment: (choiceId: string) => Promise<void>
+  simGameDayToEnd: () => Promise<void>
+  abandonGameDay: () => void
   statsDb: () => CareerDatabase
-  liveGame: LiveGame | null
-  startLiveGame: () => void
   setPlan: (side: 'off' | 'def', plan: GamePlan) => void
-  simLiveChunk: () => void
-  finishLiveGame: () => void
   /** Saved pre-game plan, applied every week. */
   defaultPlan: { off: GamePlan; def: GamePlan }
   setDefaultPlan: (side: 'off' | 'def', plan: GamePlan) => void
+  /** L10 G4: the user's 4th-down / 2-point / timeout call sheet. */
+  setCallSheet: (sheet: CallSheet) => void
   /** Opt-in: run the whole league's games through true play-by-play (Web Worker). */
   leaguePbp: boolean
   setLeaguePbp: (v: boolean) => void
@@ -372,7 +379,7 @@ interface GameStore {
   resetDepthChart: () => void
   startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId }) => void
   resetCareer: () => void
-  advanceWeek: () => void
+  advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
   startNextSeason: () => void
   dismissModal: () => void
   /** Resume the validated save held by the career hub. */
@@ -491,7 +498,8 @@ export const useGame = create<GameStore>((set, get) => ({
   saveInfo: null,
   saveError: null,
   match: null,
-  liveGame: null,
+  matchSeq: 0,
+  gameDay: null,
   defaultPlan: { off: { ...BALANCED_PLAN }, def: { ...BALANCED_PLAN } },
   leaguePbp: false,
 
@@ -602,9 +610,11 @@ export const useGame = create<GameStore>((set, get) => ({
     set({ career: null, screen: 'career', tick: get().tick + 1, summary: null, modal: 'none', offers: [], match: null, pendingSave: null, saveInfo: null, saveError: null })
   },
 
-  advanceWeek: async () => {
+  advanceWeek: async (opts) => {
     const career = get().career
     if (!career) return
+    // While a coached game is in progress, only its own finish may advance the week.
+    if (get().gameDay && !opts?.userSim) return
     if (world.phase === 'offseason') {
       get().startNextSeason()
       return
@@ -633,7 +643,9 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     let sim: GameSim | null = null
     if (userGame) {
-      sim = simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101)
+      // G3: a coached game hands us its finished result; fast sim answers every
+      // moment with the user's standing orders.
+      sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101, userCtx(career))
       finalizeGame(world, userGame, sim.homeScore, sim.awayScore)
       // Record career stats for both teams' players (college or pro).
       const level = world.byId[userGame.homeId].tier === 'NFL' ? 'NFL' : 'CFB'
@@ -642,6 +654,13 @@ export const useGame = create<GameStore>((set, get) => ({
       userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
       growPlaybookFromGame(world, sim)
+      // L10 G5: grade the user's fourth-down and two-point calls; keep the film
+      // on the game (one season, cleared with the box).
+      const film = gradeGame(world, sim, career.teamId)
+      if (film) {
+        userGame.film = film
+        sim.film = film
+      }
     }
     // K1: fold this week's wrinkles into the film history, then clear the pick.
     if (career.wrinkles?.pick && career.wrinkles.pick.week === week) {
@@ -737,7 +756,7 @@ export const useGame = create<GameStore>((set, get) => ({
         })
       }
     }
-    set({ career: nextCareer, match: sim, tick: get().tick + 1 })
+    set({ career: nextCareer, match: sim, matchSeq: get().matchSeq + 1, tick: get().tick + 1 })
     setLivePlan(null)
     get().save()
   },
@@ -752,54 +771,65 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101)
     sim.box = boxScore(world, sim)
-    set({ match: sim, tick: get().tick + 1 })  },
+    sim.film = game.film
+    set({ match: sim, matchSeq: get().matchSeq + 1, tick: get().tick + 1 })
+  },
   closeMatch: () => set({ match: null }),
 
-  startLiveGame: () => {
+  startGameDay: () => {
     const career = get().career
     if (!career) return
+    const ctx = userCtx(career)
+    if (!ctx) return
+    const week = world.week
+    const game = world.schedule.find(
+      (g) => !g.played && g.week === week && (g.homeId === career.teamId || g.awayId === career.teamId),
+    )
+    if (!game) return
     const { off, def } = get().defaultPlan
-    set({ modal: 'none', summary: null, tick: get().tick + 1 })
-    // Re-sim the user's current-week game under live control.
-    startLiveSim(get, set, off, def)
+    setLivePlan({ teamId: career.teamId, off, def })
+    applyUserCoaching(career)
+    const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, ctx)
+    const moment = runToMoment(world, state)
+    set({
+      gameDay: { gameId: game.id, state, moment },
+      match: finishGame(state),
+      matchSeq: get().matchSeq + 1,
+      tick: get().tick + 1,
+    })
+    // A game with no user moment left to call (e.g. the caps were spent) is
+    // already over — record it straight away on standing orders.
+    if (!moment) void get().simGameDayToEnd()
+  },
+
+  answerGameMoment: async (choiceId) => {
+    const gd = get().gameDay
+    if (!gd) return
+    answerMoment(gd.state, choiceId)
+    await resolveGameDay(set, get)
+  },
+
+  simGameDayToEnd: async () => {
+    const gd = get().gameDay
+    if (!gd) return
+    // Answer the pending moment, then every remaining one, on standing orders.
+    let m = gd.state.pending ?? runToMoment(world, gd.state)
+    while (m) {
+      answerMoment(gd.state, m.defaultId, 'standing')
+      m = runToMoment(world, gd.state)
+    }
+    await resolveGameDay(set, get)
+  },
+
+  abandonGameDay: () => {
+    // Nothing is recorded — the week is exactly as it was before kickoff.
+    setLivePlan(null)
+    set({ gameDay: null, match: null, tick: get().tick + 1 })
   },
 
   setPlan: (side, plan) => {
-    const lg = get().liveGame
-    if (!lg) return
-    const next = { ...lg, [side]: plan } as LiveGame
-    set({ liveGame: next })
-    startLiveSim(get, set, next.off, next.def)
-  },
-
-  simLiveChunk: () => {
-    // With deterministic full-game sim, "advance" just re-simulates; kept for UI parity.
-    const lg = get().liveGame
-    if (!lg) return
-    startLiveSim(get, set, lg.off, lg.def)
-  },
-
-  finishLiveGame: () => {
-    const lg = get().liveGame
-    const career = get().career
-    if (!lg || !career) return
-    const game = world.schedule.find((g) => g.id === lg.gameId)
-    if (!game) return
-    // Finalise the game with the managed result and record stats.
-    const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101)
-    finalizeGame(world, game, sim.homeScore, sim.awayScore)
-    const level = world.byId[game.homeId]?.tier === 'NFL' ? 'NFL' : 'CFB'
-    sim.box = boxScore(world, sim)
-    recordGameStats(world, sim, world.season, level)
-    const c = get().career!
-    set({
-      career: { ...c, week: world.week, season: world.season },
-      match: sim,
-      liveGame: null,
-      tick: get().tick + 1,
-    })
-    get().showToast('Game finished. Your plan is on the record.')
-    get().save()
+    // The old live path re-simulated the game; now this only edits the saved plan.
+    get().setDefaultPlan(side, plan)
   },
 
   setDefaultPlan: (side, plan) => {
@@ -809,6 +839,13 @@ export const useGame = create<GameStore>((set, get) => ({
       career: career ? withFlag(career, 'gameplan') : career,
       tick: get().tick + 1,
     })
+    get().save()
+  },
+
+  setCallSheet: (sheet) => {
+    const career = get().career
+    if (!career) return
+    set({ career: { ...career, callSheet: sheet }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -822,7 +859,10 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career) return
     if (world.phase !== 'offseason') return
     // R4: box scores are kept for one season only.
-    for (const g of world.schedule) delete g.box
+    for (const g of world.schedule) {
+      delete g.box
+      delete g.film
+    }
     if (!world.draftState.complete) {
       simulateRestOfDraft(world, career)
       runUDFAs(world)
@@ -1918,33 +1958,42 @@ function applyUserCoaching(career: CareerState | null) {
 }
 
 /**
- * Live game driver: re-simulate the user's current-week game with the chosen
- * plan applied. The sim is deterministic, so changing a dial immediately shows
- * how the game plays out under those calls.
+ * The user's per-game context from their career: `planScope` decides whether
+ * they call moments at all, and `unitFocus` narrows a coordinator to one side.
  */
-function startLiveSim(
-  get: () => GameStore,
+export function userCtx(career: CareerState | null): GameCtx | undefined {
+  if (!career) return undefined
+  const scope = capabilities(career).planScope
+  if (scope === 'none') return undefined
+  const callSheet = career.callSheet ?? DEFAULT_CALL_SHEET
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet }
+  const focus = career.unitFocus ?? 'both'
+  return {
+    userTeamId: career.teamId,
+    scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
+    callSheet,
+  }
+}
+
+/**
+ * Advance the game-day sim to its next moment, or — once the game is over —
+ * record the finished result through `advanceWeek` as the user's game.
+ */
+async function resolveGameDay(
   set: (p: Partial<GameStore>) => void,
-  off: GamePlan,
-  def: GamePlan,
+  get: () => GameStore,
 ) {
-  const career = get().career
-  if (!career) return
-  const game = world.schedule.find(
-    (g) => !g.played && g.week === world.week && (g.homeId === career.teamId || g.awayId === career.teamId),
-  )
-  if (!game) return
-  // The live path runs the same coaching edges as a normal advance.
-  applyUserCoaching(career)
-  setLivePlan({
-    teamId: career.teamId,
-    off,
-    def,
-  })
-  const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101)
-  sim.box = boxScore(world, sim)
+  const gd = get().gameDay
+  if (!gd) return
+  const moment = runToMoment(world, gd.state)
+  if (moment) {
+    set({ gameDay: { ...gd, moment }, match: finishGame(gd.state), tick: get().tick + 1 })
+    return
+  }
+  const sim = finishGame(gd.state)
   setLivePlan(null)
-  set({ liveGame: { gameId: game.id, off, def }, match: sim, tick: get().tick + 1 })
+  set({ gameDay: null, match: sim, tick: get().tick + 1 })
+  await get().advanceWeek({ userSim: sim })
 }
 
 /**
@@ -2639,6 +2688,34 @@ function runEndOfRegularSeason(
           category: 'Career',
           headline: `You were named ${a.award}`,
           body: `${a.award} for the ${world.season} season. ${a.line}`,
+        })
+      }
+    }
+  }
+
+  // ── L10 G5: reward a season of sound in-game calls (once, within the cap) ────
+  if (careerNext) {
+    const seasonTeam = career?.teamId ?? careerNext.teamId
+    // Only games you actually coached (at least one call made in the moment)
+    // count, and it takes a real sample: fast-simmed standing orders earn nothing.
+    const filmGames = world.schedule.filter(
+      (g) => g.played && g.film && (g.film.userCalls ?? 0) > 0 && (g.homeId === seasonTeam || g.awayId === seasonTeam),
+    )
+    if (filmGames.length >= 4) {
+      const avg = filmGames.reduce((s, g) => s + (g.film?.grade ?? 0), 0) / filmGames.length
+      const bonus = avg >= 90 ? 2 : avg >= 85 ? 1 : 0
+      if (bonus > 0) {
+        careerNext = {
+          ...careerNext,
+          reputation: {
+            ...careerNext.reputation,
+            leadership: clamp(careerNext.reputation.leadership + bonus, 0, 100),
+          },
+        }
+        careerNext = logMoment(careerNext, {
+          week: careerNext.week,
+          text: `Your film grade averaged ${avg.toFixed(1)} — the staff learned from your calls (leadership +${bonus}).`,
+          tone: 'win',
         })
       }
     }

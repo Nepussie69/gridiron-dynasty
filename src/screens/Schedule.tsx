@@ -108,6 +108,19 @@ export function Schedule() {
             </button>
             <div className="mb-3">
               <span className="label">Box Score · Week {boxGame.week}</span>
+              {boxGame.film && (
+                <div className="mt-1.5 text-sm text-ink-2">
+                  Film grade: <strong className="font-700 text-ink">{boxGame.film.letter}</strong>
+                  <span className="text-muted"> ({boxGame.film.grade}/100)</span>
+                  {boxGame.film.lines.length > 0 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {boxGame.film.lines.map((l, i) => (
+                        <li key={i} className="text-[11px] text-muted">• {l}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
             </div>
             <div className="mb-3 grid grid-cols-2 gap-3">
               <TeamTotals name={league.byId[boxGame.awayId].name} t={boxGame.box.team[boxGame.awayId] ?? EMPTY_TOTALS} />

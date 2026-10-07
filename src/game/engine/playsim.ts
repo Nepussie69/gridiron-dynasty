@@ -94,6 +94,8 @@ export interface GameSim {
   generated?: boolean
   /** G1: every decision the user's club made this game. */
   decisions?: DecisionLog[]
+  /** L10 G5: film grade of the user's calls, for the post-game view. */
+  film?: { grade: number; letter: string; lines: string[]; userCalls?: number }
   homeLines?: { playerId: string; line: import('../types').GameStatLine }[]
   awayLines?: { playerId: string; line: import('../types').GameStatLine }[]
 }
@@ -596,6 +598,8 @@ export interface GameState {
   phase: 'play' | 'try' | 'halftime'
   pending: Moment | null
   answers: Record<string, string>
+  /** Moments answered on standing orders (Sim to end / fast sim) rather than by the user. */
+  autoAnswered?: Record<string, true>
   momentsUsed: number
   kindUsed: Partial<Record<MomentKind, number>>
   decisions: DecisionLog[]
@@ -669,7 +673,7 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
   const id = `${spec.kind}-${s.plays.length}`
   const isUser = !!s.ctx && spec.teamId === s.ctx.userTeamId
   if (isUser && s.answers[id]) {
-    logDecision(s, id, spec, s.answers[id], 'user')
+    logDecision(s, id, spec, s.answers[id], s.autoAnswered?.[id] ? 'standing' : 'user')
     return s.answers[id]
   }
   const canAsk = isUser && s.ctx!.scope === 'hc' && spec.ask &&
@@ -1052,11 +1056,12 @@ export function runToMoment(world: World, s: GameState): Moment | null {
 }
 
 /** Record the user's answer for state.pending (must be one of its option ids). */
-export function answerMoment(s: GameState, choiceId: string): void {
+export function answerMoment(s: GameState, choiceId: string, source: 'user' | 'standing' = 'user'): void {
   const m = s.pending
   if (!m) return
   if (!m.options.some((o) => o.id === choiceId)) return
   s.answers[m.id] = choiceId
+  if (source === 'standing') (s.autoAnswered ??= {})[m.id] = true
   s.pending = null
 }
 
@@ -1074,6 +1079,6 @@ export function finishGame(s: GameState): GameSim {
 
 export function simulatePlayByPlay(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx): GameSim {
   const s = createGame(world, homeId, awayId, seed, ctx)
-  for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId)
+  for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId, 'standing')
   return finishGame(s)
 }
