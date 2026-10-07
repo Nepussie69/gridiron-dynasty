@@ -6,7 +6,7 @@
 // play log with enough geometry for the 2D top-down match viewer.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Player, Position } from '../types'
+import type { Player, Position, MatchupSet, UsageSet } from '../types'
 import { attributesFor } from '../data/ratings'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
 import { coachEffect } from './coaching'
@@ -513,6 +513,11 @@ interface SimEnv {
   qbOverride: Record<string, string>
   down: number
   intMult: number
+  /** L10 G11/G12: current quarter, the user's club, and their matchup/usage settings. */
+  qtr: number
+  userTeamId?: string
+  matchups?: MatchupSet
+  usage?: UsageSet
 }
 
 function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
@@ -522,8 +527,18 @@ function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
+  // L10 G11/G12: matchup and workload effects apply to the user's club only, so
+  // AI-vs-AI snaps never see them.
+  const userTeamId = env?.userTeamId
+  const userOff = !!userTeamId && userTeamId === offId
+  const userDef = !!userTeamId && userTeamId === defId
+  const offMove = userOff ? env?.matchups?.off : undefined
+  const defMove = userDef ? env?.matchups?.def : undefined
+  const usage = env?.usage
   const qb = topGroup(world, offId, ['QB'], 1, env?.qbOverride)[0]
-  const wrs = topGroup(world, offId, ['WR', 'TE'], 4)
+  // G11 doubleRusher: chipping the best rusher also keeps a back in to block,
+  // so the target pool drops to the top three receivers.
+  const wrs = topGroup(world, offId, ['WR', 'TE'], offMove === 'doubleRusher' ? 3 : 4)
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const rb = topGroup(world, offId, ['RB'], 1)[0]
   const dl = topGroup(world, defId, ['DE', 'DT'], 4)
@@ -536,7 +551,24 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const qbA = qb ? mkAttrs(qb) : {}
   const qbStyle = qb ? styleProfile(qb) : styleProfile({ traits: [''] } as Player)
   const qbFit = qb ? schemeFit(qb, ocScheme, 'OFF') : 0.5
-  const pressure = avg(dl.map((p) => Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70)))
+  const pressureVals = dl.map((p) => Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70))
+  // G11 doubleRusher: chip their best rusher — he counts at half.
+  if (offMove === 'doubleRusher' && pressureVals.length) {
+    let best = 0
+    for (let i = 1; i < pressureVals.length; i++) if (pressureVals[i] > pressureVals[best]) best = i
+    pressureVals[best] *= 0.5
+  }
+  let pressure = avg(pressureVals)
+  // G11 spyQB spends a rusher (−4); G12 DL rotation trades pressure by quarter.
+  if (defMove === 'spyQB') pressure -= 4
+  if (usage && userDef) {
+    const q4 = (env?.qtr ?? 0) >= 4
+    if (usage.dl === 'starters') {
+      if (q4) pressure -= 3
+    } else if (usage.dl === 'rotate') {
+      pressure += q4 ? 1.5 : -1.5
+    }
+  }
   const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70))
   const defPlan = planFor(defId, 'def')
   // G6 third-down heat: extra blitz on the opponent's 3rd downs.
@@ -579,9 +611,23 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     (tA.SPD ?? 70) * 0.3 +
     (tA.AGI ?? 70) * 0.2 +
     tStyle.deepBias * (concept.depth >= 12 ? 6 : -2)
-  const coverSkill =
-    dStyle.manCoverage * avg(cbs.map((p) => mkAttrs(p).MCV ?? 70)) +
-    (1 - dStyle.manCoverage) * avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
+  const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
+  const zoneCov = avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
+  // G11 targetWeakCB: on 35% of passes the coverage keys their weakest corner
+  // (and the safety help raises the interception risk on those throws).
+  let manCov = avg(cbMcv)
+  let weakCb = false
+  if (offMove === 'targetWeakCB' && cbMcv.length) {
+    weakCb = rng() < 0.35
+    if (weakCb) manCov = Math.min(...cbMcv)
+  }
+  let coverSkill = dStyle.manCoverage * manCov + (1 - dStyle.manCoverage) * zoneCov
+  // G11 shadowWR1: your CB1 trails their WR1; help over the top on everyone else.
+  if (defMove === 'shadowWR1') {
+    const wr1 = topGroup(world, offId, ['WR'], 1)[0]
+    if (wr1 && target && target.id === wr1.id) coverSkill = (cbMcv.length ? cbMcv[0] : 70) * 1.05
+    else coverSkill *= 0.96
+  }
   const planOverrides = applyDefPlan(defId, dStyle)
   // G6 fixes: load-the-box loosens coverage; two-deep gives up the underneath but
   // caps explosives; third-down heat concedes more explosives on 3rd down.
@@ -592,14 +638,16 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
   const offPassBias = planFor(offId, 'off')?.passBias ?? 0
   const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) : 0
-  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5
+  // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
+  const spyPenalty = defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
+  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5 - spyPenalty
 
   // Completion probability based on real league rate vs. this matchup. Coordinator
   // quality shifts it: a great OC helps, a great DC hurts.
   const coachShift = (ocEff.offEdge - dcEff.defEdge) * 0.003
   const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) : 0
   let compProb = clamp(
-    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012,
+    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012,
     0.42,
     0.74,
   )
@@ -608,7 +656,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   if (hasFix(env, offId, 'quickGame') && concept.depth <= 8) compProb = clamp(compProb + 0.03, 0.42, 0.74)
   if (hasFix(env, offId, 'maxProtect') && concept.depth >= 12) compProb = clamp(compProb - 0.03, 0.42, 0.74)
   // G7 hurry: a faster offense forces riskier throws.
-  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1), 0.005, 0.06)
+  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1), 0.005, 0.06)
 
   if (rng() < intProb) {
     const ballHawk = [...cbs, ...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
@@ -642,6 +690,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
+  // L10 G11/G12: matchup and workload effects apply to the user's club only.
+  const userTeamId = env?.userTeamId
+  const userOff = !!userTeamId && userTeamId === offId
+  const userDef = !!userTeamId && userTeamId === defId
+  const defMove = userDef ? env?.matchups?.def : undefined
+  const usage = env?.usage
   const rb = topGroup(world, offId, ['RB'], 2)
   void dcEff
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
@@ -649,7 +703,18 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const lbs = topGroup(world, defId, ['LB'], 3)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
-  const carrier = rb[0]
+  // G12 RB workload. 'normal' is exactly what AI clubs do (RB1 carries, no extra
+  // risk). 'feature' rides RB1 harder (+1 edge, injury risk after the game);
+  // 'committee' gives RB2 40% of the carries so RB1 is fresh in the 4th (+1 there).
+  let carrier = rb[0]
+  let runEdgeBonus = 0
+  if (userOff && usage) {
+    if (usage.rb === 'feature') runEdgeBonus = 1
+    else if (usage.rb === 'committee') {
+      if (rb[1] && rng() < 0.4) carrier = rb[1]
+      else if ((env?.qtr ?? 1) >= 4) runEdgeBonus = 1
+    }
+  }
   const cA = carrier ? mkAttrs(carrier) : {}
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
@@ -674,7 +739,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const boxLight = Math.max(0, offPassBiasRun) * 1.8
   // G6 quick game: throwing it quick comes at the expense of the run game.
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + (call?.edge ?? 0) * 1.6
+  // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
+  const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + (call?.edge ?? 0) * 1.6
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -779,6 +846,10 @@ export interface GameCtx {
   scriptEdgeMult?: number
   /** G8: the opponent film read purchased this week. */
   oppRead?: { week: number; oppId: string; sharp: boolean }
+  /** L10 G11: the user's matchup assignments for this game. */
+  matchups?: MatchupSet
+  /** L10 G12: the user's workload / rotation settings for this game. */
+  usage?: UsageSet
 }
 export interface GameState {
   rng: Rng
@@ -1155,7 +1226,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1 }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage }
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */

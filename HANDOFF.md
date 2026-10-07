@@ -211,6 +211,20 @@ game's guardrails intact.
   - R7 **Sortable roster** — `PlayerTable.tsx` headers cycle asc → desc → default with ▲/▼ (Player, Age, OVR, POT, Dev, Playbook %, Cap Hit, Dead $, Yrs, Fit), mirroring `DataTable`'s `sortValue`; local state. ✅ done.
   - R8 **Fit for defenders** — `fitLabel(player, scheme, side)` now passes side to `schemeFit` so DEF uses `DEF_FIT`; `FitBadge` and `PlayerProfile` pass the player's side; Roster already passes the DC scheme as `defScheme`. ✅ done.
 
+- **L10 "Game day" DONE** (F1–F2, G1–G13; spec `NEXT_PHASE_L10.md`; build green, lint = 5 baseline warnings):
+  - F1 **Sack stat fix** — `TeamGameStats.sacksTaken`; `sacks` now means sacks made by that team's defense (no more double-counting).
+  - F2 **Defensive plan rework** — plan bends only the explosive part of a play, stacking the box stops the run, blitz adds pressure; a pass-lean tax keeps one offense preset from dominating; `__planMatrix` probe.
+  - G1 **Resumable sim** — `createGame` / `runToMoment` / `answerMoment` / `finishGame` step machine; every moment is checked at the **start** of a step, before any `rng()` draw; `__gameDayEquivalence` answers every moment with its `defaultId` and matches fast sim n/n.
+  - G2 **decisions.ts** — 4th-down EV + style choice, 2-point chart, timeout sheet, `aiCallSheet`, `DEFAULT_CALL_SHEET`; wired into the step machine.
+  - G3 **Game Day flow** — store `gameDay` session + `startGameDay` / `answerGameMoment` / `simGameDayToEnd` / `abandonGameDay`; Moment card in `MatchView.tsx`.
+  - G4 **Call-sheet editor** + G5 **`film.ts` `gradeGame`** (4th-down / 2-point) + season reward.
+  - G6 **Halftime adjustments + QB change**; G7 **two-minute drill, timeouts, clock moment**.
+  - G8 **Tendency books, opponent-film scouting, self-scout panel**; G9 **play-call cards + zero-sum call matrix** (user calls only); G10 **opening script**.
+  - G11 **Matchup assignments** — `CareerState.matchups` (`doubleRusher` / `targetWeakCB` / `shadowWR1` / `spyQB`), Game Plan card. Effects apply to the user's club only.
+  - G12 **Workload and DL rotation** — `CareerState.usage` (`rb: normal | feature | committee`, `dl: starters | rotate`), Game Plan card; a seeded, in-place RB1 injury roll after the user's game.
+  - G13 **Film grade part 2** (call/defCall, halftime improvement, two-minute drive, timeouts, QB switch) + `__decisionProbe`.
+  - Key files: `src/game/engine/playsim.ts`, `src/game/engine/decisions.ts`, `src/game/engine/film.ts`, `src/store/gameStore.ts`, `src/screens/GamePlanScreen.tsx`, `src/components/MatchView.tsx`; probes `__gameDayEquivalence`, `__planMatrix`, `__clockProbe`, `__decisionProbe`.
+
 ## In progress
 - **L9.5** — ✅ R1–R8 done and verified (P1 e5dba86, P2 7842153, P3 committed after them).
 

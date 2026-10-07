@@ -20,7 +20,7 @@ Use **`~/.claude/bin/ds-push <prompt-file> [label]`** (added 2026-10-06). It run
 - a retry prepends a note telling Flash to inspect `git status`/`git diff` first and continue without redoing work;
 - status lines start with `[push]` (follow them with a Monitor); the per-try event logs are `$PUSH_LOG_DIR` (default `$TMPDIR/ds-push`)`/<label>.tryN.jsonl`; at the end it prints Flash's final report. Exit 3 = gave up.
 - Env overrides: `STARTUP`, `IDLE`, `HARD`, `MAX_TRIES`, `DS_ROUTE` (model).
-Run it with Bash `run_in_background: true`.
+Run it with Bash `run_in_background: true`. It retries on hangs AND on provider/connection errors (e.g. `ECONNRESET`), up to 3 tries.
 **Hang root cause (found 2026-10-06):** `opencode run` reads extra prompt text from **stdin** when stdin isn't a TTY. Launched from a background shell, it can inherit a pipe/socket that never closes,
 so it blocks forever *before contacting the server* (0% CPU, no log line after "cli starting", no session created). Proven: with a never-closing stdin pipe it hangs every time; with `< /dev/null` it answers in seconds.
 **Fix:** both `ds` and `ds-push` now launch with `< /dev/null`. Any other way of calling `opencode run` from a script must do the same. `--standalone` was a red herring (now opt-in via `STANDALONE=1`).
@@ -34,6 +34,8 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 > long-running/watch command. Obey the DO NOT list (no git commands, …, do not edit any NEXT_PHASE*.md). Do NOT start <next task> or later. Finish with a short per-task report.
 
 ## 2. Verifying in the browser pane
+- **Wait for real data:** after a page load, wait ~5 s and check `__world().roster.BAL` has real names (e.g. Lamar Jackson) before trusting `__simTest`; otherwise you measure the placeholder world (~29–30 pts).
+- **Balance comparisons need 500+ games**: one tiny change diverges a whole game, so 120-game deltas carry ±1.8 pts of noise.
 - The dev server runs from the user's terminal at **http://127.0.0.1:5173** (Node at `~/.local/node`). `.claude/launch.json` exists but port 5173 is the user's server, so just `navigate` to it.
 - The browser pane has **separate storage** from the user's Chrome, so test careers there never touch the user's saves.
 - Dev globals: `__game` (zustand store: `__game.getState().startCareer({name,path,archetype,teamId,seed,startLevel,scenarioId})`, `advanceWeek()` (async), `finishDraft()`, …),
@@ -57,12 +59,12 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | L8 Staff room (weekly wrinkle, install plan, starter pitch, red flag) | NEXT_PHASE_L8.md | ✅ | 9f4e40d |
 | **L9 The long game** | NEXT_PHASE_L9.md | **✅ all pushes (P3 verified)** | see git log |
 | **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | ✅ all 3 pushes | see git log |
-| **L10 Game day** | NEXT_PHASE_L10.md | in progress (see its table) | see git log |
+| **L10 Game day** | NEXT_PHASE_L10.md | ✅ all 5 pushes | see git log |
 
 ### Immediate next steps
 1. **L9.5 is done.** Nothing is in flight.
 
-2. **L10 Game day** (all 10 ideas approved 2026-10-07, plus the sack-stat bug F1 and the Bend-Don't-Break dominance fix F2): spec **`NEXT_PHASE_L10.md`**, 5 pushes. Check its progress table for where it stands.
+2. **L10 Game day is done** (all 10 coaching ideas + sack fix + plan rebalance). Next phase: ask the user.
 
 ## 4. Pacing & balance (current, measured on committed code)
 - Personnel → GM: seeds 20261004 13 · 2222 8 · 33333 8 · 5150 10 · 777 9 · 111 17 (a weak-roster outlier). Coach → HC ~10–11.

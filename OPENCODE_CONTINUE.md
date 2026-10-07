@@ -13,16 +13,14 @@ You plan, verify and commit. You can implement small pushes yourself, or delegat
 | L9.5 P1 (R1 game-plan wiring bug, R2 one side per plan) | ✅ `e5dba86` |
 | L9.5 P2 (R3 team ratings, R4 box scores) | ✅ `7842153` |
 | L9.5 P3 (R5 staff role tabs, R6 staff budget, R7 sortable roster, R8 Fit fix for defenders) | ✅ committed (Claude verified it in the browser on 2026-10-07) |
-| **L10 Game day** (`NEXT_PHASE_L10.md`, 5 pushes) | P1 ✅ committed; see the spec's progress table for later pushes |
+| **L10 Game day** (`NEXT_PHASE_L10.md`, 5 pushes) | ✅ all committed |
 
 ## Step 1: done
 L9.5 is complete and committed. Nothing is waiting for review.
 
 ## Next
-- **Continue L10** from its progress table: send the next push (`P2 = G3, G4, G5`, then P3–P5) with `~/.claude/bin/ds-push <prompt-file> <label>`; verify each the same way
-  (build, lint 5, diff review, and for in-game checks give the user console snippets: `__gameDayEquivalence(20)` must be n/n, `__simTest(200,'NFL')` within the spec's band,
-  `__planMatrix`, `__careerSmoke(6,'coach')`), then commit.
-- The sack bug and the soft-zone dominance were fixed in L10 P1 (F1, F2).
+- **L10 is done.** Ask the user what the next phase should be (ideas backlog: `ORCHESTRATION_HANDOVER.md` §5, plus anything from a playtest of game day).
+- Verification gotchas: wait for real data before `__simTest`; use 500+ games for balance comparisons (see `ORCHESTRATION_HANDOVER.md` §2).
 
 ## Guardrails (unchanged)
 No changes to reputation gates, objectives, capabilities, sim constants, `evaluateTrade` or contract pricing without the user's OK. Rewards ≤ +3 per dimension per feature per season.

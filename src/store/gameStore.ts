@@ -11,7 +11,7 @@ import {
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
 import { simulatePlayByPlay, createGame, runToMoment, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, type GameSim, type GameCtx, type GameState, type Moment } from '../game/engine/playsim'
-import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, type CallSheet } from '../game/engine/decisions'
+import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, userBonusFromSkills } from '../game/engine/coaching'
 import {
@@ -158,7 +158,7 @@ import {
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
-import type { CapMemo, CareerPath, CareerState, JobOffer, LeagueTier, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion } from '../game/types'
+import type { CapMemo, CareerPath, CareerState, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
@@ -382,6 +382,10 @@ interface GameStore {
   setCallSheet: (sheet: CallSheet) => void
   /** L10 G10: the user's opening script (ordered concept names, max 8). */
   setScript: (concepts: string[]) => void
+  /** L10 G11: pre-game matchup assignments for your club. */
+  setMatchups: (matchups: MatchupSet) => void
+  /** L10 G12: running-back workload and defensive-line rotation. */
+  setUsage: (usage: UsageSet) => void
   /** Opt-in: run the whole league's games through true play-by-play (Web Worker). */
   leaguePbp: boolean
   setLeaguePbp: (v: boolean) => void
@@ -667,6 +671,7 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     let sim: GameSim | null = null
     let qbSwitchLine: string | null = null
+    let rbInjuryLine: string | null = null
     if (userGame) {
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
@@ -697,6 +702,23 @@ export const useGame = create<GameStore>((set, get) => ({
         if (starter) starter.morale = clamp(starter.morale - 8, 1, 100)
         qbSwitchLine = `Benched ${starter?.name ?? 'the starter'} at halftime for ${backup?.name ?? 'the backup'}.`
       }
+      // L10 G12: a heavy RB workload carries a deterministic injury risk. The
+      // roll is seeded and the canonical roster player is mutated in place.
+      const rbUsage = career.usage?.rb
+      if (rbUsage === 'feature') {
+        const rb1 = depthAt(world, career.teamId, 'RB')[0]
+        if (rb1 && !rb1.injured) {
+          // Only the feature workload adds risk on top of the league's normal injuries.
+          const risk = 0.05
+          const roll = makeRng(world.seed + week * 7919 + 4242)
+          if (roll() < risk) {
+            const notes = ['Hamstring', 'Ankle', 'Knee', 'Groin']
+            const note = notes[Math.floor(roll() * notes.length)]
+            rb1.injured = { games: 1 + Math.floor(roll() * 3), note }
+            rbInjuryLine = `${rb1.name} (${note}) is out ${rb1.injured.games} ${rb1.injured.games === 1 ? 'game' : 'games'} after a heavy workload.`
+          }
+        }
+      }
     }
     // K1: fold this week's wrinkles into the film history, then clear the pick.
     if (career.wrinkles?.pick && career.wrinkles.pick.week === week) {
@@ -720,6 +742,7 @@ export const useGame = create<GameStore>((set, get) => ({
     let nextCareer: CareerState = { ...c, week: world.week, season: world.season, hoursLeft: WEEK_HOURS, weekFlags: {} }
     // L10 G6: remember a halftime QB switch in the season's story.
     if (qbSwitchLine) nextCareer = logMoment(nextCareer, { week, text: qbSwitchLine, tone: 'info' })
+    if (rbInjuryLine) nextCareer = logMoment(nextCareer, { week, text: rbInjuryLine, tone: 'loss' })
     // #20: log only the notable results — blowouts and thrillers — so the
     // season recap has a handful of real moments, not 18.
     if (sim && userGame) {
@@ -894,6 +917,20 @@ export const useGame = create<GameStore>((set, get) => ({
     const valid = new Set(offStyle(world, career.teamId).concepts.map((c) => c.name))
     const script = concepts.filter((c) => valid.has(c)).slice(0, 8)
     set({ career: withFlag({ ...career, script }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  setMatchups: (matchups) => {
+    const career = get().career
+    if (!career) return
+    set({ career: withFlag({ ...career, matchups }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  setUsage: (usage) => {
+    const career = get().career
+    if (!career) return
+    set({ career: withFlag({ ...career, usage }, 'gameplan'), tick: get().tick + 1 })
     get().save()
   },
 
@@ -2042,12 +2079,14 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const script = hasOff ? career.script ?? [] : []
   const scriptEdgeMult = career.install?.season === world.season && career.install.plan === 'full' ? 1.5 : 1
   const oppRead = career.oppRead
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead }
+  const matchups = career.matchups
+  const usage = career.usage
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage,
   }
 }
 
@@ -2287,6 +2326,9 @@ function migrateCareer(c: CareerState): CareerState {
       : { ...c, path }
   // L10 G10: optional opening script defaults to empty.
   base.script ??= []
+  // L10 G11/G12: matchup and workload defaults (optional on legacy saves).
+  base.matchups ??= {}
+  base.usage ??= { rb: 'normal', dl: 'starters' }
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
     const sheet = base.callSheet ?? DEFAULT_CALL_SHEET
@@ -3049,6 +3091,62 @@ export function gameDayEquivalence(n = 20) {
     total++
   }
   return { identical, total }
+}
+
+/**
+ * Dev-only probe (L10 G13): does any "always X" call policy beat the standing
+ * order? For each offensive call class and each defensive call, play `n` games
+ * against four opponents, answering only that moment (with source 'user') and
+ * leaving every other moment on its standing order. Reports the average point
+ * margin from the user's side and the standing baseline.
+ */
+export function decisionProbe(n = 100) {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const opponents = nfl.filter((t) => t.id !== career.teamId).slice(0, 4)
+  const ctx: GameCtx = { userTeamId: career.teamId, scope: 'hc', callSheet: career.callSheet ?? DEFAULT_CALL_SHEET }
+  const concepts = offStyle(world, career.teamId).concepts
+  const classOf = (name: string): OffClass | undefined => {
+    const c = concepts.find((x) => x.name === name)
+    return c ? offClassFor(c.type, c.depth) : undefined
+  }
+  type CallPolicy = 'standing' | 'run' | 'short' | 'deep'
+  type DefPolicy = 'standing' | DefCall
+  const callPolicies: CallPolicy[] = ['standing', 'run', 'short', 'deep']
+  const defPolicies: DefPolicy[] = ['standing', 'blitz', 'man', 'zone', 'stack']
+
+  const margin = (call: CallPolicy, def: DefPolicy): number => {
+    let total = 0
+    let games = 0
+    for (let i = 0; i < n; i++) {
+      const opp = opponents[i % Math.max(1, opponents.length)]
+      if (!opp) continue
+      const s = createGame(world, career.teamId, opp.id, world.seed + i * 7919 + 101, ctx)
+      for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) {
+        let choiceId = m.defaultId
+        let source: 'user' | 'standing' = 'standing'
+        if (m.kind === 'call' && call !== 'standing') {
+          const pick = m.options.find((o) => classOf(o.id) === call)
+          if (pick) { choiceId = pick.id; source = 'user' }
+        } else if (m.kind === 'defCall' && def !== 'standing') {
+          const pick = m.options.find((o) => o.id === def)
+          if (pick) { choiceId = pick.id; source = 'user' }
+        }
+        answerMoment(s, choiceId, source)
+      }
+      const sim = finishGame(s)
+      total += sim.homeScore - sim.awayScore
+      games++
+    }
+    return +(total / Math.max(1, games)).toFixed(2)
+  }
+
+  const call: Record<string, number> = {}
+  for (const p of callPolicies) call[p] = margin(p, 'standing')
+  const def: Record<string, number> = {}
+  for (const p of defPolicies) def[p] = margin('standing', p)
+  return { games: n, opponents: opponents.map((t) => t.id), call, def, standingBaseline: call.standing }
 }
 
 /** Dev-only probe: timeouts spent and two-minute drives per game (L10 G7). */

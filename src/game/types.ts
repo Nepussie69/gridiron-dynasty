@@ -467,6 +467,20 @@ export interface LedgerEntry {
   ovrAtSign?: number
 }
 
+/** L10 G11: matchup assignments you can set for your club before kickoff. */
+export interface MatchupSet {
+  /** Offense: double their best rusher, or attack their weakest corner. */
+  off?: 'doubleRusher' | 'targetWeakCB'
+  /** Defense: shadow their WR1, or spy the quarterback. */
+  def?: 'shadowWR1' | 'spyQB'
+}
+
+/** L10 G12: running-back workload and defensive-line rotation. */
+export interface UsageSet {
+  rb: 'normal' | 'feature' | 'committee'
+  dl: 'starters' | 'rotate'
+}
+
 export interface CareerState {
   gmName: string
   path: CareerPath
@@ -575,6 +589,10 @@ export interface CareerState {
   oppRead?: { week: number; oppId: string; sharp: boolean }
   /** L10 G10: the opening script, an ordered list of concept names (max 8). */
   script?: string[]
+  /** L10 G11: pre-game matchup assignments for your club's offense / defense. */
+  matchups?: MatchupSet
+  /** L10 G12: running-back workload and defensive-line rotation. */
+  usage?: UsageSet
   /** OVR at season start by playerId, for young players on your side (F5). */
   devBaseline?: Record<string, number>
   history: { season: number; team: string; role: string; record: string; outcome: string }[]

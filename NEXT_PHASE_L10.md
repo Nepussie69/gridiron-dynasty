@@ -18,9 +18,9 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate: find 
 | G8 | Tendency books, scouting action, self-scout panel (idea 6) | P4 | ✅ done — verified (P4) |
 | G9 | Play-call cards (offense) and defensive calls (idea 4) | P4 | ✅ done — verified (P4) |
 | G10 | Opening script (idea 3) | P4 | ✅ done — verified (P4) |
-| G11 | Matchup assignments (idea 8) | P5 | not started |
-| G12 | Workload and DL rotation (idea 9a) | P5 | not started |
-| G13 | Film grade for every decision kind (idea 10, part 2) + `__decisionProbe` + docs | P5 | not started |
+| G11 | Matchup assignments (idea 8) | P5 | ✅ done — verified (P5) |
+| G12 | Workload and DL rotation (idea 9a) | P5 | ✅ done — verified (P5) |
+| G13 | Film grade for every decision kind (idea 10, part 2) + `__decisionProbe` + docs | P5 | ✅ done — verified (P5) |
 
 ## Phase goal
 Today the user's game is simulated in one call and the match view only **replays** it. L10 makes the sim **pause at big moments** so a head coach or coordinator **calls them**:
@@ -285,8 +285,8 @@ After the user's first possession the script still runs but with no edge.
 
 ### G12 — Workload and DL rotation (idea 9a)
 `CareerState.usage?: { rb: 'normal' | 'feature' | 'committee'; dl: 'starters' | 'rotate' }`:
-- RB: `feature` = RB1 gets every carry (run edge +1); `normal` = RB2 gets 20% of carries; `committee` = RB2 40% (run edge −0.5).
-  After the user's game, an injury roll for RB1 (`feature` 6%, `normal` 2.5%, `committee` 1%) → `injured = { games: 1 + floor(rng × 3), note }` (deterministic rng).
+- RB (orchestrator rebalance in P5): `normal` = exactly what AI clubs do (RB1 carries, no extra risk); `feature` = run edge +1 and a 5% RB1 injury roll after the game;
+  `committee` = RB2 gets 40% of carries, RB1 is fresh in Q4 (+1 run edge on his Q4 carries), no extra risk. Injury roll → `injured = { games: 1 + floor(rng × 3), note }` (deterministic rng).
 - DL: `starters` = pressure −3 in Q4 (fatigue); `rotate` = pressure −1.5 in Q1–Q3 and +1.5 in Q4.
 
 ### G13 — Film grade, part 2 + dominance probe + docs
@@ -344,3 +344,9 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   **Orchestrator fixes:** (1) the call matrix applied to standing-order answers too (my P4 prompt said so, against the spec), so a fast-sim user lost ~3.7 pts/game; it now applies only to calls the user makes (and scripted snaps).
   Standing-ctx margin is now +0.37 vs −0.98 with no ctx (noise). (2) call/defCall were eating the 8-moment budget (halftime 1.0 → 0.55, two-point 1.7 → 0.1); they now have their own caps (2 each). (3) `__gameDayEquivalence` answers with `'standing'`.
   (4) The read line was ungrammatical ("They Zone coverage 40%…"), now "They play zone coverage 40% of the time on 3rd & short". `__careerSmoke` coach/personnel 0/0.
+- **P5** (Flash; paused by the user mid-run, resumed with a continue note, finished in 10 min; browser-verified by Claude on 2026-10-07). `__simTest` unchanged (23.8 / 66.8% / 64.5 / 1.75); `__gameDayEquivalence` 20/20.
+  `__decisionProbe(150)` (margin; standing = 1.07): call run 1.11 / short 0.52 / deep 1.07; def blitz 0.37 / man 0.57 / stack 0.49 / zone 0.76: **no "always X" policy beats standing** (at n = 60, "always run" read +1.8, which was noise).
+  Matchups and usage vs none (500 games, 8 opps, margin delta): doubleRusher +0.49, targetWeakCB +0.13, shadowWR1 +0.07, spyQB −0.29, feature RB +0.77 (pays a 5% injury roll per game), all within ±0.8.
+  Note: a single tiny change diverges a whole game, so ~120-game comparisons carry ±1.8 pts of noise. Use 500+ for balance calls. Matchups/Workload cards save; 8 weeks as a feature back: RB1 stayed canonical.
+  `__careerSmoke` coach/personnel 0/0. `HANDOFF.md` got an append-only L10 section. **Orchestrator fix:** RB workload as specced made `normal` (the default) worse than AI clubs (20% carries to RB2 + a 2.5% injury roll AI never faces);
+  now `normal` = AI behavior, and only `feature` adds risk (see G12). **L10 complete.**

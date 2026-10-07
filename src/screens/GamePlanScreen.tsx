@@ -80,6 +80,8 @@ export function GamePlanScreen() {
           {canWrinkle(career) && <WrinkleCard />}
           <InstallCard />
           <ScriptCard />
+          <MatchupCard />
+          <UsageCard />
           <CallSheetCard />
           <SelfScoutCard />
           <CulturePanel teamId={team.id} />
@@ -390,6 +392,97 @@ function ScriptCard() {
             </button>
           )
         })}
+      </div>
+    </Card>
+  )
+}
+
+/** L10 G11: pre-game matchup assignments, limited to the side(s) you control. */
+function MatchupCard() {
+  const career = useGame((s) => s.career)!
+  const setMatchups = useGame((s) => s.setMatchups)
+  const scope = capabilities(career).planScope
+  if (scope === 'none') return null
+  const focus = career.unitFocus ?? 'both'
+  const hasOff = scope === 'both' || focus !== 'def'
+  const hasDef = scope === 'both' || focus !== 'off'
+  const m = career.matchups ?? {}
+  return (
+    <Card>
+      <div className="mb-3 flex items-center gap-2">
+        <ClipboardList size={16} className="text-muted" />
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Matchups</h3>
+      </div>
+      <div className="space-y-3">
+        {hasOff && (
+          <CallSheetRow
+            label="Offense"
+            value={m.off ?? 'none'}
+            onChange={(off) => setMatchups({ ...m, off: off === 'none' ? undefined : off })}
+            options={[
+              { id: 'none', label: 'None', hint: 'No special assignment.' },
+              { id: 'doubleRusher', label: 'Double the rusher', hint: 'Chip their best edge — he rushes at half speed. Costs a target (top 3 receivers).' },
+              { id: 'targetWeakCB', label: 'Target the weak CB', hint: 'On 35% of throws key their weakest corner — but safety help raises interception risk.' },
+            ]}
+          />
+        )}
+        {hasDef && (
+          <CallSheetRow
+            label="Defense"
+            value={m.def ?? 'none'}
+            onChange={(def) => setMatchups({ ...m, def: def === 'none' ? undefined : def })}
+            options={[
+              { id: 'none', label: 'None', hint: 'No special assignment.' },
+              { id: 'shadowWR1', label: 'Shadow their WR1', hint: 'Your CB1 trails their top receiver; helps over the top on everyone else.' },
+              { id: 'spyQB', label: 'Spy the QB', hint: 'Contains scrambles and QB runs, but one fewer rusher (−4 pressure).' },
+            ]}
+          />
+        )}
+      </div>
+    </Card>
+  )
+}
+
+/** L10 G12: RB workload and defensive-line rotation, limited to your side(s). */
+function UsageCard() {
+  const career = useGame((s) => s.career)!
+  const setUsage = useGame((s) => s.setUsage)
+  const scope = capabilities(career).planScope
+  if (scope === 'none') return null
+  const focus = career.unitFocus ?? 'both'
+  const hasOff = scope === 'both' || focus !== 'def'
+  const hasDef = scope === 'both' || focus !== 'off'
+  const u = career.usage ?? { rb: 'normal' as const, dl: 'starters' as const }
+  return (
+    <Card>
+      <div className="mb-3 flex items-center gap-2">
+        <ClipboardList size={16} className="text-muted" />
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Workload</h3>
+      </div>
+      <div className="space-y-3">
+        {hasOff && (
+          <CallSheetRow
+            label="Running backs"
+            value={u.rb}
+            onChange={(rb) => setUsage({ ...u, rb })}
+            options={[
+              { id: 'normal', label: 'Normal', hint: 'RB2 gets 20% of the carries. Modest injury risk (2.5%).' },
+              { id: 'feature', label: 'Feature back', hint: 'RB1 takes every carry (run edge +1); higher injury risk (6%).' },
+              { id: 'committee', label: 'Committee', hint: 'RB2 gets 40% of the carries (run edge −0.5); lowest injury risk (1%).' },
+            ]}
+          />
+        )}
+        {hasDef && (
+          <CallSheetRow
+            label="Defensive line"
+            value={u.dl}
+            onChange={(dl) => setUsage({ ...u, dl })}
+            options={[
+              { id: 'starters', label: 'Starters', hint: 'Full pressure early; −3 pressure in the 4th (fatigue).' },
+              { id: 'rotate', label: 'Rotate', hint: 'Fresh legs: −1.5 pressure early, +1.5 in the 4th.' },
+            ]}
+          />
+        )}
       </div>
     </Card>
   )
