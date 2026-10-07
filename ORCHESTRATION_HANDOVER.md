@@ -61,7 +61,7 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 ### Immediate next steps
 1. **L9.5 is done.** Nothing is in flight.
 
-3. **L10 candidate — game-day coaching:** the user asked for 10 ideas to give HCs/coordinators more input (play-calling etc.). They're in **`IDEAS_GAMEDAY.md`** with a suggested 4-push phasing.
+2. **L10 candidate — game-day coaching:** the user asked for 10 ideas to give HCs/coordinators more input (play-calling etc.). They're in **`IDEAS_GAMEDAY.md`** with a suggested 4-push phasing.
    Not approved or specced yet: ask the user which ideas to build, then write `NEXT_PHASE_L10.md`.
 
 ## 4. Pacing & balance (current, measured on committed code)
