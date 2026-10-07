@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Eye, Pause, Play, SkipForward, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Eye, Pause, Play, SkipForward, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, type GameState, type Play as PlayEvent, type Moment } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
@@ -146,6 +146,8 @@ export function MatchView() {
   const [speed, setSpeed] = useState(1)
   const [phase, setPhase] = useState<'set' | 'move'>('set')
   const timer = useRef<number | null>(null)
+  const [tab, setTab] = useState<'plays' | 'box' | 'plan' | 'film'>('plays')
+  const [boxTeam, setBoxTeam] = useState<string | null>(null)
 
   const play = match?.plays[idx]
 
@@ -191,7 +193,6 @@ export function MatchView() {
   const away = world.byId[match.awayId]
   const offTeam = world.byId[play.offId]
   const defTeam = world.byId[play.defId]
-  const coaches = coachLabels(world, play.offId)
   const los = 10 + play.startYard
   const dur = phase === 'set' ? 0 : playDuration(play) / speed
   // G3: pause the replay at the end of what has been simulated so the moment
@@ -205,6 +206,15 @@ export function MatchView() {
     : { home: match.homeScore, away: match.awayScore }
   const moment = gameDay?.moment ?? null
   const showMoment = !!gameDay && !!moment && atEnd
+
+  const sideTabs: { id: 'plays' | 'box' | 'plan' | 'film'; label: string }[] = [
+    { id: 'plays', label: 'Plays' },
+    { id: 'box', label: 'Box score' },
+    ...(gameDay ? [{ id: 'plan' as const, label: 'Game plan' }] : []),
+    ...(match.film && !gameDay ? [{ id: 'film' as const, label: 'Film' }] : []),
+  ]
+  const activeTab = sideTabs.some((t) => t.id === tab) ? tab : 'plays'
+  const boxTeamId = boxTeam === match.homeId || boxTeam === match.awayId ? boxTeam : (career?.teamId === match.homeId ? match.homeId : match.awayId)
 
   const onClose = () => {
     if (gameDay) {
@@ -231,230 +241,320 @@ export function MatchView() {
     void simGameDayToEnd()
   }
 
+  const downText = (p: PlayEvent) => (p.down ? `${['1st', '2nd', '3rd', '4th'][p.down - 1]} & ${p.distance}` : '')
+  const jump = (i: number) => {
+    setIdx(i)
+    setPlaying(false)
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex h-screen w-screen flex-col overflow-hidden bg-[#0a1626] text-white">
-      {/* Scoreboard */}
-      <div className="flex items-center gap-3 border-b border-white/10 bg-black/30 px-4 py-2.5">
-        <TeamCrest team={away} size={30} />
-        <span className="font-display text-lg font-700 uppercase">{away.name}</span>
-        <span className="font-display text-3xl font-700 tnum">{shownScore.away}</span>
-        <span className="text-white/40">–</span>
-        <span className="font-display text-3xl font-700 tnum">{shownScore.home}</span>
-        <span className="font-display text-lg font-700 uppercase">{home.name}</span>
-        <TeamCrest team={home} size={30} />
-
-        <div className="mx-auto flex items-center gap-3">
-          <Badge tone="team" className="!text-white" >
-            {offTeam.abbr} ball
-          </Badge>
-          <span className="font-cond text-sm font-600 uppercase text-white/80">
-            {play.down ? `${['1st', '2nd', '3rd', '4th'][play.down - 1]} & ${play.distance} at ${yardName(play.startYard)}` : play.concept}
-          </span>
-          <span className="rounded bg-white/10 px-2 py-0.5 font-cond text-sm font-700 tnum">
-            Q{play.qtr} · {play.clock}
+      {/* ── Scoreboard ─────────────────────────────────────────────────────── */}
+      <header className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-black/40 px-4 py-2">
+        <ScoreSide team={away} score={shownScore.away} hasBall={play.offId === away.id} align="left" />
+        <div className="mx-auto flex min-w-0 flex-col items-center leading-tight">
+          <div className="flex items-center gap-2">
+            <span className="whitespace-nowrap rounded bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum sm:text-sm">Q{play.qtr} · {play.clock}</span>
+            {play.down ? (
+              <span className="whitespace-nowrap font-cond text-xs font-700 uppercase sm:text-sm">
+                {downText(play)} <span className="hidden text-white/60 sm:inline">at {gameDayFieldPosForPlay(world, play)}</span>
+              </span>
+            ) : (
+              <span className="font-cond text-sm font-600 uppercase text-white/70">{play.concept}</span>
+            )}
+          </div>
+          <span className="mt-0.5 hidden truncate text-[10px] text-white/45 md:block">
+            {[away, home].map((t) => {
+              const c = coachLabels(world, t.id)
+              return `${t.abbr}: ${c.ocScheme} / ${c.dcScheme}`
+            }).join('   ·   ')}
           </span>
         </div>
-
-        <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg bg-white/10 hover:bg-white/20">
+        <ScoreSide team={home} score={shownScore.home} hasBall={play.offId === home.id} align="right" />
+        <button onClick={onClose} title={gameDay ? 'Abandon game' : 'Close'} className="ml-2 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/10 hover:bg-white/20">
           <X size={16} />
         </button>
-      </div>
+      </header>
 
-      {/* Coordinator schemes */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-white/10 bg-black/20 px-4 py-1">
-        {[away, home].map((t) => {
-          const c = coachLabels(world, t.id)
-          return (
-            <span key={t.id} className="flex items-center gap-2 text-[11px]">
-              <TeamCrest team={t} size={18} />
-              <span className="font-cond font-700 uppercase text-white/85">{t.abbr}</span>
-              <span className="text-white/55">OC {c.oc} · <span className="text-white/80">{c.ocScheme}</span></span>
-              <span className="text-white/55">DC {c.dc} · <span className="text-white/80">{c.dcScheme}</span></span>
-            </span>
-          )
-        })}
-      </div>
+      {/* ── Body: field + decisions (left), side panel (right) ─────────────── */}
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,42vh)] lg:grid-cols-[minmax(0,1fr)_400px] lg:grid-rows-1">
+        <div className="flex min-h-0 flex-col overflow-y-auto lg:overflow-hidden">
+          {/* Field */}
+          <div className="relative min-h-[140px] flex-1 p-3 pb-0">
+            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="h-full w-full">
+              <rect x={10} y={0} width={100} height={H} fill="#1f7a3f" />
+              <rect x={0} y={0} width={10} height={H} fill={offTeam.primary} opacity={0.9} />
+              <rect x={110} y={0} width={10} height={H} fill={defTeam.primary} opacity={0.9} />
+              {Array.from({ length: 21 }, (_, i) => 10 + i * 5).map((x, i) => (
+                <line key={x} x1={x} y1={0} x2={x} y2={H} stroke="#ffffff" strokeOpacity={i % 2 === 0 ? 0.5 : 0.25} strokeWidth={0.12} />
+              ))}
+              {Array.from({ length: 9 }, (_, i) => 20 + i * 10).map((x) => (
+                <line key={`n${x}`} x1={x} y1={0} x2={x} y2={H} stroke="#ffffff" strokeOpacity={0.6} strokeWidth={0.2} />
+              ))}
+              <line x1={los} y1={0} x2={los} y2={H} stroke="#ffd34d" strokeWidth={0.35} />
+              <text x={4.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
+                {offTeam.abbr}
+              </text>
+              <text x={115.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
+                {defTeam.abbr}
+              </text>
+              {(() => {
+                const sack = play.pressure && play.endYard < play.startYard
+                const bx = phase === 'set' ? los - 6 : sack ? los - 7 : 10 + play.endYard
+                const by = phase === 'set' ? CENTER_Y : play.type === 'pass' || play.type === 'run' ? CENTER_Y + (rnd(play.n * 7 + play.startYard) - 0.5) * 30 : CENTER_Y
+                return (
+                  <g style={{ transform: `translate(${bx}px, ${by}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}>
+                    <circle r={0.72} fill="#8a4b1f" stroke="#fff" strokeWidth={0.16} />
+                  </g>
+                )
+              })()}
+              {dots.map((d) => {
+                const x = phase === 'set' ? d.fx : d.ex
+                const y = phase === 'set' ? d.fy : d.ey
+                return (
+                  <g key={d.key} style={{ transform: `translate(${x}px, ${y}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}>
+                    {d.hasBall && <circle r={1.7} fill="#ffffff" opacity={0.25} />}
+                    <circle r={1.15} fill={d.side === 'off' ? OFF_COLOR : DEF_COLOR} stroke="#fff" strokeWidth={0.16} />
+                  </g>
+                )
+              })}
+            </svg>
+          </div>
 
-      {/* Field */}
-      <div className="relative flex min-h-[45vh] flex-1 items-center justify-center overflow-hidden bg-[#0a1626] p-3">
-        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="h-full w-full">
-          {/* field */}
-          <rect x={10} y={0} width={100} height={H} fill="#1f7a3f" />
-          <rect x={0} y={0} width={10} height={H} fill={offTeam.primary} opacity={0.9} />
-          <rect x={110} y={0} width={10} height={H} fill={defTeam.primary} opacity={0.9} />
-          {Array.from({ length: 21 }, (_, i) => 10 + i * 5).map((x, i) => (
-            <line key={x} x1={x} y1={0} x2={x} y2={H} stroke="#ffffff" strokeOpacity={i % 2 === 0 ? 0.5 : 0.25} strokeWidth={0.12} />
-          ))}
-          {Array.from({ length: 9 }, (_, i) => 20 + i * 10).map((x) => (
-            <line key={`n${x}`} x1={x} y1={0} x2={x} y2={H} stroke="#ffffff" strokeOpacity={0.6} strokeWidth={0.2} />
-          ))}
-          {/* line of scrimmage + first down */}
-          <line x1={los} y1={0} x2={los} y2={H} stroke="#ffd34d" strokeWidth={0.35} />
-          <text x={4.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
-            {offTeam.abbr}
-          </text>
-          <text x={115.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
-            {defTeam.abbr}
-          </text>
+          {/* What just happened + replay controls */}
+          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <span className="font-display text-lg font-700 uppercase" style={{ color: play.bigPlay ? '#ffd34d' : '#fff' }}>{play.concept}</span>
+              <span className="truncate font-cond text-base font-600 text-white/85">{play.result}</span>
+              {play.yards !== 0 && (
+                <span className={cn('font-cond text-base font-700 tnum', play.yards > 0 ? 'text-[#8ef0b5]' : 'text-[#ffb3ba]')}>
+                  {play.yards > 0 ? '+' : ''}{play.yards} yd
+                </span>
+              )}
+            </div>
+            <div className="ml-auto flex items-center gap-1 rounded-lg bg-white/5 p-1">
+              <IconBtn title="Previous play" onClick={() => jump(Math.max(0, idx - 1))}><ChevronLeft size={15} /></IconBtn>
+              <IconBtn title={playing ? 'Pause replay' : 'Play replay'} onClick={() => setPlaying((p) => !p)}>{playing ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
+              <IconBtn title="Next play" onClick={() => jump(Math.min(match.plays.length - 1, idx + 1))}><ChevronRight size={15} /></IconBtn>
+              <IconBtn title="Jump to the latest play" onClick={() => jump(match.plays.length - 1)}><SkipForward size={15} /></IconBtn>
+              <span className="mx-1 h-4 w-px bg-white/15" />
+              {[0.5, 1, 2, 4].map((sp) => (
+                <button
+                  key={sp}
+                  onClick={() => setSpeed(sp)}
+                  className={cn('rounded px-1.5 py-0.5 font-cond text-[11px] font-700', speed === sp ? 'bg-white text-ink' : 'text-white/60 hover:bg-white/10')}
+                >
+                  {sp}×
+                </button>
+              ))}
+              <span className="ml-1 font-cond text-[11px] tnum text-white/40">{idx + 1}/{match.plays.length}</span>
+            </div>
+          </div>
 
-          {/* ball */}
-          {(() => {
-            const sack = play.pressure && play.endYard < play.startYard
-            const bx = phase === 'set' ? los - 6 : sack ? los - 7 : 10 + play.endYard
-            const by = phase === 'set' ? CENTER_Y : play.type === 'pass' || play.type === 'run' ? CENTER_Y + (rnd(play.n * 7 + play.startYard) - 0.5) * 30 : CENTER_Y
-            return (
-              <g style={{ transform: `translate(${bx}px, ${by}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}>
-                <circle r={0.72} fill="#8a4b1f" stroke="#fff" strokeWidth={0.16} />
-              </g>
-            )
-          })()}
+          {/* Game day: your call, or how to move the game on */}
+          {gameDay && (
+            <div className="shrink-0 border-t border-white/10 bg-[#0d1a2b] px-4 py-3">
+              {showMoment && moment ? (
+                <MomentCard moment={moment} fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)} onAnswer={answer} />
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-display text-sm font-700 uppercase tracking-wide">Game day</span>
+                  <span className="text-[11px] text-white/55">
+                    {moment ? 'Your call is coming up — the replay is catching up.' : 'Paused. Change the plan in the side panel, or move the game on.'}
+                  </span>
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('play')}>Next play</Button>
+                    <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('drive')}>Next drive</Button>
+                    <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('moment')}>Next moment</Button>
+                    <Button size="sm" variant="ghost" className="!text-white/80 hover:!bg-white/10" onClick={simToEnd}>
+                      <SkipForward size={14} /> Sim to end
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {showMoment && (
+                <div className="mt-2 flex items-center justify-end">
+                  <Button size="sm" variant="ghost" className="!text-white/60 hover:!bg-white/10" onClick={simToEnd}>
+                    <SkipForward size={14} /> Sim to end (standing orders)
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
-          {/* players */}
-          {dots.map((d) => {
-            const x = phase === 'set' ? d.fx : d.ex
-            const y = phase === 'set' ? d.fy : d.ey
-            return (
-              <g
-                key={d.key}
-                style={{ transform: `translate(${x}px, ${y}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}
-              >
-                {d.hasBall && <circle r={1.7} fill="#ffffff" opacity={0.25} />}
-                <circle r={1.15} fill={d.side === 'off' ? OFF_COLOR : DEF_COLOR} stroke="#fff" strokeWidth={0.16} />
-              </g>
-            )
-          })}
-        </svg>
-      </div>
-
-      {/* Result banner */}
-      <div className="flex items-center gap-4 border-t border-white/10 bg-black/30 px-4 py-2">
-        <span className="font-display text-xl font-700 uppercase" style={{ color: play.bigPlay ? '#ffd34d' : '#fff' }}>
-          {play.concept}
-        </span>
-        <span className="font-cond text-lg font-600 text-white/90">{play.result}</span>
-        {play.yards !== 0 && (
-          <span className={cn('font-cond text-lg font-700 tnum', play.yards > 0 ? 'text-[#8ef0b5]' : 'text-[#ffb3ba]')}>
-            {play.yards > 0 ? '+' : ''}{play.yards} yd
-          </span>
-        )}
-        <span className="ml-auto hidden text-xs text-white/50 md:block">
-          {offTeam.abbr} OC {coaches.oc} · {coaches.ocScheme} &nbsp;|&nbsp; {defTeam.abbr} DC {coaches.dc} · {coaches.dcScheme}
-        </span>
-      </div>
-
-      {/* Controls + log */}
-      <div className="grid gap-3 border-t border-white/10 bg-[#0a1626] p-3 md:grid-cols-[1fr_340px]">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="primary" className="!bg-white !text-ink" onClick={() => { setIdx((i) => Math.max(0, i - 1)); setPlaying(false) }}>
-            <ChevronLeft size={14} /> Prev
-          </Button>
-          <Button size="sm" variant="primary" className="!bg-white !text-ink" onClick={() => setPlaying((p) => !p)}>
-            {playing ? <Pause size={14} /> : <Play size={14} />} {playing ? 'Pause' : 'Play'}
-          </Button>
-          <Button size="sm" variant="primary" className="!bg-white !text-ink" onClick={() => { setIdx((i) => Math.min(match.plays.length - 1, i + 1)); setPlaying(false) }}>
-            Next <ChevronRight size={14} />
-          </Button>
-          <Button size="sm" variant="ghost" className="!text-white hover:!bg-white/10" onClick={() => { setIdx(match.plays.length - 1); setPlaying(false) }}>
-            <SkipForward size={14} /> Skip to end
-          </Button>
-          <div className="flex gap-1">
-            {[0.5, 1, 2, 4].map((sp) => (
+        {/* ── Side panel ───────────────────────────────────────────────────── */}
+        <aside className="flex min-h-0 flex-col border-t border-white/10 bg-[#0c1828] lg:border-l lg:border-t-0">
+          <div className="flex shrink-0 gap-1 border-b border-white/10 p-1.5">
+            {sideTabs.map((t) => (
               <button
-                key={sp}
-                onClick={() => setSpeed(sp)}
-                className={cn('rounded-md px-2 py-1 font-cond text-xs font-700', speed === sp ? 'bg-white text-ink' : 'bg-white/10 text-white/70 hover:bg-white/20')}
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  'flex-1 rounded-md px-2 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
+                  activeTab === t.id ? 'bg-white text-ink' : 'text-white/65 hover:bg-white/10 hover:text-white',
+                )}
               >
-                {sp}×
+                {t.label}
               </button>
             ))}
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <BoxScore world={world} teamId={match.awayId} box={match.box} gmName={career?.gmName} myTeamId={career?.teamId} />
-          <BoxScore world={world} teamId={match.homeId} box={match.box} gmName={career?.gmName} myTeamId={career?.teamId} />
-        </div>
-      </div>
-
-      {gameDay && (
-        <div className="border-t border-white/10 bg-[#0d1a2b] p-3">
-          {showMoment && moment && (
-            <div className="mb-2">
-              <MomentCard moment={moment} fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)} onAnswer={answer} />
-            </div>
-          )}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-display text-sm font-700 uppercase tracking-wide text-white">Game day</span>
-            <span className="text-[11px] text-white/60">
-              {moment ? 'Make your call to continue.' : 'Advance the game.'}
-            </span>
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('play')}>
-                Next play
-              </Button>
-              <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('drive')}>
-                Next drive
-              </Button>
-              <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('moment')}>
-                Next moment
-              </Button>
-              <Button size="sm" variant="ghost" className="!text-white hover:!bg-white/10" onClick={simToEnd}>
-                <SkipForward size={14} /> Sim to end (standing orders)
-              </Button>
-            </div>
-          </div>
-          <GameDayPlanPanel gameDay={gameDay} />
-        </div>
-      )}
-
-      {match.film && !gameDay && (
-        <div className="border-t border-white/10 bg-[#0d1a2b] px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-display text-sm font-700 uppercase tracking-wide text-white">
-              Film grade: {match.film.letter}
-            </span>
-            <span className="font-cond text-[11px] text-white/50">{match.film.grade}/100</span>
-          </div>
-          {match.film.lines.length > 0 && (
-            <ul className="mt-1 space-y-0.5">
-              {match.film.lines.map((l, i) => (
-                <li key={i} className="text-[11px] text-white/60">• {l}</li>
-              ))}
-            </ul>
-          )}
-          {match.planChanges && match.planChanges.length > 0 && (
-            <ul className="mt-1 space-y-0.5">
-              {match.planChanges.map((c, i) => (
-                <li key={i} className="text-[11px] text-white/60">• Switched to {c.preset} at Q{c.qtr} {c.clock}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {/* Play log */}
-      <div className="max-h-[180px] overflow-y-auto border-t border-white/10 bg-[#0a1626] px-3 pb-3">
-        {match.plays.map((p, i) => (
-          <button
-            key={p.n}
-            onClick={() => { setIdx(i); setPlaying(false) }}
-            className={cn(
-              'flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs',
-              i === idx ? 'bg-white/15' : 'hover:bg-white/5',
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {activeTab === 'plays' && (
+              <PlayLog plays={match.plays} idx={idx} world={world} onJump={jump} downText={downText} />
             )}
-          >
-            <span className="w-8 shrink-0 font-cond text-white/50">Q{p.qtr}</span>
-            <span className="w-10 shrink-0 font-cond tnum text-white/50">{p.clock}</span>
-            <span className="min-w-0 flex-1 truncate text-white/85">
-              {p.down ? `${['1st', '2nd', '3rd', '4th'][p.down - 1]}&${p.distance} ` : ''}
-              {p.concept} — {p.result}
-            </span>
-            <span className="shrink-0 font-cond tnum text-white/60">{p.homeScore}-{p.awayScore}</span>
-          </button>
-        ))}
+            {activeTab === 'box' && (
+              <div className="p-2">
+                <div className="mb-2 inline-flex w-full rounded-lg bg-white/10 p-0.5">
+                  {[away, home].map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setBoxTeam(t.id)}
+                      className={cn('flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 font-cond text-xs font-700 uppercase', boxTeamId === t.id ? 'bg-white text-ink' : 'text-white/70')}
+                    >
+                      <TeamCrest team={t} size={16} /> {t.name}
+                    </button>
+                  ))}
+                </div>
+                <BoxScore world={world} teamId={boxTeamId} box={match.box} gmName={career?.gmName} myTeamId={career?.teamId} />
+              </div>
+            )}
+            {activeTab === 'plan' && gameDay && <GameDayPlanPanel gameDay={gameDay} />}
+            {activeTab === 'film' && match.film && (
+              <div className="p-3">
+                <div className="flex items-baseline gap-2">
+                  <span className="font-display text-3xl font-700">{match.film.letter}</span>
+                  <span className="font-cond text-xs text-white/50">{match.film.grade}/100 film grade</span>
+                </div>
+                {match.film.lines.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {match.film.lines.map((l, i) => <li key={i} className="text-xs leading-snug text-white/70">• {l}</li>)}
+                  </ul>
+                )}
+                {match.planChanges && match.planChanges.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {match.planChanges.map((c, i) => <li key={i} className="text-xs text-white/60">• Switched to {c.preset} at Q{c.qtr} {c.clock}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        </aside>
       </div>
     </div>
   )
+}
+
+function ScoreSide({ team, score, hasBall, align }: { team: import('../game/types').Team; score: number; hasBall: boolean; align: 'left' | 'right' }) {
+  return (
+    <div className={cn('flex items-center gap-2.5', align === 'right' && 'flex-row-reverse')}>
+      <TeamCrest team={team} size={30} />
+      <div className={cn('flex flex-col leading-none', align === 'right' && 'items-end')}>
+        <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/60">
+          {team.abbr}
+          {hasBall && <span className="ml-1 text-[#ffd34d]">●</span>}
+        </span>
+        <span className="hidden font-display text-sm font-700 uppercase sm:block">{team.name}</span>
+      </div>
+      <span className="font-display text-3xl font-700 tnum">{score}</span>
+    </div>
+  )
+}
+
+function IconBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button title={title} aria-label={title} onClick={onClick} className="grid h-7 w-7 place-items-center rounded text-white/80 hover:bg-white/15 hover:text-white">
+      {children}
+    </button>
+  )
+}
+
+interface Drive { offId: string; start: number; end: number }
+
+/** Plays grouped into drives (a drive = consecutive plays by one offense). */
+function drivesOf(plays: PlayEvent[]): Drive[] {
+  const out: Drive[] = []
+  plays.forEach((p, i) => {
+    const last = out[out.length - 1]
+    if (last && last.offId === p.offId) last.end = i
+    else out.push({ offId: p.offId, start: i, end: i })
+  })
+  return out
+}
+
+function PlayLog({ plays, idx, world, onJump, downText }: {
+  plays: PlayEvent[]; idx: number; world: World; onJump: (i: number) => void; downText: (p: PlayEvent) => string
+}) {
+  const drives = useMemo(() => drivesOf(plays), [plays])
+  const activeRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [idx])
+  return (
+    <div className="pb-2">
+      {drives.map((d) => {
+        const team = world.byId[d.offId]
+        const snaps = plays.slice(d.start, d.end + 1)
+        const scrimmage = snaps.filter((p) => p.type === 'run' || p.type === 'pass')
+        const yards = scrimmage.reduce((s, p) => s + p.yards, 0)
+        const last = snaps[snaps.length - 1]
+        const first = snaps[0]
+        const ptsBefore = d.start > 0 ? plays[d.start - 1] : null
+        const scored = ptsBefore ? (last.homeScore + last.awayScore) - (ptsBefore.homeScore + ptsBefore.awayScore) : last.homeScore + last.awayScore
+        return (
+          <div key={`${d.start}`}>
+            <div className="sticky top-0 z-10 flex items-center gap-2 border-y border-white/10 bg-[#13233a] px-3 py-1.5">
+              {team && <TeamCrest team={team} size={16} />}
+              <span className="font-cond text-[11px] font-700 uppercase tracking-wide">{team?.abbr} ball</span>
+              <span className="font-cond text-[11px] text-white/50">
+                Q{first.qtr} {first.clock}
+                {scrimmage.length > 0 && ` · ${scrimmage.length} plays, ${yards} yds`}
+              </span>
+              {scored > 0 && <span className="ml-auto rounded bg-[#ffd34d] px-1.5 py-px font-cond text-[10px] font-700 uppercase text-ink">+{scored}</span>}
+              {last.turnover && <span className="ml-auto rounded bg-[#dc2937] px-1.5 py-px font-cond text-[10px] font-700 uppercase">Turnover</span>}
+            </div>
+            {snaps.map((p, k) => {
+              const i = d.start + k
+              const isActive = i === idx
+              return (
+                <button
+                  key={p.n}
+                  ref={isActive ? activeRef : undefined}
+                  onClick={() => onJump(i)}
+                  className={cn(
+                    'flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs',
+                    isActive ? 'bg-white/15' : 'hover:bg-white/5',
+                    i > idx && 'opacity-45',
+                  )}
+                >
+                  <span className="w-14 shrink-0 pt-px font-cond text-[11px] tnum text-white/45">{downText(p) || p.type.toUpperCase()}</span>
+                  <span className="min-w-0 flex-1 leading-snug text-white/85">
+                    <span className="font-600 text-white">{p.concept}</span> — {p.result}
+                  </span>
+                  {(p.type === 'run' || p.type === 'pass') && (
+                    <span className={cn('w-10 shrink-0 text-right font-cond tnum', p.yards > 0 ? 'text-[#8ef0b5]' : p.yards < 0 ? 'text-[#ffb3ba]' : 'text-white/45')}>
+                      {p.yards > 0 ? '+' : ''}{p.yards}
+                    </span>
+                  )}
+                  <span className="w-11 shrink-0 text-right font-cond tnum text-white/45">
+                    {p.awayScore}-{p.homeScore}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Field position for a replayed play, tagged with the club whose side it's on. */
+function gameDayFieldPosForPlay(world: World, p: PlayEvent): string {
+  const offAbbr = world.byId[p.offId]?.abbr ?? ''
+  const defAbbr = world.byId[p.defId]?.abbr ?? ''
+  if (p.startYard === 50) return '50'
+  return p.startYard < 50 ? `${offAbbr} ${p.startYard}` : `${defAbbr} ${100 - p.startYard}`
 }
 
 /** L11.5 Q3: a collapsible in-game plan editor, limited to the side(s) you coach. */
@@ -462,7 +562,6 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   const world = useWorld()
   const career = useGame((s) => s.career)
   const setGameDayPlan = useGame((s) => s.setGameDayPlan)
-  const [open, setOpen] = useState(false)
   const [side, setSide] = useState<'off' | 'def'>('off')
   if (!career) return null
   const caps = capabilities(career)
@@ -472,19 +571,11 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   if (!hasOff && !hasDef) return null
   const active: 'off' | 'def' = side === 'off' && hasOff ? 'off' : hasDef ? 'def' : 'off'
   const oppId = gameDay.state.homeId === career.teamId ? gameDay.state.awayId : gameDay.state.homeId
-  const advice = open ? coordinatorAdvice(world, career, oppId).filter((a) => a.side === active) : []
+  const advice = coordinatorAdvice(world, career, oppId).filter((a) => a.side === active)
   return (
-    <div className="mt-2 rounded-lg border border-white/10 bg-black/20">
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
-        <ClipboardList size={14} className="text-white/70" />
-        <span className="font-display text-xs font-700 uppercase tracking-wide text-white">Game plan</span>
-        <span className="hidden text-[11px] text-white/50 sm:inline">
-          Change how you play — it applies from the next snap.
-        </span>
-        <span className="ml-auto text-white/60">{open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
-      </button>
-      {open && (
-        <div className="border-t border-white/10 p-3">
+    <div className="p-3">
+      <p className="mb-2 text-[11px] text-white/55">Change how you play — it applies from the next snap.</p>
+      <div>
           {hasOff && hasDef && (
             <div className="mb-3 inline-flex rounded-lg bg-white/10 p-0.5">
               {(['off', 'def'] as const).map((s) => (
@@ -501,14 +592,11 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
               ))}
             </div>
           )}
-          <div className="rounded-lg bg-white p-3">
-            <PlanEditor plan={gameDay.plan[active]} onChange={(p) => setGameDayPlan(active, p)} side={active} />
-          </div>
           {advice.map((a) => {
             const preset = PLAN_PRESETS.find((p) => p.id === a.presetId && p.side === a.side)
             if (!preset) return null
             return (
-              <div key={a.side} className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-[11px] text-white/70">
+              <div key={a.side} className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-[11px] text-white/70">
                 <span>
                   <strong className="font-700 text-white">{a.coach}</strong> recommends{' '}
                   <strong className="font-700 text-white">{preset.label}</strong> — {a.reason}
@@ -524,6 +612,9 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
               </div>
             )
           })}
+          <div className="rounded-lg bg-white p-3">
+            <PlanEditor plan={gameDay.plan[active]} onChange={(p) => setGameDayPlan(active, p)} side={active} />
+          </div>
           {gameDay.changes.length > 0 && (
             <ul className="mt-2 space-y-0.5">
               {gameDay.changes.map((c, i) => (
@@ -534,7 +625,6 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
             </ul>
           )}
         </div>
-      )}
     </div>
   )
 }
@@ -662,12 +752,6 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
       </table>
     </div>
   )
-}
-
-function yardName(yard: number) {
-  if (yard === 50) return '50'
-  if (yard < 50) return `${yard}`
-  return `${100 - yard}`
 }
 
 /** L11.5 Q1: where the ball is, tagged with the possessing club ("BUF 32", "NE 45"). */
