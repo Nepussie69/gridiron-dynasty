@@ -642,6 +642,7 @@ export const useGame = create<GameStore>((set, get) => ({
       simWeek(world, week, userGame?.id)
     }
     let sim: GameSim | null = null
+    let qbSwitchLine: string | null = null
     if (userGame) {
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
@@ -660,6 +661,15 @@ export const useGame = create<GameStore>((set, get) => ({
       if (film) {
         userGame.film = film
         sim.film = film
+      }
+      // L10 G6: a halftime QB change costs the benched starter's confidence.
+      const switchedQb = (sim.decisions ?? []).some((d) => d.kind === 'qbChange' && d.choiceId === 'switch' && d.source === 'user')
+      if (switchedQb) {
+        const starter = depthAt(world, career.teamId, 'QB').filter((p) => !p.injured)[0]
+        const backup = depthAt(world, career.teamId, 'QB').filter((p) => !p.injured)[1]
+        // Mutate in place: roster entries must stay the canonical world.players objects.
+        if (starter) starter.morale = clamp(starter.morale - 8, 1, 100)
+        qbSwitchLine = `Benched ${starter?.name ?? 'the starter'} at halftime for ${backup?.name ?? 'the backup'}.`
       }
     }
     // K1: fold this week's wrinkles into the film history, then clear the pick.
@@ -682,6 +692,8 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     const c = get().career!
     let nextCareer: CareerState = { ...c, week: world.week, season: world.season, hoursLeft: WEEK_HOURS, weekFlags: {} }
+    // L10 G6: remember a halftime QB switch in the season's story.
+    if (qbSwitchLine) nextCareer = logMoment(nextCareer, { week, text: qbSwitchLine, tone: 'info' })
     // #20: log only the notable results — blowouts and thrillers — so the
     // season recap has a handful of real moments, not 18.
     if (sim && userGame) {
@@ -2969,6 +2981,38 @@ export function gameDayEquivalence(n = 20) {
     total++
   }
   return { identical, total }
+}
+
+/** Dev-only probe: timeouts spent and two-minute drives per game (L10 G7). */
+export function clockProbe(n = 20) {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const ctx: GameCtx = { userTeamId: career.teamId, scope: 'hc', callSheet: career.callSheet ?? DEFAULT_CALL_SHEET }
+  let userTo = 0
+  let oppTo = 0
+  let drives = 0
+  let twoMinDecisions = 0
+  let games = 0
+  for (let i = 0; i < n; i++) {
+    const opp = nfl.filter((t) => t.id !== career.teamId)[i % Math.max(1, nfl.length - 1)]
+    if (!opp) continue
+    const s = createGame(world, career.teamId, opp.id, world.seed + i * 7919 + 101, ctx)
+    for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId, 'standing')
+    userTo += s.timeoutsUsed[career.teamId] ?? 0
+    oppTo += s.timeoutsUsed[opp.id] ?? 0
+    drives += s.twoMinDrives
+    twoMinDecisions += s.decisions.filter((d) => d.kind === 'twoMinute').length
+    games++
+  }
+  const per = (v: number) => +(v / Math.max(1, games)).toFixed(2)
+  return {
+    games,
+    userTimeoutsPerGame: per(userTo),
+    oppTimeoutsPerGame: per(oppTo),
+    twoMinDrivesPerGame: per(drives),
+    twoMinDecisionsPerGame: per(twoMinDecisions),
+  }
 }
 
 /** Dev-only probe: AI re-signing and AI-to-AI trades (#F, deeper rosters). */

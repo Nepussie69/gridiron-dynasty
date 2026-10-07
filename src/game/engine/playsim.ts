@@ -150,7 +150,15 @@ function avg(list: number[]) {
   return list.length ? list.reduce((a, b) => a + b, 0) / list.length : 70
 }
 
-function topGroup(world: World, teamId: string, positions: Position[], n: number): Player[] {
+function topGroup(world: World, teamId: string, positions: Position[], n: number, qbOverride?: Record<string, string>): Player[] {
+  // G6: a halftime QB change replaces the starter until the game ends.
+  if (qbOverride && positions.length === 1 && positions[0] === 'QB') {
+    const id = qbOverride[teamId]
+    if (id) {
+      const p = (world.roster[teamId] ?? []).find((x) => x.id === id && !x.injured)
+      if (p) return [p]
+    }
+  }
   return depthGroup(world, teamId, positions, n)
 }
 
@@ -349,10 +357,22 @@ const PASS_LEAN_PRESSURE = 4
 const PASS_LEAN_COMP = 0.024
 const PASS_LEAN_EDGE = 0.6
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0): PlayOutcome {
+/** Per-step sim context for the L10 G6/G7 halftime and two-minute effects. */
+interface SimEnv {
+  adjust: Record<string, string[]>
+  qbOverride: Record<string, string>
+  down: number
+  intMult: number
+}
+
+function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
+  return !!env?.adjust[teamId]?.includes(fix)
+}
+
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
-  const qb = topGroup(world, offId, ['QB'], 1)[0]
+  const qb = topGroup(world, offId, ['QB'], 1, env?.qbOverride)[0]
   const wrs = topGroup(world, offId, ['WR', 'TE'], 4)
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const rb = topGroup(world, offId, ['RB'], 1)[0]
@@ -369,14 +389,18 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const pressure = avg(dl.map((p) => Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70)))
   const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70))
   const defPlan = planFor(defId, 'def')
-  const blitz = rng() < clamp(dStyle.blitz + (defPlan ? planEffects(defPlan, true).blitz : 0), 0, 0.8)
+  // G6 third-down heat: extra blitz on the opponent's 3rd downs.
+  const heat = hasFix(env, defId, 'thirdDownHeat') && env?.down === 3 ? 0.15 : 0
+  const blitz = rng() < clamp(dStyle.blitz + (defPlan ? planEffects(defPlan, true).blitz : 0) + heat, 0, 0.8)
   // A pass-heavy plan is predictable: the defense pins its ears back and sits
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
   const pressureEdge = pressure - protection + (blitz ? 9 : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
     + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
-  const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1), 0.02, 0.13)
+  // G6 max protect: sacks give up 40% less often.
+  const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
+  const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult, 0.02, 0.13)
 
   // Target selection: a scheme-fitting, style-appropriate receiver gets more looks.
   const scored = wrs.map((w) => {
@@ -409,7 +433,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     dStyle.manCoverage * avg(cbs.map((p) => mkAttrs(p).MCV ?? 70)) +
     (1 - dStyle.manCoverage) * avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
   const planOverrides = applyDefPlan(defId, dStyle)
-  const coverage = coverSkill * dStyle.coverage * planOverrides.coverMult + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
+  // G6 fixes: load-the-box loosens coverage; two-deep gives up the underneath but
+  // caps explosives; third-down heat concedes more explosives on 3rd down.
+  const compMult = planOverrides.compMult * (hasFix(env, defId, 'twoDeep') ? 1.04 : 1)
+  const bigPlayRisk = planOverrides.bigPlayRisk * (hasFix(env, defId, 'twoDeep') ? 0.85 : 1) * (heat ? 1.1 : 1)
+  const coverage = coverSkill * dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
   const offPassBias = planFor(offId, 'off')?.passBias ?? 0
@@ -420,12 +448,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // quality shifts it: a great OC helps, a great DC hurts.
   const coachShift = (ocEff.offEdge - dcEff.defEdge) * 0.003
   const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) : 0
-  const compProb = clamp(
-    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(qbStyle.scramble, 0.04) * planOverrides.compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP,
+  let compProb = clamp(
+    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP,
     0.42,
     0.74,
   )
-  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15) * planOverrides.intMult * (1 - clutch * 0.03), 0.005, 0.06)
+  // G6 quick game: short concepts complete a touch more. Max protect costs a
+  // deep concept a target (slightly lower completion).
+  if (hasFix(env, offId, 'quickGame') && concept.depth <= 8) compProb = clamp(compProb + 0.03, 0.42, 0.74)
+  if (hasFix(env, offId, 'maxProtect') && concept.depth >= 12) compProb = clamp(compProb - 0.03, 0.42, 0.74)
+  // G7 hurry: a faster offense forces riskier throws.
+  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1), 0.005, 0.06)
 
   if (rng() < intProb) {
     const ballHawk = [...cbs, ...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
@@ -440,7 +473,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     let gain = sampleYards(rng, true, talentEdge + (catchSkill - 72), gains, yard, tier)
     // Live defensive plan bends the explosive part of a play: soft zone caps
     // them, press man risks them. Underneath gains are left alone.
-    if (gain > 15) gain = 15 + Math.round((gain - 15) * planOverrides.bigPlayRisk)
+    if (gain > 15) gain = 15 + Math.round((gain - 15) * bigPlayRisk)
     // Style-driven YAC: playmakers and elusive receivers add yards after the catch.
     if (gain > 0) gain += Math.round(tStyle.yacBias * 2.5 * (0.5 + rng()) + tStyle.elusiveness * (1 + rng() * 3))
     if (yard >= 88) gain += 4
@@ -456,7 +489,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id }
 }
 
-function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0): PlayOutcome {
+function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   const rb = topGroup(world, offId, ['RB'], 2)
@@ -476,9 +509,11 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // The live defensive plan moves the front: stacking the box stops the run,
   // a soft-zone light box gives a little back on the ground.
   const dp = planFor(defId, 'def')
-  const runDef = dp
+  // G6 load the box: an extra 8% run defense, paid for by looser coverage.
+  const boxMult = hasFix(env, defId, 'loadTheBox') ? 1.08 : 1
+  const runDef = (dp
     ? runDefBase * (1 + (dp.aggression - 0.5) * 0.06 - (dp.coverage <= 0 ? 0.03 : 0))
-    : runDefBase
+    : runDefBase) * boxMult
   const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4))
   const elusiveness = (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2
 
@@ -487,7 +522,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // A pass-heavy offense runs against lighter boxes — make them pay on the ground.
   const offPassBiasRun = planFor(offId, 'off')?.passBias ?? 0
   const boxLight = Math.max(0, offPassBiasRun) * 1.8
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight
+  // G6 quick game: throwing it quick comes at the expense of the run game.
+  const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -545,6 +582,10 @@ function fmtClock(sec: number) {
 
 // ── Resumable game state (L10 G1) ─────────────────────────────────────────────
 export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange'
+/** Which side a moment belongs to (Design rule 5). 'hc' = head-coach only. */
+export type MomentSide = 'off' | 'def' | 'both' | 'hc'
+/** G7 two-minute offensive mode for the current possession. */
+export type TwoMinMode = 'hurry' | 'normal' | 'protect' | 'fgRange'
 export interface MomentOption { id: string; label: string; hint: string }
 export interface Moment {
   id: string // `${kind}-${playIndex}` — unique within a game
@@ -610,6 +651,28 @@ export interface GameState {
   tier: 'NFL' | 'FBS'
   pace: number
   passAdj: number
+  // ── L10 G6/G7 ──────────────────────────────────────────────────────────────
+  /** Timeouts left per club, reset to 3 at halftime. */
+  timeouts: Record<string, number>
+  /** Timeouts spent per club (probe/clock reporting). */
+  timeoutsUsed: Record<string, number>
+  /** Halftime fixes per club, read by the resolvers. */
+  adjust: Record<string, string[]>
+  /** G6: halftime QB change override (teamId → backup playerId). */
+  qbOverride: Record<string, string>
+  /** G7: two-minute mode for the current possession. */
+  twoMinMode: TwoMinMode | null
+  /** Whether this possession has already chosen a two-minute mode. */
+  twoMinChecked: boolean
+  /** G7: the user's clock decision per club ('use' | 'save'). */
+  clockMode: Record<string, 'use' | 'save' | undefined>
+  /** Whether the one clock moment for this game has been resolved. */
+  clockChecked: boolean
+  /** Halftime bookkeeping so rng only draws once per phase. */
+  halfAdjustDone: boolean
+  qbChangeChecked: boolean
+  /** Probe counter: possessions that ran a two-minute mode. */
+  twoMinDrives: number
 }
 
 const MAX_PLAYS = 210
@@ -622,6 +685,9 @@ function swapPossession(s: GameState) {
   const t = s.offId
   s.offId = s.defId
   s.defId = t
+  // A two-minute mode only lasts as long as the possession that chose it.
+  s.twoMinMode = null
+  s.twoMinChecked = false
 }
 
 function baseTimeScale(id: string): number {
@@ -641,6 +707,8 @@ const TOTAL_MOMENT_CAP = 8
 
 interface DecisionSpec {
   kind: MomentKind
+  /** Which side owns this moment (Design rule 5). */
+  side: MomentSide
   teamId: string
   qtr: number
   clock: string
@@ -655,6 +723,15 @@ interface DecisionSpec {
   ask: boolean
   margin: number
   ep?: number
+}
+
+/** Design rule 5: does a rung's scope let it answer a moment on this side? */
+function scopeAllows(scope: GameCtx['scope'], side: MomentSide): boolean {
+  if (scope === 'hc') return true
+  if (side === 'hc') return false
+  if (scope === 'off') return side === 'off'
+  if (scope === 'def') return side === 'def'
+  return side === 'off' || side === 'def' || side === 'both'
 }
 
 function logDecision(s: GameState, id: string, spec: DecisionSpec, choiceId: string, source: 'user' | 'standing') {
@@ -676,7 +753,7 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
     logDecision(s, id, spec, s.answers[id], s.autoAnswered?.[id] ? 'standing' : 'user')
     return s.answers[id]
   }
-  const canAsk = isUser && s.ctx!.scope === 'hc' && spec.ask &&
+  const canAsk = isUser && scopeAllows(s.ctx!.scope, spec.side) && spec.ask &&
     s.momentsUsed < TOTAL_MOMENT_CAP && (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind]
   if (canAsk) {
     const us = spec.teamId === s.homeId ? s.homeScore : s.awayScore
@@ -722,13 +799,262 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | null {
   const yardText = s.yard >= 50 ? `their ${100 - s.yard}` : `your ${s.yard}`
   const ask = (s.yard >= 35 && s.distance <= 5) || s.yard >= 52
   const choice = decide(s, {
-    kind: 'fourth', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: 4, distance: s.distance,
+    kind: 'fourth', side: 'hc', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: 4, distance: s.distance,
     yard: s.yard, title: `4th & ${s.distance} at ${yardText}`, options, defaultId,
     staffRead: `Staff EV — Go ${fmtEV(ev.go)} · FG ${ev.fg == null ? '—' : fmtEV(ev.fg)} · Punt ${fmtEV(ev.punt)}`,
     ask, margin, ep: ev.go,
   })
   if (choice == null) return null
   return choice as 'go' | 'fg' | 'punt'
+}
+
+// ── L10 G6: halftime adjustments + QB change ─────────────────────────────────
+type FixId = 'maxProtect' | 'quickGame' | 'thirdDownHeat' | 'loadTheBox' | 'twoDeep'
+interface FixMeta { side: 'off' | 'def'; label: string; hint: string }
+const FIX_META: Record<FixId | 'stayCourse', FixMeta> = {
+  maxProtect: { side: 'off', label: 'Max protect', hint: 'Sacks ×0.6; deep concepts lose a target (completion −3%).' },
+  quickGame: { side: 'off', label: 'Quick game', hint: 'Pass rate +10%, short concepts +3% completion; run edge −2.' },
+  thirdDownHeat: { side: 'def', label: 'Third-down heat', hint: 'Blitz +15% on their 3rd downs; big-play risk ×1.1 there.' },
+  loadTheBox: { side: 'def', label: 'Load the box', hint: 'Run defense ×1.08; coverage ×0.96.' },
+  twoDeep: { side: 'def', label: 'Two-deep', hint: 'Big plays allowed ×0.85; underneath completion ×1.04.' },
+  stayCourse: { side: 'off', label: 'Stay the course', hint: 'No change — trust the first-half plan.' },
+}
+const FIX_ORDER: FixId[] = ['maxProtect', 'quickGame', 'thirdDownHeat', 'loadTheBox', 'twoDeep']
+
+interface Diagnosis { fix: FixId; side: 'off' | 'def'; severity: number; note: string }
+
+/** First-half diagnostics for one club, most severe first (G6). */
+function diagnose(plays: Play[], teamId: string): Diagnosis[] {
+  let sacksTaken = 0
+  let rushAtt = 0
+  let rushYds = 0
+  let opp3Att = 0
+  let opp3Conv = 0
+  let oppRushAtt = 0
+  let oppRushYds = 0
+  let explosives = 0
+  for (const p of plays) {
+    if (p.offId === teamId) {
+      if (p.type === 'pass' && p.yards < 0) sacksTaken += 1
+      else if (p.type === 'run') { rushAtt += 1; rushYds += Math.max(0, p.yards) }
+    } else if (p.defId === teamId) {
+      if (p.type === 'run') { oppRushAtt += 1; oppRushYds += Math.max(0, p.yards) }
+      if (p.type === 'pass' && p.yards >= 25 && !p.turnover) explosives += 1
+      if (p.down === 3 && (p.type === 'run' || p.type === 'pass')) {
+        opp3Att += 1
+        if (!p.turnover && (p.endYard >= 100 || p.yards >= (p.distance ?? 99))) opp3Conv += 1
+      }
+    }
+  }
+  const out: Diagnosis[] = []
+  if (sacksTaken >= 2) out.push({ fix: 'maxProtect', side: 'off', severity: 50 + sacksTaken, note: `${sacksTaken} sacks taken` })
+  const rushAvg = rushAtt ? rushYds / rushAtt : 0
+  if (rushAtt >= 6 && rushAvg < 3.5) out.push({ fix: 'quickGame', side: 'off', severity: 40 + (3.5 - rushAvg), note: `rush ${rushAvg.toFixed(1)} avg` })
+  const opp3Rate = opp3Att ? opp3Conv / opp3Att : 0
+  if (opp3Att >= 4 && opp3Rate >= 0.5) out.push({ fix: 'thirdDownHeat', side: 'def', severity: 30 + (opp3Rate - 0.5) * 10, note: `their 3rd downs ${(opp3Rate * 100).toFixed(0)}%` })
+  const oppRushAvg = oppRushAtt ? oppRushYds / oppRushAtt : 0
+  if (oppRushAtt >= 6 && oppRushAvg >= 5) out.push({ fix: 'loadTheBox', side: 'def', severity: 20 + (oppRushAvg - 5), note: `their rush ${oppRushAvg.toFixed(1)} avg` })
+  if (explosives >= 2) out.push({ fix: 'twoDeep', side: 'def', severity: 10 + (explosives - 2), note: `${explosives} explosives allowed` })
+  return out.sort((a, b) => b.severity - a.severity)
+}
+
+/** The user's halftime adjustment card, filtered to their side's fixes (G6). */
+function buildHalftimeSpec(s: GameState): DecisionSpec {
+  const ctx = s.ctx!
+  const userTeam = ctx.userTeamId
+  const side: MomentSide = ctx.scope === 'off' ? 'off' : ctx.scope === 'def' ? 'def' : 'both'
+  const allowed: ('off' | 'def')[] = side === 'off' ? ['off'] : side === 'def' ? ['def'] : ['off', 'def']
+  const diag = diagnose(s.plays, userTeam).filter((d) => allowed.includes(d.side))
+  const picks: FixId[] = diag.slice(0, 2).map((d) => d.fix)
+  for (const f of FIX_ORDER) {
+    if (picks.length >= 2) break
+    if (FIX_META[f].side === 'off' && allowed.includes('off') && !picks.includes(f)) picks.push(f)
+    else if (FIX_META[f].side === 'def' && allowed.includes('def') && !picks.includes(f)) picks.push(f)
+  }
+  const options: MomentOption[] = picks.map((f) => ({ id: f, label: FIX_META[f].label, hint: FIX_META[f].hint }))
+  options.push({ id: 'stayCourse', label: FIX_META.stayCourse.label, hint: FIX_META.stayCourse.hint })
+  const margin = userTeam === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  const read = diag.length ? diag.slice(0, 2).map((d) => d.note).join(' · ') : 'No first-half problem stood out.'
+  return {
+    kind: 'halftime', side, teamId: userTeam, qtr: 2, clock: '0:00', down: null, distance: null, yard: s.yard,
+    title: 'Halftime adjustments', options, defaultId: 'stayCourse',
+    staffRead: `First half — ${read}`, ask: true, margin,
+  }
+}
+
+/** AI clubs take their top diagnosed fix, scaled by the head coach (G6). */
+function rollAIHalftime(world: World, s: GameState) {
+  const userTeam = s.ctx?.userTeamId
+  for (const teamId of [s.homeId, s.awayId]) {
+    if (teamId === userTeam) continue
+    const top = diagnose(s.plays, teamId)[0]
+    if (!top) { s.adjust[teamId] = []; continue }
+    const hc = (world.staff[teamId] ?? []).find((m) => m.role === 'Head Coach')
+    const p = clamp(0.4 + ((hc?.rating ?? 74) - 60) / 100, 0.2, 0.8)
+    s.adjust[teamId] = s.rng() < p ? [top.fix] : []
+  }
+}
+
+/** Standard NFL passer rating for one QB over the plays so far. */
+function firstHalfPasserRating(plays: Play[], qbId: string): number | null {
+  let att = 0, comp = 0, yds = 0, td = 0, ints = 0
+  for (const p of plays) {
+    if (p.qbId !== qbId || p.type !== 'pass') continue
+    if (p.yards < 0) continue // sack
+    att += 1
+    if (p.turnover) { ints += 1; continue }
+    if (p.result === 'Incomplete') continue
+    comp += 1
+    yds += Math.max(0, p.yards)
+    if (p.result === 'TOUCHDOWN!') td += 1
+  }
+  if (!att) return null
+  const term = (x: number) => Math.max(0, Math.min(2.375, x))
+  const a = term((comp / att - 0.3) * 5)
+  const b = term((yds / att - 3) * 0.25)
+  const c = term((td / att) * 20)
+  const d = term(2.375 - (ints / att) * 25)
+  return ((a + b + c + d) / 6) * 100
+}
+
+interface QbSpec extends DecisionSpec { backupId: string }
+
+/** The HC-only QB-change card when the starter has struggled (G6). */
+function buildQbSpec(world: World, s: GameState): QbSpec | null {
+  if (!s.ctx) return null
+  const userTeam = s.ctx.userTeamId
+  const qbs = depthGroup(world, userTeam, ['QB'], 2)
+  if (qbs.length < 2) return null
+  const starter = qbs[0]
+  const backup = qbs[1]
+  const rating = firstHalfPasserRating(s.plays, starter.id)
+  if (rating == null || rating >= 50) return null
+  const margin = userTeam === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  return {
+    kind: 'qbChange', side: 'hc', teamId: userTeam, qtr: 2, clock: '0:00', down: null, distance: null, yard: s.yard,
+    title: 'Change quarterback?', defaultId: 'stay', ask: true, margin, backupId: backup.id,
+    options: [
+      { id: 'stay', label: `Stay with ${starter.name}`, hint: 'Give him the second half to settle in.' },
+      { id: 'switch', label: `Switch to ${backup.name}`, hint: 'Turn to the backup for the second half.' },
+    ],
+    staffRead: `${starter.name} — first-half passer rating ${rating.toFixed(1)}`,
+  }
+}
+
+/** The halftime phase: adjustment card, AI fixes, then the QB-change card. */
+function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
+  if (!s.halfAdjustDone) {
+    const userTeam = s.ctx?.userTeamId
+    if (userTeam) {
+      const choice = decide(s, buildHalftimeSpec(s))
+      if (choice === null) return 'moment'
+      s.adjust[userTeam] = choice === 'stayCourse' ? [] : [choice]
+    }
+    // AI fixes draw only after the user's answer (determinism, Design rule 4).
+    s.halfAdjustDone = true
+    rollAIHalftime(world, s)
+  }
+  if (!s.qbChangeChecked) {
+    const spec = buildQbSpec(world, s)
+    if (spec) {
+      const choice = decide(s, spec)
+      if (choice === null) return 'moment'
+      if (choice === 'switch') s.qbOverride[s.ctx!.userTeamId] = spec.backupId
+    }
+    s.qbChangeChecked = true
+  }
+  return stepHalftime(s)
+}
+
+// ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
+function envFor(s: GameState): SimEnv {
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1 }
+}
+
+/** The offense's two-minute choice at the start of a possession (G7). */
+function checkTwoMinute(s: GameState): 'continue' | 'moment' {
+  if (s.twoMinChecked) return 'continue'
+  if (s.qtr !== 2 && s.qtr !== 4) return 'continue'
+  if (s.clock > 120) return 'continue'
+  const offId = s.offId
+  const margin = offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  if (s.qtr === 4 && (margin < -8 || margin > 3)) return 'continue'
+  const isUser = !!s.ctx && offId === s.ctx.userTeamId
+  if (!isUser) {
+    // AI: trailing or tied → hurry, leading → protect.
+    s.twoMinMode = margin <= 0 ? 'hurry' : 'protect'
+    s.twoMinChecked = true
+    s.twoMinDrives += 1
+    return 'continue'
+  }
+  const standing: TwoMinMode = margin < 0 ? 'hurry' : margin > 0 ? 'protect' : 'normal'
+  const options: MomentOption[] = [
+    { id: 'hurry', label: 'Hurry up', hint: 'Fast tempo; burn timeouts on gains. Riskier throws.' },
+    { id: 'normal', label: 'Normal tempo', hint: 'Keep the standard pace.' },
+    ...(margin > 0 ? [{ id: 'protect', label: 'Protect the ball', hint: 'Slow tempo, safe throws — run the clock.' }] : []),
+    { id: 'fgRange', label: 'Play for the FG', hint: 'Normal tempo until in range, then kick it.' },
+  ]
+  const choice = decide(s, {
+    kind: 'twoMinute', side: 'off', teamId: offId, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
+    yard: s.yard, title: 'Two-minute drill', options, defaultId: standing, ask: true, margin,
+  })
+  if (choice === null) return 'moment'
+  s.twoMinMode = choice as TwoMinMode
+  s.twoMinChecked = true
+  s.twoMinDrives += 1
+  return 'continue'
+}
+
+/** The HC clock-management moment when the user's defense is trailing late (G7). */
+function checkClock(s: GameState): 'continue' | 'moment' {
+  if (s.clockChecked || !s.ctx) return 'continue'
+  const userTeam = s.ctx.userTeamId
+  if (s.qtr !== 4 || s.clock > 180 || s.defId !== userTeam) return 'continue'
+  if ((s.timeouts[userTeam] ?? 0) <= 0) return 'continue'
+  const margin = userTeam === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  if (margin > -1 || margin < -8) return 'continue'
+  const standing = s.ctx.callSheet.timeouts === 'aggressive' ? 'useTimeouts' : 'save'
+  const choice = decide(s, {
+    kind: 'clock', side: 'hc', teamId: userTeam, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
+    yard: s.yard, title: 'Use your timeouts?', defaultId: standing, ask: true, margin,
+    staffRead: `Trailing ${-margin} with ${fmtClock(s.clock)} left`,
+    options: [
+      { id: 'useTimeouts', label: 'Use timeouts', hint: 'Stop the clock after each opponent play.' },
+      { id: 'save', label: 'Save timeouts', hint: 'Keep them for the final possession.' },
+    ],
+  })
+  if (choice === null) return 'moment'
+  s.clockMode[userTeam] = choice === 'useTimeouts' ? 'use' : 'save'
+  s.clockChecked = true
+  return 'continue'
+}
+
+/** Would the defense stop the clock after this play? (G7) */
+function wantsTimeout(world: World, s: GameState, defId: string): boolean {
+  if (s.qtr !== 4 || (s.timeouts[defId] ?? 0) <= 0) return false
+  const defScore = defId === s.homeId ? s.homeScore : s.awayScore
+  const offScore = defId === s.homeId ? s.awayScore : s.homeScore
+  if (defScore >= offScore) return false // only when trailing
+  const isUser = !!s.ctx && defId === s.ctx.userTeamId
+  let mode: 'use' | 'save'
+  if (isUser) mode = s.clockMode[defId] ?? (s.ctx!.callSheet.timeouts === 'aggressive' ? 'use' : 'save')
+  else mode = aiCallSheet(world, defId).timeouts === 'aggressive' ? 'use' : 'save'
+  return mode === 'use' ? s.clock <= 180 : s.clock <= 60
+}
+
+/** Spend a timeout on this play if the offense (hurry) or defense wants one (G7). */
+function usedTimeout(world: World, s: GameState, offId: string, defId: string, out: PlayOutcome): boolean {
+  if (s.twoMinMode === 'hurry' && out.yards > 0 && (s.timeouts[offId] ?? 0) > 0) {
+    s.timeouts[offId] -= 1
+    s.timeoutsUsed[offId] = (s.timeoutsUsed[offId] ?? 0) + 1
+    return true
+  }
+  if (wantsTimeout(world, s, defId)) {
+    s.timeouts[defId] -= 1
+    s.timeoutsUsed[defId] = (s.timeoutsUsed[defId] ?? 0) + 1
+    return true
+  }
+  return false
 }
 
 export function createGame(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx): GameState {
@@ -762,6 +1088,17 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     tier: isCollege ? 'FBS' : 'NFL',
     pace: isCollege ? 0.78 : 0.9,
     passAdj: isCollege ? -0.09 : 0,
+    timeouts: { [homeId]: 3, [awayId]: 3 },
+    timeoutsUsed: { [homeId]: 0, [awayId]: 0 },
+    adjust: {},
+    qbOverride: {},
+    twoMinMode: null,
+    twoMinChecked: false,
+    clockMode: {},
+    clockChecked: false,
+    halfAdjustDone: false,
+    qbChangeChecked: false,
+    twoMinDrives: 0,
   }
   s.defId = s.offId === homeId ? awayId : homeId
   // opening kickoff
@@ -800,7 +1137,7 @@ function stepClock(s: GameState): 'continue' | 'done' {
   return 'continue'
 }
 
-/** Halftime: possession flips to start Q3. (G6 adds the adjustment moment here.) */
+/** Halftime: possession flips to start Q3, timeouts reset (G6/G7). */
 function stepHalftime(s: GameState): 'continue' {
   s.qtr = 3
   s.clock = 900
@@ -808,6 +1145,7 @@ function stepHalftime(s: GameState): 'continue' {
   s.yard = 25
   s.down = 1
   s.distance = 10
+  s.timeouts = { [s.homeId]: 3, [s.awayId]: 3 }
   s.phase = 'play'
   return 'continue'
 }
@@ -820,7 +1158,7 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
   const margin = offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const twoDefault = twoPointChoice(sheet.twoPoint, margin, s.qtr)
   const choice = decide(s, {
-    kind: 'two', teamId: offId, qtr: s.qtr, clock: fmtClock(s.clock), down: null, distance: null, yard: 98,
+    kind: 'two', side: 'hc', teamId: offId, qtr: s.qtr, clock: fmtClock(s.clock), down: null, distance: null, yard: 98,
     // Only ask when it can matter: the second half, or whenever the chart says go for two.
     title: 'Two-point try', margin, ask: s.qtr >= 3 || twoDefault === 'go2', defaultId: twoDefault,
     options: [
@@ -835,9 +1173,10 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
     offS.twoAtt += 1
     const style = offStyle(world, offId)
     const concept = pickConcept(s.rng, style, 4, 2, 0)
+    const env = envFor(s)
     const out = concept.type === 'pass'
-      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98))
-      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98))
+      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98), env)
+      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98), env)
     s.clock -= out.timeUsed * s.pace
     const good = !out.turnover && out.yards >= 2
     if (good) {
@@ -877,9 +1216,13 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (s.n >= MAX_PLAYS) return 'done'
 
   if (s.phase === 'try') return stepTry(world, s)
-  if (s.phase === 'halftime') return stepHalftime(s)
+  if (s.phase === 'halftime') return stepHalftimePhase(world, s)
 
   if (s.clock <= 0) return stepClock(s)
+
+  // L10 G7: two-minute and clock moments sit at the very start, before any rng.
+  if (checkTwoMinute(s) === 'moment') return 'moment'
+  if (checkClock(s) === 'moment') return 'moment'
 
   // 4th-down decision sits at the very start of the step, before any rng draw.
   let fourthChoice: 'go' | 'fg' | 'punt' | null = null
@@ -893,7 +1236,32 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const style = offStyle(world, offId)
   const offPlan = planFor(offId, 'off')
   const planPassAdj = offPlan ? planEffects(offPlan, false).passAdj : 0
-  const concept = pickConcept(s.rng, style, s.down, s.distance, s.passAdj + planPassAdj)
+
+  // G7 fgRange: as soon as it's a long FG, kick it (≤0:30 left or on 3rd down).
+  if (s.twoMinMode === 'fgRange' && s.down !== 4 && s.yard >= 62 && (s.clock <= 30 || s.down === 3)) {
+    const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard)
+    s.clock -= out.timeUsed * s.pace
+    const good = !out.turnover
+    const fgS = statFor(s, offId)
+    fgS.fgAtt += 1
+    if (good) {
+      if (offId === s.homeId) s.homeScore += 3
+      else s.awayScore += 3
+      fgS.points += 3
+      fgS.fgMade += 1
+    }
+    pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: s.down, distance: s.distance })
+    swapPossession(s)
+    s.yard = 25
+    s.down = 1
+    s.distance = 10
+    return 'continue'
+  }
+
+  // G6 quick game throws more; G7 protect throws safer.
+  const quickPassAdj = hasFix(envFor(s), offId, 'quickGame') ? 0.1 : 0
+  const modePassAdj = s.twoMinMode === 'protect' ? -0.15 : 0
+  const concept = pickConcept(s.rng, style, s.down, s.distance, s.passAdj + planPassAdj + quickPassAdj + modePassAdj)
   const isFourth = s.down === 4
 
   // Defensive penalty (~3.5%) — 5 yards and an automatic first down.
@@ -913,9 +1281,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     return 'continue'
   }
 
-  // Offensive penalty (~2.5%) — 5 yards, replay the down.
+  // Offensive penalty (~2.5%, ×1.3 in the G7 hurry-up) — 5 yards, replay the down.
   const offDisc = ocEffect(world, offId).discipline
-  if (s.rng() < 0.025 * offDisc) {
+  const hurryPen = s.twoMinMode === 'hurry' ? 1.3 : 1
+  if (s.rng() < 0.025 * offDisc * hurryPen) {
     const penS = statFor(s, offId)
     const startY = s.yard
     s.yard = clamp(s.yard - 5, 1, 99)
@@ -960,11 +1329,16 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     return 'continue'
   }
 
+  const env = envFor(s)
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard))
-    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard))
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env)
+    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env)
 
-  s.clock -= out.timeUsed * s.pace * baseTimeScale(offId)
+  // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
+  const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
+  let t = out.timeUsed * s.pace * baseTimeScale(offId) * tempoMult
+  if (usedTimeout(world, s, offId, defId, out)) t = Math.min(t, 6)
+  s.clock -= t
   const offS = statFor(s, offId)
   const defS = statFor(s, defId)
   const isPass = out.type === 'pass'

@@ -13,8 +13,8 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate: find 
 | G3 | Game Day flow in the store + moment card in the match view (idea 1, UI) | P2 | ✅ done — verified (P2) |
 | G4 | Call-sheet editor on the Game Plan screen (idea 2, UI) | P2 | ✅ done — verified (P2) |
 | G5 | Film grade for 4th-down and 2-point calls + season reward (idea 10, part 1) | P2 | ✅ done — verified (P2) |
-| G6 | Halftime adjustments + QB change (ideas 5, 9b) | P3 | not started |
-| G7 | Two-minute drill, timeouts, clock moment (idea 7) | P3 | not started |
+| G6 | Halftime adjustments + QB change (ideas 5, 9b) | P3 | ✅ done — verified (P3) |
+| G7 | Two-minute drill, timeouts, clock moment (idea 7) | P3 | ✅ done — verified (P3) |
 | G8 | Tendency books, scouting action, self-scout panel (idea 6) | P4 | not started |
 | G9 | Play-call cards (offense) and defensive calls (idea 4) | P4 | not started |
 | G10 | Opening script (idea 3) | P4 | not started |
@@ -329,3 +329,11 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   (Flash/spec formula `80 + Σ×8` capped a perfect game at B− because deltas are ≤ 0), routine kicks/punts are left off the sheet, and `film.userCalls` counts real calls;
   (4) `answerMoment(s, id, source)`: Sim to end and fast sim answer with `'standing'`, so "Coach, then Sim to end" doesn't count as coaching; (5) the season reward needs ≥ 4 coached games
   (avg ≥ 90 → +2, ≥ 85 → +1). Note: coordinators get no moments yet (P2's moments are HC-only); P3+ must extend `decide()` so `'off'`/`'def'`/`'both'` scopes answer their side's moments.
+- **P3** (Flash 12 min, hit its step limit after finishing; browser-verified by Claude on 2026-10-07). **Measurement gotcha:** `__simTest` right after a page load can run before the real ratings
+  finish loading (placeholder world, ~29–30 pts). Wait ~5 s and check `__world().roster.BAL` has real names before trusting calibration. With real data: `__simTest` seed 33333 = **23.8 pts** (+0.2 over the
+  band, from the extra late-game snaps timeouts allow) / 66.8% / 64.5 plays / sacks 1.75; `__gameDayEquivalence(20)` 20/20; `__clockProbe(20)`: ~2 timeouts per team, 2.4 two-minute drives and 1.35 two-minute
+  decisions per game. Moments per game by scope (BAL vs IND, 20 games): **HC 6.1** (fourth, two, halftime, twoMinute, clock, qbChange), **OC 2.3** (halftime, twoMinute), **DC 1.0** (halftime;
+  defCall arrives in P4). Moment cards read well (e.g. "Change quarterback? Lamar Jackson — first-half passer rating 39.8"). A forced QB switch through `advanceWeek({ userSim })`:
+  starter morale 57 → 49, logged once, roster entry still the canonical player object. `__careerSmoke` coach/personnel 0 errors / 0 violations.
+  **Orchestrator fixes:** (1) Flash overwrote `HANDOFF.md` with a scratch plan — restored from git (future prompts forbid editing it); (2) the QB-switch morale hit replaced the roster entry with a copy
+  (`{ ...roster[i] }`), breaking the L9 canonical-object invariant — it now mutates the player in place.
