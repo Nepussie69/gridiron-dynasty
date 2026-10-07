@@ -63,15 +63,14 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | ✅ all 3 pushes | see git log |
 | **L10 Game day** | NEXT_PHASE_L10.md | ✅ all 5 pushes | see git log |
 | **L11 In-season roster life** (priced FA signings, Waiver Tuesday, AI injury moves, Waiver Wire) | NEXT_PHASE_L11.md | ✅ both pushes | c9996e5 |
-| **L11.5 Playtest 3** (14 items from the user's 3rd playtest) | NEXT_PHASE_L11_5.md | **P1 ✅ (05c6b96); P2 running with Flash (started ~20:23 AEDT); P3, P4 not sent** | 05c6b96 |
+| **L11.5 Playtest 3** (14 items from the user's 3rd playtest) | NEXT_PHASE_L11_5.md | **P1 ✅ 05c6b96; P2 ✅ 3aa9822; P3 sent ~20:52 AEDT; P4 queued** | 3aa9822 |
+| **L12 Ratings, week, every rating counts** | NEXT_PHASE_L12.md | specced (4 pushes); prompts ready in the session scratchpad (`l12p1..4.txt`) | — |
 
 ### Immediate next steps
-1. **Finish L11.5.** The user said "push the rest to deepseek and let me know when done". P2 (Q4 more presets, Q5 coordinator advice, Q6 weekly hours explained) was launched with
-   `nohup ~/.claude/bin/ds-push <scratchpad>/l115p2.txt l115p2` before this handover. If `git status` shows uncommitted `src/` changes and no `opencode-cli run` process: verify P2 (build, lint 5, diff, browser:
-   **`__planMatrix` with 500+ games per preset** in chunks — Flash's own probe flagged *Press Man* as dominant, check it; coordinator advice card + Apply; the weekly tiles' effect text), fix, update the spec log, commit.
-   If no Flash process is running and `src/` is clean, resend P2. Then P3 (Q7, Q8, Q9, Q10, Q12, Q13, Q14) and P4 (Q11), same template. Tell the user when all four are committed.
-2. **After L11.5:** the user is choosing from `IDEAS_ROUND2.md` (20 HC/coordinator + 15 GM ideas; my top picks: trade deadline day, FA frenzy, draft-day trades, practice week, keys to the game,
-   personnel packages, special-teams calls). Spec whatever they pick as the next phase.
+1. The user said **"keep going through all the pushes"** (2026-10-07 ~20:55): finish L11.5 P3 and P4, then L12 P1 to P4, verifying and committing each push. Check `git status` and `pgrep -fl "opencode-cli run"` first.
+   The prompts are the L11.5 template plus the task list (P3 = Q7, Q8, Q9, Q10, Q12, Q13, Q14; P4 = Q11; L12 P1 = R2, R1, R3; P2 = W1, W2; P3 = E0, E1; P4 = E2, E3). L12 P3 and P4 are the approved sim change
+   ("every rating counts", user request): verify calibration on seeds 33333, 2222 and 5150 against the E3 bands, run `__planMatrix` in chunks (one opponent per JS call; `__planMatrix(70)` in one call times out the JS tool), and check `__ratingSpread`.
+2. Keep the status board at the top of `ROADMAP_L13_L15.md` current. After L12: spec L13 (personnel packages, special-teams calls) from the roadmap.
 
 ## 4. Pacing & balance (current, measured on committed code)
 - Personnel → GM: seeds 20261004 13 · 2222 8 · 33333 8 · 5150 10 · 777 9 · 111 17 (a weak-roster outlier). Coach → HC ~10–11.
