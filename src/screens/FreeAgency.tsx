@@ -3,6 +3,7 @@ import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { canSignFreeAgents } from '../game/engine/career'
 import { freeAgentContract } from '../game/engine/progress'
+import { waiverBlockedReason, waiverPriority } from '../game/engine/waivers'
 import { canShadow } from '../game/engine/shadow'
 import { accessFor } from '../game/engine/access'
 import { capSummary } from '../game/selectors'
@@ -13,10 +14,22 @@ import { Badge, Button, Card, PageHeader, Stat } from '../ui/kit'
 
 const POS_FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
 
+/** 14 -> "14th", 1 -> "1st", &c. */
+function ordinal(n: number): string {
+  const rem10 = n % 10
+  const rem100 = n % 100
+  if (rem10 === 1 && rem100 !== 11) return `${n}st`
+  if (rem10 === 2 && rem100 !== 12) return `${n}nd`
+  if (rem10 === 3 && rem100 !== 13) return `${n}rd`
+  return `${n}th`
+}
+
 export function FreeAgency() {
   const league = useWorld()
   const career = useGame((s) => s.career)!
   const signFreeAgent = useGame((s) => s.signFreeAgent)
+  const claimWaiver = useGame((s) => s.claimWaiver)
+  const cancelWaiverClaim = useGame((s) => s.cancelWaiverClaim)
   const [pos, setPos] = useState('ALL')
   const [q, setQ] = useState('')
 
@@ -24,6 +37,14 @@ export function FreeAgency() {
   const canScout = canShadow(career)
   const access = accessFor(career, 'freeagency')
   const cap = capSummary(league, career.teamId)
+
+  // L11 W4: the waiver wire. Priority is worst-record-first; the user's own
+  // released players stay on the list but cannot be re-claimed by them.
+  const waiverRows = [...(league.waivers ?? [])]
+    .sort((a, b) => a.week - b.week || (b.contract.capHit - a.contract.capHit))
+    .map((entry) => ({ entry, player: league.players.find((p) => p.id === entry.playerId) }))
+  const myPriority = Math.max(1, waiverPriority(league).indexOf(career.teamId) + 1)
+  const myClaims = (league.waivers ?? []).filter((e) => e.claims.includes(career.teamId)).length
 
   const agents = useMemo(() => {
     let out = league.freeAgents.filter((p) => pos === 'ALL' || p.pos === pos)
@@ -65,6 +86,81 @@ export function FreeAgency() {
       </div>
 
       {canScout && <ShadowBoardCard className="mb-4" />}
+
+      {/* L11 W4: Waiver Tuesday — this week's released players, worst team picks first. */}
+      <Card pad={false} className="mb-4">
+        <div className="flex flex-wrap items-center gap-3 border-b border-line p-3">
+          <div>
+            <span className="label">Waiver Wire</span>
+            <div className="font-display text-sm font-700">Waiver Tuesday</div>
+          </div>
+          <Badge tone="neutral">You pick {ordinal(myPriority)} of 32</Badge>
+          <Badge tone={myClaims > 0 ? 'info' : 'neutral'}>{myClaims} of 3 claims filed</Badge>
+          <span className="ml-auto text-xs text-muted">Claims resolve when you advance the week.</span>
+        </div>
+        {waiverRows.length === 0 ? (
+          <div className="p-3 text-sm text-muted">
+            No players on waivers. In-season releases land here until Tuesday.
+          </div>
+        ) : (
+          <div className="divide-y divide-line">
+            {waiverRows.map(({ entry, player }) => {
+              const mine = entry.claims.includes(career.teamId)
+              const fromMe = entry.fromTeamId === career.teamId
+              const blocked = waiverBlockedReason(league, career.teamId, entry, true)
+              const atMax = !mine && myClaims >= 3
+              const disabled = !canSign || blocked !== null || atMax
+              const label = !canSign
+                ? 'GM decides'
+                : blocked === 'cap'
+                  ? 'No cap room'
+                  : blocked === 'roster'
+                    ? 'No roster spot'
+                    : atMax
+                      ? 'Max 3 claims'
+                      : `Claim · ${money(entry.contract.capHit)}`
+              return (
+                <div key={entry.playerId} className="flex flex-wrap items-center gap-3 p-3">
+                  <div className="min-w-0">
+                    <div className="truncate font-600">{player?.name ?? 'Unknown'}</div>
+                    <div className="text-xs text-muted">
+                      {player ? `${player.pos} · ${player.ovr} OVR · age ${player.age}` : '—'}
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted">
+                    {money(entry.contract.capHit)} · {entry.contract.years} yr
+                  </div>
+                  <div className="text-xs text-muted">
+                    from {league.byId[entry.fromTeamId]?.abbr ?? entry.fromTeamId}
+                  </div>
+                  {fromMe ? (
+                    <span className="ml-auto text-xs text-faint">Released by you</span>
+                  ) : mine ? (
+                    <Button
+                      className="ml-auto"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => cancelWaiverClaim(entry.playerId)}
+                    >
+                      Cancel claim
+                    </Button>
+                  ) : (
+                    <Button
+                      className="ml-auto"
+                      size="sm"
+                      variant="team"
+                      disabled={disabled}
+                      onClick={() => claimWaiver(entry.playerId)}
+                    >
+                      {label}
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Card>
 
       <Card pad={false}>
         <div className="flex flex-wrap items-center gap-3 border-b border-line p-3">

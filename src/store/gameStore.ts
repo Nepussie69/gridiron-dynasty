@@ -115,7 +115,7 @@ import { evaluateTrade, executeTrade, findDeals, type TradeAsset } from '../game
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
-import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers } from '../game/engine/waivers'
+import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
 import { STARTERS, depthAt, moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
 import {
   advanceContacts,
@@ -464,6 +464,9 @@ interface GameStore {
 
   signFreeAgent: (id: string) => void
   releasePlayer: (id: string) => void
+  /** L11 W4: file / withdraw a waiver claim (resolves on Tuesday, at most 3 open). */
+  claimWaiver: (playerId: string) => void
+  cancelWaiverClaim: (playerId: string) => void
   hireStaff: (candidateId: string, salary: number, scheme?: string) => void
   fireStaff: (staffId: string) => void
   restructurePlayer: (id: string) => void
@@ -650,10 +653,17 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const week = world.week
-    // L11 W2: Waiver Tuesday — AI clubs add claims to entries from an earlier
-    // week, then those entries resolve before any game is simulated.
+    // L11 W2/W4: Waiver Tuesday — AI clubs add claims to entries from an earlier
+    // week, then those entries resolve before any game is simulated. Snapshot the
+    // open entries first so the result can be reported back to the user's inbox.
+    const openWaivers = (world.waivers ?? []).map((e) => ({
+      playerId: e.playerId,
+      fromTeamId: e.fromTeamId,
+      userClaimed: e.claims.includes(career.teamId),
+    }))
     aiWaiverClaims(world, career.teamId)
-    processWaivers(world)
+    const waiveResult = processWaivers(world, career.teamId)
+    const waiverMoments = waiveNews(world, career.teamId, openWaivers, waiveResult)
     // L11 W3: AI clubs replace injured starters from the free-agent pool.
     aiInjuryMoves(world, career.teamId)
     // Apply the saved pre-game plan to the user's game this week.
@@ -751,6 +761,8 @@ export const useGame = create<GameStore>((set, get) => ({
     // L10 G6: remember a halftime QB switch in the season's story.
     if (qbSwitchLine) nextCareer = logMoment(nextCareer, { week, text: qbSwitchLine, tone: 'info' })
     if (rbInjuryLine) nextCareer = logMoment(nextCareer, { week, text: rbInjuryLine, tone: 'loss' })
+    // L11 W4: the waiver turn's result for the user's club (win -> a moment).
+    for (const line of waiverMoments) nextCareer = logMoment(nextCareer, { week, text: line.text, tone: line.tone })
     // #20: log only the notable results — blowouts and thrillers — so the
     // season recap has a handful of real moments, not 18.
     if (sim && userGame) {
@@ -1664,6 +1676,55 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  claimWaiver: (playerId) => {
+    const career = get().career
+    if (!career) return
+    if (!canSignFreeAgents(career)) {
+      get().showToast('You do not have roster control yet — keep climbing.')
+      return
+    }
+    const waivers = world.waivers ?? []
+    const entry = waivers.find((e) => e.playerId === playerId)
+    if (!entry) return
+    if (entry.fromTeamId === career.teamId) {
+      get().showToast('You cannot claim a player you just released.')
+      return
+    }
+    const mine = waivers.filter((e) => e.claims.includes(career.teamId)).length
+    if (!entry.claims.includes(career.teamId) && mine >= 3) {
+      get().showToast('You already have three open waiver claims.')
+      return
+    }
+    // W4: the same cap / roster test the Tuesday processing will apply; the UI
+    // shows the reason up front so a filed claim is never silently dead.
+    const blocked = waiverBlockedReason(world, career.teamId, entry, true)
+    if (blocked === 'cap') {
+      get().showToast('Not enough cap space to take on this contract.')
+      return
+    }
+    if (blocked === 'roster') {
+      get().showToast('No roster spot — every position is already at its floor.')
+      return
+    }
+    if (!entry.claims.includes(career.teamId)) entry.claims.push(career.teamId)
+    const p = world.players.find((x) => x.id === playerId)
+    bump(set, get)
+    get().showToast(`Waiver claim filed for ${p?.name ?? 'the player'}. It resolves on Tuesday.`)
+    get().save()
+  },
+
+  cancelWaiverClaim: (playerId) => {
+    const career = get().career
+    if (!career) return
+    if (!canSignFreeAgents(career)) return
+    const entry = (world.waivers ?? []).find((e) => e.playerId === playerId)
+    if (!entry || !entry.claims.includes(career.teamId)) return
+    entry.claims = entry.claims.filter((t) => t !== career.teamId)
+    bump(set, get)
+    get().showToast('Waiver claim withdrawn.')
+    get().save()
+  },
+
   restructurePlayer: (id) => {
     const career = get().career
     if (!career) return
@@ -2160,6 +2221,63 @@ async function simulateLeagueWeek(world: World, week: number, exceptGameId?: str
   }
   healAfterWeek(world, week)
   return true
+}
+
+/**
+ * L11 W4: turn a resolved waiver turn into news for the inbox, and return the
+ * season moments to log. A user claim won gets a news item and a moment; a claim
+ * lost gets news; an AI club claiming a player the user released gets news.
+ */
+function waiveNews(
+  world: World,
+  teamId: string,
+  open: { playerId: string; fromTeamId: string; userClaimed: boolean }[],
+  result: { claimed: { playerId: string; teamId: string }[]; cleared: string[] },
+): { text: string; tone: SeasonMoment['tone'] }[] {
+  const meta = new Map(open.map((e) => [e.playerId, e]))
+  const moments: { text: string; tone: SeasonMoment['tone'] }[] = []
+  const news = (id: string, headline: string, body: string) =>
+    world.news.unshift({
+      id,
+      week: world.week,
+      season: world.season,
+      category: 'Roster',
+      headline,
+      body,
+      teamId,
+      read: false,
+    })
+  for (const c of result.claimed) {
+    const p = world.players.find((x) => x.id === c.playerId)
+    const m = meta.get(c.playerId)
+    if (!p || !m) continue
+    const winner = world.byId[c.teamId]?.name ?? c.teamId
+    const from = world.byId[m.fromTeamId]?.name ?? m.fromTeamId
+    if (c.teamId === teamId) {
+      news(
+        `waiverwin_${world.season}_${world.week}_${p.id}`,
+        `Claimed ${p.name} off waivers`,
+        `You won the claim for ${p.name} (${p.pos}, ${p.ovr}) from the ${from}.`,
+      )
+      moments.push({ text: `Claimed ${p.name} off waivers from the ${from}.`, tone: 'win' })
+    } else {
+      if (m.userClaimed) {
+        news(
+          `waiverlose_${world.season}_${world.week}_${p.id}`,
+          `${winner} claimed ${p.name} ahead of you.`,
+          `Your waiver claim for ${p.name} (${p.pos}, ${p.ovr}) lost to the ${winner}.`,
+        )
+      }
+      if (m.fromTeamId === teamId) {
+        news(
+          `waivercut_${world.season}_${world.week}_${p.id}`,
+          `${winner} claimed ${p.name} off waivers.`,
+          `The ${winner} took over ${p.name}'s original contract after you released him.`,
+        )
+      }
+    }
+  }
+  return moments
 }
 
 /** Add a career milestone to the inbox. */
@@ -3219,6 +3337,55 @@ export function aiManagerProbe() {
     freeAgentsAfter: clone.freeAgents.length,
     aiTrades: tradeNews.length,
     sample: tradeNews.slice(0, 3).map((n) => n.headline),
+  }
+}
+
+/**
+ * Dev-only probe: exercise the L11 waiver wire for a full regular season on a
+ * clone of the current world. Injuries are simulated with `healAfterWeek`; each
+ * week AI clubs file claims and replace injured starters (which backfills the
+ * wire when a signing pushes a roster past 53). Reports the season's volume.
+ */
+export function waiverProbe(weeks = 17) {
+  const clone = structuredClone(world) as World
+  clone.phase = 'regular'
+  clone.week = 1
+  clone.waivers = []
+  // A fresh season: everyone 0-0, so priority is deterministic.
+  for (const id of Object.keys(clone.standings)) clone.standings[id] = zeroRecord(id)
+  const nfl = clone.teams.filter((t) => t.tier === 'NFL')
+  let claims = 0
+  let cleared = 0
+  let injurySignings = 0
+  let maxRoster = 0
+  let minRoster = Infinity
+  for (let w = 1; w <= weeks; w++) {
+    clone.week = w
+    aiWaiverClaims(clone)
+    const res = processWaivers(clone)
+    claims += res.claimed.length
+    cleared += res.cleared.length
+    // AI injury moves are the only free-agent consumers between waiver turns;
+    // a signing removes exactly one free agent and releases a surplus onto the
+    // wire when the roster is at 53.
+    const freeBefore = clone.freeAgents.length
+    aiInjuryMoves(clone)
+    injurySignings += freeBefore - clone.freeAgents.length
+    const sizes = nfl.map((t) => (clone.roster[t.id] ?? []).length)
+    maxRoster = Math.max(maxRoster, ...sizes)
+    minRoster = Math.min(minRoster, ...sizes)
+    // Week-end recovery, which also seeds the next week's minor injuries.
+    healAfterWeek(clone, w)
+  }
+  const open = clone.waivers?.length ?? 0
+  return {
+    weeks,
+    releases: claims + cleared + open,
+    claims,
+    cleared,
+    injurySignings,
+    maxRoster,
+    minRoster: Number.isFinite(minRoster) ? minRoster : 0,
   }
 }
 

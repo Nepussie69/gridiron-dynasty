@@ -115,26 +115,43 @@ function releaseSurplus(world: World, teamId: string): Player | null {
   return cand
 }
 
-/** Whether a club could take on an entry, making room (and cap) if need be. */
-function canTake(world: World, teamId: string, entry: WaiverEntry): boolean {
+/**
+ * Whether a club can take on an entry right now, and if not, why (W4 UI uses the
+ * reason for the disabled Claim button). `roster` means every position is at its
+ * floor so there is nobody to cut; `cap` means the contract does not fit even
+ * after making room. Mirrors the exact test `processWaivers` applies.
+ */
+export function waiverBlockedReason(
+  world: World,
+  teamId: string,
+  entry: WaiverEntry,
+  /** The user's club never has a player cut for it: it needs an open roster spot. */
+  noAutoCut = false,
+): 'cap' | 'roster' | null {
   const roster = world.roster[teamId] ?? []
   let hit = roster.reduce((s, q) => s + q.contract.capHit, 0)
   let dead = world.deadMoney[teamId] ?? 0
   if (roster.length >= 53) {
+    if (noAutoCut) return 'roster'
     const cand = surplusCandidate(world, teamId)
-    if (!cand) return false
+    if (!cand) return 'roster'
     hit -= cand.contract.capHit
     dead += deadMoney(cand.contract)
   }
-  return capForSeason(world.season) - (hit + dead) >= entry.contract.capHit
+  return capForSeason(world.season) - (hit + dead) >= entry.contract.capHit ? null : 'cap'
+}
+
+/** Whether a club could take on an entry, making room (and cap) if need be. */
+function canTake(world: World, teamId: string, entry: WaiverEntry, userTeamId?: string): boolean {
+  return waiverBlockedReason(world, teamId, entry, teamId === userTeamId) === null
 }
 
 /** The first claimant in priority order that can fit the contract under the cap. */
-function firstClaimant(world: World, entry: WaiverEntry, priority: string[]): string | null {
+function firstClaimant(world: World, entry: WaiverEntry, priority: string[], userTeamId?: string): string | null {
   for (const team of priority) {
     if (team === entry.fromTeamId) continue
     if (!entry.claims.includes(team)) continue
-    if (canTake(world, team, entry)) return team
+    if (canTake(world, team, entry, userTeamId)) return team
   }
   return null
 }
@@ -183,7 +200,7 @@ export function aiWaiverClaims(world: World, skipTeamId?: string): void {
  * contract; the releasing club's dead money is refunded. Unclaimed players fall
  * to free agency with a zeroed contract. Processed entries are removed.
  */
-export function processWaivers(world: World): {
+export function processWaivers(world: World, userTeamId?: string): {
   claimed: { playerId: string; teamId: string }[]
   cleared: string[]
 } {
@@ -197,7 +214,7 @@ export function processWaivers(world: World): {
   const priority = waiverPriority(world)
   for (const entry of open) {
     const p = world.players.find((x) => x.id === entry.playerId)
-    const winner = p ? firstClaimant(world, entry, priority) : null
+    const winner = p ? firstClaimant(world, entry, priority, userTeamId) : null
     if (winner && p) {
       const roster = (world.roster[winner] ??= [])
       if (roster.length >= 53) releaseSurplus(world, winner)

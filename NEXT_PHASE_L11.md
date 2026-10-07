@@ -9,7 +9,7 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate: find 
 | W1 | **Bug:** signing a released/cut free agent gives a $0, 0-year contract | P1 | ✅ done — verified (P1) |
 | W2 | Waiver Tuesday engine: in-season releases go on waivers; claims by waiver priority | P1 | ✅ done — verified (P1) |
 | W3 | AI in-season injury moves (sign a replacement, release a surplus player onto waivers) | P1 | ✅ done — verified (P1) |
-| W4 | Waiver Wire UI, user claims, news, `__waiverProbe`, docs | P2 | not started |
+| W4 | Waiver Wire UI, user claims, news, `__waiverProbe`, docs | P2 | ✅ done — verified (P2) |
 
 ## Phase goal
 The season is now coached game by game (L10), but the roster is frozen between Week 1 and the offseason: AI clubs never react to injuries, and a cut player can be re-signed for nothing.
@@ -106,3 +106,8 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   exactly ($11.52M → $10.29M). 10 simulated weeks: 4 league waiver claims (e.g. PIT OG → LA), 11 one-year in-season deals (AI injury signings), every roster 53, 0 non-canonical roster entries, waivers cleared.
   `__careerSmoke(6,'personnel')` and `(6,'coach')` 0 errors / 0 violations. **Orchestrator fix:** AI clubs only claim contracts worth it (`annual ≤ 1.25 × marketPrice`); otherwise a user could dump an overpaid
   veteran (and the dead money) on the AI.
+- **P2** (Flash 6 min; browser-verified by Claude on 2026-10-07). As BAL (4th in priority) I claimed Eric Gregory (DT 64, released by NE) and won at Tuesday processing: on the roster, news
+  "Claimed Eric Gregory off waivers" + season moment. The Waiver Wire card shows "You pick 3rd of 32", "0 of 3 claims filed", contracts, releasing clubs, Claim · $1.1M buttons. `__waiverProbe(17)`:
+  19 releases, 18 AI injury signings, 1 claim, 18 cleared, rosters 53–53. **Orchestrator fix:** a claim won at 53 silently cut the user's lowest-OVR player ("Charlie Kolar — Released by you");
+  the user's club now needs an open roster spot (`waiverBlockedReason(..., noAutoCut)`, `processWaivers(world, userTeamId)`): at 53 every button reads "No roster spot"; after releasing one player the claim won
+  with no automatic cut. `__careerSmoke` personnel/coach 0/0, `__gameDayEquivalence` 10/10. **L11 complete.**

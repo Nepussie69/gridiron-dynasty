@@ -60,12 +60,12 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | **L9 The long game** | NEXT_PHASE_L9.md | **✅ all pushes (P3 verified)** | see git log |
 | **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | ✅ all 3 pushes | see git log |
 | **L10 Game day** | NEXT_PHASE_L10.md | ✅ all 5 pushes | see git log |
-| **L11 In-season roster life** | NEXT_PHASE_L11.md | in progress (see its table) | see git log |
+| **L11 In-season roster life** | NEXT_PHASE_L11.md | ✅ both pushes | see git log |
 
 ### Immediate next steps
 1. **L9.5 is done.** Nothing is in flight.
 
-2. **L10 Game day is done.** **L11 In-season roster life** (`NEXT_PHASE_L11.md`, 2 pushes): fixes a $0 free-agent signing exploit and adds Waiver Tuesday + AI injury moves. Check its progress table.
+2. **L10 Game day and L11 In-season roster life are done.** Next phase: ask the user (or plan one from the backlog in §5).
 
 ## 4. Pacing & balance (current, measured on committed code)
 - Personnel → GM: seeds 20261004 13 · 2222 8 · 33333 8 · 5150 10 · 777 9 · 111 17 (a weak-roster outlier). Coach → HC ~10–11.
