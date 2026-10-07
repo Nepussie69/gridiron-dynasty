@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { cn } from '../lib/cn'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card, PageHeader } from '../ui/kit'
+import { Badge, Button, Card, PageHeader } from '../ui/kit'
 
 const CAT_TONE: Record<string, 'gold' | 'loss' | 'info' | 'win' | 'neutral' | 'warn'> = {
   Owner: 'gold',
@@ -17,6 +17,7 @@ export function Inbox() {
   const league = useWorld()
   const readNews = useGame((s) => s.readNews)
   const markRead = useGame((s) => s.markRead)
+  const markAllNewsRead = useGame((s) => s.markAllNewsRead)
   const career = useGame((s) => s.career)!
   const [openId, setOpenId] = useState<string | null>(league.news[0]?.id ?? null)
 
@@ -37,6 +38,14 @@ export function Inbox() {
         eyebrow="Club"
         title="Inbox"
         subtitle={`${unread} unread. Offers, press, transactions, and notes from ownership.`}
+        right={
+          <div className="flex items-center gap-2">
+            <Badge tone={unread ? 'team' : 'neutral'}>{unread} unread</Badge>
+            <Button size="sm" variant="default" disabled={!unread} onClick={markAllNewsRead}>
+              Mark all read
+            </Button>
+          </div>
+        }
       />
 
       <div className="grid gap-4 lg:grid-cols-[380px_1fr]">

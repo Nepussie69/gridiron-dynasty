@@ -58,7 +58,7 @@ export function PlayerProfile() {
             <X size={16} />
           </button>
           <div className="flex items-start gap-4">
-            <OvrBadge value={player.ovr} size={64} />
+            <OvrBadge value={player.ovr} pot={player.pot} size={64} />
             <div className="min-w-0 text-white">
               <div className="label !text-white/70">
                 {player.pos} · {player.side} · {player.height} · {player.weight} lbs

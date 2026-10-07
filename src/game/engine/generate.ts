@@ -6,6 +6,7 @@ import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
+import { frontOfficeProfile } from './hiring'
 import { freshDraftPicks } from './picks'
 import { makeCharacter } from './character'
 import { makeScoutBias } from './scoutBias'
@@ -268,6 +269,8 @@ function makeStaff(rng: Rng, teamId: string, role: StaffRole, rating: number, se
     status: 'Hired',
     notes: `Signed through ${season + rint(rng, 1, 3)}`,
     bias: makeScoutBias(`${teamId}|${role}|${rating}`),
+    // Q8: front-office roles get a deterministic focus + front-office specialty.
+    ...frontOfficeProfile(role, id),
   }
 }
 
@@ -305,7 +308,8 @@ function generateStaffPool(rng: Rng, count: number): StaffMember[] {
   return Array.from({ length: count }, (_, i) => {
     const role = rpick(rng, roles)
     const m = makeStaff(rng, '', role, rint(rng, 52, 92), 2026)
-    return { ...m, id: `av${i}`, status: 'Available' as const }
+    const id = `av${i}`
+    return { ...m, id, ...frontOfficeProfile(role, id), status: 'Available' as const }
   })
 }
 
@@ -416,6 +420,25 @@ function buildNews(teamId: string, teamName: string, _teamTier: string): NewsIte
   return raw.map(([category, headline, body], i) => ({
     id: `n${i}`, week: 1, season: 2026, category, headline, body, teamId, read: i > 1,
   }))
+}
+
+/**
+ * L11.5 Q14: the opening inbox is written before the GM picks a club, so it uses
+ * Buffalo. Once the career exists, re-point every seeded club-specific item
+ * (ids n0–n5) at the user's actual club.
+ */
+export function retargetSeedNews(world: World, teamId: string): void {
+  const team = world.byId[teamId]
+  if (!team) return
+  const name = team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name
+  for (const n of world.news) {
+    if (!/^n[0-5]$/.test(n.id)) continue
+    n.teamId = teamId
+    n.headline = n.headline.replace(
+      /^Buffalo Bills leadership sets expectations$/,
+      `${name} leadership sets expectations`,
+    )
+  }
 }
 
 // ── Real-data mapping (exact Madden 26 / CFB 26 ratings) ──────────────────────

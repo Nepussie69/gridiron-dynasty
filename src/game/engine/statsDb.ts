@@ -8,6 +8,7 @@
 
 import type { Player, SeasonStats, StatLevel } from '../types'
 import { teamAvgOvr } from '../selectors'
+import { passerRating } from './stats'
 import type { World } from './generate'
 
 export interface TeamSeasonRecord {
@@ -89,7 +90,7 @@ export interface LeaderRow {
 export function leaderboard(
   world: World,
   db: CareerDatabase,
-  stat: 'passYds' | 'passTD' | 'rushYds' | 'rushTD' | 'rec' | 'recYds' | 'recTD' | 'sacks' | 'ints' | 'tackles',
+  stat: 'passYds' | 'passTD' | 'passerRating' | 'rushYds' | 'rushTD' | 'rec' | 'recYds' | 'recTD' | 'sacks' | 'ints' | 'tackles',
   opts: { season?: number; level?: StatLevel; career?: boolean; limit?: number } = {},
 ): LeaderRow[] {
   const limit = opts.limit ?? 25
@@ -98,7 +99,7 @@ export function leaderboard(
 
   const addLine = (pid: string, line: SeasonStats, name: string, pos: string) => {
     const team = world.byId[line.teamId]
-    const value = (line as unknown as Record<string, number>)[stat] ?? 0
+    const value = stat === 'passerRating' ? passerRating(line) : ((line as unknown as Record<string, number>)[stat] ?? 0)
     if (value <= 0) return
     if (opts.level && line.level !== opts.level) return
     if (opts.season && line.season !== opts.season) return

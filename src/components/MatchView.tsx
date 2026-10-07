@@ -6,6 +6,7 @@ import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
 import { originTag } from '../game/selectors'
+import { passerRating } from '../game/engine/stats'
 import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
@@ -591,7 +592,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
   const rushing = rows.filter((r) => (r.line.rushAtt ?? 0) > 0)
   const receiving = rows.filter((r) => (r.line.rec ?? 0) > 0 || (r.line.targets ?? 0) > 0)
-  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0)
+  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0)
   // Index once per render: the viewer re-renders every playback tick, so a
   // linear scan per box-score row would add up fast.
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
@@ -605,6 +606,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
       {passing.length > 0 && <BoxBlock title="Passing" rows={passing} fp={fp} cols={[
         { k: 'passComp', l: 'C/ATT', fmt: (r) => `${r.passComp ?? 0}/${r.passAtt ?? 0}` },
         { k: 'passYds', l: 'YDS' }, { k: 'passTD', l: 'TD' }, { k: 'ints', l: 'INT' },
+        { k: 'passerRating', l: 'RTG', fmt: (r) => passerRating(r).toFixed(1) },
       ]} />}
       {rushing.length > 0 && <BoxBlock title="Rushing" rows={rushing} fp={fp} cols={[
         { k: 'rushAtt', l: 'CAR' }, { k: 'rushYds', l: 'YDS' }, { k: 'rushTD', l: 'TD' },
@@ -613,7 +615,8 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
         { k: 'rec', l: 'REC' }, { k: 'recYds', l: 'YDS' }, { k: 'recTD', l: 'TD' },
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
-        { k: 'tackles', l: 'TCK' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
+        { k: 'tackles', l: 'TCK' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
+        { k: 'defYdsAllowed', l: 'YDS ALW' },
       ]} />}
     </div>
   )

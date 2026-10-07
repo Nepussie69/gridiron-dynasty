@@ -9,7 +9,7 @@
 import type { StaffMember } from '../types'
 import { coachEffect } from './coaching'
 import type { World } from './generate'
-import { clamp, type Rng } from './rng'
+import { clamp, hash32, type Rng } from './rng'
 import type { Reputation } from './career'
 
 export interface HireCandidate extends StaffMember {
@@ -21,6 +21,35 @@ export interface HireCandidate extends StaffMember {
 /** Schemes a candidate can be hired to run, by role family. */
 export const OFF_SCHEMES = ['Air Raid', 'Pro Style', 'Spread', 'West Coast', 'RPO Heavy']
 export const DEF_SCHEMES = ['4-3 Base', '3-4 Base', '4-2-5 Nickel', 'Multiple', 'Blitz Heavy']
+
+// ── L11.5 Q8: front-office staff have focus + front-office specialties ─────────
+export const SCOUT_FOCUS = ['College East', 'College West', 'Pro', 'Character']
+export const DPP_FOCUS = ['Pro scouting', 'Negotiation', 'Cap', 'Analytics']
+export const FRONT_SPECIALTIES = ['Talent ID', 'Character reads', 'Negotiation', 'Cap management', 'Analytics']
+
+export function isFrontOfficeRole(role: string): boolean {
+  return role === 'Scout' || role === 'Director of Player Personnel' || role === 'General Manager'
+}
+
+/** Focus options for a front-office role (empty for coaches). */
+export function focusOptions(role: string): string[] {
+  if (role === 'Scout') return SCOUT_FOCUS
+  if (role === 'Director of Player Personnel' || role === 'General Manager') return DPP_FOCUS
+  return []
+}
+
+/**
+ * Deterministic front-office profile derived from the staff id (no rng draws),
+ * used both when generating staff and when migrating legacy saves.
+ */
+export function frontOfficeProfile(role: string, id: string): { focus?: string; specialty?: string } {
+  if (!isFrontOfficeRole(role)) return {}
+  const opts = focusOptions(role)
+  return {
+    focus: opts.length ? opts[hash32(id, 11) % opts.length] : undefined,
+    specialty: FRONT_SPECIALTIES[hash32(id, 23) % FRONT_SPECIALTIES.length],
+  }
+}
 
 export function schemesForRole(role: string): string[] {
   if (role.includes('Offensive') || role === 'QB Coach' || role === 'OL Coach') return OFF_SCHEMES

@@ -175,7 +175,7 @@ export function PlayerTable({
             >
               {rank && <Td className="font-cond text-muted">{i + 1}</Td>}
               <Td className="sticky left-0 bg-surface">
-                <OvrBadge value={p.ovr} size={30} />
+                <OvrBadge value={p.ovr} pot={p.pot} size={30} />
               </Td>
               <Td className="sticky left-10 bg-surface">
                 <div className="flex items-center gap-2">

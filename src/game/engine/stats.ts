@@ -19,6 +19,25 @@ export interface PlayerBoxScore {
   line: GameStatLine
 }
 
+/**
+ * L11.5 Q7: standard NFL passer rating from any passing line (game or season).
+ * Returns 0 when the player has no attempts.
+ */
+export function passerRating(line: { passAtt?: number; passComp?: number; passYds?: number; passTD?: number; ints?: number }): number {
+  const att = line.passAtt ?? 0
+  if (att <= 0) return 0
+  const comp = line.passComp ?? 0
+  const yds = line.passYds ?? 0
+  const td = line.passTD ?? 0
+  const ints = line.ints ?? 0
+  const term = (x: number) => Math.max(0, Math.min(2.375, x))
+  const a = term((comp / att - 0.3) * 5)
+  const b = term((yds / att - 3) * 0.25)
+  const c = term((td / att) * 20)
+  const d = term(2.375 - (ints / att) * 25)
+  return Math.round(((a + b + c + d) / 6) * 1000) / 10
+}
+
 /** Aggregate a game's plays into per-player lines for both teams. */
 export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
   const byId: Record<string, GameStatLine> = {}
@@ -58,7 +77,11 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         }
         if (play.result === 'Interception!') add(qb, off, 'ints', 1)
       }
-      if (play.sackId) add(play.sackId, def, 'defSacks', 1)
+      if (play.sackId) {
+        add(play.sackId, def, 'defSacks', 1)
+        // Q7: a sack is a tackle for loss.
+        add(play.sackId, def, 'tfl', 1)
+      }
       if (play.intId) {
         add(play.intId, def, 'defInts', 1)
         add(play.intId, def, 'tackles', 1)
@@ -69,6 +92,14 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         add(play.carrierId, off, 'recYds', play.yards)
         if (play.result === 'TOUCHDOWN!') add(play.carrierId, off, 'recTD', 1)
       }
+      // Q7: coverage credit goes to the defender on the target.
+      if (play.coverId && play.targetId) {
+        add(play.coverId, def, 'defTargets', 1)
+        if (isComp) {
+          add(play.coverId, def, 'defComp', 1)
+          add(play.coverId, def, 'defYdsAllowed', Math.max(0, play.yards))
+        }
+      }
     } else if (play.type === 'run') {
       if (play.carrierId) {
         add(play.carrierId, off, 'rushAtt', 1)
@@ -77,7 +108,12 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       }
       // One tackler per run — the defense shares stops across the front seven.
       const t = play.tackleIds ?? []
-      if (t.length) add(t[(play.n + play.yards + 10) % t.length], def, 'tackles', 1)
+      if (t.length) {
+        const tackler = t[(play.n + play.yards + 10) % t.length]
+        add(tackler, def, 'tackles', 1)
+        // Q7: the tackler on a run for a loss also gets the TFL.
+        if (play.yards < 0) add(tackler, def, 'tfl', 1)
+      }
     }
   }
 

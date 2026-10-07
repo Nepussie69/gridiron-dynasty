@@ -80,6 +80,8 @@ export interface Play {
   tackleIds?: string[]
   sackId?: string
   intId?: string
+  /** L11.5 Q7: the defender in coverage on the target (derived, never an rng draw). */
+  coverId?: string
 }
 
 export interface GameSim {
@@ -326,6 +328,8 @@ interface PlayOutcome {
   tackleIds?: string[]
   sackId?: string
   intId?: string
+  /** L11.5 Q7: coverage defender on the target. */
+  coverId?: string
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -544,6 +548,20 @@ function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
   return !!env?.adjust[teamId]?.includes(fix)
 }
 
+/**
+ * L11.5 Q7: the coverage defender on the target. Purely deterministic — it reads
+ * the target's slot in the receiver group and the throw depth, so it never draws
+ * rng and cannot move the sim's calibration or the paused/full equivalence.
+ */
+function coverDefender(target: Player | undefined, concept: Concept, wrs: Player[], cbs: Player[], saf: Player[], lbs: Player[]): string | undefined {
+  if (!target) return undefined
+  const pick = (list: Player[], slot: number) => (list.length ? list[slot % list.length] : undefined)
+  const slot = Math.max(0, wrs.findIndex((w) => w.id === target.id))
+  if (target.pos === 'TE' || target.pos === 'RB') return pick(lbs, slot)?.id
+  if (concept.depth >= 15) return pick(saf, slot)?.id
+  return pick(cbs, slot)?.id ?? pick(saf, slot)?.id
+}
+
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
@@ -618,11 +636,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const target = scored[0]?.w ?? rb
   const tA = target ? mkAttrs(target) : {}
   const tStyle = target ? styleProfile(target) : styleProfile({ traits: [''] } as Player)
+  // Q7: pick the coverage defender now, from the same groups, with no rng draw.
+  const coverId = coverDefender(target, concept, wrs, cbs, saf, lbs)
 
   if (rng() < sackChance) {
     const y = -Math.round(6 + rng() * 6)
     const sackId = dl[rng() < 0.5 ? 0 : Math.min(1, dl.length - 1)]?.id
-    return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, pressure: true, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId }
+    return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, pressure: true, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId, coverId }
   }
 
   const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
@@ -682,7 +702,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const ballHawk = [...cbs, ...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
     return {
       type: 'pass', concept: concept.name, yards: 0, result: 'Interception!', turnover: true,
-      timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId: ballHawk?.id,
+      timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId: ballHawk?.id, coverId,
     }
   }
   if (rng() < compProb) {
@@ -701,10 +721,10 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: gain, result: big ? 'Explosive play!' : 'Complete',
       turnover: false, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: big,
-      timeUsed: 24 + Math.floor(rng() * 16), qbId: qb?.id,
+      timeUsed: 24 + Math.floor(rng() * 16), qbId: qb?.id, coverId,
     }
   }
-  return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id }
+  return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
 }
 
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect): PlayOutcome {

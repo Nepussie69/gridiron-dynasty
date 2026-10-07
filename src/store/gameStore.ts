@@ -4,6 +4,7 @@ import {
   fitToCap,
   indexPlayers,
   regenerateSchedule,
+  retargetSeedNews,
   teamStrength,
   zeroRecord,
   ERAS,
@@ -21,7 +22,7 @@ import {
   refreshCohesion,
   teamCohesion,
 } from '../game/engine/playbook'
-import { applyHire, attemptHire, openCandidates } from '../game/engine/hiring'
+import { applyHire, attemptHire, focusOptions, openCandidates, frontOfficeProfile, isFrontOfficeRole } from '../game/engine/hiring'
 import {
   leaderboard,
   newDatabase,
@@ -477,6 +478,8 @@ interface GameStore {
   cancelWaiverClaim: (playerId: string) => void
   hireStaff: (candidateId: string, salary: number, scheme?: string) => void
   fireStaff: (staffId: string) => void
+  /** L11.5 Q8: change a front-office staffer's focus (once per season). */
+  setStaffFocus: (staffId: string, focus: string) => void
   restructurePlayer: (id: string) => void
   extendPlayer: (id: string) => void
   /** G2: negotiate an extension with a player's agent (negotiate rungs). */
@@ -499,6 +502,8 @@ interface GameStore {
   proposeTrade: (partnerId: string, give: TradeAsset[], get: TradeAsset[]) => { accepted: boolean; message: string }
 
   markRead: (id: string) => void
+  /** L11.5 Q12: mark every current news item read. */
+  markAllNewsRead: () => void
   showToast: (msg: string) => void
   clearToast: () => void
   save: () => void
@@ -628,6 +633,8 @@ export const useGame = create<GameStore>((set, get) => ({
     career = applyScenario(world, career, scenario)
     career.seasonQuestion = makeSeasonQuestion(world, career)
     career.devBaseline = snapshotDevBaseline(world, career)
+    // L11.5 Q14: the opening inbox was written for Buffalo; re-point it at this club.
+    retargetSeedNews(world, career.teamId)
     set({
       career,
       activeTeamId: resolvedTeam,
@@ -2089,7 +2096,41 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  // L11.5 Q8: front-office staffer changes focus (once per season per staffer).
+  setStaffFocus: (staffId, focus) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const staff = world.staff[career.teamId] ?? []
+    const m = staff.find((s) => s.id === staffId)
+    if (!m || !isFrontOfficeRole(m.role)) return
+    if (!focusOptions(m.role).includes(focus)) return
+    if (m.focusChanged === world.season) {
+      get().showToast(`${m.name} already changed focus this season.`)
+      return
+    }
+    m.focus = focus
+    m.focusChanged = world.season
+    bump(set, get)
+    get().showToast(`${m.name} now focuses on ${focus}.`)
+    get().save()
+  },
+
   markRead: (id) => set((s) => ({ readNews: { ...s.readNews, [id]: true } })),
+
+  // L11.5 Q12: clear the whole inbox at once.
+  markAllNewsRead: () => {
+    const readNews: Record<string, boolean> = {}
+    for (const n of world.news) {
+      readNews[n.id] = true
+      n.read = true
+    }
+    set({ readNews })
+    get().save()
+  },
 
   showToast: (toast) => {
     set({ toast })
@@ -2462,6 +2503,16 @@ function migrateWorld(w: World): World {
     w.draftRounds = built.rounds
     w.draftPickIds = built.ids
   }
+  // L11.5 Q8: front-office staff get a focus + front-office specialty. Deterministic
+  // from the id, so a legacy save lands on the same values every load.
+  const applyFrontOffice = (m: import('../game/types').StaffMember) => {
+    if (!isFrontOfficeRole(m.role)) return
+    const prof = frontOfficeProfile(m.role, m.id)
+    if (prof.focus) m.focus ??= prof.focus
+    if (prof.specialty) m.specialty = prof.specialty
+  }
+  for (const team of Object.keys(w.staff)) for (const m of w.staff[team]) applyFrontOffice(m)
+  for (const m of w.staffPool) applyFrontOffice(m)
   repairCrushedContracts(w)
   return w
 }
@@ -2547,8 +2598,12 @@ function migrateCareer(c: CareerState): CareerState {
  * real NFL team. The college universe the save was built on no longer exists. */
 function reconcileCareerTeam(w: World, c: CareerState): CareerState {
   const team = w.byId[c.teamId]
-  if (team && team.tier === 'NFL') return c
+  if (team && team.tier === 'NFL') {
+    retargetSeedNews(w, c.teamId)
+    return c
+  }
   const fallback = w.teams.find((t) => t.tier === 'NFL')?.id ?? 'BUF'
+  retargetSeedNews(w, fallback)
   return { ...c, teamId: fallback, tier: 'NFL' }
 }
 

@@ -154,14 +154,25 @@ export function DevBadge({ dev }: { dev: string }) {
 }
 
 // ── Ratings ──────────────────────────────────────────────────────────────────
-export function OvrBadge({ value, size = 34 }: { value: number; size?: number }) {
+// L11.5 Q13: `pot` shows the ceiling as a muted "/80" beside the OVR badge.
+export function OvrBadge({ value, pot, size = 34 }: { value: number; pot?: number; size?: number }) {
   const c = gradeColor(value)
   return (
-    <span
-      className="grid shrink-0 place-items-center rounded-md font-display font-700 tnum"
-      style={{ width: size, height: size, background: c, color: inkOn(c), fontSize: size * 0.46 }}
-    >
-      {value}
+    <span className="inline-flex shrink-0 items-center gap-0.5">
+      <span
+        className="grid shrink-0 place-items-center rounded-md font-display font-700 tnum"
+        style={{ width: size, height: size, background: c, color: inkOn(c), fontSize: size * 0.46 }}
+      >
+        {value}
+      </span>
+      {pot != null && (
+        <span
+          className="font-cond font-700 tnum text-muted"
+          style={{ fontSize: Math.max(9, Math.round(size * 0.32)) }}
+        >
+          /{pot}
+        </span>
+      )}
     </span>
   )
 }

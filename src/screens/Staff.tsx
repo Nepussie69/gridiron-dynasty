@@ -6,7 +6,7 @@ import type { StaffMember, StaffRole } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { coachEffect, staffGrade } from '../game/engine/coaching'
-import { openCandidates, schemesForRole, type HireCandidate } from '../game/engine/hiring'
+import { focusOptions, isFrontOfficeRole, openCandidates, schemesForRole, type HireCandidate } from '../game/engine/hiring'
 import { learnedBias } from '../game/engine/scoutBias'
 
 type RoleGroup = 'all' | 'hc' | 'coord' | 'pos' | 'front'
@@ -70,6 +70,7 @@ export function Staff() {
   const grade = staffGrade(effect)
   const hireStaff = useGame((s) => s.hireStaff)
   const fireStaff = useGame((s) => s.fireStaff)
+  const setStaffFocus = useGame((s) => s.setStaffFocus)
   const candidates = openCandidates(league, career.teamId, career.reputation)
   const visibleStaff = staff.filter((m) => inGroup(m.role, roleGroup))
   const visibleCandidates = candidates
@@ -139,7 +140,14 @@ export function Staff() {
       {tab === 'staff' ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {visibleStaff.map((m) => (
-            <StaffCard key={m.id} member={m} onAction={() => fireStaff(m.id)} actionLabel="Let Go" />
+            <StaffCard
+              key={m.id}
+              member={m}
+              season={league.season}
+              onFocusChange={setStaffFocus}
+              onAction={() => fireStaff(m.id)}
+              actionLabel="Let Go"
+            />
           ))}
           {!visibleStaff.length && (
             <Card className="grid place-items-center border-dashed text-center text-sm text-muted">
@@ -191,6 +199,7 @@ function HireCard({
 }) {
   const [offer, setOffer] = useState(candidate.askingSalary)
   const schemes = schemesForRole(candidate.role)
+  const front = isFrontOfficeRole(candidate.role)
   const [scheme, setScheme] = useState(candidate.scheme)
   const interestTone = candidate.interest >= 65 ? 'win' : candidate.interest >= 40 ? 'warn' : 'loss'
   const interestLabel = candidate.interest >= 65 ? 'Keen' : candidate.interest >= 40 ? 'Warm' : 'Cold'
@@ -215,7 +224,7 @@ function HireCard({
 
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
         <MiniStat label="Age" value={candidate.age} />
-        <MiniStat label="Scheme" value={candidate.scheme.split(' ')[0]} />
+        <MiniStat label={front ? 'Focus' : 'Scheme'} value={front ? (candidate.focus ?? '—') : candidate.scheme.split(' ')[0]} />
         <MiniStat label="Asking" value={money(candidate.askingSalary)} />
       </div>
 
@@ -277,15 +286,23 @@ function HireCard({
 
 function StaffCard({
   member,
+  season,
+  onFocusChange,
   actionLabel,
   onAction,
 }: {
   member: StaffMember
+  season: number
+  onFocusChange: (staffId: string, focus: string) => void
   actionLabel: string
   onAction: () => void
 }) {
   const tier = member.rating >= 85 ? 'gold' : member.rating >= 75 ? 'info' : 'neutral'
   const learned = learnedBias(member)
+  // L11.5 Q8: front-office roles use FOCUS instead of an offensive/defensive scheme.
+  const front = isFrontOfficeRole(member.role)
+  const focusOpts = focusOptions(member.role)
+  const changedThisSeason = member.focusChanged === season
   return (
     <Card>
       <div className="flex items-start gap-3">
@@ -308,9 +325,35 @@ function StaffCard({
 
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
         <MiniStat label="Age" value={member.age} />
-        <MiniStat label="Scheme" value={member.scheme.split(' ')[0]} />
+        <MiniStat label={front ? 'Focus' : 'Scheme'} value={front ? (member.focus ?? '—') : member.scheme.split(' ')[0]} />
         <MiniStat label="Salary" value={money(member.annual)} />
       </div>
+
+      {front && focusOpts.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="label">Focus</span>
+            <span className="text-[10px] text-faint">
+              {changedThisSeason ? 'Changed this season' : 'Change once per season'}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {focusOpts.map((f) => (
+              <button
+                key={f}
+                disabled={changedThisSeason || f === member.focus}
+                onClick={() => onFocusChange(member.id, f)}
+                className={cn(
+                  'rounded-md border px-2 py-1 font-cond text-[11px] font-700 uppercase transition disabled:opacity-40',
+                  f === member.focus ? 'border-transparent bg-ink text-white' : 'border-line text-muted hover:bg-surface-2',
+                )}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-3">
         <div className="mb-1 flex items-center justify-between">

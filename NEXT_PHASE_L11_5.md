@@ -12,14 +12,14 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | Q4 | More offensive and defensive plan presets (balanced) | P2 | ✅ done — verified (P2) |
 | Q5 | Coordinator recommendations ("what the OC/DC think we should do") | P2 | ✅ done — verified (P2) |
 | Q6 | Weekly hours: show what each action actually does | P2 | ✅ done — verified (P2) |
-| Q7 | Stats: DB yards allowed, tackles for loss, QB passer rating | P3 | not started |
-| Q8 | Front-office staff get front-office skills (no offensive schemes) | P3 | not started |
-| Q9 | Cap allocation by position group | P3 | not started |
-| Q10 | Trade center: empty trade says "They accept" | P3 | not started |
+| Q7 | Stats: DB yards allowed, tackles for loss, QB passer rating | P3 | ✅ done — verified (P3) |
+| Q8 | Front-office staff get front-office skills (no offensive schemes) | P3 | ✅ done — verified (P3) |
+| Q9 | Cap allocation by position group | P3 | ✅ done — verified (P3) |
+| Q10 | Trade center: empty trade says "They accept" | P3 | ✅ done — verified (P3) |
 | Q11 | Trade future picks up to 3 drafts ahead | P4 | not started |
-| Q12 | Inbox: "Mark all read" button | P3 | not started |
-| Q13 | Show players as current/ceiling, e.g. `64/80` (depth chart, roster lists, player cards) | P3 | not started |
-| Q14 | **Bug:** opening inbox names the wrong club ("Buffalo Bills leadership…" for a CLE/BAL career) | P3 | not started |
+| Q12 | Inbox: "Mark all read" button | P3 | ✅ done — verified (P3) |
+| Q13 | Show players as current/ceiling, e.g. `64/80` (depth chart, roster lists, player cards) | P3 | ✅ done — verified (P3) |
+| Q14 | **Bug:** opening inbox names the wrong club ("Buffalo Bills leadership…" for a CLE/BAL career) | P3 | ✅ done — verified (P3) |
 
 **Guardrails:** keep L10 determinism (`__gameDayEquivalence` n/n: a stop or pause never draws rng), `__simTest` calibration (AI-vs-AI unchanged), the no-dominant-strategy rule (`__planMatrix`), canonical player objects,
 optional save fields. No changes to gates, objectives, capabilities or contract pricing.
@@ -149,3 +149,9 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   Advice card + Apply sets `defaultPlan` (Stack the Box applied); weekly tiles show the effect and "Done ×1 this week".
   **Orchestrator fixes:** the weak-secondary reason now quotes the DB rating; the DC's "their run game" branch read *their linebackers* — now reads their RB; the OC no longer recommends Run Heavy (−3.9 vs Balanced) or
   Ball Control (−2.5): strong fronts → Quick Game, run-first opponents → Balanced. **Balance note for later:** run-leaning offensive presets are all below Balanced (Run Heavy −3.9, Clock Killer −3.5, Ball Control −2.5, Play-Action −1.2).
+- **P3** (Flash 7.5 min, hit its step limit after Q7 + half of Q8; continuation 6.5 min for the rest; browser-verified by Claude on 2026-10-07). `__simTest(200)` seed 33333 identical (23.8 / 66.8% / 64.5 / 1.75 / 0.97 INT / 4.84 ypc);
+  `__gameDayEquivalence(20)` 20/20; `__careerSmoke(2,'personnel')` 0/0. Box score: passer rating matches the NFL formula (28/33, 290, 3 TD, 0 INT → 133.6); coverage lines (targets/comp/yds) credited by slot; TFL on sacks and
+  negative runs. Cap shows QB…K/P groups with $ and % plus the OFF/DEF/ST line; staff cards show FOCUS (Scout: College East/West/Pro/Character; DPP: Pro scouting/Negotiation/Cap/Analytics) with a once-per-season change;
+  empty trade says "Add players or picks to build a trade"; Mark all read → 0 unread (the sidebar badge was dead before, now counts unread news); depth chart shows `72/74`; a CLE career's opening inbox says "Cleveland Browns".
+  **Orchestrator fix:** a run's TFL now goes to the same defender credited with the tackle (Flash used `t[0]`).
+  **Found (pre-existing sim issue, moved to L12 E1):** one receiver gets a median 72% of his team's targets per game (argmax target pick), so coverage stats concentrate on one defender.

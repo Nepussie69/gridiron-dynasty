@@ -167,7 +167,7 @@ export function League() {
             <div className="space-y-1">
               {top.map((p) => (
                 <div key={p.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5">
-                  <OvrBadge value={p.ovr} size={28} />
+                  <OvrBadge value={p.ovr} pot={p.pot} size={28} />
                   <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
                   <span className="flex-1 truncate text-sm font-600 text-ink">{p.name}</span>
                   <span className="font-cond text-xs text-muted">{p.age}</span>

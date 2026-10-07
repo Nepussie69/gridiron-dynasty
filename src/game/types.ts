@@ -138,6 +138,12 @@ export interface GameStatLine {
   tackles?: number
   defSacks?: number
   defInts?: number
+  /** L11.5 Q7: tackles for loss (runs stopped behind the line; sacks count too). */
+  tfl?: number
+  /** L11.5 Q7: coverage stats for the defender on the target. */
+  defYdsAllowed?: number
+  defTargets?: number
+  defComp?: number
 }
 
 export interface Player {
@@ -263,6 +269,10 @@ export interface StaffMember {
   rating: number // 1-100
   specialty: string
   scheme: string
+  /** L11.5 Q8: front-office staff focus (Scout/DPP/GM) — replaces scheme for them. */
+  focus?: string
+  /** L11.5 Q8: season the focus was last changed (once per season for the user's staff). */
+  focusChanged?: number
   annual: number
   contractYears: number
   teamId: string | null

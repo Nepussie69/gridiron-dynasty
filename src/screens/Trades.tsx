@@ -27,6 +27,7 @@ interface Asset {
   sub: string
   value: number
   ovr?: number
+  pot?: number
   round?: number
 }
 
@@ -182,14 +183,18 @@ export function Trades() {
             <div
               className={cn(
                 'mt-3 rounded-lg px-3 py-2 font-cond text-sm font-700 uppercase',
-                verdict.verdict === 'accept' ? 'bg-[#e5f6ec] text-win' : verdict.verdict === 'close' ? 'bg-[#fdf0dc] text-warn' : 'bg-[#fdeaec] text-loss',
+                !give.length && !get.length
+                  ? 'bg-surface-2 text-muted'
+                  : verdict.verdict === 'accept' ? 'bg-[#e5f6ec] text-win' : verdict.verdict === 'close' ? 'bg-[#fdf0dc] text-warn' : 'bg-[#fdeaec] text-loss',
               )}
             >
-              {verdict.verdict === 'accept'
-                ? 'They accept'
-                : verdict.verdict === 'close'
-                  ? 'Close — needs more'
-                  : 'They decline'}
+              {!give.length && !get.length
+                ? 'Add players or picks to build a trade'
+                : verdict.verdict === 'accept'
+                  ? 'They accept'
+                  : verdict.verdict === 'close'
+                    ? 'Close — needs more'
+                    : 'They decline'}
             </div>
             {canTrade && <p className="mt-2 text-[11px] leading-snug text-muted">{verdict.reason}</p>}
 
@@ -226,6 +231,7 @@ function assetsFor(world: World, teamId: string): Asset[] {
     sub: `${p.pos} · ${p.age} yrs · ${money(p.contract.capHit)}`,
     value: playerTradeValue(p),
     ovr: p.ovr,
+    pot: p.pot,
   }))
   const pickAssets: Asset[] = picksOwnedBy(world, teamId).map((pk) => ({
     id: pk.id,
@@ -285,7 +291,7 @@ function AssetColumn({
               )}
             >
               {a.kind === 'player' ? (
-                <OvrBadge value={a.ovr!} size={30} />
+                <OvrBadge value={a.ovr!} pot={a.pot} size={30} />
               ) : (
                 <span className="grid h-7 w-7 place-items-center rounded-md bg-ink font-display text-xs font-700 text-white">
                   R{a.round}

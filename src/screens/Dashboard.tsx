@@ -249,7 +249,7 @@ export function Dashboard() {
                   onClick={() => selectPlayer(p.id)}
                   className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition hover:bg-surface-2"
                 >
-                  <OvrBadge value={p.ovr} size={30} />
+                  <OvrBadge value={p.ovr} pot={p.pot} size={30} />
                   <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
                   <span className="flex-1 truncate font-600 text-ink">{p.name}</span>
                   <span className="font-cond text-xs text-muted">{p.college}</span>

@@ -4,10 +4,10 @@ import { leaderboard, type LeaderRow } from '../game/engine/statsDb'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
 
-type StatKey = 'passYds' | 'passTD' | 'rushYds' | 'rushTD' | 'rec' | 'recYds' | 'recTD' | 'sacks' | 'ints' | 'tackles'
+type StatKey = 'passYds' | 'passTD' | 'passerRating' | 'rushYds' | 'rushTD' | 'rec' | 'recYds' | 'recTD' | 'sacks' | 'ints' | 'tackles'
 
 const GROUPS: { label: string; stats: { key: StatKey; label: string }[] }[] = [
-  { label: 'Passing', stats: [{ key: 'passYds', label: 'Pass Yards' }, { key: 'passTD', label: 'Pass TD' }] },
+  { label: 'Passing', stats: [{ key: 'passYds', label: 'Pass Yards' }, { key: 'passTD', label: 'Pass TD' }, { key: 'passerRating', label: 'Passer Rating' }] },
   { label: 'Rushing', stats: [{ key: 'rushYds', label: 'Rush Yards' }, { key: 'rushTD', label: 'Rush TD' }] },
   { label: 'Receiving', stats: [{ key: 'rec', label: 'Receptions' }, { key: 'recYds', label: 'Rec Yards' }, { key: 'recTD', label: 'Rec TD' }] },
   { label: 'Defense', stats: [{ key: 'sacks', label: 'Sacks' }, { key: 'ints', label: 'Interceptions' }, { key: 'tackles', label: 'Tackles' }] },

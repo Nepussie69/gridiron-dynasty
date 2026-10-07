@@ -200,7 +200,7 @@ function Unit({
                           >
                             {i + 1}
                           </span>
-                          <OvrBadge value={p.ovr} size={26} />
+                          <OvrBadge value={p.ovr} pot={p.pot} size={26} />
                           <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
                           <span className="flex-1 truncate text-sm font-600 text-ink">{p.name}</span>
                           {p.injured && <Badge tone="loss">OUT</Badge>}

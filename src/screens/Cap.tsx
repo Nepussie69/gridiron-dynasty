@@ -11,6 +11,21 @@ import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { ExtensionTalks } from '../components/ExtensionTalks'
+import type { Position } from '../game/types'
+
+// L11.5 Q9: cap allocation is grouped by position family, in this order.
+const POSITION_GROUPS: { label: string; positions: Position[] }[] = [
+  { label: 'QB', positions: ['QB'] },
+  { label: 'RB', positions: ['RB'] },
+  { label: 'WR', positions: ['WR'] },
+  { label: 'TE', positions: ['TE'] },
+  { label: 'OL', positions: ['OT', 'OG', 'C'] },
+  { label: 'DL', positions: ['DE', 'DT'] },
+  { label: 'LB', positions: ['LB'] },
+  { label: 'CB', positions: ['CB'] },
+  { label: 'S', positions: ['S'] },
+  { label: 'K/P', positions: ['K', 'P'] },
+]
 
 export function Cap() {
   const league = useWorld()
@@ -64,20 +79,33 @@ export function Cap() {
         <Card className="lg:col-span-2">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-display text-lg font-700 uppercase tracking-wide">Cap Allocation</h3>
-            <span className="text-xs text-muted">by unit</span>
+            <span className="text-xs text-muted">by position group</span>
           </div>
-          <div className="space-y-2.5">
-            {['OFF', 'DEF', 'ST'].map((side) => {
-              const group = roster.filter((p) => p.side === side)
-              const total = group.reduce((s, p) => s + p.contract.capHit, 0)
+          <div className="space-y-2">
+            {POSITION_GROUPS.map((g) => {
+              const total = roster
+                .filter((p) => g.positions.includes(p.pos))
+                .reduce((s, p) => s + p.contract.capHit, 0)
+              const pct = (total / Math.max(1, summary.limit)) * 100
               return (
-                <div key={side} className="flex items-center gap-3">
-                  <span className="w-9 font-cond text-xs font-700 uppercase text-muted">{side}</span>
+                <div key={g.label} className="flex items-center gap-3">
+                  <span className="w-9 font-cond text-xs font-700 uppercase text-muted">{g.label}</span>
                   <div className="flex-1">
-                    <RatingBar value={(total / Math.max(1, summary.used)) * 100} color={side === 'OFF' ? 'var(--team)' : side === 'DEF' ? '#0b62ff' : '#c99a2e'} height={10} />
+                    <RatingBar value={(total / Math.max(1, summary.used)) * 100} color="var(--team)" height={10} />
                   </div>
                   <span className="w-20 text-right font-cond text-sm font-700 tnum text-ink-2">{money(total)}</span>
+                  <span className="w-12 text-right font-cond text-xs tnum text-muted">{pct.toFixed(1)}%</span>
                 </div>
+              )
+            })}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-2 text-[11px] text-muted">
+            {(['OFF', 'DEF', 'ST'] as const).map((side) => {
+              const total = roster.filter((p) => p.side === side).reduce((s, p) => s + p.contract.capHit, 0)
+              return (
+                <span key={side} className="font-cond font-700 uppercase">
+                  {side} <span className="text-ink-2">{money(total)}</span>
+                </span>
               )
             })}
           </div>

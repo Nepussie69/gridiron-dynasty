@@ -6,11 +6,11 @@
 | L5–L11 | Long-arc stories, rung jobs, economy, staff room, long game, game day, in-season roster life | ✅ done |
 | L11.5 P1 | Moment card, Next play/drive/moment, in-game plan changes | ✅ done |
 | L11.5 P2 | More presets, coordinator advice, weekly hours explained | ✅ done |
-| L11.5 P3 | Stats (DB yards, TFL, passer rating), front-office staff skills, cap by position, empty trade, mark all read, OVR/POT, wrong-club inbox bug | 🔄 with Flash |
-| L11.5 P4 | Trade future picks up to 3 drafts ahead | ⏳ queued |
+| L11.5 P3 | Stats (DB yards, TFL, passer rating), front-office staff skills, cap by position, empty trade, mark all read, OVR/POT, wrong-club inbox bug | ✅ done |
+| L11.5 P4 | Trade future picks up to 3 drafts ahead | 🔄 with Flash |
 | L12 P1 | Ratings tab (sortable), rating glossary, engine composites | 📝 specced |
 | L12 P2 | Practice week, keys to the game | 📝 specced |
-| L12 P3–P4 | Every rating counts in the sim, then recalibrate | 📝 specced |
+| L12 P3–P4 | Every rating counts in the sim (+ fix one receiver hogging targets), then recalibrate | 📝 specced |
 | L13 | Personnel packages, special-teams calls | 🗺 outlined |
 | L14 | Trade deadline day, draft-day trades, free-agency frenzy | 🗺 outlined |
 | L15 | Development plans (Auto / Select all), scouting travel (Auto), injury decisions, locker room | 🗺 outlined |

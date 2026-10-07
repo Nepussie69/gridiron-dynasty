@@ -124,7 +124,7 @@ export function FreeAgency() {
                   <div className="min-w-0">
                     <div className="truncate font-600">{player?.name ?? 'Unknown'}</div>
                     <div className="text-xs text-muted">
-                      {player ? `${player.pos} · ${player.ovr} OVR · age ${player.age}` : '—'}
+                      {player ? `${player.pos} · ${player.ovr}/${player.pot} OVR · age ${player.age}` : '—'}
                     </div>
                   </div>
                   <div className="text-xs text-muted">

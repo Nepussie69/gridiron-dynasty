@@ -182,7 +182,7 @@ function PracticeSquadCard({ teamId }: { teamId: string }) {
           <option value="">Sign a free agent…</option>
           {candidates.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.pos} {p.name} — {p.ovr} OVR
+              {p.pos} {p.name} — {p.ovr}/{p.pot} OVR
             </option>
           ))}
         </select>
@@ -202,7 +202,7 @@ function PracticeSquadCard({ teamId }: { teamId: string }) {
         {squad.length === 0 && <p className="py-3 text-xs text-muted">No players on the practice squad.</p>}
         {squad.map((p) => (
           <div key={p.id} className="flex items-center gap-3 py-2">
-            <OvrBadge value={p.ovr} size={28} />
+            <OvrBadge value={p.ovr} pot={p.pot} size={28} />
             <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
             <span className="min-w-0 flex-1 truncate text-sm font-600 text-ink">{p.name}</span>
             <Button size="sm" variant="ghost" onClick={() => promote(p.id)}>Promote</Button>
@@ -238,7 +238,7 @@ function InjuredReserveCard({ teamId }: { teamId: string }) {
           const healthy = !p.injured || p.injured.games <= 0
           return (
             <div key={p.id} className="flex items-center gap-3 py-2">
-              <OvrBadge value={p.ovr} size={28} />
+              <OvrBadge value={p.ovr} pot={p.pot} size={28} />
               <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-600 text-ink">{p.name}</span>

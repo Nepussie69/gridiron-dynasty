@@ -130,6 +130,12 @@ Real players already carry all 41 keys, so for them nothing changes. This also c
 | WR/TE ACC, COD | Join separation (small) |
 | TE RBK, IBL; OL STR, AWR | TE joins run blocking at 15% weight; OL STR helps short-yardage runs (≤2 to go); OL AWR blunts the blitz bonus (`blitz ? 9 : 0` → 9 × (1 − AWR term)) |
 
+**E1 also fixes target concentration (found in L11.5 P3 verification).** `resolvePass` picks the receiver with the top score (`route·0.6 + SPD·0.25 + styleBonus + fit·16 + rng()·12`); the fixed terms
+outweigh the 0–12 noise, so one receiver gets a median **72%** of his team's targets per game (≥10% of games: 100%). NFL: the top receiver averages ~25–30%. Replace the argmax with a **weighted pick**
+(weight = `exp((score − maxScore) / τ)` over the same scored list; choose with the SAME `rng()` draws already made — e.g. use the first receiver's draw as the uniform for the pick and keep the per-receiver
+draws as they are, so the draw count is unchanged). Tune τ so the median top share lands at **0.30–0.40** over 120 team-games, then re-check calibration (comp% moves when worse receivers see the ball).
+Add a probe `__targetShare(games)` that reports the median / p90 top-receiver share.
+
 ### E2 — Defense, kicking, general (P4)
 | Rating | Where it acts |
 |---|---|

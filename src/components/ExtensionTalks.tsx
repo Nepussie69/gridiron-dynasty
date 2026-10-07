@@ -75,7 +75,7 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
         </button>
 
         <div className="mb-4 flex items-center gap-3 pr-10">
-          <OvrBadge value={p.ovr} size={44} />
+          <OvrBadge value={p.ovr} pot={p.pot} size={44} />
           <div className="min-w-0">
             <div className="label">Extension Talks · {p.pos} · age {p.age}</div>
             <h2 className="truncate font-display text-2xl font-700 uppercase leading-none">{p.name}</h2>

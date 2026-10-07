@@ -72,7 +72,8 @@ export function Sidebar() {
   const resetCareer = useGame((s) => s.resetCareer)
   const exportSaveText = useGame((s) => s.exportSaveText)
   const importSaveText = useGame((s) => s.importSaveText)
-  const unread = useGame((s) => Object.values(s.readNews).filter((v) => !v).length)
+  const readNews = useGame((s) => s.readNews)
+  const unread = useWorld().news.filter((n) => !readNews[n.id]).length
 
   const tier = career?.tier ?? 'NFL'
   const visible = SCREENS.filter((s) => {

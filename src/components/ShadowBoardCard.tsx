@@ -40,7 +40,7 @@ export function ShadowBoardCard({ className }: { className?: string }) {
                 key={e.playerId}
                 className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5"
               >
-                <OvrBadge value={p?.ovr ?? e.ovrAtAdd} size={30} />
+                <OvrBadge value={p?.ovr ?? e.ovrAtAdd} pot={p?.pot} size={30} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-600 text-ink">
                     {e.name}{' '}
