@@ -1,14 +1,18 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
-import type { Contract, Player } from '../game/types'
+import type { Contract, Player, Position } from '../game/types'
+import { ATTRIBUTE_SCHEMA, playerAttrs } from '../game/data/ratings'
+import { COMPOSITES, ratingTitle, groupForPosition, type Composite } from '../game/data/ratingInfo'
 import { capSavings, deadMoney } from '../game/engine/cap'
 import { fitLabel, schemeFit } from '../game/engine/style'
 import { masteryLabel, masteryProgress } from '../game/engine/playbook'
 import { useGame } from '../store/gameStore'
 import { Badge, DevBadge, OvrBadge, RatingBar } from '../ui/kit'
 
-type SortKey = 'name' | 'age' | 'ovr' | 'pot' | 'dev' | 'pbk' | 'cap' | 'dead' | 'yrs' | 'fit'
+type SortKey =
+  | 'name' | 'age' | 'ovr' | 'pot' | 'dev' | 'pbk' | 'cap' | 'dead' | 'yrs' | 'fit'
+  | `composite:${string}` | `rating:${string}`
 type SortDir = 'asc' | 'desc'
 
 const DEV_RANK: Record<string, number> = {
@@ -21,7 +25,14 @@ const DEV_RANK: Record<string, number> = {
 }
 
 /** Value used to sort a row by column, mirroring DataTable's `sortValue`. */
-function sortValue(p: Player, key: SortKey, scheme?: string, defScheme?: string): number | string {
+function sortValue(
+  p: Player,
+  key: SortKey,
+  scheme?: string,
+  defScheme?: string,
+  attrs?: Record<string, number>,
+  composites?: Composite[],
+): number | string | null {
   switch (key) {
     case 'name':
       return p.name
@@ -46,7 +57,24 @@ function sortValue(p: Player, key: SortKey, scheme?: string, defScheme?: string)
       const useScheme = p.side === 'DEF' ? defScheme : scheme
       return useScheme ? schemeFit(p, useScheme, p.side === 'DEF' ? 'DEF' : 'OFF') : -1
     }
+    default: {
+      // R4a: inline composites / ratings when a single position is filtered.
+      if (key.startsWith('composite:')) {
+        const c = composites?.find((x) => x.id === key.slice(10))
+        return c && attrs ? c.compute(attrs) : null
+      }
+      return attrs?.[key.slice(7)] ?? null
+    }
   }
+}
+
+/** Rating tint, matching the Ratings tab (missing values are faint). */
+function ratingTint(v: number | null | undefined): string {
+  if (v == null) return 'text-faint'
+  if (v >= 90) return 'bg-win/10 text-win font-700'
+  if (v >= 80) return 'bg-brand/10 text-brand font-600'
+  if (v >= 70) return 'text-ink-2'
+  return 'text-muted'
 }
 
 /**
@@ -89,6 +117,8 @@ interface Props {
   showFit?: boolean
   scheme?: string
   defScheme?: string
+  /** R4a: when a single position is filtered, show its composites + first 4 ratings. */
+  inlinePos?: Position
   rank?: boolean
   right?: (p: Player) => ReactNode
   emptyText?: string
@@ -104,6 +134,7 @@ export function PlayerTable({
   showFit = false,
   scheme,
   defScheme,
+  inlinePos,
   rank = false,
   right,
   emptyText = 'No players to show.',
@@ -112,12 +143,29 @@ export function PlayerTable({
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [dir, setDir] = useState<SortDir>('asc')
 
+  const inlineGroup = inlinePos ? groupForPosition(inlinePos) : null
+  const inlineComposites = useMemo(() => (inlineGroup ? COMPOSITES[inlineGroup] ?? [] : []), [inlineGroup])
+  const inlineRatings = useMemo(
+    () => (inlinePos ? (ATTRIBUTE_SCHEMA[inlinePos] ?? []).slice(0, 4) : []),
+    [inlinePos],
+  )
+  const attrsById = useMemo(() => {
+    const m = new Map<string, Record<string, number>>()
+    if (inlinePos) for (const p of players) m.set(p.id, playerAttrs(p))
+    return m
+  }, [players, inlinePos])
+
   const sorted = useMemo(() => {
     if (!sortKey) return players
     const copy = [...players]
     copy.sort((a, b) => {
-      const va = sortValue(a, sortKey, scheme, defScheme)
-      const vb = sortValue(b, sortKey, scheme, defScheme)
+      const va = sortValue(a, sortKey, scheme, defScheme, attrsById.get(a.id), inlineComposites)
+      const vb = sortValue(b, sortKey, scheme, defScheme, attrsById.get(b.id), inlineComposites)
+      const ma = va == null
+      const mb = vb == null
+      if (ma && mb) return a.name.localeCompare(b.name)
+      if (ma) return 1
+      if (mb) return -1
       const cmp =
         typeof va === 'string' || typeof vb === 'string'
           ? String(va).localeCompare(String(vb))
@@ -125,7 +173,7 @@ export function PlayerTable({
       return dir === 'asc' ? cmp : -cmp
     })
     return copy
-  }, [players, sortKey, dir, scheme, defScheme])
+  }, [players, sortKey, dir, scheme, defScheme, attrsById, inlineComposites])
 
   const toggle = (key: SortKey) => {
     if (sortKey !== key) {
@@ -158,6 +206,30 @@ export function PlayerTable({
             <Th className="w-14 text-center" onClick={() => toggle('dev')} active={sortKey === 'dev'} dir={dir}>Dev</Th>
             <Th className="w-14 text-center" onClick={() => toggle('ovr')} active={sortKey === 'ovr'} dir={dir}>OVR</Th>
             <Th className="w-14 text-center" onClick={() => toggle('pot')} active={sortKey === 'pot'} dir={dir}>POT</Th>
+            {inlineComposites.map((c) => (
+              <Th
+                key={c.id}
+                className="w-16 text-center text-ink"
+                title={c.title}
+                onClick={() => toggle(`composite:${c.id}`)}
+                active={sortKey === `composite:${c.id}`}
+                dir={dir}
+              >
+                {c.label}
+              </Th>
+            ))}
+            {inlineRatings.map((k) => (
+              <Th
+                key={k}
+                className="w-12 text-center"
+                title={ratingTitle(k)}
+                onClick={() => toggle(`rating:${k}`)}
+                active={sortKey === `rating:${k}`}
+                dir={dir}
+              >
+                {k}
+              </Th>
+            ))}
             <Th className="w-24 text-center" onClick={() => toggle('pbk')} active={sortKey === 'pbk'} dir={dir}>Playbook</Th>
             {showMorale && <Th className="w-20">Morale</Th>}
             {showContract && <Th className="w-20 text-right" onClick={() => toggle('cap')} active={sortKey === 'cap'} dir={dir}>Cap Hit</Th>}
@@ -201,6 +273,22 @@ export function PlayerTable({
               </Td>
               <Td className="text-center font-display text-lg font-700 text-ink">{p.ovr}</Td>
               <Td className="text-center font-display text-lg font-700 text-brand">{p.pot}</Td>
+              {inlineComposites.map((c) => {
+                const v = attrsById.get(p.id) ? c.compute(attrsById.get(p.id)!) : null
+                return (
+                  <Td key={c.id} className={cn('text-center', ratingTint(v))}>
+                    {v == null ? '–' : Math.round(v)}
+                  </Td>
+                )
+              })}
+              {inlineRatings.map((k) => {
+                const v = attrsById.get(p.id)?.[k]
+                return (
+                  <Td key={k} className={cn('text-center', ratingTint(v))}>
+                    {v == null ? '–' : Math.round(v)}
+                  </Td>
+                )
+              })}
               <Td>
                 <PlaybookCell player={p} />
               </Td>
@@ -255,15 +343,18 @@ function Th({
   onClick,
   active,
   dir,
+  title,
 }: {
   children?: ReactNode
   className?: string
   onClick?: () => void
   active?: boolean
   dir?: SortDir
+  title?: string
 }) {
   return (
     <th
+      title={title}
       onClick={onClick}
       className={cn(
         'label whitespace-nowrap px-2 py-2 font-700',

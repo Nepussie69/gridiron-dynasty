@@ -703,6 +703,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: 0, result: 'Interception!', turnover: true,
       timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId: ballHawk?.id, coverId,
+      targetId: target?.id,
     }
   }
   if (rng() < compProb) {

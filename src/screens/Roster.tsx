@@ -6,7 +6,10 @@ import { capUsed, rosterOf, teamAvgOvr } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { PlayerTable } from '../components/PlayerTable'
 import { RatingsTable } from '../components/RatingsTable'
+import { StatsTable } from '../components/StatsTable'
+import { mainStatValue, seasonLine } from '../game/engine/stats'
 import { RATING_GROUPS, groupPositions } from '../game/data/ratingInfo'
+import type { Position, StatLevel } from '../game/types'
 import { Badge, Button, Card, OvrBadge, PageHeader, Stat } from '../ui/kit'
 
 const SIDES = [
@@ -21,6 +24,7 @@ const POSITIONS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', '
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'ratings', label: 'Ratings' },
+  { id: 'stats', label: 'Stats' },
 ] as const
 
 const RATING_POSITIONS = ['ALL', ...RATING_GROUPS.map((g) => g.id)]
@@ -32,16 +36,17 @@ export function Roster() {
   const [side, setSide] = useState<(typeof SIDES)[number]['id']>('ALL')
   const [pos, setPos] = useState('ALL')
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState<'ovr' | 'age' | 'name' | 'cap'>('ovr')
+  const [sort, setSort] = useState<'ovr' | 'age' | 'name' | 'cap' | 'stats'>('ovr')
 
   const roster = rosterOf(league, activeTeamId)
+  const level: StatLevel = league.byId[activeTeamId].tier === 'NFL' ? 'NFL' : 'CFB'
 
   const filtered = useMemo(() => {
-    const groupPos = tab === 'ratings' ? groupPositions(pos) : null
+    const groupPos = tab !== 'overview' ? groupPositions(pos) : null
     let out = roster.filter((p) => {
       if (side !== 'ALL' && p.side !== side) return false
       if (pos !== 'ALL') {
-        if (tab === 'ratings') {
+        if (tab !== 'overview') {
           if (groupPos && !groupPos.includes(p.pos)) return false
         } else if (p.pos !== pos) return false
       }
@@ -49,17 +54,22 @@ export function Roster() {
       return true
     })
     out = [...out].sort((a, b) => {
+      if (sort === 'stats') {
+        const va = mainStatValue(a, seasonLine(a, league.season, level)) ?? -1
+        const vb = mainStatValue(b, seasonLine(b, league.season, level)) ?? -1
+        return vb - va
+      }
       if (sort === 'ovr') return b.ovr - a.ovr
       if (sort === 'age') return a.age - b.age
       if (sort === 'cap') return b.contract.capHit - a.contract.capHit
       return a.name.localeCompare(b.name)
     })
     return out
-  }, [roster, side, pos, q, sort, tab])
+  }, [roster, side, pos, q, sort, tab, league.season, level])
 
   const avgAge = roster.length ? roster.reduce((s, p) => s + p.age, 0) / roster.length : 0
   const used = capUsed(roster)
-  const isNFL = league.byId[activeTeamId].tier === 'NFL'
+  const isNFL = level === 'NFL'
 
   return (
     <div>
@@ -69,7 +79,9 @@ export function Roster() {
         subtitle={
           tab === 'ratings'
             ? `${filtered.length} shown · click a column header to sort`
-            : `${roster.length} players · sorted by ${sort === 'ovr' ? 'overall' : sort}`
+            : tab === 'stats'
+              ? `${filtered.length} shown · ${league.season} season stats`
+              : `${roster.length} players · sorted by ${sort === 'ovr' ? 'overall' : sort}`
         }
         right={
           <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
@@ -163,6 +175,7 @@ export function Roster() {
                   <option value="age">Age</option>
                   <option value="cap">Cap Hit</option>
                   <option value="name">Name</option>
+                  <option value="stats">Stats</option>
                 </select>
               </>
             )}
@@ -179,16 +192,19 @@ export function Roster() {
               showDeadMoney
               scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
               defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
+              inlinePos={pos !== 'ALL' ? (pos as Position) : undefined}
               emptyText="No players match these filters."
             />
           </div>
-        ) : (
+        ) : tab === 'ratings' ? (
           <RatingsTable
             players={filtered}
             group={pos}
             scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
             defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
           />
+        ) : (
+          <StatsTable players={filtered} group={pos} season={league.season} level={level} />
         )}
       </Card>
 

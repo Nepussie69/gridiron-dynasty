@@ -8,14 +8,18 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 |---|---|---|---|
 | R1 | Roster **Ratings** tab: every rating as a column, click to sort ascending/descending | P1 | ✅ done — verified (P1) |
 | R2 | Rating glossary: full names + what each rating does in the sim (tooltips, help panel, player profile) | P1 | ✅ done — verified (P1) |
-| R4 | Orchestrator polish (user request): key ratings inline in Overview when one position is filtered; a **Stats** tab (season stats by position, sortable) + a stat option in the sort dropdown; **coverage grade 0–100** per game (passer rating allowed when targeted, + INT/incompletions, − TD/explosives; INTs credited to the coverage defender) in the box score (COV), Stats tab and profile | P1 | not started |
+| R4 | Orchestrator polish (user request): key ratings inline in Overview when one position is filtered; a **Stats** tab (season stats by position, sortable) + a stat option in the sort dropdown; **coverage grade 0–100** per game (passer rating allowed when targeted, + INT/incompletions, − TD/explosives; INTs credited to the coverage defender) in the box score (COV), Stats tab and profile | P1 | ✅ done — verified (R4) |
 | R3 | "Engine composites": the exact scores the sim builds from ratings (QB accuracy, separation, pass rush…) as sortable columns | P1 | ✅ done — verified (P1) |
 | W1 | Practice week: Balanced / Install / Sharpen / Rest, each week | P2 | not started |
 | W2 | Keys to the game: pick 2 before kickoff, graded after, builds trust | P2 | not started |
-| E0 | Every player carries every rating his position uses (generated players included) | P3 | not started |
-| E1 | Offense ratings in the sim: QB, RB, receivers, OL | P3 | not started |
-| E2 | Defense, kicking and general ratings in the sim: DL, LB, CB, S, K/P, STA, TGH | P4 | not started |
-| E3 | Recalibrate to today's numbers; glossary and ⚙ marks updated to "every rating counts" | P4 | not started |
+| S1 | Realistic target shares (weighted pick, no argmax) | P3 | not started |
+| S2 | Realistic carry split (RB1 / RB2 / QB runs) | P3 | not started |
+| S3 | Realistic tackle / sack / INT credit by position (bookkeeping, incl. tackles on completions) | P3 | not started |
+| S4 | `__statShape` probe vs NFL bands; box-score table layout fix | P3 | not started |
+| E0 | Every player carries every rating his position uses (generated players included) | P4 | not started |
+| E1 | Offense ratings in the sim: QB, RB, receivers, OL | P4 | not started |
+| E2 | Defense, kicking and general ratings in the sim: DL, LB, CB, S, K/P, STA, TGH | P5 | not started |
+| E3 | Recalibrate to today's numbers; glossary and ⚙ marks updated to "every rating counts" | P5 | not started |
 
 **Guardrails:** keep L10 determinism (`__gameDayEquivalence` n/n), `__simTest` calibration (AI-vs-AI unchanged), `__planMatrix` no-dominant-strategy, canonical player objects, optional save fields.
 User-only sim bonuses stay inside the existing clamp (wrinkle + install + practice ∈ [−0.6, +1.5] per side). Rewards ≤ +3 per reputation dimension per feature per season. No changes to gates, objectives,
@@ -98,7 +102,47 @@ one game with 2 keys graded correctly against the box score.
 
 ---
 
-## P3–P4 — Every rating counts (user request, 2026-10-07)
+## P3 — Realistic stat lines (user request, 2026-10-07: "find more realistic looking statistics… WR share, RB rushing yards, all of defense")
+Team totals are already calibrated (≈24 pts, 67% comp, 4.8 ypc). The problem is how plays are **credited to players**. Found in code:
+- **Targets:** `resolvePass` takes the argmax of `route·0.6 + SPD·0.25 + styleBonus + fit·16 + rng()·12`; the fixed terms beat the noise, so one receiver gets a median 72% of targets (100% in ≥10% of games).
+  User's screenshot: a WR with 23 rec / 362 yds (the real single-game record is 21 receptions).
+- **Carries:** `resolveRun` uses `carrier = rb[0]` for every AI run (only the user's 'committee' usage splits), and the QB never runs.
+- **Tackles:** completions credit no tackle at all; runs credit one tackler from LB+DL only (`tacklers = [...lbs, ...dl]`), so DBs show 0–1 tackles beside 50+ yards allowed.
+
+**NFL benchmarks (per team per game, recent seasons)** — sources: league-wide 2024 target shares (fantasy data trackers: WR1 23.5%, WR2 15.1%, TE1 14.1%, RB1 10.7%, WR3 10.1%, WR4 6.0%, RB2 5.2%, TE2 5.0%,
+other 10.3%); ~21 RB carries per game with lead backs mostly under ~60–65% of RB carries (committee era); linebackers lead tackles, DBs close behind.
+| Measure | Target band (median over 200+ team-games) |
+|---|---|
+| Top receiver's share of team targets | 0.22–0.32 (p90 ≤ 0.45; a 15+ target game ≤ 5% of team-games) |
+| Receivers with ≥ 1 catch | ≥ 5 |
+| Top receiver yards | 55–80 median; 150+ yd games ≤ 6% |
+| RB1 share of team rushes | 0.50–0.65; RB2 0.15–0.30; QB 0.08–0.16 (scrambles + designed runs) |
+| RB1 rush yards | 50–75 median; 100+ yd games 12–25%; 30+ carries ≤ 2% |
+| Tackles credited per team-game | 45–60; LB 35–45%, S 18–26%, CB 15–22%, DL 15–22% |
+| Top tackler | 7–10 median (usually an LB) |
+| Sacks by position | DL/edge 70–85%, LB 10–25%, DB ≤ 8% |
+| INTs by position | CB 40–55%, S 30–45%, LB 8–18% |
+
+### S1 — Target shares (sim change, approved)
+Replace the argmax with a **weighted pick** over the same scored list: weight = `exp((score − max)/τ)`, choose with the **existing draws** (no draw added or removed; e.g. reuse the top-scored receiver's own `rng()` value
+as the uniform, after the scores are built). Include RB targets (checkdowns: RB1 enters the list with a role prior so RB1 lands ~9–13%). Tune τ to the band above. This is where E1 (target concentration) lands; E1 keeps the
+rating terms only.
+### S2 — Carry split (sim change, approved)
+Pick the carrier for every team (AI too) from RB1 / RB2 / QB with weights ~0.60 / 0.27 / 0.13, shifted by the user's 'feature' (RB1 +0.15) / 'committee' (RB2 0.4) usage, a mobile QB's style (scramble trait raises QB share),
+and short yardage (≤ 2 to go: RB1/power back +). Deterministic choice from a hash of `(play.n, offId)` — **no new `rng()` draws**. QB runs use the QB's SPD/AGI for elusiveness in place of the RB's ratings.
+### S3 — Defensive credit (bookkeeping only; no outcome changes)
+- Runs: tackler from LB 45% / DL 25% / S 20% / CB 10% (more S/CB on gains ≥ 10, more DL on gains ≤ 0); passes: completions credit a tackler — the coverage defender (`coverId`) 55%, a safety 25%, a linebacker 20%
+  (none on TDs or out of bounds on the last 2 minutes). All deterministic from a hash of `play.n` (no rng). TFL stays with the tackler.
+- Sacks: the existing `sackId` pick stays DL-first; on blitz sacks 30% go to an LB (deterministic hash). INTs: credit the coverage defender 60% of the time, else the best ball-hawk DB (deterministic).
+### S4 — Probe + box-score layout
+- `__statShape(games = 200)` (dev global) runs AI-vs-AI games and prints every row of the benchmark table with ✅/❌ against the bands.
+- **Box score table fix (user screenshot):** columns overlap ("C/ATTYDSTDINT", "TCKTFLSCKINT") in the narrow box score (Schedule's box view and the game-day side panel). Use `table-fixed`, a truncating name
+  column, fixed numeric column widths (`w-9`/`w-11`), short headers ("YDS", "RTG", "ALW") and `whitespace-nowrap`; show up to 8 rows per block.
+**Acceptance (P3):** `__statShape(200)` all rows inside the bands; `__simTest(500)` team calibration within the E3 bands on seeds 33333/2222/5150; `__gameDayEquivalence(20)` 20/20; `__planMatrix` unchanged rules.
+
+---
+
+## P4–P5 — Every rating counts (user request, 2026-10-07)
 Today the sim reads about 25 of the ratings; the rest (ACC, COD, STR, JMP, STA, TGH, THP, TOR, TUP, PAC, CAR, SPM, SFA, CIT, RLS, PRS, PRC, HPW, IBL, …) are shown only.
 Goal: every rating a position carries changes something on the field, in a way a football fan would expect, **without moving league averages**.
 
@@ -131,11 +175,7 @@ Real players already carry all 41 keys, so for them nothing changes. This also c
 | WR/TE ACC, COD | Join separation (small) |
 | TE RBK, IBL; OL STR, AWR | TE joins run blocking at 15% weight; OL STR helps short-yardage runs (≤2 to go); OL AWR blunts the blitz bonus (`blitz ? 9 : 0` → 9 × (1 − AWR term)) |
 
-**E1 also fixes target concentration (found in L11.5 P3 verification).** `resolvePass` picks the receiver with the top score (`route·0.6 + SPD·0.25 + styleBonus + fit·16 + rng()·12`); the fixed terms
-outweigh the 0–12 noise, so one receiver gets a median **72%** of his team's targets per game (≥10% of games: 100%). NFL: the top receiver averages ~25–30%. Replace the argmax with a **weighted pick**
-(weight = `exp((score − maxScore) / τ)` over the same scored list; choose with the SAME `rng()` draws already made — e.g. use the first receiver's draw as the uniform for the pick and keep the per-receiver
-draws as they are, so the draw count is unchanged). Tune τ so the median top share lands at **0.30–0.40** over 120 team-games, then re-check calibration (comp% moves when worse receivers see the ball).
-Add a probe `__targetShare(games)` that reports the median / p90 top-receiver share.
+**Target concentration is fixed in S1 (P3), before E1.** E1 only adds the rating terms; re-check `__statShape` afterwards.
 
 ### E2 — Defense, kicking, general (P4)
 | Rating | Where it acts |
@@ -162,7 +202,7 @@ Add a probe `__targetShare(games)` that reports the median / p90 top-receiver sh
 - Spread check (new): a probe `__ratingSpread()` that swaps one starter for a ±15 version of himself in one rating and reports the point-margin change over 300 paired games, for ~10 key ratings, so we can see each one matters
   (expect +0.2 to +1.5 pts each) and none is huge (> 3 pts).
 - `RATING_INFO.sim` lines and the Ratings tab ⚙ marks updated so every rating shows what it does.
-**Acceptance (P3):** build + lint 5; equivalence 20/20; calibration within the bands above with only E0+E1 (re-tune E1 weights if needed). **(P4):** everything in E3.
+**Acceptance (P4):** build + lint 5; equivalence 20/20; calibration within the bands above with only E0+E1 (re-tune E1 weights if needed); `__statShape` still inside its bands. **(P5):** everything in E3.
 
 ## Orchestrator notes: what each rating does today (source for `RATING_INFO.sim`)
 From `playsim.ts` (play-by-play, used for every game) and `statAlloc.ts` (how season stats are shared between players):
@@ -179,7 +219,7 @@ From `playsim.ts` (play-by-play, used for every game) and `statAlloc.ts` (how se
 - K/P: KPW 50 / KAC 50 → field-goal make chance and range; KPW → punt distance; KAC → extra points.
 
 ## PUSHES
-**P1 = R2, R1, R3** · **P2 = W1, W2** · **P3 = E0, E1** · **P4 = E2, E3**
+**P1 = R2, R1, R3 (+R4)** · **P2 = W1, W2** · **P3 = S1, S2, S3, S4** · **P4 = E0, E1** · **P5 = E2, E3**
 After every task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && npm run lint` → green, exactly 5 warnings. Never run `npm run dev` or any watch command. No git commands.
 
 ## DO NOT
@@ -192,3 +232,7 @@ After every task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && n
   PMV sorts 87→… desc and 68→… asc; header tooltip "Power Moves — … sets the pass rush". Mahomes Accuracy 92 = hand calc. No sim file touched.
   **Orchestrator fix:** the K/P Leg composite defaults to 78 (as the sim does), not 70. **Note:** real players carry no DRR/MRR/SRR/CIT/RTE, so those columns show the derived values the sim also uses.
   **Also on 2026-10-07 (user request, Claude):** game-day screen redesign, one page, commit 5502792.
+- **R4** (Flash 13 min; Claude-verified). Overview with DE filtered adds Pass rush, Run stop, SPD, STR, AGI, AWR after POT; roster tabs Overview | Ratings | Stats; box score COV column; INT plays now carry targetId (field only).
+  **Orchestrator fix:** coverage grade formula re-anchored (Flash flagged that the spec's line couldn't hit both reference points): `95 − (ratingAllowed − 39.6)·0.573 + 4·INT` → 0/5 = 95, 6/7 110 yds TD = 27, 3/6 30 yds = 81.
+  **Also (user request, Claude):** the field uses each club's color (a readable one: Browns orange, Cowboys silver; the away club switches if they clash), the home end zone is on the left and the away one on the right,
+  and away possessions are drawn mirrored (right to left). Drive tags: Punt / Missed FG / Turnover (turnover only on a run or pass).

@@ -38,6 +38,33 @@ export function passerRating(line: { passAtt?: number; passComp?: number; passYd
   return Math.round(((a + b + c + d) / 6) * 1000) / 10
 }
 
+/**
+ * L12 R4b: coverage grade 0–100 from a defender's coverage line (game or season).
+ * `null` when the defender was never targeted. Built on the passer rating the
+ * coverage allowed, plus a bonus for interceptions made in coverage.
+ */
+export function coverageGrade(line: {
+  defTargets?: number
+  defComp?: number
+  defYdsAllowed?: number
+  defTDAllowed?: number
+  defIntsCov?: number
+}): number | null {
+  const att = line.defTargets ?? 0
+  if (att <= 0) return null
+  const ratingAllowed = passerRating({
+    passAtt: att,
+    passComp: line.defComp ?? 0,
+    passYds: line.defYdsAllowed ?? 0,
+    passTD: line.defTDAllowed ?? 0,
+    ints: line.defIntsCov ?? 0,
+  })
+  const intsCov = line.defIntsCov ?? 0
+  // Anchored on the passer-rating floor (39.6 = every target incomplete) and ceiling (158.3):
+  // 0/5 targets → 95, 6/7 for 110 yds and a TD → 27. Each interception in coverage adds 4.
+  return Math.max(0, Math.min(100, Math.round(95 - (ratingAllowed - 39.6) * 0.573 + 4 * intsCov)))
+}
+
 /** Aggregate a game's plays into per-player lines for both teams. */
 export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
   const byId: Record<string, GameStatLine> = {}
@@ -98,7 +125,11 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         if (isComp) {
           add(play.coverId, def, 'defComp', 1)
           add(play.coverId, def, 'defYdsAllowed', Math.max(0, play.yards))
+          // R4b: a pass TD caught on this defender.
+          if (play.result === 'TOUCHDOWN!') add(play.coverId, def, 'defTDAllowed', 1)
         }
+        // R4b: INTs credited to the coverage defender (distinct from the ball hawk).
+        if (play.result === 'Interception!') add(play.coverId, def, 'defIntsCov', 1)
       }
     } else if (play.type === 'run') {
       if (play.carrierId) {
@@ -145,6 +176,13 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.tackles += line.tackles ?? 0
   season.defSacks += line.defSacks ?? 0
   season.defInts += line.defInts ?? 0
+  season.tfl = (season.tfl ?? 0) + (line.tfl ?? 0)
+  // R4b: coverage fields, so the season coverage grade matches the game detail.
+  season.defTargets = (season.defTargets ?? 0) + (line.defTargets ?? 0)
+  season.defComp = (season.defComp ?? 0) + (line.defComp ?? 0)
+  season.defYdsAllowed = (season.defYdsAllowed ?? 0) + (line.defYdsAllowed ?? 0)
+  season.defTDAllowed = (season.defTDAllowed ?? 0) + (line.defTDAllowed ?? 0)
+  season.defIntsCov = (season.defIntsCov ?? 0) + (line.defIntsCov ?? 0)
 }
 
 /** Get or create this season's stat line for a player at a level. */
@@ -223,8 +261,51 @@ export function careerTotals(p: Player) {
     t.rushAtt += s.rushAtt; t.rushYds += s.rushYds; t.rushTD += s.rushTD
     t.targets += s.targets; t.rec += s.rec; t.recYds += s.recYds; t.recTD += s.recTD
     t.tackles += s.tackles; t.defSacks += s.defSacks; t.defInts += s.defInts
+    t.tfl = (t.tfl ?? 0) + (s.tfl ?? 0)
+    t.defTargets = (t.defTargets ?? 0) + (s.defTargets ?? 0)
+    t.defComp = (t.defComp ?? 0) + (s.defComp ?? 0)
+    t.defYdsAllowed = (t.defYdsAllowed ?? 0) + (s.defYdsAllowed ?? 0)
+    t.defTDAllowed = (t.defTDAllowed ?? 0) + (s.defTDAllowed ?? 0)
+    t.defIntsCov = (t.defIntsCov ?? 0) + (s.defIntsCov ?? 0)
   }
   return t
+}
+
+/**
+ * L12 R4c: this player's line for one season/level, or undefined if none.
+ */
+export function seasonLine(p: Player, season: number, level: StatLevel): SeasonStats | undefined {
+  return p.stats?.find((s) => s.season === season && s.level === level)
+}
+
+/**
+ * L12 R4c: the "main" stat for a player's position, used by the roster Stats tab
+ * and the Overview "Stats" sort. Returns null when there is no line to show.
+ */
+export function mainStatValue(p: Player, s: SeasonStats | undefined): number | null {
+  if (!s) return null
+  switch (p.pos) {
+    case 'QB':
+      return s.passYds
+    case 'RB':
+      return s.rushYds
+    case 'WR':
+    case 'TE':
+      return s.recYds
+    case 'DE':
+    case 'DT':
+    case 'LB':
+      return s.tackles
+    case 'CB':
+    case 'S': {
+      const g = coverageGrade(s)
+      return g != null ? g : s.defInts
+    }
+    case 'K':
+      return (s as unknown as { fgMade?: number }).fgMade ?? null
+    default:
+      return 0
+  }
 }
 
 export function statSummary(p: Player): string {

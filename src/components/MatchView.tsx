@@ -6,18 +6,52 @@ import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
 import { originTag } from '../game/selectors'
-import { passerRating } from '../game/engine/stats'
+import { coverageGrade, passerRating } from '../game/engine/stats'
 import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from './PlanEditor'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
-const OFF_COLOR = '#0b62ff'
-const DEF_COLOR = '#dc2937'
 const CENTER_Y = 26.65
 const W = 120
 const H = 53.3
+
+function hexRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '')
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h.slice(0, 6), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function colorGap(a: string, b: string): number {
+  const [r1, g1, b1] = hexRgb(a)
+  const [r2, g2, b2] = hexRgb(b)
+  return Math.hypot(r1 - r2, g1 - g2, b1 - b2)
+}
+function luminance(hex: string): number {
+  const [r, g, b] = hexRgb(hex).map((v) => {
+    const c = v / 255
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.04) / 1.055, 2.4)
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+const FIELD_GREEN = '#1f7a3f'
+/** A club color that reads on the green field: primary unless it's too dark or too close to the grass. */
+function fieldColor(team: import('../game/types').Team): string {
+  const ok = (c: string) => luminance(c) > 0.045 && colorGap(c, FIELD_GREEN) > 90
+  if (ok(team.primary)) return team.primary
+  if (ok(team.secondary)) return team.secondary
+  return luminance(team.primary) > luminance(team.secondary) ? team.primary : team.secondary
+}
+/** Jersey colors for both clubs; the away club switches color when the two clash. */
+function jerseyColors(home: import('../game/types').Team, away: import('../game/types').Team): { home: string; away: string } {
+  const homeC = fieldColor(home)
+  let awayC = fieldColor(away)
+  if (colorGap(homeC, awayC) < 90) {
+    const alt = awayC === away.primary ? away.secondary : away.primary
+    awayC = colorGap(homeC, alt) > colorGap(homeC, awayC) ? alt : '#ffffff'
+  }
+  return { home: homeC, away: awayC }
+}
 
 interface Dot {
   key: string
@@ -191,9 +225,14 @@ export function MatchView() {
 
   const home = world.byId[match.homeId]
   const away = world.byId[match.awayId]
-  const offTeam = world.byId[play.offId]
-  const defTeam = world.byId[play.defId]
-  const los = 10 + play.startYard
+  // Each club keeps its own end: home defends the left end zone, away the right.
+  // When the away club has the ball the play is drawn mirrored, right to left.
+  const flip = play.offId !== match.homeId
+  const mx = (x: number) => (flip ? W - x : x)
+  const jerseys = jerseyColors(home, away)
+  const offColor = play.offId === match.homeId ? jerseys.home : jerseys.away
+  const defColor = play.offId === match.homeId ? jerseys.away : jerseys.home
+  const los = mx(10 + play.startYard)
   const dur = phase === 'set' ? 0 : playDuration(play) / speed
   // G3: pause the replay at the end of what has been simulated so the moment
   // can be called. Nothing shows until the animation catches up.
@@ -283,8 +322,8 @@ export function MatchView() {
           <div className="relative min-h-[140px] flex-1 p-3 pb-0">
             <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="h-full w-full">
               <rect x={10} y={0} width={100} height={H} fill="#1f7a3f" />
-              <rect x={0} y={0} width={10} height={H} fill={offTeam.primary} opacity={0.9} />
-              <rect x={110} y={0} width={10} height={H} fill={defTeam.primary} opacity={0.9} />
+              <rect x={0} y={0} width={10} height={H} fill={home.primary} opacity={0.9} />
+              <rect x={110} y={0} width={10} height={H} fill={away.primary} opacity={0.9} />
               {Array.from({ length: 21 }, (_, i) => 10 + i * 5).map((x, i) => (
                 <line key={x} x1={x} y1={0} x2={x} y2={H} stroke="#ffffff" strokeOpacity={i % 2 === 0 ? 0.5 : 0.25} strokeWidth={0.12} />
               ))}
@@ -293,14 +332,14 @@ export function MatchView() {
               ))}
               <line x1={los} y1={0} x2={los} y2={H} stroke="#ffd34d" strokeWidth={0.35} />
               <text x={4.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
-                {offTeam.abbr}
+                {home.abbr}
               </text>
               <text x={115.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
-                {defTeam.abbr}
+                {away.abbr}
               </text>
               {(() => {
                 const sack = play.pressure && play.endYard < play.startYard
-                const bx = phase === 'set' ? los - 6 : sack ? los - 7 : 10 + play.endYard
+                const bx = phase === 'set' ? mx(10 + play.startYard - 6) : sack ? mx(10 + play.startYard - 7) : mx(10 + play.endYard)
                 const by = phase === 'set' ? CENTER_Y : play.type === 'pass' || play.type === 'run' ? CENTER_Y + (rnd(play.n * 7 + play.startYard) - 0.5) * 30 : CENTER_Y
                 return (
                   <g style={{ transform: `translate(${bx}px, ${by}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}>
@@ -309,12 +348,12 @@ export function MatchView() {
                 )
               })()}
               {dots.map((d) => {
-                const x = phase === 'set' ? d.fx : d.ex
+                const x = mx(phase === 'set' ? d.fx : d.ex)
                 const y = phase === 'set' ? d.fy : d.ey
                 return (
                   <g key={d.key} style={{ transform: `translate(${x}px, ${y}px)`, transition: `transform ${dur}ms cubic-bezier(.4,0,.5,1)` }}>
                     {d.hasBall && <circle r={1.7} fill="#ffffff" opacity={0.25} />}
-                    <circle r={1.15} fill={d.side === 'off' ? OFF_COLOR : DEF_COLOR} stroke="#fff" strokeWidth={0.16} />
+                    <circle r={1.15} fill={d.side === 'off' ? offColor : defColor} stroke="#fff" strokeWidth={0.2} />
                   </g>
                 )
               })}
@@ -511,7 +550,9 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
                 {scrimmage.length > 0 && ` · ${scrimmage.length} plays, ${yards} yds`}
               </span>
               {scored > 0 && <span className="ml-auto rounded bg-[#ffd34d] px-1.5 py-px font-cond text-[10px] font-700 uppercase text-ink">+{scored}</span>}
-              {last.turnover && <span className="ml-auto rounded bg-[#dc2937] px-1.5 py-px font-cond text-[10px] font-700 uppercase">Turnover</span>}
+              {scored <= 0 && last.type === 'punt' && <span className="ml-auto rounded bg-white/15 px-1.5 py-px font-cond text-[10px] font-700 uppercase text-white/80">Punt</span>}
+              {scored <= 0 && last.turnover && (last.type === 'run' || last.type === 'pass') && <span className="ml-auto rounded bg-[#dc2937] px-1.5 py-px font-cond text-[10px] font-700 uppercase">Turnover</span>}
+              {scored <= 0 && last.type === 'fg' && <span className="ml-auto rounded bg-white/15 px-1.5 py-px font-cond text-[10px] font-700 uppercase text-white/80">Missed FG</span>}
             </div>
             {snaps.map((p, k) => {
               const i = d.start + k
@@ -682,7 +723,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
   const rushing = rows.filter((r) => (r.line.rushAtt ?? 0) > 0)
   const receiving = rows.filter((r) => (r.line.rec ?? 0) > 0 || (r.line.targets ?? 0) > 0)
-  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0)
+  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0 || (r.line.defTargets ?? 0) > 0)
   // Index once per render: the viewer re-renders every playback tick, so a
   // linear scan per box-score row would add up fast.
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
@@ -707,6 +748,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
         { k: 'defYdsAllowed', l: 'YDS ALW' },
+        { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
       ]} />}
     </div>
   )

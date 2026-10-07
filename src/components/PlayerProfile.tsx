@@ -3,7 +3,7 @@ import { money } from '../lib/format'
 import { attributesFor, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
 import { RATING_INFO, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel, schemeFit } from '../game/engine/style'
-import { careerTotals } from '../game/engine/stats'
+import { careerTotals, coverageGrade } from '../game/engine/stats'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, DevBadge, MiniBars, OvrBadge, RatingBar, TeamCrest } from '../ui/kit'
 import type { Player } from '../game/types'
@@ -201,6 +201,7 @@ function CareerStats({ player }: { player: Player }) {
     )
   }
   const t = careerTotals(player)
+  const showCov = player.side === 'DEF'
   const levels = [
     { level: 'CFB' as const, label: 'College' },
     { level: 'NFL' as const, label: 'Pro' },
@@ -250,18 +251,21 @@ function CareerStats({ player }: { player: Player }) {
                     <th className="text-right font-500">GP</th>
                     <th className="text-right font-500">Yds</th>
                     <th className="text-right font-500">TD</th>
+                    {showCov && <th className="text-right font-500">COV</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((s) => {
                     const yds = s.passYds + s.rushYds + s.recYds
                     const td = s.passTD + s.rushTD + s.recTD
+                    const cov = coverageGrade(s)
                     return (
                       <tr key={`${s.season}-${level}`} className="text-ink-2">
                         <td className="text-left">{s.season}</td>
                         <td className="text-right">{s.games}</td>
                         <td className="text-right">{yds.toLocaleString()}</td>
                         <td className="text-right">{td}</td>
+                        {showCov && <td className="text-right">{cov == null ? '—' : cov}</td>}
                       </tr>
                     )
                   })}

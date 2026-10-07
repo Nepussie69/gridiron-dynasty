@@ -143,6 +143,11 @@ export function groupPositions(groupId: string): Position[] | null {
   return RATING_GROUPS.find((g) => g.id === groupId)?.positions ?? null
 }
 
+/** The ratings group a single position belongs to (OT/OG/C → OL, DE/DT → DL…). */
+export function groupForPosition(pos: Position): string | null {
+  return RATING_GROUPS.find((g) => g.positions.includes(pos))?.id ?? null
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // R3 — engine composites
 //

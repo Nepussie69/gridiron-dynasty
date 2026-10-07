@@ -107,6 +107,14 @@ export interface SeasonStats {
   defSacks: number
   defInts: number
   passDef: number
+  /** L11.5 Q7: tackles for loss (not previously rolled into season totals). */
+  tfl?: number
+  /** L12 R4b: season-summed coverage fields, used for the coverage grade (optional). */
+  defTargets?: number
+  defComp?: number
+  defYdsAllowed?: number
+  defTDAllowed?: number
+  defIntsCov?: number
   // honors
   awards?: string[]
 }
@@ -144,6 +152,10 @@ export interface GameStatLine {
   defYdsAllowed?: number
   defTargets?: number
   defComp?: number
+  /** L12 R4b: a pass TD caught while this defender covered the target. */
+  defTDAllowed?: number
+  /** L12 R4b: interceptions made on plays this defender was the cover man. */
+  defIntsCov?: number
 }
 
 export interface Player {
