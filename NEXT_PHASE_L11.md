@@ -6,9 +6,9 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate: find 
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| W1 | **Bug:** signing a released/cut free agent gives a $0, 0-year contract | P1 | not started |
-| W2 | Waiver Tuesday engine: in-season releases go on waivers; claims by waiver priority | P1 | not started |
-| W3 | AI in-season injury moves (sign a replacement, release a surplus player onto waivers) | P1 | not started |
+| W1 | **Bug:** signing a released/cut free agent gives a $0, 0-year contract | P1 | ✅ done — verified (P1) |
+| W2 | Waiver Tuesday engine: in-season releases go on waivers; claims by waiver priority | P1 | ✅ done — verified (P1) |
+| W3 | AI in-season injury moves (sign a replacement, release a surplus player onto waivers) | P1 | ✅ done — verified (P1) |
 | W4 | Waiver Wire UI, user claims, news, `__waiverProbe`, docs | P2 | not started |
 
 ## Phase goal
@@ -62,7 +62,7 @@ export function processWaivers(world: World): { claimed: { playerId: string; tea
   `deadBooked` (the claimer took the contract over). Set `p.origin = { kind: 'waiver', season, by: winnerName, fromTeamId }` (add `'waiver'` to the origin kind union if needed).
   Unclaimed: the player goes to `freeAgents` with the zeroed contract (as today; W1 prices him when someone signs him) and the dead money stays.
   Processed entries are removed. Waivers older than 2 weeks never linger.
-- **AI claims (`aiWaiverClaims`):** an AI club claims an entry when it has cap room, at most **one claim per club per week**, and either it has fewer healthy players than `STARTERS[pos]` at the player's
+- **AI claims (`aiWaiverClaims`):** an AI club claims an entry when it has cap room, the contract is worth it (`annual ≤ marketPrice × 1.25`, orchestrator addition in P1), at most **one claim per club per week**, and either it has fewer healthy players than `STARTERS[pos]` at the player's
   position, or the player's OVR is ≥ its weakest healthy starter at that position + 2. Deterministic: no rng.
 - **Offseason:** at `startNextSeason` (and at the end of the regular season), any remaining waiver entries clear to free agency.
 
@@ -101,3 +101,8 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
 - No new dependencies. Do not fix the baseline lint warnings. Do not reformat unrelated code.
 
 ## Verification log
+- **P1** (Flash 5 min; browser-verified by Claude on 2026-10-07). W1: a free-agent signing is now a priced 1-year deal (Cade Stover: 1 yr, $1.3M at week 1); the $0 re-sign exploit is gone.
+  W2: releasing Nate Wiggins (79 CB, 4 yrs, $1.09M) in week 1 put him on waivers (not FA, +$1.23M dead); KC claimed him at Tuesday processing with his **original** contract, and BAL's dead money went back
+  exactly ($11.52M → $10.29M). 10 simulated weeks: 4 league waiver claims (e.g. PIT OG → LA), 11 one-year in-season deals (AI injury signings), every roster 53, 0 non-canonical roster entries, waivers cleared.
+  `__careerSmoke(6,'personnel')` and `(6,'coach')` 0 errors / 0 violations. **Orchestrator fix:** AI clubs only claim contracts worth it (`annual ≤ 1.25 × marketPrice`); otherwise a user could dump an overpaid
+  veteran (and the dead money) on the AI.

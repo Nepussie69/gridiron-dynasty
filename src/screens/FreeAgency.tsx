@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { canSignFreeAgents } from '../game/engine/career'
+import { freeAgentContract } from '../game/engine/progress'
 import { canShadow } from '../game/engine/shadow'
 import { accessFor } from '../game/engine/access'
 import { capSummary } from '../game/selectors'
@@ -94,19 +95,25 @@ export function FreeAgency() {
           <PlayerTable
             players={agents}
             showCollege
-            right={(p) => (
-              <div className="flex items-center justify-end gap-1.5">
-                <ShadowStar playerId={p.id} />
-                <Button
-                  size="sm"
-                  variant="team"
-                  disabled={!canSign || cap.space < p.contract.annual}
-                  onClick={() => signFreeAgent(p.id)}
-                >
-                  {!canSign ? 'GM decides' : cap.space < p.contract.annual ? 'No cap room' : 'Sign'}
-                </Button>
-              </div>
-            )}
+            right={(p) => {
+              // W1: a released player's stored contract is zeroed; the real cost
+              // is the priced one-year deal (pro-rated during the season).
+              const deal = freeAgentContract(p, league.season, league.week, league.phase)
+              const noRoom = cap.space < deal.capHit
+              return (
+                <div className="flex items-center justify-end gap-1.5">
+                  <ShadowStar playerId={p.id} />
+                  <Button
+                    size="sm"
+                    variant="team"
+                    disabled={!canSign || noRoom}
+                    onClick={() => signFreeAgent(p.id)}
+                  >
+                    {!canSign ? 'GM decides' : noRoom ? 'No cap room' : `Sign · ${money(deal.capHit)}`}
+                  </Button>
+                </div>
+              )
+            }}
           />
         </div>
       </Card>

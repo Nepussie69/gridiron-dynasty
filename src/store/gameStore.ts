@@ -55,6 +55,7 @@ import { gradeGame } from '../game/engine/film'
 import {
   developPlayers,
   evaluateScouting,
+  freeAgentContract,
   refreshProspectClass,
   runAIFreeAgency,
   runAIResign,
@@ -114,6 +115,7 @@ import { evaluateTrade, executeTrade, findDeals, type TradeAsset } from '../game
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
+import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers } from '../game/engine/waivers'
 import { STARTERS, depthAt, moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
 import {
   advanceContacts,
@@ -648,6 +650,12 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const week = world.week
+    // L11 W2: Waiver Tuesday — AI clubs add claims to entries from an earlier
+    // week, then those entries resolve before any game is simulated.
+    aiWaiverClaims(world, career.teamId)
+    processWaivers(world)
+    // L11 W3: AI clubs replace injured starters from the free-agent pool.
+    aiInjuryMoves(world, career.teamId)
     // Apply the saved pre-game plan to the user's game this week.
     const plan = get().defaultPlan
     const userGameForPlan = world.schedule.find(
@@ -943,6 +951,8 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     if (world.phase !== 'offseason') return
+    // L11 W2: defensively clear any lingering waiver entries into free agency.
+    clearWaivers(world)
     // R4: box scores are kept for one season only.
     for (const g of world.schedule) {
       delete g.box
@@ -1606,13 +1616,17 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = world.freeAgents.findIndex((p) => p.id === id)
     if (idx < 0) return
     const p = world.freeAgents[idx]
+    // W1: a released player carries a zeroed contract, so price the signing
+    // here (one year at market, pro-rated for the weeks left in season).
+    const contract = freeAgentContract(p, world.season, world.week, world.phase)
     const cap = summarizeCap(world.roster[career.teamId] ?? [], world.deadMoney[career.teamId] ?? 0, world.season)
-    if (cap.space < p.contract.annual) {
+    if (cap.space < contract.capHit) {
       get().showToast('Not enough cap space to sign this player.')
       return
     }
     world.freeAgents.splice(idx, 1)
     p.teamId = career.teamId
+    p.contract = contract
     p.origin = { kind: 'freeAgent', season: world.season, by: career.gmName, fromTeamId: null }
     if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
     world.roster[career.teamId].push(p)
@@ -1637,8 +1651,14 @@ export const useGame = create<GameStore>((set, get) => ({
     world.deadMoney[career.teamId] = (world.deadMoney[career.teamId] ?? 0) + dead
     roster.splice(idx, 1)
     p.teamId = null
+    const original = { ...p.contract }
     p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
-    world.freeAgents.push(p)
+    // W2: in-season releases go on the waiver wire, not straight to free agency.
+    if (world.phase === 'regular') {
+      placeOnWaivers(world, p, career.teamId, original, dead)
+    } else {
+      world.freeAgents.push(p)
+    }
     bump(set, get)
     get().showToast(`${p.name} released. Dead money: $${(dead / 1e6).toFixed(1)}M.`)
     get().save()
@@ -1798,6 +1818,8 @@ export const useGame = create<GameStore>((set, get) => ({
     if (idx < 0) return
     const p = world.freeAgents.splice(idx, 1)[0]
     p.teamId = career.teamId
+    // W1: PS deals are priced too, at the flat practice-squad salary.
+    p.contract = freeAgentContract(p, world.season, world.week, world.phase, 250_000)
     ps.push(p)
     bump(set, get)
     get().showToast(`${p.name} signed to the practice squad.`)
@@ -2246,6 +2268,7 @@ function migrateWorld(w: World): World {
   w.ir ??= {}
   w.compLedger ??= {}
   w.rivals ??= []
+  w.waivers ??= []
   w.era ??= { id: 'modern', label: 'Modern Spread Era', positionBias: {}, capSpike: 1 }
   // L10 G8: a tendency book from a past season is stale — drop it.
   if (w.userBook && w.userBook.season !== w.season) w.userBook = undefined
@@ -2851,6 +2874,8 @@ function runEndOfRegularSeason(
       careerNext = { ...careerNext, counter: { season: world.season, taken: false } }
     }
   }
+  // L11 W2: the wire closes with the regular season — anything left clears to FA.
+  clearWaivers(world)
   world.phase = 'offseason'
 
   const rec = world.standings[careerNext?.teamId ?? 'BUF']

@@ -13,6 +13,7 @@ import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
 import { STARS } from './starSeed'
 import type { RealCfbPlayer, RealCfbTeam, RealData, RealNflPlayer } from '../data/realData'
 import type { PlayerBoxScore } from './stats'
+import type { WaiverEntry } from './waivers'
 
 /** Team offensive/defensive totals summed from a game's player box-score lines. */
 export interface GameBoxTotals {
@@ -91,6 +92,8 @@ export interface World {
   lastWins?: Record<string, number>
   /** L10 G8: the user's tendency book for this season (offense classes + defensive calls). */
   userBook?: { season: number; teamId: string; book: import('./decisions').TendencyBook }
+  /** L11 W2: players placed on waivers this season, awaiting the Tuesday turn. */
+  waivers?: WaiverEntry[]
 }
 
 // Backwards-compatible alias used by screen/selector imports.

@@ -1,4 +1,4 @@
-import type { CareerState, Player, Recommendation } from '../types'
+import type { CareerState, Contract, Player, Recommendation } from '../types'
 import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT } from './cap'
 import { coachEffect } from './coaching'
 import { generateProspectClass, indexPlayers, type World } from './generate'
@@ -224,7 +224,7 @@ export function runAIResign(world: World, skipTeamId?: string) {
     let resigned = 0
     for (const p of expiring) {
       if (resigned >= 4) break
-      const annual = priceFor(p, world.season, world.era?.positionBias?.[p.pos] ?? 1)
+      const annual = marketPrice(p, world.season, world.era?.positionBias?.[p.pos] ?? 1)
       if (used() + annual > capLimit * 0.98) continue
       const years = 3
       p.contract = {
@@ -320,7 +320,7 @@ export function runAITrades(world: World) {
 }
 
 // ── Free agency AI: teams re-sign or sign to fill needs ───────────────────────/** Minimum bodies per position when trimming a roster to 53. */
-const ROSTER_FLOOR: Record<string, number> = {
+export const ROSTER_FLOOR: Record<string, number> = {
   QB: 2, RB: 2, WR: 4, TE: 2, OT: 3, OG: 3, C: 1, DE: 3, DT: 3, LB: 4, CB: 4, S: 3, K: 1, P: 1,
 }
 
@@ -350,8 +350,40 @@ export function trimNflRosters(world: World) {
 }
 
 /** Market price for a free agent in a given season (tracks cap growth + era drift). */
-function priceFor(p: Player, season: number, posBias = 1): number {
+export function marketPrice(p: Player, season: number, posBias = 1): number {
   return Math.round((marketAAV(p.ovr, p.pos, p.age) * capScale(season) * posBias) / 100_000) * 100_000
+}
+
+/**
+ * L11 W1: the priced one-year deal a free agent signs mid-career. Built from
+ * `marketPrice`; during the regular season the cap hit is pro-rated for the
+ * weeks left in an 18-week season. `annualOverride` is used for practice-squad
+ * deals (a flat PS salary).
+ */
+export function freeAgentContract(
+  p: Player,
+  season: number,
+  week: number,
+  phase: 'regular' | 'offseason' | string,
+  annualOverride?: number,
+): Contract {
+  const annual = annualOverride ?? marketPrice(p, season)
+  const capHit =
+    phase === 'regular'
+      ? Math.round((annual * (18 - week + 1)) / 18)
+      : annual
+  return {
+    years: 1,
+    length: 1,
+    base: [annual],
+    signingBonus: 0,
+    proration: 0,
+    guaranteed: 0,
+    capHit,
+    annual,
+    signedThrough: season,
+    voidYears: 0,
+  }
 }
 
 export function runAIFreeAgency(world: World, skipTeamId?: string) {
@@ -374,16 +406,16 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
         const used0 = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
         let cand = freeCopy.find((p) => {
           if (taken.has(p.id) || p.pos !== pos) return false
-          return used0() + priceFor(p, world.season, eraBias) <= capLimit
+          return used0() + marketPrice(p, world.season, eraBias) <= capLimit
         })
         // Over the cap: fill remaining slots with the cheapest body, not a star.
         if (!cand) {
           cand = [...freeCopy]
             .filter((p) => !taken.has(p.id) && p.pos === pos)
-            .sort((a, b) => priceFor(a, world.season, eraBias) - priceFor(b, world.season, eraBias))[0]
+            .sort((a, b) => marketPrice(a, world.season, eraBias) - marketPrice(b, world.season, eraBias))[0]
         }
         if (!cand) break
-        const annual = priceFor(cand, world.season, eraBias)
+        const annual = marketPrice(cand, world.season, eraBias)
         taken.add(cand.id)
         cand.teamId = t.id
         cand.contract = { ...cand.contract, annual, years: 2, base: [annual, annual], capHit: annual }
@@ -402,7 +434,7 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
         const cand = freeCopy.find((p) => {
           if (taken.has(p.id) || p.pos === 'K' || p.pos === 'P') return false
           const bias = world.era?.positionBias?.[p.pos as import('../types').Position] ?? 1
-          return usedCap() + priceFor(p, world.season, bias) <= capLimit * 0.95
+          return usedCap() + marketPrice(p, world.season, bias) <= capLimit * 0.95
         })
         if (!cand) break
         // A full roster swaps cheap depth for the better free agent instead of
@@ -427,7 +459,7 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
           world.freeAgents.push(release)
         }
         const bias = world.era?.positionBias?.[cand.pos] ?? 1
-        const annual = priceFor(cand, world.season, bias)
+        const annual = marketPrice(cand, world.season, bias)
         taken.add(cand.id)
         cand.teamId = t.id
         cand.contract = { ...cand.contract, annual, years: 2, base: [annual, annual], capHit: annual }
