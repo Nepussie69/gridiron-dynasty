@@ -10,8 +10,9 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
-import { simulatePlayByPlay, setUserCoaching, setLivePlan, type GameSim } from '../game/engine/playsim'
-import { BALANCED_PLAN, type GamePlan } from '../game/engine/gameplan'
+import { simulatePlayByPlay, createGame, runToMoment, answerMoment, finishGame, setUserCoaching, setLivePlan, type GameSim, type GameCtx } from '../game/engine/playsim'
+import { DEFAULT_CALL_SHEET } from '../game/engine/decisions'
+import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, userBonusFromSkills } from '../game/engine/coaching'
 import {
   gainGameReps,
@@ -2159,14 +2160,16 @@ function migrateCareer(c: CareerState): CareerState {
       : { ...c, path }
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
+    const sheet = base.callSheet ?? DEFAULT_CALL_SHEET
     if (!base.skills || typeof base.skills !== 'object') {
-      return { ...base, skills: { ...ZERO_SKILLS } }
+      return { ...base, skills: { ...ZERO_SKILLS }, callSheet: sheet }
     }
-    return base
+    return { ...base, callSheet: sheet }
   }
   const legacy = typeof rep === 'number' ? rep : 20
   return {
     ...base,
+    callSheet: base.callSheet ?? DEFAULT_CALL_SHEET,
     reputation: {
       evaluation: clamp(legacy, 0, 100),
       roster: clamp(Math.round(legacy * 0.7), 0, 100),
@@ -2810,6 +2813,87 @@ export function dominanceProbe(games = 60) {
   }
 }
 
+/** Dev-only probe: check no single game-plan setting dominates the sim (#L10 F2).
+ * For each of up to 8 NFL opponents and each preset, plays `n` games with the
+ * user's club as the home team and reports points against/by preset. */
+export function planMatrix(n = 60) {
+  const career = useGame.getState().career
+  const userTeam = career?.teamId ?? 'BUF'
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const opponents = nfl.filter((t) => t.id !== userTeam).slice(0, 8)
+  const defPresets = PLAN_PRESETS.filter((p) => p.side === 'def')
+  const offPresets = PLAN_PRESETS.filter((p) => p.side === 'off')
+  // Paired seeds: every preset faces the exact same games.
+  const seeds = Array.from({ length: n }, (_, i) => world.seed + i * 7919 + 101)
+
+  const runSide = (side: 'off' | 'def', presets: typeof PLAN_PRESETS) => {
+    const perOpp: Record<string, Record<string, number>> = {}
+    for (const opp of opponents) {
+      const row: Record<string, number> = {}
+      for (const preset of presets) {
+        let total = 0
+        for (const seed of seeds) {
+          setLivePlan(
+            side === 'def'
+              ? { teamId: userTeam, off: BALANCED_PLAN, def: preset.plan }
+              : { teamId: userTeam, off: preset.plan, def: BALANCED_PLAN },
+          )
+          const sim = simulatePlayByPlay(world, userTeam, opp.id, seed)
+          // Point margin for the user's club, so offense and defense are judged alike
+          // (a hurry-up offense that scores more but gives up more is not "better").
+          total += sim.homeScore - sim.awayScore
+        }
+        row[preset.label] = +(total / n).toFixed(2)
+      }
+      perOpp[opp.id] = row
+    }
+    setLivePlan(null)
+    const labels = presets.map((p) => p.label)
+    const bestCount: Record<string, number> = Object.fromEntries(labels.map((l) => [l, 0]))
+    const edgeVsBalanced: Record<string, number> = Object.fromEntries(labels.map((l) => [l, 0]))
+    for (const opp of opponents) {
+      const row = perOpp[opp.id]
+      const best = Math.max(...labels.map((l) => row[l]))
+      for (const l of labels) if (row[l] === best) bestCount[l] += 1
+      for (const l of labels) edgeVsBalanced[l] += row[l] - (row.Balanced ?? 0)
+    }
+    for (const l of labels) edgeVsBalanced[l] = +(edgeVsBalanced[l] / Math.max(1, opponents.length)).toFixed(2)
+    // Opponent keys sit at the top level alongside the summary maps.
+    return { ...perOpp, bestCount, edgeVsBalanced }
+  }
+
+  return {
+    n,
+    userTeam,
+    opponents: opponents.map((t) => t.id),
+    defense: runSide('def', defPresets),
+    offense: runSide('off', offPresets),
+  }
+}
+
+/** Dev-only probe: prove game-day pauses never change the RNG stream (L10 G1). */
+export function gameDayEquivalence(n = 20) {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const ctx: GameCtx = { userTeamId: career.teamId, scope: 'hc', callSheet: career.callSheet ?? DEFAULT_CALL_SHEET }
+  const pick = (g: GameSim) => JSON.stringify({ h: g.homeScore, a: g.awayScore, p: g.plays, s: g.stats })
+  let identical = 0
+  let total = 0
+  for (let i = 0; i < n; i++) {
+    const opp = nfl.filter((t) => t.id !== career.teamId)[i % Math.max(1, nfl.length - 1)]
+    if (!opp) continue
+    const seed = world.seed + i * 7919 + 101
+    const a = simulatePlayByPlay(world, career.teamId, opp.id, seed, ctx)
+    const s = createGame(world, career.teamId, opp.id, seed, ctx)
+    for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId)
+    const b = finishGame(s)
+    if (pick(a) === pick(b)) identical++
+    total++
+  }
+  return { identical, total }
+}
+
 /** Dev-only probe: AI re-signing and AI-to-AI trades (#F, deeper rosters). */
 export function aiManagerProbe() {
   const clone = structuredClone(world) as World
@@ -3358,7 +3442,7 @@ export function draftFlowProbe() {
 export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
   const pool = world.teams.filter((t) => t.tier === tier)
   const rng = makeRng(world.seed + 999331)
-  const keys = ['points', 'plays', 'passAtt', 'passComp', 'passYds', 'passTD', 'ints', 'rushAtt', 'rushYds', 'rushTD', 'sacks', 'firstDowns', 'thirdDownAtt', 'thirdDownConv', 'fgAtt', 'fgMade', 'td', 'top'] as const
+  const keys = ['points', 'plays', 'passAtt', 'passComp', 'passYds', 'passTD', 'ints', 'rushAtt', 'rushYds', 'rushTD', 'sacks', 'sacksTaken', 'firstDowns', 'thirdDownAtt', 'thirdDownConv', 'fgAtt', 'fgMade', 'td', 'top'] as const
   const acc: Record<string, number> = Object.fromEntries(keys.map((k) => [k, 0]))
   let made = 0
   let margin = 0

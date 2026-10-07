@@ -179,8 +179,8 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
     awayScore: game.awayScore,
     plays: lines,
     stats: {
-      home: { plays: 60, points: game.homeScore, passAtt: 0, passComp: 0, passYds: 0, passTD: 0, ints: 0, rushAtt: 0, rushYds: 0, rushTD: 0, sacks: 3, firstDowns: 20, thirdDownAtt: 12, thirdDownConv: 5, fumbles: 0, td: 0, fgAtt: 2, fgMade: 1, top: 1800 },
-      away: { plays: 60, points: game.awayScore, passAtt: 0, passComp: 0, passYds: 0, passTD: 0, ints: 0, rushAtt: 0, rushYds: 0, rushTD: 0, sacks: 3, firstDowns: 20, thirdDownAtt: 12, thirdDownConv: 5, fumbles: 0, td: 0, fgAtt: 2, fgMade: 1, top: 1800 },
+      home: { plays: 60, points: game.homeScore, passAtt: 0, passComp: 0, passYds: 0, passTD: 0, ints: 0, rushAtt: 0, rushYds: 0, rushTD: 0, sacks: 3, sacksTaken: 3, firstDowns: 20, thirdDownAtt: 12, thirdDownConv: 5, fumbles: 0, td: 0, fgAtt: 2, fgMade: 1, twoAtt: 0, twoMade: 0, top: 1800 },
+      away: { plays: 60, points: game.awayScore, passAtt: 0, passComp: 0, passYds: 0, passTD: 0, ints: 0, rushAtt: 0, rushYds: 0, rushTD: 0, sacks: 3, sacksTaken: 3, firstDowns: 20, thirdDownAtt: 12, thirdDownConv: 5, fumbles: 0, td: 0, fgAtt: 2, fgMade: 1, twoAtt: 0, twoMade: 0, top: 1800 },
     },
     generated: true,
     homeLines: allocateTeamGame(world, game.homeId, game.homeScore, game.awayScore, rng),

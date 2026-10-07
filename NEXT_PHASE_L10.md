@@ -6,10 +6,10 @@ _Lint baseline: exactly 5 warnings. Line numbers marked ~ are approximate: find 
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| F1 | **Bug:** `TeamGameStats.sacks` counts every sack for BOTH teams | P1 | not started |
-| F2 | **Balance:** "Bend Don't Break" beats every opponent; defensive plan rework + `__planMatrix` probe | P1 | not started |
-| G1 | Resumable sim: `createGame` / `runToMoment` / `answerMoment` / `finishGame` (idea 1) | P1 | not started |
-| G2 | Decisions module + call sheet: 4th down, 2-point tries, AI call sheets (idea 2, engine) | P1 | not started |
+| F1 | **Bug:** `TeamGameStats.sacks` counts every sack for BOTH teams | P1 | ✅ done — verified (P1) |
+| F2 | **Balance:** "Bend Don't Break" beats every opponent; defensive plan rework + `__planMatrix` probe | P1 | ✅ done — verified (P1) |
+| G1 | Resumable sim: `createGame` / `runToMoment` / `answerMoment` / `finishGame` (idea 1) | P1 | ✅ done — verified (P1) |
+| G2 | Decisions module + call sheet: 4th down, 2-point tries, AI call sheets (idea 2, engine) | P1 | ✅ done — verified (P1) |
 | G3 | Game Day flow in the store + moment card in the match view (idea 1, UI) | P2 | not started |
 | G4 | Call-sheet editor on the Game Plan screen (idea 2, UI) | P2 | not started |
 | G5 | Film grade for 4th-down and 2-point calls + season reward (idea 10, part 1) | P2 | not started |
@@ -311,3 +311,13 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
 - No new dependencies. Do not fix the baseline lint warnings. Do not reformat unrelated code. Do not edit any NEXT_PHASE*.md or IDEAS_*.md.
 
 ## Verification log
+- **P1** (Flash 12 min; browser-verified by Claude on 2026-10-07). F1: `__simTest` sacks 3.31 → 1.57 (no longer double-counted); home ≠ away in most games.
+  F2: defensive presets after the rework (`__planMatrix`, user margin): best counts Blitz 4 / Balanced 3 / Stack 1 / BDB 0, edges +0.31 / 0 / −0.58 / −1.57 (was BDB best vs 8/8, ~+4 pts).
+  **Orchestrator addition to F2:** offense presets were dominated by pass-heavy plans (Air It Out +2.4, Hurry Up +2.3 margin vs Balanced, best vs 8/8 between them, 8 opps × 100 games), because
+  passing out-earns running and nothing taxed a predictable plan. Added a pass-lean tax in `resolvePass` for a user plan with `passBias > 0`: `PASS_LEAN_PRESSURE = 4` (pressureEdge per point),
+  `PASS_LEAN_COMP = 0.024` (completion), `PASS_LEAN_EDGE = 0.6` (talentEdge). Tuned (3/0.015/0 → +2.56, 5/0.035/1.5 → −2.84) to Air It Out +0.76, Hurry Up +1.02, Clock Killer −0.34, Run Heavy −0.10
+  (best counts 3/3/0/0, Balanced 2). AI-vs-AI is untouched (plans are user-only).
+  `planMatrix` fixed by the orchestrator to judge both sides by the user's point margin (Flash's version ranked offense by fewest points).
+  G1: `__gameDayEquivalence(20)` 20/20; with a user ctx there are ~4–5 moments a game (fourth + two), and answering against the standing order changes results.
+  Orchestrator fix: `two` moments only ask in the 2nd half or when the chart says go2 (they were spending both caps on Q1 PATs). G2: `__simTest` seed 33333 = 23.4 pts / 67.4% / 62.1 plays (in band);
+  AI 4th-down go rate ~19%. `__careerSmoke(6,'coach')` 0 errors / 0 violations; `__balanceProbe(14,'coach')` seasonsToTop 10 (unchanged). Build + lint 5.
