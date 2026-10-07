@@ -1,3 +1,4 @@
+import { baseGroup } from '../game/data/ratingInfo'
 import { useMemo, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import type { Player, SeasonStats, StatLevel } from '../game/types'
@@ -176,7 +177,7 @@ export function StatsTable({ players, group, season, level }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('ovr')
   const [dir, setDir] = useState<Dir>('desc')
 
-  const cols = useMemo(() => columnsFor(group), [group])
+  const cols = useMemo(() => columnsFor(baseGroup(group)), [group])
   const lines = useMemo(() => {
     const m = new Map<string, SeasonStats | undefined>()
     for (const p of players) m.set(p.id, seasonLine(p, season, level))

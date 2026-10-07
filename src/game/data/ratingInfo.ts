@@ -90,7 +90,12 @@ export const RATING_GROUPS: { id: string; positions: Position[] }[] = [
   { id: 'WR', positions: ['WR'] },
   { id: 'TE', positions: ['TE'] },
   { id: 'OL', positions: ['OT', 'OG', 'C'] },
+  { id: 'OT', positions: ['OT'] },
+  { id: 'OG', positions: ['OG'] },
+  { id: 'C', positions: ['C'] },
   { id: 'DL', positions: ['DE', 'DT'] },
+  { id: 'DE', positions: ['DE'] },
+  { id: 'DT', positions: ['DT'] },
   { id: 'LB', positions: ['LB'] },
   { id: 'CB', positions: ['CB'] },
   { id: 'S', positions: ['S'] },
@@ -137,6 +142,13 @@ export const RATING_COLUMNS: Record<string, string[]> = {
   ...Object.fromEntries(
     Object.entries(GROUP_SCHEMA).map(([g, base]) => [g, columnsFor(base, GROUP_EXTRAS[g] ?? [])]),
   ),
+}
+
+/** Single-position chips (OT, OG, C, DE, DT) share their line group's columns and composites. */
+export function baseGroup(groupId: string): string {
+  if (groupId === 'OT' || groupId === 'OG' || groupId === 'C') return 'OL'
+  if (groupId === 'DE' || groupId === 'DT') return 'DL'
+  return groupId
 }
 
 export function groupPositions(groupId: string): Position[] | null {

@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import { playerAttrs } from '../game/data/ratings'
-import { COMPOSITES, RATING_COLUMNS, RATING_INFO, ratingTitle, type Composite } from '../game/data/ratingInfo'
+import { COMPOSITES, RATING_COLUMNS, RATING_INFO, ratingTitle, type Composite, baseGroup } from '../game/data/ratingInfo'
 import { schemeFit } from '../game/engine/style'
 import { useGame } from '../store/gameStore'
 import { OvrBadge } from '../ui/kit'
@@ -108,8 +108,8 @@ export function RatingsTable({ players, group, scheme, defScheme }: Props) {
   const [dir, setDir] = useState<Dir>('desc')
   const [helpOpen, setHelpOpen] = useState(false)
 
-  const ratingCols = RATING_COLUMNS[group] ?? RATING_COLUMNS.ALL
-  const composites = useMemo(() => COMPOSITES[group] ?? [], [group])
+  const ratingCols = RATING_COLUMNS[baseGroup(group)] ?? RATING_COLUMNS.ALL
+  const composites = useMemo(() => COMPOSITES[baseGroup(group)] ?? [], [group])
   const attrsById = useMemo(() => {
     const m = new Map<string, Record<string, number>>()
     for (const p of players) m.set(p.id, playerAttrs(p))
