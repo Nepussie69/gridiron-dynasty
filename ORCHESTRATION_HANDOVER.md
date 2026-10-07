@@ -57,12 +57,12 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | L8 Staff room (weekly wrinkle, install plan, starter pitch, red flag) | NEXT_PHASE_L8.md | ✅ | 9f4e40d |
 | **L9 The long game** | NEXT_PHASE_L9.md | **✅ all pushes (P3 verified)** | see git log |
 | **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | ✅ all 3 pushes | see git log |
+| **L10 Game day** | NEXT_PHASE_L10.md | in progress (see its table) | see git log |
 
 ### Immediate next steps
 1. **L9.5 is done.** Nothing is in flight.
 
-2. **L10 candidate — game-day coaching:** the user asked for 10 ideas to give HCs/coordinators more input (play-calling etc.). They're in **`IDEAS_GAMEDAY.md`** with a suggested 4-push phasing.
-   Not approved or specced yet: ask the user which ideas to build, then write `NEXT_PHASE_L10.md`.
+2. **L10 Game day** (all 10 ideas approved 2026-10-07, plus the sack-stat bug F1 and the Bend-Don't-Break dominance fix F2): spec **`NEXT_PHASE_L10.md`**, 5 pushes. Check its progress table for where it stands.
 
 ## 4. Pacing & balance (current, measured on committed code)
 - Personnel → GM: seeds 20261004 13 · 2222 8 · 33333 8 · 5150 10 · 777 9 · 111 17 (a weak-roster outlier). Coach → HC ~10–11.
