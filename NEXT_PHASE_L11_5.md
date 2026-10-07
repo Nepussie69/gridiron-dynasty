@@ -17,6 +17,9 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | Q9 | Cap allocation by position group | P3 | not started |
 | Q10 | Trade center: empty trade says "They accept" | P3 | not started |
 | Q11 | Trade future picks up to 3 drafts ahead | P4 | not started |
+| Q12 | Inbox: "Mark all read" button | P3 | not started |
+| Q13 | Show players as current/ceiling, e.g. `64/80` (depth chart, roster lists, player cards) | P3 | not started |
+| Q14 | **Bug:** opening inbox names the wrong club ("Buffalo Bills leadership…" for a CLE/BAL career) | P3 | not started |
 
 **Guardrails:** keep L10 determinism (`__gameDayEquivalence` n/n: a stop or pause never draws rng), `__simTest` calibration (AI-vs-AI unchanged), the no-dominant-strategy rule (`__planMatrix`), canonical player objects,
 optional save fields. No changes to gates, objectives, capabilities or contract pricing.
@@ -99,6 +102,18 @@ totals as a small summary line.
 ### Q10 — Empty trade (`Trades.tsx`)
 With nothing selected the card says "THEY ACCEPT". Show "Add players or picks to build a trade" and keep Propose disabled until both sides have something (or at least one side, per current rules).
 
+### Q12 — Inbox "Mark all read" (`Inbox.tsx`, store)
+A **Mark all read** button in the inbox header (and an unread count). Marks every news item read (use the existing read flag; add an optional `read?: boolean` on news items if there is none, plus a store action
+`markAllNewsRead()`). The sidebar/top-bar unread badge updates.
+
+### Q13 — Current/ceiling ratings
+Wherever a player's OVR badge appears alone (depth chart rows, roster tables' OVR cell, player cards, draft/FA lists), show **`OVR/POT`** (e.g. `64/80`): OVR in the existing badge, then a muted `/80`.
+Use the same POT value the roster table already shows (for draft prospects, the scouted potential the UI already displays, never the hidden true value). Keep the separate POT column where it exists.
+
+### Q14 — Opening inbox names the wrong club (bug)
+The seeded week-1 inbox includes "Buffalo Bills leadership sets expectations" (OWNER) for careers at other clubs. Find where the opening news is generated (search for "leadership sets expectations") and use the
+user's club (`career.teamId`) for every club-specific seeded item; do the same for any other hard-coded team in seeded news.
+
 ---
 
 ## P4 — Future picks
@@ -116,7 +131,7 @@ Today `startNextSeason` replaces `world.draftPicks` with `freshDraftPicks(season
 ---
 
 ## PUSHES
-**P1 = Q1, Q2, Q3** · **P2 = Q4, Q5, Q6** · **P3 = Q7, Q8, Q9, Q10** · **P4 = Q11**
+**P1 = Q1, Q2, Q3** · **P2 = Q4, Q5, Q6** · **P3 = Q7, Q8, Q9, Q10, Q12, Q13, Q14** · **P4 = Q11**
 After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && npm run lint` → green, exactly 5 warnings. Never run `npm run dev` or any watch command. No git commands.
 
 ## DO NOT
