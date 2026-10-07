@@ -619,6 +619,7 @@ export const useGame = create<GameStore>((set, get) => ({
       earnedTraits: [],
       mentor: mentorFor(world, resolvedTeam),
       weekFlags: {},
+      weekActionCounts: {},
       tree: [],
       history: [],
       seasonMoments: [],
@@ -765,7 +766,7 @@ export const useGame = create<GameStore>((set, get) => ({
       set({ scoutingPoints: MAX_SCOUT_POINTS })
     }
     const c = get().career!
-    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, hoursLeft: WEEK_HOURS, weekFlags: {} }
+    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, hoursLeft: WEEK_HOURS, weekFlags: {}, weekActionCounts: {} }
     // L10 G6: remember a halftime QB switch in the season's story.
     if (qbSwitchLine) nextCareer = logMoment(nextCareer, { week, text: qbSwitchLine, tone: 'info' })
     if (rbInjuryLine) nextCareer = logMoment(nextCareer, { week, text: rbInjuryLine, tone: 'loss' })
@@ -1438,8 +1439,10 @@ export const useGame = create<GameStore>((set, get) => ({
         note = 'Owner meeting: the mandate is clearer (+job security).'
         break
     }
+    const counts = { ...(career.weekActionCounts ?? {}) }
+    counts[id] = (counts[id] ?? 0) + 1
     let nextCareer = withFlag(
-      { ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity, ...(nextRoom ? { room: nextRoom } : {}), ...(nextOppRead ? { oppRead: nextOppRead } : {}) },
+      { ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity, weekActionCounts: counts, ...(nextRoom ? { room: nextRoom } : {}), ...(nextOppRead ? { oppRead: nextOppRead } : {}) },
       'hours',
     )
     if (id === 'drills') nextCareer = withFlag(nextCareer, 'drills')
@@ -2512,6 +2515,8 @@ function migrateCareer(c: CareerState): CareerState {
       : { ...c, path }
   // L10 G10: optional opening script defaults to empty.
   base.script ??= []
+  // L11.5 Q6: per-week action counts (optional on legacy saves).
+  base.weekActionCounts ??= {}
   // L10 G11/G12: matchup and workload defaults (optional on legacy saves).
   base.matchups ??= {}
   base.usage ??= { rb: 'normal', dl: 'starters' }

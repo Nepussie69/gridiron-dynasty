@@ -7,6 +7,8 @@ import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
 import { originTag } from '../game/selectors'
 import { useGame, useWorld, type GameDay } from '../store/gameStore'
+import { PLAN_PRESETS } from '../game/engine/gameplan'
+import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from './PlanEditor'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
@@ -456,6 +458,7 @@ export function MatchView() {
 
 /** L11.5 Q3: a collapsible in-game plan editor, limited to the side(s) you coach. */
 function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
+  const world = useWorld()
   const career = useGame((s) => s.career)
   const setGameDayPlan = useGame((s) => s.setGameDayPlan)
   const [open, setOpen] = useState(false)
@@ -467,6 +470,8 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   const hasDef = caps.planScope === 'both' || focus !== 'off'
   if (!hasOff && !hasDef) return null
   const active: 'off' | 'def' = side === 'off' && hasOff ? 'off' : hasDef ? 'def' : 'off'
+  const oppId = gameDay.state.homeId === career.teamId ? gameDay.state.awayId : gameDay.state.homeId
+  const advice = open ? coordinatorAdvice(world, career, oppId).filter((a) => a.side === active) : []
   return (
     <div className="mt-2 rounded-lg border border-white/10 bg-black/20">
       <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
@@ -498,6 +503,26 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
           <div className="rounded-lg bg-white p-3">
             <PlanEditor plan={gameDay.plan[active]} onChange={(p) => setGameDayPlan(active, p)} side={active} />
           </div>
+          {advice.map((a) => {
+            const preset = PLAN_PRESETS.find((p) => p.id === a.presetId && p.side === a.side)
+            if (!preset) return null
+            return (
+              <div key={a.side} className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-[11px] text-white/70">
+                <span>
+                  <strong className="font-700 text-white">{a.coach}</strong> recommends{' '}
+                  <strong className="font-700 text-white">{preset.label}</strong> — {a.reason}
+                </span>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  className="ml-auto !bg-white !text-ink"
+                  onClick={() => setGameDayPlan(active, { ...preset.plan })}
+                >
+                  Apply
+                </Button>
+              </div>
+            )
+          })}
           {gameDay.changes.length > 0 && (
             <ul className="mt-2 space-y-0.5">
               {gameDay.changes.map((c, i) => (

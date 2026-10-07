@@ -9,9 +9,9 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | Q1 | Neater, easier-to-read moment card | P1 | ✅ done — verified (P1) |
 | Q2 | Game-day navigation: Next play / Next drive / Next moment | P1 | ✅ done — verified (P1) |
 | Q3 | Adjust the offensive and defensive game plan during the game | P1 | ✅ done — verified (P1) |
-| Q4 | More offensive and defensive plan presets (balanced) | P2 | not started |
-| Q5 | Coordinator recommendations ("what the OC/DC think we should do") | P2 | not started |
-| Q6 | Weekly hours: show what each action actually does | P2 | not started |
+| Q4 | More offensive and defensive plan presets (balanced) | P2 | ✅ done — verified (P2) |
+| Q5 | Coordinator recommendations ("what the OC/DC think we should do") | P2 | ✅ done — verified (P2) |
+| Q6 | Weekly hours: show what each action actually does | P2 | ✅ done — verified (P2) |
 | Q7 | Stats: DB yards allowed, tackles for loss, QB passer rating | P3 | not started |
 | Q8 | Front-office staff get front-office skills (no offensive schemes) | P3 | not started |
 | Q9 | Cap allocation by position group | P3 | not started |
@@ -144,3 +144,8 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   Next play adds exactly one play; Next drive runs to a change of possession or stops early at a moment ("3rd & 1 at their 1"); a mid-game switch to Hurry Up was logged (Q1 13:27). The card shows chips
   (Q1 9:48 · 0-0 · IND 1), the read once, a grid of options with descriptions and the Standing order tag; the nav bar disables Next while a call is pending. `__careerSmoke` coach 0/0.
   **Orchestrator polish:** concept descriptions rewritten to explain each play ("Quick slant" → "One-step slant: ball out fast"; "Screen to the back" → "Dump to the back behind blockers: punishes the blitz").
+- **P2** (Flash 23 min; browser-verified by Claude on 2026-10-07). `__planMatrix` paired seeds, 800 games per preset (BUF, seed 33333): offense best-count max 4/8 (Hurry Up, Quick Game), max edge +1.35 (Hurry Up);
+  defense max 4/8 (All-Out Blitz), max edge +1.23. Press Man set to coverage **1.8** (Flash: at 2.0 it was best vs 7/8, +2.14). `__simTest` unchanged (23.8 / 66.8% / 64.5 / 1.75 sacks); `__gameDayEquivalence(20)` 20/20.
+  Advice card + Apply sets `defaultPlan` (Stack the Box applied); weekly tiles show the effect and "Done ×1 this week".
+  **Orchestrator fixes:** the weak-secondary reason now quotes the DB rating; the DC's "their run game" branch read *their linebackers* — now reads their RB; the OC no longer recommends Run Heavy (−3.9 vs Balanced) or
+  Ball Control (−2.5): strong fronts → Quick Game, run-first opponents → Balanced. **Balance note for later:** run-leaning offensive presets are all below Balanced (Run Heavy −3.9, Clock Killer −3.5, Ball Control −2.5, Play-Action −1.2).

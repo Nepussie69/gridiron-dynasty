@@ -577,6 +577,8 @@ export interface CareerState {
   recruited?: { name: string; pos: string; season: number; schoolId: string }[]
   /** Actions completed this week, for the weekly checklist. Reset on advance. */
   weekFlags?: Record<string, boolean>
+  /** L11.5 Q6: how many times each weekly action was used this week. Reset on advance. */
+  weekActionCounts?: Record<string, number>
   /** Your stated philosophy (#14). */
   philosophy?: string
   /** Every trade your club has made (#6), newest last, capped at 60. */

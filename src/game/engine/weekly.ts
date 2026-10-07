@@ -19,6 +19,8 @@ export interface WeeklyAction {
   id: string
   label: string
   blurb: string
+  /** L11.5 Q6: the concrete effect of spending the hours, shown under the label. */
+  effect: string
   cost: number
 }
 
@@ -26,17 +28,17 @@ export interface WeeklyAction {
 export function weeklyActions(career: CareerState): WeeklyAction[] {
   const c = capabilities(career).can
   const out: WeeklyAction[] = [
-    { id: 'film', label: 'Study film', blurb: 'Sharpen your eye on this class.', cost: 6 },
+    { id: 'film', label: 'Study film', blurb: 'Sharpen your eye on this class.', effect: '+1 Evaluation skill', cost: 6 },
   ]
-  if (c.has('grade')) out.push({ id: 'phones', label: 'Work the phones', blurb: "Uncover a prospect's character.", cost: 8 })
-  if (c.has('grade')) out.push({ id: 'road', label: 'Drive the region', blurb: 'Cover more ground; +Evaluation.', cost: 12 })
-  if (c.has('crossCheck') || c.has('rankBoard')) out.push({ id: 'crosscheck', label: 'Cross-check reports', blurb: 'Compare the staff board.', cost: 6 })
-  if (c.has('developRoom')) out.push({ id: 'drills', label: 'Run drills', blurb: 'Develop a young player.', cost: 10 })
-  if (c.has('callPlays')) out.push({ id: 'install', label: 'Film session', blurb: 'Prep the game plan.', cost: 8 })
-  if (c.has('callPlays')) out.push({ id: 'tendencies', label: 'Opponent film', blurb: "Study this week's opponent tendencies.", cost: 8 })
-  if (c.has('assignScouts') || c.has('hireStaff')) out.push({ id: 'scouts', label: 'Scouts meeting', blurb: "Learn a scout's bias.", cost: 8 })
-  if (c.has('negotiate') || c.has('signFreeAgents')) out.push({ id: 'agent', label: 'Agent calls', blurb: 'Advance a negotiation.', cost: 8 })
-  if (c.has('setExpectations') || c.has('hireStaff')) out.push({ id: 'owner', label: 'Owner meeting', blurb: 'Manage the mandate; +job security.', cost: 6 })
+  if (c.has('grade')) out.push({ id: 'phones', label: 'Work the phones', blurb: "Uncover a prospect's character.", effect: "Reveal a prospect's character read", cost: 8 })
+  if (c.has('grade')) out.push({ id: 'road', label: 'Drive the region', blurb: 'Cover more ground; +Evaluation.', effect: '+1 Evaluation skill', cost: 12 })
+  if (c.has('crossCheck') || c.has('rankBoard')) out.push({ id: 'crosscheck', label: 'Cross-check reports', blurb: 'Compare the staff board.', effect: '+1 Profile', cost: 6 })
+  if (c.has('developRoom')) out.push({ id: 'drills', label: 'Run drills', blurb: 'Develop a young player.', effect: 'Bank development reps for your room', cost: 10 })
+  if (c.has('callPlays')) out.push({ id: 'install', label: 'Film session', blurb: 'Prep the game plan.', effect: '+1 Scheme skill', cost: 8 })
+  if (c.has('callPlays')) out.push({ id: 'tendencies', label: 'Opponent film', blurb: "Study this week's opponent tendencies.", effect: "Reveal this week's opponent tendencies (2nd buy: sharp read)", cost: 8 })
+  if (c.has('assignScouts') || c.has('hireStaff')) out.push({ id: 'scouts', label: 'Scouts meeting', blurb: "Learn a scout's bias.", effect: "+1 Profile, learn a scout's bias", cost: 8 })
+  if (c.has('negotiate') || c.has('signFreeAgents')) out.push({ id: 'agent', label: 'Agent calls', blurb: 'Advance a negotiation.', effect: '+1 Roster', cost: 8 })
+  if (c.has('setExpectations') || c.has('hireStaff')) out.push({ id: 'owner', label: 'Owner meeting', blurb: 'Manage the mandate; +job security.', effect: '+2 job security', cost: 6 })
   return out
 }
 

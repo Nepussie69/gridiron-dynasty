@@ -35,11 +35,17 @@ export const PLAN_PRESETS: PlanPreset[] = [
   { id: 'air-it-out', side: 'off', label: 'Air It Out', blurb: 'Pass-first. Push the ball downfield.', plan: { passBias: 1.6, tempo: 0.4, aggression: 0.5, coverage: 1 } },
   { id: 'clock-killer', side: 'off', label: 'Clock Killer', blurb: 'Deliberate tempo, run the ball, protect the lead.', plan: { passBias: -1.2, tempo: -1, aggression: 0.4, coverage: 0 } },
   { id: 'hurry-up', side: 'off', label: 'Hurry Up', blurb: 'Fast tempo, throw to stop the clock.', plan: { passBias: 1.2, tempo: 1, aggression: 0.5, coverage: 1 } },
+  { id: 'quick-game', side: 'off', label: 'Quick Game', blurb: 'Short, rhythm throws. Get the ball out fast.', plan: { passBias: 0.6, tempo: 0.3, aggression: 0.5, coverage: 1 } },
+  { id: 'play-action', side: 'off', label: 'Play-Action Shots', blurb: 'Run to set up the deep ball.', plan: { passBias: -0.6, tempo: -0.2, aggression: 0.5, coverage: 1 } },
+  { id: 'ball-control', side: 'off', label: 'Ball Control', blurb: 'Lean on the run and drain the clock.', plan: { passBias: -0.8, tempo: -0.6, aggression: 0.5, coverage: 1 } },
   // ── Defense ────────────────────────────────────────────────────────────────
   { id: 'balanced-def', side: 'def', label: 'Balanced', blurb: 'Standard calls. Take what the offense gives.', plan: { ...BALANCED_PLAN } },
   { id: 'blitz', side: 'def', label: 'All-Out Blitz', blurb: 'Send the house. Risk the big play for pressure.', plan: { passBias: 0, tempo: 0.3, aggression: 2, coverage: 1.6 } },
   { id: 'bend-dont-break', side: 'def', label: "Bend Don't Break", blurb: 'Soft zone, no big plays, tackle in front.', plan: { passBias: 0, tempo: -0.4, aggression: 0.2, coverage: 0 } },
   { id: 'stack-box', side: 'def', label: 'Stack the Box', blurb: 'Sell out to stop the run. Dare them to throw.', plan: { passBias: 0.2, tempo: 0, aggression: 1.4, coverage: 0.4 } },
+  { id: 'two-high', side: 'def', label: 'Two-High Shell', blurb: 'Two deep safeties. Keep everything in front.', plan: { passBias: 0, tempo: 0, aggression: 0.3, coverage: 0.3 } },
+  { id: 'press-man', side: 'def', label: 'Press Man', blurb: 'Jam them at the line. Tight man coverage.', plan: { passBias: 0, tempo: 0, aggression: 0.8, coverage: 1.8 } },
+  { id: 'fire-zone', side: 'def', label: 'Fire Zone', blurb: 'Send pressure out of a zone look.', plan: { passBias: 0, tempo: 0, aggression: 1.5, coverage: 0.5 } },
 ]
 
 // ── How a plan bends the sim ─────────────────────────────────────────────────

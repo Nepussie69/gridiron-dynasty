@@ -82,22 +82,31 @@ export function CareerRhythm() {
         <RatingBar value={(hours / WEEK_HOURS) * 100} height={8} color={hours <= 10 ? '#d98207' : 'var(--team)'} />
         <p className="mt-2 text-[11px] text-muted">The job is choosing what not to do. Spend hours, then advance the week.</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {actions.map((a) => (
-            <button
-              key={a.id}
-              disabled={hours < a.cost}
-              onClick={() => spendHours(a.id)}
-              className="flex items-center gap-2 rounded-lg border border-line p-2.5 text-left transition hover:bg-surface-2 disabled:opacity-40"
-            >
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-surface-3 font-display text-xs font-700 text-ink-2">
-                {a.cost}
-              </span>
-              <span className="min-w-0">
-                <span className="block font-cond text-xs font-700 uppercase text-ink">{a.label}</span>
-                <span className="block truncate text-[11px] text-muted">{a.blurb}</span>
-              </span>
-            </button>
-          ))}
+          {actions.map((a) => {
+            const done = career.weekActionCounts?.[a.id] ?? 0
+            return (
+              <button
+                key={a.id}
+                disabled={hours < a.cost}
+                onClick={() => spendHours(a.id)}
+                className="flex items-start gap-2 rounded-lg border border-line p-2.5 text-left transition hover:bg-surface-2 disabled:opacity-40"
+              >
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-surface-3 font-display text-xs font-700 text-ink-2">
+                  {a.cost}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="font-cond text-xs font-700 uppercase text-ink">{a.label}</span>
+                    {done > 0 && (
+                      <span className="ml-auto shrink-0 font-cond text-[10px] font-700 uppercase text-win">Done ×{done} this week</span>
+                    )}
+                  </span>
+                  <span className="block text-[11px] leading-snug text-ink-2">{a.effect}</span>
+                  <span className="block truncate text-[10px] text-muted">{a.blurb}</span>
+                </span>
+              </button>
+            )
+          })}
         </div>
       </Card>
     </div>

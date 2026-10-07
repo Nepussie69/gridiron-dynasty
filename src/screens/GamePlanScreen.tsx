@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, ClipboardList, Plus, Repeat, X } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { describePlan, type GamePlan } from '../game/engine/gameplan'
+import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
 import { DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
 import { capabilities } from '../game/engine/capabilities'
+import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from '../components/PlanEditor'
 import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
@@ -14,7 +15,7 @@ import { teamRatings } from '../game/engine/depth'
 import { coachLabels, offStyle } from '../game/engine/playsim'
 import { recordOf, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
+import { Badge, Button, Card, PageHeader, TeamCrest } from '../ui/kit'
 
 export function GamePlanScreen() {
   const league = useWorld()
@@ -121,25 +122,7 @@ export function GamePlanScreen() {
             </Card>
           )}
 
-          <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Coordinator Notes</h3>
-            <div className="space-y-3 text-sm">
-              <div className="rounded-lg bg-surface-2 p-3">
-                <div className="label mb-0.5">{coaches.oc} · OC</div>
-                <div className="text-ink-2">{coaches.ocScheme}</div>
-                <div className="mt-1 text-xs text-muted">
-                  {describePlan(defaultPlan.off, 'off')}
-                </div>
-              </div>
-              <div className="rounded-lg bg-surface-2 p-3">
-                <div className="label mb-0.5">{coaches.dc} · DC</div>
-                <div className="text-ink-2">{coaches.dcScheme}</div>
-                <div className="mt-1 text-xs text-muted">
-                  {describePlan(defaultPlan.def, 'def')}
-                </div>
-              </div>
-            </div>
-          </Card>
+          <CoordinatorAdviceCard oppId={opp?.id} />
 
           <Card>
             <div className="flex items-start gap-2 text-xs leading-relaxed text-muted">
@@ -154,6 +137,59 @@ export function GamePlanScreen() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** L11.5 Q5: the coordinators read the matchup and suggest a plan you can apply. */
+function CoordinatorAdviceCard({ oppId }: { oppId?: string }) {
+  const league = useWorld()
+  const career = useGame((s) => s.career)!
+  const defaultPlan = useGame((s) => s.defaultPlan)
+  const setDefaultPlan = useGame((s) => s.setDefaultPlan)
+  const advice = oppId ? coordinatorAdvice(league, career, oppId) : []
+  const tone: Record<string, 'win' | 'info' | 'warn'> = { high: 'win', medium: 'info', low: 'warn' }
+  return (
+    <Card>
+      <div className="mb-3 flex items-center gap-2">
+        <ClipboardList size={16} className="text-muted" />
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Coordinator Notes</h3>
+      </div>
+      {!advice.length ? (
+        <p className="text-sm text-muted">No upcoming opponent to scout.</p>
+      ) : (
+        <div className="space-y-3 text-sm">
+          {advice.map((a) => {
+            const preset = PLAN_PRESETS.find((p) => p.id === a.presetId && p.side === a.side)
+            if (!preset) return null
+            const applied = JSON.stringify(defaultPlan[a.side]) === JSON.stringify(preset.plan)
+            return (
+              <div key={a.side} className="rounded-lg bg-surface-2 p-3">
+                <div className="flex items-center gap-2">
+                  <span className="label !mb-0">{a.coach} · {a.side === 'off' ? 'OC' : 'DC'}</span>
+                  <Badge tone={tone[a.confidence]} className="ml-auto">{a.confidence}</Badge>
+                </div>
+                <div className="mt-1 text-ink-2">
+                  <strong className="text-ink">{preset.label}</strong> — {a.reason}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant={applied ? 'ghost' : 'team'}
+                    disabled={applied}
+                    onClick={() => setDefaultPlan(a.side, { ...preset.plan })}
+                  >
+                    {applied ? 'Applied' : 'Apply'}
+                  </Button>
+                  <span className="text-[11px] text-muted">
+                    Current: {describePlan(defaultPlan[a.side], a.side)}
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
   )
 }
 
