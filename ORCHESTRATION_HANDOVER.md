@@ -63,8 +63,8 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | ✅ all 3 pushes | see git log |
 | **L10 Game day** | NEXT_PHASE_L10.md | ✅ all 5 pushes | see git log |
 | **L11 In-season roster life** (priced FA signings, Waiver Tuesday, AI injury moves, Waiver Wire) | NEXT_PHASE_L11.md | ✅ both pushes | c9996e5 |
-| **L11.5 Playtest 3** (14 items from the user's 3rd playtest) | NEXT_PHASE_L11_5.md | **P1 ✅ 05c6b96; P2 ✅ 3aa9822; P3 sent ~20:52 AEDT; P4 queued** | 3aa9822 |
-| **L12 Ratings, week, every rating counts** | NEXT_PHASE_L12.md | specced (4 pushes); prompts ready in the session scratchpad (`l12p1..4.txt`) | — |
+| **L11.5 Playtest 3** (14 items from the user's 3rd playtest) | NEXT_PHASE_L11_5.md | ✅ all 4 pushes | see git log |
+| **L12 Ratings, week, every rating counts** | NEXT_PHASE_L12.md | P1 sent; P2–P4 prompts in the session scratchpad (`l12p2..4.txt`) | — |
 
 ### Immediate next steps
 1. The user said **"keep going through all the pushes"** (2026-10-07 ~20:55): finish L11.5 P3 and P4, then L12 P1 to P4, verifying and committing each push. Check `git status` and `pgrep -fl "opencode-cli run"` first.

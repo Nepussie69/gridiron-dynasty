@@ -35,7 +35,8 @@ export function initDraft(world: World) {
  * but belong to their new owner; comp picks go last in their round.
  */
 export function buildDraftOrder(world: World): { order: string[]; rounds: number[]; ids: string[] } {
-  const picks = ensureDraftPicks(world, world.season + 1)
+  const upcoming = world.season + 1
+  const picks = ensureDraftPicks(world, upcoming)
   const base = computeDraftOrder(world)
   const slot = new Map(base.map((id, i) => [id, i]))
   const order: string[] = []
@@ -43,7 +44,7 @@ export function buildDraftOrder(world: World): { order: string[]; rounds: number
   const ids: string[] = []
   for (let r = 1; r <= DRAFT_ROUNDS; r++) {
     const group = picks
-      .filter((p) => p.round === r)
+      .filter((p) => p.season === upcoming && p.round === r)
       .sort((a, b) => {
         const ac = a.comp ? 1 : 0
         const bc = b.comp ? 1 : 0

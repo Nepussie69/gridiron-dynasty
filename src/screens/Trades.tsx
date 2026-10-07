@@ -7,8 +7,10 @@ import { picksOwnedBy } from '../game/engine/picks'
 import {
   evaluateTrade,
   findDeals,
+  isTradeablePick,
   pickTradeValue,
   playerTradeValue,
+  upcomingDraftSeason,
   type DealOffer,
   type TradeAsset,
 } from '../game/engine/trade'
@@ -29,6 +31,7 @@ interface Asset {
   ovr?: number
   pot?: number
   round?: number
+  season?: number
 }
 
 const toRef = (a: Asset): TradeAsset => ({ kind: a.kind, id: a.id })
@@ -233,13 +236,14 @@ function assetsFor(world: World, teamId: string): Asset[] {
     ovr: p.ovr,
     pot: p.pot,
   }))
-  const pickAssets: Asset[] = picksOwnedBy(world, teamId).map((pk) => ({
+  const pickAssets: Asset[] = picksOwnedBy(world, teamId).filter((pk) => isTradeablePick(world, pk)).map((pk) => ({
     id: pk.id,
     kind: 'pick' as const,
     label: `${pk.season} Round ${pk.round} Pick${pk.comp ? ' (comp)' : ''}`,
     sub: pk.originalTeam === teamId ? 'Own pick' : `via ${world.byId[pk.originalTeam]?.abbr ?? pk.originalTeam}`,
-    value: pickTradeValue(pk),
+    value: pickTradeValue(pk, upcomingDraftSeason(world)),
     round: pk.round,
+    season: pk.season,
   }))
   return [...playerAssets, ...pickAssets]
 }
@@ -279,51 +283,59 @@ function AssetColumn({
         </Badge>
       </div>
       <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
-        {assets.map((a) => {
+        {assets.map((a, i) => {
           const on = selected.some((s) => s.id === a.id)
+          const prev = assets[i - 1]
+          const showYear = a.kind === 'pick' && (!prev || prev.kind !== 'pick' || prev.season !== a.season)
           return (
-            <div
-              key={a.id}
-              onClick={() => onToggle(a)}
-              className={cn(
-                'flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left transition',
-                on ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
+            <div key={a.id}>
+              {showYear && (
+                <div className="bg-surface-2 px-4 py-1 font-cond text-[10px] font-700 uppercase tracking-widest text-muted">
+                  {a.season} Draft
+                </div>
               )}
-            >
-              {a.kind === 'player' ? (
-                <OvrBadge value={a.ovr!} pot={a.pot} size={30} />
-              ) : (
-                <span className="grid h-7 w-7 place-items-center rounded-md bg-ink font-display text-xs font-700 text-white">
-                  R{a.round}
-                </span>
-              )}
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-600 text-ink">{a.label}</span>
-                <span className="block truncate text-xs text-muted">{a.sub}</span>
-              </span>
-              <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
-              {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
-              {a.kind === 'player' && onFindDeals && (
-                <button
-                  type="button"
-                  title="Find deals"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onFindDeals(a)
-                  }}
-                  className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
-                >
-                  <Search size={13} />
-                </button>
-              )}
-              <span
+              <div
+                onClick={() => onToggle(a)}
                 className={cn(
-                  'grid h-6 w-6 place-items-center rounded-md border',
-                  on ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]' : 'border-line text-faint',
+                  'flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left transition',
+                  on ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
                 )}
               >
-                {on ? <X size={13} /> : <Plus size={13} />}
-              </span>
+                {a.kind === 'player' ? (
+                  <OvrBadge value={a.ovr!} pot={a.pot} size={30} />
+                ) : (
+                  <span className="grid h-7 w-7 place-items-center rounded-md bg-ink font-display text-xs font-700 text-white">
+                    R{a.round}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-600 text-ink">{a.label}</span>
+                  <span className="block truncate text-xs text-muted">{a.sub}</span>
+                </span>
+                <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
+                {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
+                {a.kind === 'player' && onFindDeals && (
+                  <button
+                    type="button"
+                    title="Find deals"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onFindDeals(a)
+                    }}
+                    className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
+                  >
+                    <Search size={13} />
+                  </button>
+                )}
+                <span
+                  className={cn(
+                    'grid h-6 w-6 place-items-center rounded-md border',
+                    on ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]' : 'border-line text-faint',
+                  )}
+                >
+                  {on ? <X size={13} /> : <Plus size={13} />}
+                </span>
+              </div>
             </div>
           )
         })}

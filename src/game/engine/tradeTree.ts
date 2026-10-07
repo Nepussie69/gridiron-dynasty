@@ -9,7 +9,7 @@
 
 import type { CareerState, Player, TradeAssetSnap, TradeRecord } from '../types'
 import type { World } from './generate'
-import { playerTradeValue, pickTradeValue, type TradeAsset } from './trade'
+import { playerTradeValue, pickTradeValue, upcomingDraftSeason, type TradeAsset } from './trade'
 
 function findPlayer(world: World, id: string): Player | undefined {
   return world.players.find((p) => p.id === id)
@@ -94,7 +94,7 @@ export function sideValue(world: World, snaps: TradeAssetSnap[]): number {
       }
     }
     const pick = world.draftPicks.find((p) => p.id === snap.id)
-    if (pick) total += pickTradeValue(pick)
+    if (pick) total += pickTradeValue(pick, upcomingDraftSeason(world))
   }
   return total
 }

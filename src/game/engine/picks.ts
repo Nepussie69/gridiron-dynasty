@@ -12,6 +12,9 @@ import { NFL_TEAMS } from '../data/nflTeams'
 
 export const PICK_ROUNDS = 7
 
+/** How many drafts ahead picks are kept tradeable (L11.5 Q11). */
+export const PICK_WINDOW = 3
+
 /** A fresh 7-round, 32-team pick set (each team owns its own). */
 export function freshDraftPicks(season: number): DraftPick[] {
   const out: DraftPick[] = []
@@ -23,21 +26,38 @@ export function freshDraftPicks(season: number): DraftPick[] {
   return out
 }
 
+/** A fresh rolling window: sets for `first`, `first + 1`, … `first + PICK_WINDOW - 1`. */
+export function freshDraftWindow(first: number): DraftPick[] {
+  const out: DraftPick[] = []
+  for (let i = 0; i < PICK_WINDOW; i++) out.push(...freshDraftPicks(first + i))
+  return out
+}
+
 /** Structural slice of World we need, to avoid a module cycle. */
 export interface HasPicks {
   draftPicks: DraftPick[]
 }
 
+/** Create the pick set for `season` if that draft year is missing entirely. */
 export function ensureDraftPicks(world: HasPicks, season: number): DraftPick[] {
-  if (!world.draftPicks || !world.draftPicks.length) world.draftPicks = freshDraftPicks(season)
+  world.draftPicks ??= []
+  if (!world.draftPicks.some((p) => p.season === season)) {
+    world.draftPicks.push(...freshDraftPicks(season))
+  }
   return world.draftPicks
 }
 
-/** Picks currently owned by one team, in round order. */
+/** Create any missing years across the rolling window `first … first + PICK_WINDOW - 1`. */
+export function ensureDraftWindow(world: HasPicks, first: number): DraftPick[] {
+  for (let i = 0; i < PICK_WINDOW; i++) ensureDraftPicks(world, first + i)
+  return world.draftPicks
+}
+
+/** Picks currently owned by one team, in draft-year then round order. */
 export function picksOwnedBy(world: HasPicks, teamId: string): DraftPick[] {
   return world.draftPicks
     .filter((p) => p.ownerTeam === teamId)
-    .sort((a, b) => a.round - b.round || a.id.localeCompare(b.id))
+    .sort((a, b) => a.season - b.season || a.round - b.round || a.id.localeCompare(b.id))
 }
 
 /** A qualifying free agent is good enough to earn his old team a comp pick. */

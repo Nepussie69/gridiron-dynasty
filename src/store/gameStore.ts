@@ -103,7 +103,7 @@ import {
   userOnClock,
   awardCompensatoryPicks,
 } from '../game/engine/draft'
-import { freshDraftPicks, ledgerFreeAgent } from '../game/engine/picks'
+import { ensureDraftWindow, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
 import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
@@ -1038,9 +1038,12 @@ export const useGame = create<GameStore>((set, get) => ({
     world.awards = {}
     // #18: the league changes over the eras every few seasons.
     if (world.season % 6 === 0) world.era = ERAS[Math.floor(world.season / 6) % ERAS.length]
-    // Fresh draft capital for the next cycle's Trade Center.
+    // Fresh draft capital for the next cycle's Trade Center. L11.5 Q11: keep the
+    // future-pick window rolling — drop drafts already held, retain owned future
+    // picks, and top up the newest year.
     resolveTradePicks(world, career)
-    world.draftPicks = freshDraftPicks(world.season + 1)
+    world.draftPicks = world.draftPicks.filter((p) => p.season > world.season)
+    ensureDraftWindow(world, world.season + 1)
     world.draftRounds = []
     for (const id of Object.keys(world.standings)) world.standings[id] = zeroRecord(id)
     for (const id of Object.keys(world.deadMoney)) world.deadMoney[id] = 0
@@ -2494,7 +2497,9 @@ function migrateWorld(w: World): World {
   w.freeAgents = w.freeAgents.filter((p) => !p.teamId || nflIds.has(p.teamId))
   w.rivals = w.rivals.map((r) => ({ ...r, tier: 'NFL' as const }))
   if (w.draftOrder) w.draftOrder = w.draftOrder.filter((id) => nflIds.has(id))
-  if (!w.draftPicks.length) w.draftPicks = freshDraftPicks(w.season + 1)
+  // L11.5 Q11: make sure the rolling window of tradeable picks exists; a legacy
+  // save gets the missing draft years created (owned by the original team).
+  ensureDraftWindow(w, w.season + 1)
   // Older saves stored a 32-team draft order; rebuild the ownership-aware one
   // (preserving the current pick index) unless the draft is already finished.
   if ((w.draftOrder?.length ?? 0) < DRAFT_ROUNDS * 32 && !w.draftState?.complete) {
@@ -3953,7 +3958,8 @@ export function cohesionProbe(games = 60) {
 
 /** Dev-only probe: inspect draft-pick ownership and the built draft order. */
 export function draftProbe() {
-  const picks = world.draftPicks ?? []
+  // L11.5 Q11: the pool holds a 3-draft window; this reports the upcoming draft.
+  const picks = (world.draftPicks ?? []).filter((p) => p.season === world.season + 1)
   const nfl = world.teams.filter((t) => t.tier === 'NFL').length
   const byOwner = new Map<string, number>()
   for (const p of picks) byOwner.set(p.ownerTeam, (byOwner.get(p.ownerTeam) ?? 0) + 1)

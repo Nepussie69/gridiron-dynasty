@@ -29,7 +29,7 @@ import {
 import { refreshProspectClass, developPlayers, evaluateScouting, runAIFreeAgency, runAIResign, runAITrades, enforceCapCompliance, tickAllContracts } from './progress'
 import { gainSeasonTraining, refreshCohesion, teamCohesion } from './playbook'
 import { awardCompensatoryPicks, initDraft, runUDFAs, simulateRestOfDraft } from './draft'
-import { freshDraftPicks } from './picks'
+import { ensureDraftWindow } from './picks'
 import { simulatePlayoffs, simWeek } from './sim'
 import {
   canDraft,
@@ -326,7 +326,9 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
       world.season += 1
       world.week = 1
       world.phase = 'regular'
-      world.draftPicks = freshDraftPicks(world.season + 1)
+      // L11.5 Q11: roll the tradeable pick window forward, keeping future owners.
+      world.draftPicks = world.draftPicks.filter((p) => p.season > world.season)
+      ensureDraftWindow(world, world.season + 1)
       resetSeason(world)
     }
   }

@@ -16,7 +16,7 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | Q8 | Front-office staff get front-office skills (no offensive schemes) | P3 | ✅ done — verified (P3) |
 | Q9 | Cap allocation by position group | P3 | ✅ done — verified (P3) |
 | Q10 | Trade center: empty trade says "They accept" | P3 | ✅ done — verified (P3) |
-| Q11 | Trade future picks up to 3 drafts ahead | P4 | not started |
+| Q11 | Trade future picks up to 3 drafts ahead | P4 | ✅ done — verified (P4) |
 | Q12 | Inbox: "Mark all read" button | P3 | ✅ done — verified (P3) |
 | Q13 | Show players as current/ceiling, e.g. `64/80` (depth chart, roster lists, player cards) | P3 | ✅ done — verified (P3) |
 | Q14 | **Bug:** opening inbox names the wrong club ("Buffalo Bills leadership…" for a CLE/BAL career) | P3 | ✅ done — verified (P3) |
@@ -155,3 +155,8 @@ After **every** task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build 
   empty trade says "Add players or picks to build a trade"; Mark all read → 0 unread (the sidebar badge was dead before, now counts unread news); depth chart shows `72/74`; a CLE career's opening inbox says "Cleveland Browns".
   **Orchestrator fix:** a run's TFL now goes to the same defender credited with the tackle (Flash used `t[0]`).
   **Found (pre-existing sim issue, moved to L12 E1):** one receiver gets a median 72% of his team's targets per game (argmax target pick), so coverage stats concentrate on one defender.
+- **P4** (Flash 6.7 min; browser-verified by Claude on 2026-10-07). Career start holds 2027–2029 (672 picks, unique ids). Traded CLE's 2029 R2 to MIA → after the 2027 season the window is 2028–2030 and MIA still owns it →
+  in the 2029 draft slot 54 (round 2) is used by MIA. `__simTest(200)` identical (23.8 / 66.8% / 64.5 / 1.75); `__gameDayEquivalence(20)` 20/20; `__careerSmoke(4,'personnel',2222)` 0/0 (Flash: `(6,'personnel')` 0/0).
+  **Orchestrator fix:** `upcomingDraftSeason(world)` / `isTradeablePick` in `trade.ts`: after the draft has been held (offseason, draft complete) the next draft is a year later, so values are discounted from there,
+  and the spent year's picks no longer show in the Trade Center or in AI deal searches (verified: post-draft CLE tradeable picks = 2028, 2029). AI clubs trade future picks through the existing pool (no new AI behavior).
+**L11.5 complete (all 14 items).**

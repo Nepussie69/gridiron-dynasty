@@ -285,3 +285,25 @@ game's guardrails intact.
 Spec + ordered task list (T1–T12) in **`NEXT_PHASE.md`** (planned by Claude Opus 5.5; implemented by
 DeepSeek Flash 4.1 via OpenCode). Features: F1 Trade Tree (#6), F2 seeded runs (#18), F3 light start
 scenarios (#16), F4 Scouting subtitle copy fix. #14 stays deferred. Checkpoint commit before L5: `f16a75d`.
+
+## L11.5 "Playtest 3" — game-day polish, plans, advice, stats, picks
+Spec: **`NEXT_PHASE_L11_5.md`** (Claude Opus 5.5; DeepSeek Flash 4.1). Q1–Q14 across P1–P4; P1–P3
+committed, **P4 (Q11) done** here.
+- **Q11 — future picks (P4).** `picks.ts`: `PICK_WINDOW=3`, `freshDraftWindow(first)` (sets for
+  `first…first+2`), `ensureDraftPicks` now creates a missing draft year in-place, new
+  `ensureDraftWindow`. Career start (`generate.ts`) seeds `season+1…season+3`. `startNextSeason`
+  (store) and `balance.ts` roll the window: drop drafts already held (`season <= world.season`),
+  keep owned future picks, top up `season+3`. `migrateWorld` `ensureDraftWindow(w, w.season+1)`.
+  `buildDraftOrder` filters to `season === world.season+1`, so order/usage is unchanged.
+  `pickTradeValue(pick, upcomingDraftSeason?)` applies `futurePickFactor` (next ×1.0, +1 ×0.8,
+  +2 ×0.65); `assetValue` passes `world.season+1` (shared by UI + AI evaluation). Trade Center lists
+  picks grouped by year. `draftProbe` reports the upcoming draft. No new save field.
+- **Guardrails:** L10 determinism untouched; sim/playsim untouched (calibration cannot move; headless
+  `__gameDayEquivalence(20)` 20/20). Canonical player objects unchanged. Build green, lint = 5.
+- **Verified (headless jiti):** `__careerSmoke(6,'personnel')` 0 errors / 0 violations;
+  rolling-window unit check (trade a 2029 R2, advance 2 seasons → partner still owns it in the 2029
+  draft; ids unique; factors 1.0/0.8/0.65). Browser pass still recommended for the Trade Center year
+  grouping.
+- **Key files:** `src/game/engine/picks.ts`, `src/game/engine/trade.ts`, `src/game/engine/tradeTree.ts`,
+  `src/game/engine/draft.ts`, `src/game/engine/generate.ts`, `src/game/engine/balance.ts`,
+  `src/store/gameStore.ts`, `src/screens/Trades.tsx`.

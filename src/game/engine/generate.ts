@@ -7,7 +7,7 @@ import { NFL_TEAMS } from '../data/nflTeams'
 import { capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
 import { frontOfficeProfile } from './hiring'
-import { freshDraftPicks } from './picks'
+import { freshDraftWindow } from './picks'
 import { makeCharacter } from './character'
 import { makeScoutBias } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
@@ -648,7 +648,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     jobMarket: [],
     staffTenure: seedStaffTenure(rng),
     draftState: { round: 1, pickIndex: 0, complete: false, log: [] },
-    draftPicks: freshDraftPicks(season + 1),
+    draftPicks: freshDraftWindow(season + 1),
     draftRounds: [],
     practiceSquad: {},
     ir: {},

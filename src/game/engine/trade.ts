@@ -23,11 +23,39 @@ export function playerTradeValue(p: Player): number {
   return Math.round(Math.pow(Math.max(p.ovr - 45, 1), 2) * 1.2 * youth * upside)
 }
 
-/** Trade-chart value of a pick, estimated at the middle of its round. */
-export function pickTradeValue(pick: DraftPick): number {
+/**
+ * The draft whose picks are "next" for trade value. After that draft has been held
+ * (offseason, draft complete) the next one is a year later, and the spent year's
+ * picks are no longer tradeable.
+ */
+export function upcomingDraftSeason(world: World): number {
+  return world.season + (world.phase === 'offseason' && world.draftState?.complete ? 2 : 1)
+}
+
+/** Picks that can still change hands (drafts not yet held). */
+export function isTradeablePick(world: World, pick: DraftPick): boolean {
+  return pick.season >= upcomingDraftSeason(world)
+}
+
+/** Discount on a pick's value by how many drafts away it is (L11.5 Q11). */
+export function futurePickFactor(yearsAway: number): number {
+  if (yearsAway <= 0) return 1
+  if (yearsAway === 1) return 0.8
+  return 0.65
+}
+
+/**
+ * Trade-chart value of a pick, estimated at the middle of its round. Future
+ * picks are discounted by distance: next draft ×1.0, two drafts ×0.8, three
+ * drafts ×0.65. Pass the upcoming draft's season (`world.season + 1`) to apply
+ * that discount; callers that omit it get the undiscounted chart value.
+ */
+export function pickTradeValue(pick: DraftPick, upcomingDraftSeason?: number): number {
   const overall = (pick.round - 1) * 32 + 16
   const base = Math.max(1, Math.round(3000 * Math.pow(0.945, overall - 1)))
-  return pick.comp ? Math.round(base * 0.7) : base
+  const factor = upcomingDraftSeason ? futurePickFactor(pick.season - upcomingDraftSeason) : 1
+  const value = base * factor
+  return pick.comp ? Math.round(value * 0.7) : Math.round(value)
 }
 
 function findPlayer(world: World, id: string): Player | undefined {
@@ -44,7 +72,7 @@ export function assetValue(world: World, a: TradeAsset): number {
     return p ? playerTradeValue(p) : 0
   }
   const pk = findPick(world, a.id)
-  return pk ? pickTradeValue(pk) : 0
+  return pk ? pickTradeValue(pk, upcomingDraftSeason(world)) : 0
 }
 
 const NEED_TARGET: Record<string, number> = {
@@ -172,7 +200,7 @@ export function findDeals(world: World, userTeamId: string, playerId: string): D
     const assets: TradeAsset[] = [
       ...partnerRoster.map((p): TradeAsset => ({ kind: 'player', id: p.id })),
       ...world.draftPicks
-        .filter((pk) => pk.ownerTeam === partner)
+        .filter((pk) => pk.ownerTeam === partner && isTradeablePick(world, pk))
         .map((pk): TradeAsset => ({ kind: 'pick', id: pk.id })),
     ].sort((a, b) => assetValue(world, b) - assetValue(world, a))
 
