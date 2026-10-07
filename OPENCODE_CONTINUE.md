@@ -15,15 +15,15 @@ You plan, verify and commit. You can implement small pushes yourself, or delegat
 | L9.5 P3 (R5 staff role tabs, R6 staff budget, R7 sortable roster, R8 Fit fix for defenders) | ✅ committed (Claude verified it in the browser on 2026-10-07) |
 | **L10 Game day** (`NEXT_PHASE_L10.md`, 5 pushes) | ✅ all committed |
 | **L11 In-season roster life** (`NEXT_PHASE_L11.md`, 2 pushes) | ✅ all committed |
-| **L11.5 Playtest 3** (`NEXT_PHASE_L11_5.md`, 4 pushes) | **P1 (Q1–Q3) sent to Flash on 2026-10-07 ~09:15; P2–P4 not sent.** Check the spec's progress table and `git log` |
+| **L11.5 Playtest 3** (`NEXT_PHASE_L11_5.md`, 4 pushes) | **P1 ✅ `05c6b96`; P2 running with Flash (started 2026-10-07 ~20:23 AEDT); P3, P4 not sent.** Check the spec's progress table and `git log` |
 
 ## Step 1: done
 L9.5 is complete and committed. Nothing is waiting for review.
 
 ## Next
 - **Continue L11.5** (the user asked for all pushes to be sent and verified, then to be told when done):
-  1. If `git status` shows uncommitted `src/` changes and no `opencode-cli run` process is active, P1 finished: verify it (build, lint 5, diff vs the spec; browser checks via console snippets for the user:
-     `__gameDayEquivalence(20)` n/n, `__simTest(200,'NFL')` unchanged ~23.8 pts after the real ratings load, coach a game with Next play/drive/moment and a mid-game plan change), update the spec's progress table +
+  1. If `git status` shows uncommitted `src/` changes and no `opencode-cli run` process is active, the running push (P2) finished: verify it (build, lint 5, diff vs the spec; browser checks via console snippets for the user:
+     `__gameDayEquivalence(20)` n/n, `__simTest(200,'NFL')` unchanged ~23.8 pts after the real ratings load, `__planMatrix` with 500+ games for the new presets (Flash flagged Press Man as dominant)), update the spec's progress table +
      verification log, commit.
   2. Send the next push with `~/.claude/bin/ds-push <prompt> <label>`. Prompt = "You are the IMPLEMENTER … active spec NEXT_PHASE_L11_5.md … Implement ONLY push Pn = tasks …" (same template as earlier pushes;
      P2 = Q4, Q5, Q6 · P3 = Q7, Q8, Q9, Q10, Q12, Q13, Q14 · P4 = Q11; HANDOFF.md append-only in P4 only). Verify and commit each. For `__planMatrix` balance calls use 500+ games.

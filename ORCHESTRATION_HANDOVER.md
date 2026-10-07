@@ -2,7 +2,7 @@
 
 > **Continuing in OpenCode?** Read `OPENCODE_CONTINUE.md` first; it has the exact next steps.
 
-_Written 2026-10-06 by Claude Opus 5.5 at the end of a long orchestration session. Read this first, then `HANDOFF.md` (game state) and the open spec files listed below._
+_First written 2026-10-06; **updated 2026-10-07 20:35 AEDT** by Claude Opus 5.5 for a new chat. Read this first, then `HANDOFF.md` (game state), the active spec `NEXT_PHASE_L11_5.md`, and `IDEAS_ROUND2.md`._
 
 ## 1. How we work (the user's workflow)
 - **Claude (Opus) plans and verifies; DeepSeek Flash 4.1 implements.** The user says "plan the next phase and send it to flash" or "keep going through all the pushes".
@@ -15,12 +15,12 @@ _Written 2026-10-06 by Claude Opus 5.5 at the end of a long orchestration sessio
 - Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
 
 ### Sending a push to Flash
-Use **`~/.claude/bin/ds-push <prompt-file> [label]`** (added 2026-10-06). It runs `opencode-cli run --standalone --auto --format json -m opencode-go/deepseek-v4.1-flash` with watchdogs and auto-retry:
+Use **`~/.claude/bin/ds-push <prompt-file> [label]`** (added 2026-10-06). It runs `opencode-cli run --auto --format json -m opencode-go/deepseek-v4.1-flash < /dev/null` (shared service; `STANDALONE=1` for a private server) with watchdogs and auto-retry:
 - **startup hang** (no event within 120 s) and **idle hang** (no event and no change under `src/` for 600 s) → kill the process tree and retry, up to 3 tries; a 2700 s hard cap per try;
 - a retry prepends a note telling Flash to inspect `git status`/`git diff` first and continue without redoing work;
 - status lines start with `[push]` (follow them with a Monitor); the per-try event logs are `$PUSH_LOG_DIR` (default `$TMPDIR/ds-push`)`/<label>.tryN.jsonl`; at the end it prints Flash's final report. Exit 3 = gave up.
 - Env overrides: `STARTUP`, `IDLE`, `HARD`, `MAX_TRIES`, `DS_ROUTE` (model).
-Run it with Bash `run_in_background: true`. It retries on hangs AND on provider/connection errors (e.g. `ECONNRESET`), up to 3 tries.
+**Launch it with `nohup … &`** (so it survives a Claude session restart) and follow its log with a Monitor grepping `finished|WATCHDOG|GAVE UP|RETRY`. It retries on hangs AND on provider/connection errors (e.g. `ECONNRESET`), up to 3 tries.
 **Hang root cause (found 2026-10-06):** `opencode run` reads extra prompt text from **stdin** when stdin isn't a TTY. Launched from a background shell, it can inherit a pipe/socket that never closes,
 so it blocks forever *before contacting the server* (0% CPU, no log line after "cli starting", no session created). Proven: with a never-closing stdin pipe it hangs every time; with `< /dev/null` it answers in seconds.
 **Fix:** both `ds` and `ds-push` now launch with `< /dev/null`. Any other way of calling `opencode run` from a script must do the same. `--standalone` was a red herring (now opt-in via `STANDALONE=1`).
@@ -45,7 +45,9 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
   - To tune constants at runtime, import the module **using the exact URL the app loaded**:
     `performance.getEntriesByType('resource').map(e=>e.name).find(n=>/engine\/career\.ts/.test(n))` (it has a `?t=` suffix). A plain `import('/src/…')` gives a separate copy.
   - Long probe loops can time out the JS tool. Run 2–3 seeds per call.
-  - macOS once revoked Documents access for the Claude app mid-session (every file read gave "Operation not permitted"). The fix is System Settings → Privacy & Security → Files and Folders → Claude → Documents, then **quit and reopen** the app.
+  - macOS revoked Documents access for the Claude app **twice** on 2026-10-07 ("Operation not permitted" on every file). Fix: System Settings → Privacy & Security → Files and Folders → Claude → Documents
+    (or Full Disk Access), then **quit (⌘Q) and reopen** the app. A restart kills background shells you started without `nohup`, so relaunch any push that was running.
+  - Prompt-writing lesson: say precisely which answers count (e.g. the L10 P4 matrix was applied to standing orders because the prompt said "user or standing"). Flash also once overwrote `HANDOFF.md`: forbid it explicitly.
 - Standard seeds for pacing: 20261004, 111, 2222, 33333, 5150, 777.
 
 ## 3. Where things stand (commits on `main`)
@@ -60,31 +62,37 @@ The alternative route `opencode/deepseek-v4.1-flash` fails with **"Insufficient 
 | **L9 The long game** | NEXT_PHASE_L9.md | **✅ all pushes (P3 verified)** | see git log |
 | **L9.5 Playtest 2 fixes** | NEXT_PHASE_L9_5.md | ✅ all 3 pushes | see git log |
 | **L10 Game day** | NEXT_PHASE_L10.md | ✅ all 5 pushes | see git log |
-| **L11 In-season roster life** | NEXT_PHASE_L11.md | ✅ both pushes | see git log |
-| **L11.5 Playtest 3** | NEXT_PHASE_L11_5.md | spec written, **not sent** (user was playing) | — |
+| **L11 In-season roster life** (priced FA signings, Waiver Tuesday, AI injury moves, Waiver Wire) | NEXT_PHASE_L11.md | ✅ both pushes | c9996e5 |
+| **L11.5 Playtest 3** (14 items from the user's 3rd playtest) | NEXT_PHASE_L11_5.md | **P1 ✅ (05c6b96); P2 running with Flash (started ~20:23 AEDT); P3, P4 not sent** | 05c6b96 |
 
 ### Immediate next steps
-1. **L9.5 is done.** Nothing is in flight.
-
-2. **L11.5 Playtest 3** (`NEXT_PHASE_L11_5.md`, 4 pushes) is specced from the user's third playtest but NOT sent: the user was playing. Send P1 when they say they're done.
+1. **Finish L11.5.** The user said "push the rest to deepseek and let me know when done". P2 (Q4 more presets, Q5 coordinator advice, Q6 weekly hours explained) was launched with
+   `nohup ~/.claude/bin/ds-push <scratchpad>/l115p2.txt l115p2` before this handover. If `git status` shows uncommitted `src/` changes and no `opencode-cli run` process: verify P2 (build, lint 5, diff, browser:
+   **`__planMatrix` with 500+ games per preset** in chunks — Flash's own probe flagged *Press Man* as dominant, check it; coordinator advice card + Apply; the weekly tiles' effect text), fix, update the spec log, commit.
+   If no Flash process is running and `src/` is clean, resend P2. Then P3 (Q7, Q8, Q9, Q10, Q12, Q13, Q14) and P4 (Q11), same template. Tell the user when all four are committed.
+2. **After L11.5:** the user is choosing from `IDEAS_ROUND2.md` (20 HC/coordinator + 15 GM ideas; my top picks: trade deadline day, FA frenzy, draft-day trades, practice week, keys to the game,
+   personnel packages, special-teams calls). Spec whatever they pick as the next phase.
 
 ## 4. Pacing & balance (current, measured on committed code)
 - Personnel → GM: seeds 20261004 13 · 2222 8 · 33333 8 · 5150 10 · 777 9 · 111 17 (a weak-roster outlier). Coach → HC ~10–11.
-- League cap use ~0.76–0.90 (after L7.5 X1). Sim calibration ~23 pts on seed 33333.
+- League cap use ~0.76–0.90 (after L7.5 X1). **Sim calibration on seed 33333 (after L10): 23.8 pts / 66.8% comp / 64.5 plays / 1.75 sacks per team** (sacks are no longer double-counted).
+- L10 probes: `__gameDayEquivalence(n)` must be n/n; `__planMatrix`, `__decisionProbe`, `__clockProbe`; L11: `__waiverProbe`. Balance calls need 500+ games.
 - The probe never uses the L6–L8 rung features, so real careers climb somewhat faster. If personnel feels too fast, raise the **GM profile gate**; leadership was the bottleneck, so leave it alone.
 - Guardrails we've held every phase: no changes to gates/objectives/capabilities/sim constants/evaluateTrade/contract pricing unless the user approves; rewards ≤ +3 per dimension per feature per season;
   all user-only sim bonuses are clamped (wrinkle + install ∈ [−0.6, +1.5]); every new save field is optional.
 
 ## 5. Known issues / user decisions pending
 - Loyal agents with a happy player + high guarantees sign at ~75% of market (judgment call, left as is).
-- **Watch** re-simulates games and can differ from the real result (fixed by L9.5 R4).
+- **Replay** re-simulates games and can differ from the real result (the Box score shows the real one).
 - Dead money equals nearly the whole contract for fully-guaranteed star deals. That's the normal formula; there's a small drift above total value (possible `fitToCap` rounding). Low priority.
 - `runAIResign` still handles re-signing for scout/coach careers (by design).
-- Ideas not yet built: Waiver Tuesday, the coordinator's halftime adjustments, the deeper multi-scenario system, #14 self-scouting (deferred: dominant-strategy risk).
+- Built since: Waiver Tuesday (L11), halftime adjustments and tendency self-scouting (L10). Still open: the deeper multi-scenario system, dead-money rounding drift, plus `IDEAS_ROUND2.md`.
 
 ## 6. Key files added across these phases
 engine: tradeTree, seed, scenarios, objectives, department, conviction, room, portfolio, shadow, negotiation, capMemo, combine, depth, wrinkle, install, pitch, redflag (`src/game/engine/`).
 components: RoomCard, InterviewPrep, PortfolioCard, ShadowBoardCard, ExtensionTalks, CombineCard, WrinkleCard, InstallCard. Smoke probe: `careerSmoke` in `src/store/gameStore.ts`.
+L9–L11: staffAwards, counter, rivalry, **decisions** (EP model, call sheets, call matrix, tendency books), **film** (grades), **waivers**; `playsim.ts` is a step machine
+(`createGame` / `runUntil` / `runToMoment` / `answerMoment(s, id, source)` / `finishGame`); game day lives in the store (`startGameDay`, `gameDayAdvance`, `answerGameMoment`, `setGameDayPlan`, `simGameDayToEnd`).
 
 ## 7. Continuing in OpenCode (if Claude usage runs out)
 A ready OpenCode chat exists: open the **OpenCode app** → this project → session **"Gridiron Dynasty — Orchestrator (Claude backup)"** (model `opencode-go/deepseek-v4.1-flash`, DeepSeek Flash 4.1).
