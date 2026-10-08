@@ -54,8 +54,10 @@ User: "make sure missed tackles are involved in the gameplay … toughness → m
 | R2 | In progress; points, completion percentage and other rows remain outside bands |
 | R3 | Pending final calibration, player shape and six-season checks |
 | R4 | Glossary changes drafted; final anchors pending |
-| R5 | Tackle accounting/formula reviewed; toughness, drops and speed evidence in realism3 |
+| R5 | Tackle accounting/formula reviewed; toughness/drop measurements pass; speed and synthetic-stat bugs in realism4 |
 
 ## Verification log
 - Codex review of realism2: build passes, lint exactly4, equivalence20/20. Three seeds500 games in `/private/tmp/realism2-verify.out`: points21.2–21.6 and true completion69.6–70.1% fail specified targets. Miss rates12.34–12.79%, elite3.31–4.70%, poor21.07–21.52%; audit400games found no phantom miss/finisher double credit. TGH ratio~1.25 versus1.5 and explicit drops absent; not accepted or merged. Integrated main ab988b1, preserving rating-timed animation and R5 stumble; build/lint4 pass. realism3 addresses remaining R5 requirements before final R2 retune.
 
+
+- Codex review of realism3: measured injury6.47–6.50 events/club-month and TGH60/95 ratio1.478; PBP drops3.48–3.54%/target, CTH direction correct. Eq20/20; animation endspots100%, syntheticSPD1.33; 3-game frame spike4.575 identical without stumble. Independent final build fails TS6133 and lint5 due unfinished POS_MEAN import. Review also finds synthetic drops always round to0, paired highSPD yields fewer20+ runs, and team/average-RB/elusive tackle bands still fail. Not accepted or merged; realism4(`/private/tmp/gridiron-realism4.txt`, execsession84520) fixes these before final R2 retune. Measurements `/private/tmp/realism3-*.out`.
