@@ -5,7 +5,9 @@ import { RATING_INFO, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel, schemeFit } from '../game/engine/style'
 import { careerTotals, coverageGrade, seasonLine } from '../game/engine/stats'
 import { experienceLabel } from '../game/engine/progress'
+import { canAskGm, gmAskCovers } from '../game/engine/gmAsk'
 import { useGame, useWorld } from '../store/gameStore'
+import { ContractExplainer } from './ContractExplainer'
 import { Badge, Button, DevBadge, MiniBars, OvrBadge, RatingBar, TeamCrest } from '../ui/kit'
 import type { Player } from '../game/types'
 
@@ -196,12 +198,58 @@ export function PlayerProfile() {
             </div>
           </div>
 
+          <GmExtensionPanel player={player} />
+
           <div className="flex gap-2">
-            <Button variant="team" className="flex-1">Offer Extension</Button>
             <Button className="flex-1">Trade Block</Button>
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * L12.14 C4: a play-caller can ask the AI GM to extend one of his own players
+ * (once per season). The panel shows the button for eligible rungs and the C5
+ * explainer with the player's live contract numbers.
+ */
+function GmExtensionPanel({ player }: { player: Player }) {
+  const career = useGame((s) => s.career)!
+  const league = useWorld()
+  const askGmToExtend = useGame((s) => s.askGmToExtend)
+  if (player.teamId !== career.teamId) return null
+
+  const canAsk = canAskGm(career)
+  const covers = canAsk && gmAskCovers(career, player.pos)
+  const asked = career.gmAsks?.[player.id] === league.season
+  const eligible = player.contract.years <= 2
+
+  return (
+    <div className="rounded-xl border border-line bg-surface p-4">
+      {canAsk && <div className="label mb-2">Ask the GM to extend</div>}
+      {covers ? (
+        <>
+          <p className="mb-3 text-xs leading-relaxed text-muted">
+            {eligible
+              ? "Send a recommendation to the front office. The GM decides from the player's value, the cap room the deal leaves, your standing and the owner's mandate — and negotiates at market."
+              : `${player.name} has ${player.contract.years} years left. The GM only extends players with two or fewer.`}
+          </p>
+          <Button
+            variant="team"
+            className="w-full"
+            disabled={asked || !eligible}
+            onClick={() => askGmToExtend(player.id)}
+          >
+            {asked ? 'Asked this season' : 'Ask the GM to extend'}
+          </Button>
+        </>
+      ) : canAsk ? (
+        <p className="mb-3 text-xs leading-relaxed text-muted">
+          Coordinators only get a say on their side of the ball.
+        </p>
+      ) : null}
+      <ContractExplainer player={player} className="mt-3 border-t border-line pt-3" />
     </div>
   )
 }

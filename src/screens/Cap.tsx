@@ -11,6 +11,7 @@ import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { ExtensionTalks } from '../components/ExtensionTalks'
+import { ContractExplainer } from '../components/ContractExplainer'
 import type { Position } from '../game/types'
 
 // L11.5 Q9: cap allocation is grouped by position family, in this order.
@@ -48,9 +49,12 @@ export function Cap() {
         eyebrow={`${league.byId[career.teamId].name} · ${league.season}`}
         title="Salary Cap"
         subtitle="Every dollar is a decision. Restructure to win now, or clear the books for tomorrow."
-        right={<Badge tone={summary.overTheCap ? 'loss' : summary.meetsFloor ? 'win' : 'warn'}>
-          {summary.overTheCap ? 'Over the cap' : summary.meetsFloor ? 'Cap compliant' : 'Below the floor'}
-        </Badge>}
+        right={<div className="flex items-center gap-2">
+          <Badge tone="neutral">2025 cap · fixed</Badge>
+          <Badge tone={summary.overTheCap ? 'loss' : summary.meetsFloor ? 'win' : 'warn'}>
+            {summary.overTheCap ? 'Over the cap' : summary.meetsFloor ? 'Cap compliant' : 'Below the floor'}
+          </Badge>
+        </div>}
       />
 
       {!canMove && (
@@ -126,6 +130,10 @@ export function Cap() {
           </div>
         </Card>
       </div>
+
+      <Card className="mb-4">
+        <ContractExplainer player={contracts[0]} />
+      </Card>
 
       <Card pad={false}>
         <div className="flex items-center justify-between border-b border-line px-4 py-2.5">

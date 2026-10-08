@@ -4,6 +4,7 @@ import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { agentStyle, buildExtension, marketAsk, type AgentStyle, type ExtensionOffer } from '../game/engine/negotiation'
 import { useGame, useWorld } from '../store/gameStore'
+import { ContractExplainer } from './ContractExplainer'
 import { Badge, Button, OvrBadge } from '../ui/kit'
 
 const STYLE_LABEL: Record<AgentStyle, string> = { hardball: 'Hardball', market: 'Market', loyal: 'Loyal' }
@@ -182,6 +183,8 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
               <span className="text-xs text-muted">Projected cap hit next year</span>
               <span className="font-display text-lg font-700 tnum text-ink">{money(projectedNextYear)}</span>
             </div>
+
+            <ContractExplainer player={p} className="mb-4 rounded-lg border border-line bg-surface-2 p-3" />
 
             <div className="flex items-center justify-end border-t border-line pt-3">
               <Button variant="primary" size="lg" onClick={makeOffer}>

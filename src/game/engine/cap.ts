@@ -2,7 +2,7 @@
 // NFL salary cap model
 //
 // Models the real cap pathway closely enough to make decisions matter:
-//   · League cap with ~7%/yr growth; 89% spending floor
+//   · Fixed league cap (the 2025 NFL number, $279.2M) for every season; 89% floor
 //   · Market-value contracts (AAV by overall, position, age)
 //   · Signing-bonus proration → cap hit ≠ AAV
 //   · Rookie wage scale (slotted 4-year deals, 5th-year option for Round 1)
@@ -14,17 +14,23 @@
 import type { Contract, Player, Position } from '../types'
 import { rint, type Rng } from './rng'
 
-export const CAP_2026 = 279_200_000
-export const CAP_FLOOR_PCT = 0.89
-
-/** League cap for a given season (~7% annual growth from 2026). */
-export function capForSeason(season: number) {
-  return Math.round(CAP_2026 * Math.pow(1.07, season - 2026))
+/** Coerce a possibly-undefined/NaN contract field to a usable number. */
+function finite(n: number | undefined): number {
+  return Number.isFinite(n) ? (n as number) : 0
 }
 
-/** Multiplier that keeps market values in step with cap growth. */
-export function capScale(season: number) {
-  return capForSeason(season) / CAP_2026
+/** The fixed salary cap: the real 2025 NFL number, held flat every season. */
+export const SALARY_CAP = 279_200_000
+export const CAP_FLOOR_PCT = 0.89
+
+/** League cap for a given season. L12.14 C1: fixed at the 2025 number. */
+export function capForSeason(_season: number) {
+  return SALARY_CAP
+}
+
+/** Multiplier that keeps market values in step with cap growth. Fixed cap ⇒ 1. */
+export function capScale(_season: number) {
+  return 1
 }
 
 /** Veteran minimum salary, scaling with credited seasons (0–7+). */
@@ -35,10 +41,18 @@ export function minSalary(creditedSeasons: number) {
   return tiers[Math.min(Math.max(creditedSeasons, 0), tiers.length - 1)]
 }
 
-/** Top-of-market AAV by position (at ~99 overall), in dollars. */
+/**
+ * Top-of-market AAV by position (at ~99 overall), in dollars.
+ *
+ * L12.14 C2: recalibrated against the 2025 top-of-market bands so that the
+ * average of the five best real players at each position — the league's actual
+ * top-5 AAV — lands in band. The model's steep OVR curve means positions whose
+ * elite tier tops out around 85–90 overall (K, P, C, OG, LB) need a high
+ * theoretical ceiling to reach their real top-of-market numbers.
+ */
 const POS_TOP: Record<string, number> = {
-  QB: 62, DE: 42, WR: 38, DT: 36, OT: 32, CB: 30, LB: 27, S: 26, TE: 25,
-  RB: 21, OG: 21, C: 19, K: 6.5, P: 4.5,
+  QB: 79.5, DE: 55.5, WR: 48, DT: 50.5, OT: 44, CB: 40.5, OG: 41.5, S: 32.5, TE: 34,
+  RB: 26, LB: 40.5, C: 41.5, K: 30.6, P: 16.3,
 }
 
 /** Estimated market AAV for a player. */
@@ -69,7 +83,9 @@ export function makeVeteranContract(rng: Rng, ovr: number, pos: Position, age: n
   const weights = Array.from({ length }, (_, i) => 0.85 + i * 0.08)
   const wsum = weights.reduce((a, b) => a + b, 0)
   const base = weights.map((w) => Math.round((totalBase * w) / wsum))
-  const guaranteedBase = ovr >= 86 ? base[0] + base[1] : ovr >= 78 ? base[0] : Math.round(base[0] * 0.4)
+  // Guard the 1-year deal: base[1] is undefined for a single season, which used
+  // to leak NaN through guaranteed (and thus dead money).
+  const guaranteedBase = ovr >= 86 ? base[0] + (base[1] ?? 0) : ovr >= 78 ? base[0] : Math.round(base[0] * 0.4)
   const proration = Math.round(signingBonus / length)
   const c: Contract = {
     years: length,
@@ -122,10 +138,30 @@ export function makeRookieContract(pick: number, season: number): Contract {
   })
 }
 
-/** Dead money if released now (remaining prorated bonus + remaining guaranteed base). */
+/**
+ * The remaining total value of a contract: every remaining base salary plus the
+ * remaining prorated signing bonus (accelerated over all remaining years,
+ * including void years). Dead money can never exceed this. Non-finite inputs
+ * (defensive) count as zero so the number is always usable in the UI.
+ */
+export function remainingContractValue(c: Contract) {
+  const base = (c.base ?? []).reduce((a, b) => a + finite(b), 0)
+  const remainingBonus = Math.max(0, finite(c.proration)) * Math.max(0, finite(c.years) + finite(c.voidYears))
+  return base + remainingBonus
+}
+
+/**
+ * Dead money if released now. Real NFL rule: the remaining prorated signing
+ * bonus (every remaining year, void years included) plus the guaranteed salary
+ * still owed — never more than the remaining total contract value. The cap
+ * matters because a guaranteed percentage can exceed the base dollars added by
+ * an extension.
+ */
 export function deadMoney(c: Contract) {
-  const remainingProration = c.proration * (c.years + c.voidYears)
-  return Math.round(remainingProration + c.guaranteed)
+  const remainingBonus = Math.max(0, finite(c.proration)) * Math.max(0, finite(c.years) + finite(c.voidYears))
+  const guaranteed = Math.max(0, finite(c.guaranteed))
+  const remainingValue = remainingContractValue(c)
+  return Math.round(Math.min(remainingBonus + guaranteed, remainingValue))
 }
 
 /** Cap savings from releasing a player now (cap hit − dead money). */

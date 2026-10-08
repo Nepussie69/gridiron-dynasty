@@ -586,6 +586,10 @@ export interface CareerState {
   shadowBoard?: ShadowEntry[]
   /** G2: extension-talk bookkeeping per player (3 tries per season, then closed). */
   talks?: Record<string, { season: number; tries: number; closed?: boolean }>
+  /** L12.14 C4: the season a coach last asked the GM to extend each player. */
+  gmAsks?: Record<string, number>
+  /** L12.14 C4: players the GM extended at the coach's request, pending the +1 leadership check. */
+  gmExtensions?: { playerId: string; season: number; name: string; awarded?: boolean }[]
   /** G3: the cap memo filed last offseason, graded at the end of the following season. */
   capMemo?: CapMemo
   /** G3: your room's focus players, practice plan, and banked reps. */
