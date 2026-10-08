@@ -24,9 +24,11 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 | `l12_5` / `l12_5-trade` | scratchpad/trade-wt | NEXT_PHASE_L12_5.md T1–T5 trade desk | /private/tmp/gridiron-l12_5.txt | Launched by `/private/tmp/ds-push-wt`. Slow start |
 | `reads` / `wt-reads` | scratchpad/wt-reads | NEXT_PHASE_L12_7.md D5 (Now/Ceiling ranges on scouting reads) | /private/tmp/gridiron-l12_7p2.txt | Display only |
 | `routes` / `wt-routes` | scratchpad/wt-routes | Backlog #25: real route trees per concept + smooth motion in `playAnim.ts` | /private/tmp/gridiron-routes.txt | Visual only; check in the browser |
+| `skills` / `wt-skills` | scratchpad/wt-skills | NEXT_PHASE_L12_11.md P1–P4 skill points from goals; negotiation/development wired (user-only, small) | /private/tmp/gridiron-skills.txt | Pacing ±1 season |
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
 
 ## Queue (after the running pushes)
+0. **L12.10 full playbook** (`NEXT_PHASE_L12_10.md`) — after P5 and `routes` merge. Generic football concepts only (no EA data).
 1. **L12.8** team pages / top players / Scout a club (`NEXT_PHASE_L12_8.md`) — **after L12.5 merges** (reuses its HoverCard/PlayerHoverCard).
 2. **L12.9 P2 K1** cohesion → penalties/fumbles in the sim — **after P5 merges**.
 3. Sim record fix: extra points are pushed with `startYard: 2` in `playsim.ts` (~line 1635); should be 85 (the animation already compensates via `snapYard` in `playAnim.ts`). After P5.
