@@ -1,6 +1,7 @@
 import { baseGroup } from '../game/data/ratingInfo'
 import { useMemo, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
+import { money } from '../lib/format'
 import type { Player, SeasonStats, StatLevel } from '../game/types'
 import { seasonLine } from '../game/engine/stats'
 import {
@@ -28,8 +29,8 @@ import {
   COL_TGT,
   type StatCol,
 } from './statsColumns'
-import { useGame } from '../store/gameStore'
-import { OvrBadge } from '../ui/kit'
+import { useGame, useWorld } from '../store/gameStore'
+import { Badge, OvrBadge, TeamCrest } from '../ui/kit'
 
 type Dir = 'asc' | 'desc'
 type SortKey = 'name' | 'pos' | 'age' | 'ovr' | `col:${string}`
@@ -120,12 +121,39 @@ interface Props {
   group: string
   season: number
   level: StatLevel
+  /** Optional columns used by the league-wide Find a Player screen. */
+  showTeam?: boolean
+  showCap?: boolean
+  /** A short tag rendered beside the name (e.g. "PS" for practice squad). */
+  tagFor?: (p: Player) => string | null
+  /** Rows for this club get the team-soft background. */
+  mineTeamId?: string
+  /** Cap the rows rendered; pair with `onShowMore` for a "Show more" footer. */
+  limit?: number
+  onShowMore?: () => void
+  /** Initial sort, used when the caller remounts the table per position group. */
+  defaultSortKey?: SortKey
+  defaultDir?: Dir
 }
 
-export function StatsTable({ players, group, season, level }: Props) {
+export function StatsTable({
+  players,
+  group,
+  season,
+  level,
+  showTeam = false,
+  showCap = false,
+  tagFor,
+  mineTeamId,
+  limit,
+  onShowMore,
+  defaultSortKey = 'ovr',
+  defaultDir = 'desc',
+}: Props) {
+  const world = useWorld()
   const selectPlayer = useGame((s) => s.selectPlayer)
-  const [sortKey, setSortKey] = useState<SortKey>('ovr')
-  const [dir, setDir] = useState<Dir>('desc')
+  const [sortKey, setSortKey] = useState<SortKey>(defaultSortKey)
+  const [dir, setDir] = useState<Dir>(defaultDir)
 
   const cols = useMemo(() => columnsFor(baseGroup(group)), [group])
   const lines = useMemo(() => {
@@ -165,6 +193,8 @@ export function StatsTable({ players, group, season, level }: Props) {
 
   const hdr = (key: SortKey) => ({ onClick: () => toggle(key), active: sortKey === key, dir })
 
+  const shown = limit != null ? sorted.slice(0, limit) : sorted
+
   return (
     <div>
       <div className="border-b border-line px-1 py-2 text-[11px] text-muted">
@@ -174,14 +204,17 @@ export function StatsTable({ players, group, season, level }: Props) {
       {sorted.length === 0 ? (
         <div className="py-10 text-center text-sm text-muted">No players match these filters.</div>
       ) : (
-        <div className="max-h-[70vh] overflow-auto">
-          <table className="min-w-full border-collapse text-sm tnum">
+        <>
+          <div className="max-h-[70vh] overflow-auto">
+            <table className="min-w-full border-collapse text-sm tnum">
             <thead>
               <tr className="text-left">
                 <Th {...hdr('name')} title="Player name" className="sticky left-0 top-0 z-30 bg-surface-2">Name</Th>
+                {showTeam && <Th className="sticky top-0 z-20">Team</Th>}
                 <Th {...hdr('pos')} className="sticky top-0 z-20">Pos</Th>
                 <Th {...hdr('age')} className="sticky top-0 z-20">Age</Th>
                 <Th {...hdr('ovr')} className="sticky top-0 z-20">OVR/POT</Th>
+                {showCap && <Th className="sticky top-0 z-20 text-right">Cap Hit</Th>}
                 {cols.map((c) => (
                   <Th key={c.id} {...hdr(`col:${c.id}`)} title={c.title} className="sticky top-0 z-20 text-center">
                     {c.label}
@@ -190,17 +223,43 @@ export function StatsTable({ players, group, season, level }: Props) {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((p) => {
+              {shown.map((p) => {
                 const line = lines.get(p.id)
+                const team = showTeam && p.teamId ? world.byId[p.teamId] : null
+                const tag = tagFor?.(p) ?? null
+                const mine = mineTeamId != null && p.teamId === mineTeamId
                 return (
                   <tr
                     key={p.id}
                     onClick={() => selectPlayer(p.id)}
-                    className="cursor-pointer border-b border-line/60 transition hover:bg-[var(--team-soft)]"
+                    className={cn(
+                      'cursor-pointer border-b border-line/60 transition hover:bg-[var(--team-soft)]',
+                      mine && 'bg-[var(--team-soft)]',
+                    )}
                   >
-                    <td className="sticky left-0 z-10 whitespace-nowrap bg-surface px-2 py-1.5">
-                      <span className="font-600 text-ink">{p.name}</span>
+                    <td
+                      className={cn(
+                        'sticky left-0 z-10 whitespace-nowrap px-2 py-1.5',
+                        mine ? 'bg-[var(--team-soft)]' : 'bg-surface',
+                      )}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="font-600 text-ink">{p.name}</span>
+                        {tag && <Badge tone="info">{tag}</Badge>}
+                      </span>
                     </td>
+                    {showTeam && (
+                      <td className="whitespace-nowrap px-2 py-1.5">
+                        {team ? (
+                          <span className="inline-flex items-center gap-1.5 text-ink-2">
+                            <TeamCrest team={team} size={18} />
+                            <span className="font-cond text-[11px] font-700 uppercase">{team.abbr}</span>
+                          </span>
+                        ) : (
+                          <span className="font-cond text-[11px] font-700 uppercase text-faint">FA</span>
+                        )}
+                      </td>
+                    )}
                     <td className="whitespace-nowrap px-2 py-1.5">
                       <span className="font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
                     </td>
@@ -208,6 +267,11 @@ export function StatsTable({ players, group, season, level }: Props) {
                     <td className="whitespace-nowrap px-2 py-1.5">
                       <OvrBadge value={p.ovr} pot={p.pot} size={28} />
                     </td>
+                    {showCap && (
+                      <td className="whitespace-nowrap px-2 py-1.5 text-right font-cond font-600 text-ink-2">
+                        {p.teamId ? money(p.contract.capHit) : '—'}
+                      </td>
+                    )}
                     {cols.map((c) => (
                       <td key={c.id} className="whitespace-nowrap px-2 py-1.5 text-center text-ink-2">
                         {c.fmt(line, p)}
@@ -219,6 +283,17 @@ export function StatsTable({ players, group, season, level }: Props) {
             </tbody>
           </table>
         </div>
+        {limit != null && onShowMore && sorted.length > limit && (
+          <div className="border-t border-line p-3 text-center">
+            <button
+              onClick={onShowMore}
+              className="rounded-md bg-surface-2 px-4 py-1.5 font-cond text-xs font-700 uppercase text-ink-2 hover:bg-surface-3"
+            >
+              Show more ({sorted.length - limit} remaining)
+            </button>
+          </div>
+        )}
+        </>
       )}
     </div>
   )

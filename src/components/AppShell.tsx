@@ -44,6 +44,7 @@ const ICONS: Record<ScreenId, IconType> = {
   stats: BarChart3,
   awards: Award,
   scouting: Search,
+  players: Search,
   draft: ClipboardList,
   freeagency: Repeat,
   trades: Activity,
