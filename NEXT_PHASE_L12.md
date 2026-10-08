@@ -16,8 +16,8 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | S2 | Realistic carry split (RB1 / RB2 / QB runs) | P3 | ✅ done — verified (P3) |
 | S3 | Realistic tackle / sack / INT credit by position (bookkeeping, incl. tackles on completions) | P3 | ✅ done — verified (P3) |
 | S4 | `__statShape` probe vs NFL bands; box-score table layout fix | P3 | ✅ done — verified (P3) |
-| E0 | Every player carries every rating his position uses (generated players included) | P4 | not started |
-| E1 | Offense ratings in the sim: QB, RB, receivers, OL | P4 | not started |
+| E0 | Every player carries every rating his position uses (generated players included) | P4 | ✅ done — verified (P4) |
+| E1 | Offense ratings in the sim: QB, RB, receivers, OL | P4 | ✅ done — verified (P4) |
 | E2 | Defense, kicking and general ratings in the sim: DL, LB, CB, S, K/P, STA, TGH | P5 | not started |
 | E3 | Recalibrate to today's numbers; glossary and ⚙ marks updated to "every rating counts" | P5 | not started |
 
@@ -250,3 +250,9 @@ After every task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && n
   red-zone trip = a scrimmage snap from the 20 or closer in a same-offense drive (penalties don't split it). Ledger ±3 per season; practice/keys/ledger reset at season rollover. Keys lock at the first user decision of a coached game.
   Offline (Node, real data) seed 33333 `simTest(500)`: **24.1 pts / 68.2% / 65.2 plays / 1.45 sacks / 0.92 INT / 4.89 ypc**, identical to the pre-P2 run. `gameDayEquivalence(20)` 20/20. `careerSmoke(4,'coach')` 0/0 (pickPractice 18, toggleKey 36).
   Browser: Practice card shows "+0.4 this week" on Sharpen; a week with keys run120 + clean graded "128 rush yds ✅ / 3 sacks allowed ❌" = box score (CLE 128 rush, DAL 3 sacks), leadership unchanged (one hit = 0); plan kept into week 2.
+- **P4** (Flash 17 min, 2026-10-08; verified by Claude offline with the real data). E0 appended keys to `ATTRIBUTE_SCHEMA` (real-data calibration identical with E0 alone). E1: `ratingMeans.ts` (`POS_MEAN`, starters by OVR from madden26.json) and 14 named
+  relative-term helpers in `playsim.ts` (THP deep, TUP/TOR pressure relief, SPD/ACC/BTK sack escape, PAC ×0.7–1.3, AWR/THP INT, CTH/CIT/SPC/JMP catch, WR ACC/COD, RLS vs PRS, OL AWR vs blitz, OL STR short yardage, TE RBK/IBL,
+  RB SPM/SFA/COD/ACC, RB BTK after contact, CAR fumbles); one scale knob `E1_W = 1.0` for E3. No constant changed, no rng draw added (the fumble draw only gains a multiplier). 500 games before → after:
+  33333 24.1/68.2/65.2/1.45/0.92/4.89 → **24.2/68.4/65.2/1.43/0.90/4.88**; 2222 24.7/67.9/65.7/1.50/1.00/4.82 → **24.3/68.1/65.1/1.53/0.96/4.75**; 5150 24.9/68.4/66.4/1.25/0.89/4.82 → **24.8/68.6/66.3/1.26/0.87/4.86** (all inside ±bands of the paired baselines).
+  Equivalence 20/20; smoke coach 4 and personnel 4 0/0; `statShape` 15/16 ✅ — the INT CB/S row hovers on the S ≤ 0.45 edge before and after (500 games: 0.44/0.47 before, 0.43/0.48 after), noise; P5 reworks INT credit.
+  **Flash's flag:** with E1_W = 1 a ±15 swap moves the margin only ~0.1–0.2 pts for most new keys (below E3's +0.2–1.5 target); P5/E3 should raise weights within the calibration bands.

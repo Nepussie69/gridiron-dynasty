@@ -8,6 +8,7 @@
 
 import type { Player, Position, MatchupSet, UsageSet } from '../types'
 import { attributesFor } from '../data/ratings'
+import { POS_MEAN } from './ratingMeans'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
 import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
@@ -166,6 +167,101 @@ function famMult(p: Player | undefined): number {
 }
 function avg(list: number[]) {
   return list.length ? list.reduce((a, b) => a + b, 0) / list.length : 70
+}
+
+// ── L12 E1: every offensive rating counts ────────────────────────────────────
+// Each new term is (rating − POS_MEAN[pos][key]) × weight, so an average starter
+// adds 0 and league averages hold. None of these adds or removes an rng() draw.
+// E1_W scales ONLY the new terms; no existing constant is touched.
+const E1_W = 1.0
+/** E1: relative rating value vs the average starter at that position (0 when average). */
+function rmean(pos: string | undefined, key: string, val: number): number {
+  const m = pos ? POS_MEAN[pos]?.[key] : undefined
+  return m === undefined ? 0 : val - m
+}
+/** E1: QB throw power sharpens the deep separation edge (deep throws only). */
+function qbDeepThp(qbA: Record<string, number>, depth: number): number {
+  if (depth < 15) return 0
+  return clamp(rmean('QB', 'THP', qbA.THP ?? 70) * 0.06 * E1_W, -5, 5)
+}
+/** E1: TUP/TOR trim the share of the pressure penalty to completion that applies. */
+function qbPressureRelief(qbA: Record<string, number>): number {
+  return clamp((rmean('QB', 'TUP', qbA.TUP ?? 70) * 0.004 + rmean('QB', 'TOR', qbA.TOR ?? 70) * 0.003) * E1_W, 0, 0.4)
+}
+/** E1: QB mobility (SPD/ACC/BTK) shrinks sack chance. */
+function qbSackEscape(qbA: Record<string, number>): number {
+  return clamp(
+    (rmean('QB', 'SPD', qbA.SPD ?? 70) * 0.0012 +
+      rmean('QB', 'ACC', qbA.ACC ?? 70) * 0.0008 +
+      rmean('QB', 'BTK', qbA.BTK ?? 70) * 0.0006) * E1_W,
+    -0.15, 0.18,
+  )
+}
+/** E1: QB play-action proficiency scales the existing play-action bonus ×0.7–1.3. */
+function qbPacMult(qbA: Record<string, number>): number {
+  return clamp(1 + rmean('QB', 'PAC', qbA.PAC ?? 70) * 0.005 * E1_W, 0.7, 1.3)
+}
+/** E1: awareness trims interception risk a little; throw power trims it on deep balls. */
+function qbIntMult(qbA: Record<string, number>, depth: number): number {
+  const awr = clamp(1 - rmean('QB', 'AWR', qbA.AWR ?? 70) * 0.0015 * E1_W, 0.9, 1.08)
+  const deep = depth >= 15 ? clamp(1 - rmean('QB', 'THP', qbA.THP ?? 70) * 0.0015 * E1_W, 0.85, 1.1) : 1
+  return awr * deep
+}
+/** E1: a receiver's hands move the incompletion share on catchable balls (CTH; CIT tight, SPC/JMP deep). */
+function targetCatchProb(target: Player | undefined, tA: Record<string, number>, depth: number, tight: boolean): number {
+  if (!target) return 0
+  let p = rmean(target.pos, 'CTH', tA.CTH ?? 70) * 0.0006
+  if ((target.pos === 'WR' || target.pos === 'TE') && tight) p += rmean(target.pos, 'CIT', tA.CIT ?? 70) * 0.0005
+  if ((target.pos === 'WR' || target.pos === 'TE') && depth >= 15) {
+    p += rmean(target.pos, 'SPC', tA.SPC ?? 70) * 0.0005 + rmean(target.pos, 'JMP', tA.JMP ?? 70) * 0.0005
+  }
+  return clamp(p * E1_W, -0.035, 0.035)
+}
+/** E1: WR/TE burst (ACC/COD) joins separation a little. */
+function targetAccCod(target: Player | undefined, tA: Record<string, number>): number {
+  if (!target || (target.pos !== 'WR' && target.pos !== 'TE')) return 0
+  return clamp((rmean(target.pos, 'ACC', tA.ACC ?? 70) * 0.04 + rmean(target.pos, 'COD', tA.COD ?? 70) * 0.04) * E1_W, -6, 6)
+}
+/** E1: a receiver's release (RLS) vs the coverage defender's press (PRS) on short man throws. */
+function releaseVsPress(target: Player | undefined, tA: Record<string, number>, cover: Player | undefined, manCoverage: number, depth: number): number {
+  if (!target || target.pos !== 'WR' || !cover || manCoverage <= 0.5 || depth >= 15) return 0
+  const cA = mkAttrs(cover)
+  return clamp((rmean('WR', 'RLS', tA.RLS ?? 70) - rmean(cover.pos, 'PRS', cA.PRS ?? 70)) * 0.06 * E1_W, -8, 8)
+}
+/** E1: OL awareness blunts part of the blitz bonus (9 × (1 − this)). */
+function olBlitzAware(ol: Player[]): number {
+  return clamp(avg(ol.map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70))) * 0.005 * E1_W, -0.18, 0.3)
+}
+/** E1: OL strength helps short-yardage runs (≤ 2 to go). */
+function olShortStrength(ol: Player[], distance: number): number {
+  if (distance > 2) return 0
+  return clamp(avg(ol.map((p) => rmean(p.pos, 'STR', mkAttrs(p).STR ?? 70))) * 0.1 * E1_W, -6, 6)
+}
+/** E1: a tight end joins run blocking at 15% weight. */
+function teRunBlock(te: Player | undefined): number {
+  if (!te) return 0
+  const a = mkAttrs(te)
+  return (rmean('TE', 'RBK', a.RBK ?? 70) * 0.7 + rmean('TE', 'IBL', a.IBL ?? 70) * 0.3) * 0.15 * E1_W
+}
+/** E1: SPM/SFA/COD/ACC join a running back's elusiveness (small). */
+function rbElusivenessExtras(pos: string | undefined, a: Record<string, number>): number {
+  if (pos !== 'RB') return 0
+  return clamp(
+    (rmean('RB', 'SPM', a.SPM ?? 70) * 0.03 +
+      rmean('RB', 'SFA', a.SFA ?? 70) * 0.03 +
+      rmean('RB', 'COD', a.COD ?? 70) * 0.03 +
+      rmean('RB', 'ACC', a.ACC ?? 70) * 0.03) * E1_W,
+    -8, 8,
+  )
+}
+/** E1: BTK adds yards after contact on runs of 3+. */
+function rbAfterContact(pos: string | undefined, a: Record<string, number>, gain: number): number {
+  if (pos !== 'RB' || gain < 3) return 0
+  return clamp(Math.round(rmean('RB', 'BTK', a.BTK ?? 70) * 0.04 * E1_W), -4, 4)
+}
+/** E1: ball security — CAR moves fumble chance around the existing style factor. */
+function rbCarrySecurity(pos: string | undefined, a: Record<string, number>): number {
+  return clamp(1 - (rmean(pos, 'CAR', a.CAR ?? 70) / 100) * E1_W, 0.7, 1.3)
 }
 
 function topGroup(world: World, teamId: string, positions: Position[], n: number, qbOverride?: Record<string, string>): Player[] {
@@ -663,12 +759,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // A pass-heavy plan is predictable: the defense pins its ears back and sits
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
-  const pressureEdge = pressure - protection + (blitz ? 9 : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
+  const pressureEdge = pressure - protection + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
     + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
-  const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1), 0.02, 0.13)
+  const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)), 0.02, 0.13)
 
   // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
   // more looks, but the ball is spread by a softmax draw over those scores rather
@@ -726,12 +822,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   }
 
   const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
+  // E1: the coverage defender, for the release-vs-press term (no rng draw).
+  const coverPlayer = coverId ? [...cbs, ...saf, ...lbs].find((p) => p.id === coverId) : undefined
   const separation =
     (concept.depth > 14 ? (tA.DRR ?? 70) : concept.depth > 7 ? (tA.MRR ?? 70) : (tA.SRR ?? 70)) * 0.5 +
     (tA.SPD ?? 70) * 0.3 +
     (tA.AGI ?? 70) * 0.2 +
     tStyle.deepBias * (concept.depth >= 12 ? 6 : -2) -
-    Math.min(readRank, 3) * TARGET_TUNE.readPenalty
+    Math.min(readRank, 3) * TARGET_TUNE.readPenalty +
+    qbDeepThp(qbA, concept.depth) +
+    targetAccCod(target, tA) +
+    releaseVsPress(target, tA, coverPlayer, dStyle.manCoverage, concept.depth)
   const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
   const zoneCov = avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
   // G11 targetWeakCB: on 35% of passes the coverage keys their weakest corner
@@ -758,7 +859,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
   const offPassBias = planFor(offId, 'off')?.passBias ?? 0
-  const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) : 0
+  // E1: QB play-action rating scales the existing bonus.
+  const pacMult = qbPacMult(qbA)
+  const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) * pacMult : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
   const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5 - spyPenalty
@@ -766,9 +869,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Completion probability based on real league rate vs. this matchup. Coordinator
   // quality shifts it: a great OC helps, a great DC hurts.
   const coachShift = (ocEff.offEdge - dcEff.defEdge) * 0.003
-  const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) : 0
+  const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) * pacMult : 0
+  // E1: a receiver's hands (CTH/CIT/SPC/JMP) move the completion a little; tight coverage is when
+  // the defense's coverage edge beats the route.
+  const tightCoverage = coverage * 1.15 > qAccuracy + separation
   let compProb = clamp(
-    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012,
+    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage),
     0.42,
     0.74,
   )
@@ -777,7 +883,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   if (hasFix(env, offId, 'quickGame') && concept.depth <= 8) compProb = clamp(compProb + 0.03, 0.42, 0.74)
   if (hasFix(env, offId, 'maxProtect') && concept.depth >= 12) compProb = clamp(compProb - 0.03, 0.42, 0.74)
   // G7 hurry: a faster offense forces riskier throws.
-  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1), 0.005, 0.06)
+  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth), 0.005, 0.06)
 
   if (rng() < intProb) {
     const ballHawk = [...cbs, ...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
@@ -838,6 +944,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   void dcEff
   const qb = topGroup(world, offId, ['QB'], 1)[0]
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
+  const te = topGroup(world, offId, ['TE'], 1)[0]
   const dl = topGroup(world, defId, ['DE', 'DT'], 4)
   const lbs = topGroup(world, defId, ['LB'], 3)
   const saf = topGroup(world, defId, ['S'], 2)
@@ -883,7 +990,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
 
-  const runBlock = avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3))
+  const runBlock = avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te)
   const runDefBase = avg(dl.map((p) => (mkAttrs(p).BSH ?? 70) * 0.5 + (mkAttrs(p).TAK ?? 70) * 0.5)) * dStyle.runFit
   // The live defensive plan moves the front: stacking the box stops the run,
   // a soft-zone light box gives a little back on the ground.
@@ -896,7 +1003,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4))
   const elusiveness = carrier?.pos === 'QB'
     ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1
-    : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2
+    : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
 
   // Real NFL run distribution, tilted by line + back vs. front seven, plus back style.
   const styleEdge = cStyle.power * 14 + cStyle.elusiveness * 10 + (cFit - 0.5) * 12
@@ -907,17 +1014,18 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + (call?.edge ?? 0) * 1.6
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + (call?.edge ?? 0) * 1.6
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
   let gain = tier === 'FBS' && runGain < 0 ? Math.round(runGain * 0.7) : runGain
   if (distance <= 2) gain += (rng() < 0.35 ? 2 : 1) + Math.round(cStyle.power * 1.5)
+  gain += rbAfterContact(carrier?.pos, cA, gain)
   if (yard >= 95) gain += 4
   else if (yard >= 88) gain += 2
   gain = clamp(gain, -10, 90)
   const isBig = gain >= 20
-  const fumble = rng() < 0.011 * (1 - cStyle.power * 0.2)
+  const fumble = rng() < 0.011 * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA)
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
   const tackler = fumble ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
   const tackleIds = tackler ? [tackler] : []

@@ -15,7 +15,10 @@
 | UI | Play animation (runs, routes, YAC, scrambles, sacks, fumbles, returns, kicks) | ✅ done |
 | L12 P2 | Practice week, keys to the game | ✅ done |
 | L12 P3 | Realistic stat lines: target shares, carry split, tackles/sacks/INTs by position, box-score layout | ✅ done |
-| L12 P4–P5 | Every rating counts in the sim, then recalibrate | 📝 specced |
+| L12 P4 | Every rating counts: E0 fill ratings, E1 offense ratings in the sim | ✅ done |
+| L12 P5 | Defense/kicking/general ratings, recalibrate, rating spread probe | ⏳ next |
+| L12.5 | Trade desk: deal/player hover cards, find deals for their players, find by position, trade block | ⏳ in progress |
+| L12.6 | Live Stats Hub; offseason calendar (FA March, draft April) | ⏳ in progress |
 | L13 | Personnel packages, special-teams calls | 🗺 outlined |
 | L14 | Trade deadline day, draft-day trades, free-agency frenzy | 🗺 outlined |
 | L15 | Development plans (Auto / Select all), scouting travel (Auto), injury decisions, locker room | 🗺 outlined |

@@ -14,22 +14,29 @@
 
 import type { Position } from '../types'
 
-/** Per-position attribute schema, matching the fields Madden/CFB expose. */
+/**
+ * Per-position attribute schema, matching the fields Madden/CFB expose.
+ *
+ * L12 E0: every rating a position uses is present, so generated players carry the
+ * same keys as the real data (and the sim can read them). New keys are appended to
+ * the end of each list: `attributesFor` jitters by key index, so appending leaves
+ * every existing generated value identical. STA and TGH are appended last everywhere.
+ */
 export const ATTRIBUTE_SCHEMA: Record<string, string[]> = {
-  QB: ['SPD', 'STR', 'AGI', 'AWR', 'THP', 'SAC', 'MAC', 'DAC', 'RUN', 'PAC'],
-  RB: ['SPD', 'STR', 'AGI', 'AWR', 'CAR', 'BCV', 'JKM', 'TRK', 'SRR', 'CIT'],
-  WR: ['SPD', 'STR', 'AGI', 'AWR', 'CIT', 'SRR', 'MRR', 'DRR', 'RTE', 'JMP'],
-  TE: ['SPD', 'STR', 'AGI', 'AWR', 'CIT', 'SRR', 'RBK', 'IBL'],
-  OT: ['STR', 'AGI', 'AWR', 'PBK', 'RBK', 'IMP', 'IBL'],
-  OG: ['STR', 'AGI', 'AWR', 'PBK', 'RBK', 'IMP', 'IBL'],
-  C: ['STR', 'AGI', 'AWR', 'PBK', 'RBK', 'IMP', 'IBL'],
-  DE: ['SPD', 'STR', 'AGI', 'AWR', 'PMV', 'FMV', 'BSH', 'TAK', 'PUR'],
-  DT: ['SPD', 'STR', 'AGI', 'AWR', 'PMV', 'FMV', 'BSH', 'TAK', 'PUR'],
-  LB: ['SPD', 'STR', 'AGI', 'AWR', 'TAK', 'PUR', 'PRC', 'MCV', 'ZCV', 'BSH'],
-  CB: ['SPD', 'STR', 'AGI', 'AWR', 'MCV', 'ZCV', 'PRS', 'JMP', 'TAK'],
-  S: ['SPD', 'STR', 'AGI', 'AWR', 'MCV', 'ZCV', 'PRC', 'TAK', 'PUR'],
-  K: ['KPW', 'KAC', 'AWR'],
-  P: ['KPW', 'KAC', 'AWR'],
+  QB: ['SPD', 'STR', 'AGI', 'AWR', 'THP', 'SAC', 'MAC', 'DAC', 'RUN', 'PAC', 'ACC', 'TOR', 'TUP', 'BTK', 'STA', 'TGH'],
+  RB: ['SPD', 'STR', 'AGI', 'AWR', 'CAR', 'BCV', 'JKM', 'TRK', 'SRR', 'CIT', 'ACC', 'COD', 'CTH', 'SPM', 'SFA', 'BTK', 'STA', 'TGH'],
+  WR: ['SPD', 'STR', 'AGI', 'AWR', 'CIT', 'SRR', 'MRR', 'DRR', 'RTE', 'JMP', 'ACC', 'COD', 'CTH', 'SPC', 'RLS', 'BTK', 'STA', 'TGH'],
+  TE: ['SPD', 'STR', 'AGI', 'AWR', 'CIT', 'SRR', 'RBK', 'IBL', 'ACC', 'CTH', 'SPC', 'PBK', 'BTK', 'STA', 'TGH'],
+  OT: ['STR', 'AGI', 'AWR', 'PBK', 'RBK', 'IMP', 'IBL', 'STA', 'TGH'],
+  OG: ['STR', 'AGI', 'AWR', 'PBK', 'RBK', 'IMP', 'IBL', 'STA', 'TGH'],
+  C: ['STR', 'AGI', 'AWR', 'PBK', 'RBK', 'IMP', 'IBL', 'STA', 'TGH'],
+  DE: ['SPD', 'STR', 'AGI', 'AWR', 'PMV', 'FMV', 'BSH', 'TAK', 'PUR', 'ACC', 'PRC', 'STA', 'TGH'],
+  DT: ['SPD', 'STR', 'AGI', 'AWR', 'PMV', 'FMV', 'BSH', 'TAK', 'PUR', 'ACC', 'PRC', 'STA', 'TGH'],
+  LB: ['SPD', 'STR', 'AGI', 'AWR', 'TAK', 'PUR', 'PRC', 'MCV', 'ZCV', 'BSH', 'ACC', 'HPW', 'PMV', 'FMV', 'STA', 'TGH'],
+  CB: ['SPD', 'STR', 'AGI', 'AWR', 'MCV', 'ZCV', 'PRS', 'JMP', 'TAK', 'ACC', 'COD', 'PRC', 'STA', 'TGH'],
+  S: ['SPD', 'STR', 'AGI', 'AWR', 'MCV', 'ZCV', 'PRC', 'TAK', 'PUR', 'ACC', 'HPW', 'JMP', 'STA', 'TGH'],
+  K: ['KPW', 'KAC', 'AWR', 'STA', 'TGH'],
+  P: ['KPW', 'KAC', 'AWR', 'STA', 'TGH'],
 }
 
 /** Madden NFL 26 overall ratings for notable players (curated reference). */
