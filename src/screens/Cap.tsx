@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { FileText, Lock } from 'lucide-react'
+import { FileText, Handshake, Lock } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { capSavings, deadMoney } from '../game/engine/cap'
@@ -7,12 +7,15 @@ import { canSignFreeAgents } from '../game/engine/career'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { canFileMemo, spaceBucket, type SpaceBucket } from '../game/engine/capMemo'
+import { canAskGm, gmAskCovers } from '../game/engine/gmAsk'
+import { monthKeyOf } from '../game/engine/gmDesk'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import type { Player } from '../game/types'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { ExtensionTalks } from '../components/ExtensionTalks'
 import { ContractExplainer } from '../components/ContractExplainer'
+import { GmRestructureRequest } from '../components/GmRestructureRequest'
 
 type LedgerKey = 'name' | 'pos' | 'age' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'pct'
 const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
@@ -173,6 +176,8 @@ export function Cap() {
         <ContractExplainer player={contracts[0]} />
       </Card>
 
+      <GmRestructureCard className="mb-4" />
+
       <Card pad={false}>
         <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
           <span className="label">Contract Ledger</span>
@@ -226,15 +231,21 @@ export function Cap() {
                     </td>
                     <td className="px-3 py-1.5">
                       <div className="flex justify-end gap-1.5">
-                        <Button size="sm" variant="ghost" disabled={!canMove} title="Convert base salary to signing bonus" onClick={() => restructurePlayer(p.id)}>
-                          Restructure
-                        </Button>
-                        <Button size="sm" variant="ghost" disabled={!canMove || (canNegotiate && p.contract.years > 2)} onClick={() => (canNegotiate ? setTalkId(p.id) : extendPlayer(p.id))}>
-                          Extend
-                        </Button>
-                        <Button size="sm" variant="danger" disabled={!canMove} title={`Savings ${money(save)}`} onClick={() => releasePlayer(p.id)}>
-                          Cut
-                        </Button>
+                        {canMove ? (
+                          <>
+                            <Button size="sm" variant="ghost" disabled={!canMove} title="Convert base salary to signing bonus" onClick={() => restructurePlayer(p.id)}>
+                              Restructure
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={!canMove || (canNegotiate && p.contract.years > 2)} onClick={() => (canNegotiate ? setTalkId(p.id) : extendPlayer(p.id))}>
+                              Extend
+                            </Button>
+                            <Button size="sm" variant="danger" disabled={!canMove} title={`Savings ${money(save)}`} onClick={() => releasePlayer(p.id)}>
+                              Cut
+                            </Button>
+                          </>
+                        ) : (
+                          <GmCapRowActions player={p} />
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -259,6 +270,77 @@ function HealthRow({ label, value, good }: { label: string; value: number; good:
       </div>
       <RatingBar value={value} color={good ? '#05914f' : '#d98207'} />
     </div>
+  )
+}
+
+/**
+ * L12.14 C6: per-row GM requests on the Cap ledger. Coaching rungs that can't
+ * touch contracts themselves ask the GM to extend or cut a player; both buttons
+ * lock once he's been raised this month. Renders nothing for personnel rungs
+ * (who restructure/extend/cut directly) or a coordinator's wrong side of the ball.
+ */
+function GmCapRowActions({ player }: { player: Player }) {
+  const career = useGame((s) => s.career)!
+  const league = useWorld()
+  const askGmToExtend = useGame((s) => s.askGmToExtend)
+  const requestGmRelease = useGame((s) => s.requestGmRelease)
+
+  if (!canAskGm(career) || !gmAskCovers(career, player.pos)) return null
+
+  const asked = career.gmRequestLog?.[player.id] === monthKeyOf(league.season, league.week)
+  const eligibleExt = player.contract.years <= 2
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={asked || !eligibleExt}
+        title={eligibleExt ? 'Ask the GM to extend him' : `${player.contract.years} years left — the GM only extends players with two or fewer.`}
+        onClick={() => askGmToExtend(player.id)}
+      >
+        <Handshake size={12} /> {asked ? 'Asked' : 'Extend'}
+      </Button>
+      <Button size="sm" variant="danger" disabled={asked} title="Ask the GM to cut him" onClick={() => requestGmRelease(player.id)}>
+        <Handshake size={12} /> {asked ? 'Asked' : 'Cut'}
+      </Button>
+    </>
+  )
+}
+
+/**
+ * L12.14 C6: the team-level GM restructure request on the Cap screen. The coach
+ * picks a named trade/FA target, then asks the GM to convert base to bonus on
+ * 1–3 big deals to clear the cap need; the GM only does it while the club reads
+ * as a contender. Personnel rungs restructure directly, so this renders nothing
+ * for them.
+ */
+function GmRestructureCard({ className }: { className?: string }) {
+  const league = useWorld()
+  const career = useGame((s) => s.career)!
+
+  if (!canAskGm(career)) return null
+
+  return (
+    <Card className={className}>
+      <h3 className="flex items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
+        <Handshake size={16} className="text-[var(--team)]" /> Ask the GM
+      </h3>
+      <p className="mb-3 mt-1 max-w-2xl text-xs leading-relaxed text-muted">
+        You shape the plan; the GM holds the pen. Name the target you want room for and he converts base to bonus on
+        1&ndash;3 big deals &mdash; only while the club reads as a contender. He reports the space freed this year
+        against the extra dead money pushed into later years.
+      </p>
+      <GmRestructureRequest />
+      <p className="mt-3 text-[10px] text-faint">
+        Restructures only help for a specific, named move. An unnecessary one is refused.
+      </p>
+      {career.gmRestructureSeason === league.season && (
+        <p className="mt-1 text-[10px] text-faint">
+          Restructure green-lit this season: a free-agent bid that doesn&apos;t fit will trigger one automatically.
+        </p>
+      )}
+    </Card>
   )
 }
 

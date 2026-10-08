@@ -12,6 +12,7 @@
 import type { CareerState, LedgerEntry, LedgerKind, Player, Recommendation } from '../types'
 import type { World } from './generate'
 import { tierFor } from './career'
+import { STARTERS, depthAt } from './depth'
 import type { GameSim } from './playsim'
 import { fourthDownEV, twoPointChoice, type Situation } from './decisions'
 import { kickPowerFor, playIndexOf, type FilmGrade } from './film'
@@ -19,7 +20,7 @@ import type { KeyGrade } from './keys'
 import { clamp } from './rng'
 
 /** L12.9 L1: the coaching-track call kinds (the "Coaching" Ledger filter). */
-export const COACHING_KINDS: ReadonlySet<LedgerKind> = new Set(['fourth', 'two', 'playCall', 'keys', 'film', 'pitch'])
+export const COACHING_KINDS: ReadonlySet<LedgerKind> = new Set(['fourth', 'two', 'playCall', 'keys', 'film', 'pitch', 'gmRequest'])
 
 /** How many seasons a drafted player needs before we grade the pick. */
 const PICK_EVAL_SEASONS = 2
@@ -93,6 +94,29 @@ function gradeEntry(world: World, e: LedgerEntry): boolean | undefined {
     if (!p) return false
     return p.ovr >= (e.ovrAtSign ?? 0) - 2
   }
+  // L12.14 C6: a GM request graded the following season — did the move help?
+  if (e.kind === 'gmRequest') {
+    // Only executed moves are graded; a declined / not-now request did nothing.
+    if (!e.requestDone) return undefined
+    if (world.season <= e.season) return undefined
+    if (e.requestKind === 'restructure') {
+      // The push paid off if the club finished with a winning season.
+      return (world.lastWins?.[e.teamId ?? ''] ?? 0) >= 9
+    }
+    const p = e.playerId ? world.players.find((x) => x.id === e.playerId) : undefined
+    if (e.requestKind === 'release') {
+      // Moving on looks right unless he went on to start and produce elsewhere.
+      if (!p || !p.teamId) return true
+      if (p.teamId === e.teamId) return false
+      const s = (p.stats ?? []).find((x) => x.season === e.season && x.level === 'NFL')
+      const games = s?.games ?? 0
+      const depth = depthAt(world, p.teamId, p.pos)
+      const startsElsewhere = depth.findIndex((x) => x.id === p.id) < (STARTERS[p.pos] ?? 1)
+      return !(games >= 8 && startsElsewhere)
+    }
+    if (!p) return false
+    return p.ovr >= (e.ovrAtSign ?? 0) - 3
+  }
   return undefined
 }
 
@@ -125,6 +149,16 @@ export function gradeLedger(world: World, career: CareerState): { graded: number
       e.outcome = result
         ? `Your pitch held: ${e.name} started ${games} games.`
         : `Your pitch went nowhere: ${e.name} managed only ${games} games.`
+    }
+    // L12.14 C6: a GM request matures a season later.
+    if (e.kind === 'gmRequest' && result !== undefined) {
+      if (e.requestKind === 'restructure') {
+        e.outcome = result ? `The cap push worked: ${e.name}.` : `The cap push fizzled: ${e.name}.`
+      } else if (e.requestKind === 'release') {
+        e.outcome = result ? `Moving on from ${e.name} worked out.` : `${e.name} made the cut look wrong.`
+      } else {
+        e.outcome = result ? `${e.name} held up after the move.` : `${e.name} didn't live up to the move.`
+      }
     }
     // For picks, refresh the outcome text as the player develops.
     if (p && !e.vindication && (e.kind === 'pick' || e.kind === 'advice' || e.kind === 'recommendation')) {

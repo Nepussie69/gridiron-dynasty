@@ -473,6 +473,8 @@ export type LedgerKind =
   | 'keys'
   | 'film'
   | 'pitch'
+  // L12.14 C6: a coaching-track request filed with the GM.
+  | 'gmRequest'
 export interface LedgerEntry {
   id: string
   season: number
@@ -509,6 +511,11 @@ export interface LedgerEntry {
   /** Contract entries (G2): the AAV you signed him for, and his OVR at signing. */
   aav?: number
   ovrAtSign?: number
+  /** L12.14 C6: which GM request this entry came from, and the club it was filed with. */
+  requestKind?: import('./engine/gmDesk').GmRequestKind
+  teamId?: string
+  /** L12.14 C6: the request was actually executed — only executed moves are graded. */
+  requestDone?: boolean
 }
 
 /** L10 G11: matchup assignments you can set for your club before kickoff. */
@@ -593,6 +600,22 @@ export interface CareerState {
   gmAsks?: Record<string, number>
   /** L12.14 C4: players the GM extended at the coach's request, pending the +1 leadership check. */
   gmExtensions?: { playerId: string; season: number; name: string; awarded?: boolean }[]
+  /** L12.14 C6: the GM requests desk — every answer, newest last, capped. */
+  gmRequests?: {
+    season: number
+    week: number
+    kind: import('./engine/gmDesk').GmRequestKind
+    playerId?: string
+    name: string
+    outcome: import('./engine/gmDesk').GmRequestOutcome
+    message: string
+  }[]
+  /** L12.14 C6: the month bucket of the last request per player (1 per player per month). */
+  gmRequestLog?: Record<string, number>
+  /** L12.14 C6: players the head coach has marked untouchable (max 3). */
+  gmUntouchables?: string[]
+  /** L12.14 C6: the season the coach green-lit restructures for a push. */
+  gmRestructureSeason?: number
   /** G3: the cap memo filed last offseason, graded at the end of the following season. */
   capMemo?: CapMemo
   /** G3: your room's focus players, practice plan, and banked reps. */
