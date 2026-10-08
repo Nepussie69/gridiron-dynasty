@@ -24,7 +24,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 18 | 2026-10-08 | Potential/ceiling in a colour bubble by how good it is | Claude, kit.tsx OvrBadge | ✅ (this commit) |
 | 19 | 2026-10-08 | Rookies need much lower ratings; show current + potential side by side without giving it away | L12.7 D1 ✅ + D5 (follow-up push) | 🔨 building |
 | 20 | 2026-10-08 | "Batting average" → a football term | Claude: "Success Rate" (Ledger.tsx) | ✅ (this commit) |
-| 21 | 2026-10-08 | What is the Ledger? Make it work for the coaching track (coach calls graded) | L12.9 L1 | 🔨 building |
+| 21 | 2026-10-08 | What is the Ledger? Make it work for the coaching track (coach calls graded) | L12.9 L1 | ✅ merged |
 | 22 | 2026-10-08 | Is Culture linked to the actual game? (cohesion/culture are display-only today) | L12.9 K1–K2 | ⏳ queued (K2 contract discount needs user OK) |
-| 23 | 2026-10-08 | Doesn't like the weekly hours card → remove it | L12.9 H1 (pacing kept identical) | 🔨 building |
+| 23 | 2026-10-08 | Doesn't like the weekly hours card → remove it | L12.9 H1 | ✅ merged |
 | 24 | 2026-10-08 | (found in QA) AI QBs show 0 rushing in the Stats Hub — fast-sim stat allocation gives QBs no carries | statAlloc follow-up | ⏳ queued |

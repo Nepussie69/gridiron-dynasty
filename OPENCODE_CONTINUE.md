@@ -22,7 +22,6 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 |---|---|---|---|---|
 | `p5` / `wt-p5` | scratchpad/wt-p5 | NEXT_PHASE_L12.md P5 (E2 defense/K/general ratings, E3 recalibrate, `__ratingSpread`) | /private/tmp/gridiron-l12p5.txt | Sim change: verify all 3 seeds in bands, statShape all ✅, equivalence 20/20, spread table. Appends L12 section to HANDOFF.md |
 | `l12_5` / `l12_5-trade` | scratchpad/trade-wt | NEXT_PHASE_L12_5.md T1–T5 trade desk | /private/tmp/gridiron-l12_5.txt | Launched by `/private/tmp/ds-push-wt`. Slow start |
-| `hours` / `wt-hours` | scratchpad/wt-hours | NEXT_PHASE_L12_9.md P1 H1 (remove weekly hours, passive gains, pacing ±1 season) + L1 (coach Ledger) | /private/tmp/gridiron-l12_9p1.txt | Check the before/after pacing table |
 | `reads` / `wt-reads` | scratchpad/wt-reads | NEXT_PHASE_L12_7.md D5 (Now/Ceiling ranges on scouting reads) | /private/tmp/gridiron-l12_7p2.txt | Display only |
 | `qbrush` / `wt-qbrush` | scratchpad/wt-qbrush | Backlog #24: AI QBs get rushing in `statAlloc` | /private/tmp/gridiron-qbrush.txt | Team totals must not change; equivalence 20/20 |
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.

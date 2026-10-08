@@ -5,8 +5,8 @@ _Planned by Claude Opus 5.5. Implemented by DeepSeek Flash 4.1. Lint baseline: e
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| H1 | Remove the weekly-hours "This Week" card; its effects become passive or move to where they belong | P1 | not started |
-| L1 | Ledger for the coaching track: coaching calls dated and graded; "Success Rate" | P1 | not started |
+| H1 | Remove the weekly-hours "This Week" card; its effects become passive or move to where they belong | P1 | ✅ done — verified (P1) |
+| L1 | Ledger for the coaching track: coaching calls dated and graded; "Success Rate" | P1 | ✅ done — verified (P1) |
 | K1 | Unit cohesion in the sim: a newer unit commits slightly more penalties/fumbles (relative to league mean) | P2 (after L12 P5) | not started |
 | K2 | Culture discount on contracts + FA interest | — | **blocked: needs the user's OK (contract pricing)** |
 
@@ -44,3 +44,4 @@ agent +1 Roster rep, owner +2 job security. The card lives in `src/components/Ca
 - Do not edit `ORCHESTRATION_HANDOVER.md`, `OPENCODE_CONTINUE.md`, any `NEXT_PHASE*.md`, `ROADMAP_*.md`, `IDEAS_*.md`, `HANDOFF.md`, `PLAYTEST_BACKLOG.md`. No git commands.
 
 ## Verification log
+- **P1** (Flash 12 min, ran out of steps with Ledger.tsx mid-edit; Claude finished the list: All/Coaching filter, role-aware empty state, pos/college only when present). Passive gains: 1 point per former action every 6 weeks (`career.passiveBank`), scout bias every 4 weeks, drills +1 rep/week; Study opponent on Game Plan; Character read free 2/week. Note: `balanceProbe` never used hours, so pacing is unchanged by construction (personnel→GM 9/7/7/7, coach→HC 10 on the tested seeds); real careers lose the old repeatable hour spends (owner +2 job security etc.). Coach Ledger: 4th-down/2-pt/play-call/keys/film/pitch entries (≤6 per game), graded. Equivalence 20/20, smokes 0/0. Browser: no hours card; after 2 weeks the Ledger shows 4th-down calls vs staff EV and film grades.
