@@ -61,6 +61,9 @@ function hash(n: number): number {
   const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453
   return x - Math.floor(x)
 }
+/** Ball-carrier pace on run plays at 1× (yards per second): through the hole, then top speed. */
+const RUN_HOLE_SPEED = 5.5
+const RUN_TOP_SPEED = 7.5
 const clampY = (y: number) => Math.max(1.2, Math.min(FIELD_H - 1.2, y))
 const clampX = (x: number) => Math.max(1, Math.min(FIELD_W - 1, x))
 // Speed-continuous easing: constant speed in between waypoints, easing only on an
@@ -285,7 +288,6 @@ export function buildPlayAnim(play: Play, ctx: AnimContext = {}): PlayAnim {
 function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const los = 10 + play.startYard
   const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
-  const p = startPaths(f)
   const seed = play.n * 7 + play.startYard
   const qbRun = !!ctx.carrierIsQB || /QB Draw|Scramble|Sneak/.test(play.concept)
   const wide = /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
@@ -296,41 +298,75 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const endY = clampY(holeY + (hash(seed + 2) - 0.5) * (Math.abs(play.yards) > 12 ? 18 : 7))
   const carrier = qbRun ? 'qb' : 'rb'
 
-  // Line: run blockers drive forward, DL engage at the line.
-  for (let i = 0; i < 5; i++) p[`ol${i}`].push({ t: 0.35, x: los + 1 + (wide ? 0.5 : 1.2), y: f[`ol${i}`].y + side * (wide ? 1.5 : 0.4) })
-  for (let i = 0; i < 4; i++) p[`dl${i}`].push({ t: 0.35, x: los + 0.6, y: f[`dl${i}`].y + side * 0.6 })
-  // Receivers block downfield.
-  ;['wr0', 'wr1', 'wr2', 'te'].forEach((k, i) => p[k].push({ t: 0.45, x: f[k].x + 4 + i, y: f[k].y + (MID_Y - f[k].y) * 0.15 }))
-  // A fullback leads into the hole on a two-back run.
-  if (p.fb) p.fb.push({ t: 0.3, x: los - 1, y: MID_Y + (holeY - MID_Y) * 0.6 }, { t: 0.5, x: los + 1.5, y: holeY + side * 1.2 })
+  // Timing is set in milliseconds from real distances, then turned into 0..1
+  // fractions: the back runs at a believable pace (no sprinting through a long
+  // gain) and the whole play slows down with it. `sc` stretches the pre-hole
+  // beats (blocks, fake, fullback lead) to the hole time.
+  const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
+  const meshX = qbRun ? f.qb.x - 1 : f.qb.x + 0.7
+  const meshY = qbRun ? MID_Y : MID_Y + side * 1.4
+  const handMs = qbRun ? 260 : 520
+  const toHoleMs = Math.max(380, (Math.hypot(holeX - meshX, holeY - meshY) / RUN_HOLE_SPEED) * 1000)
+  const holeMs = handMs + toHoleMs
+  // The run after the hole: a smooth curve (quadratic, bowed to one side) from
+  // the hole to the end spot, sampled evenly along its length.
+  const finX = endX
+  const finY = endY
+  const bow = side * (0.5 + hash(seed + 4) * 2.5)
+  const ctrl = { x: (holeX + finX) / 2 - (finY - holeY) * 0.08, y: (holeY + finY) / 2 + bow * 2 }
+  const curve = (u: number) => ({
+    x: clampX((1 - u) * (1 - u) * holeX + 2 * (1 - u) * u * ctrl.x + u * u * finX),
+    y: clampY((1 - u) * (1 - u) * holeY + 2 * (1 - u) * u * ctrl.y + u * u * finY),
+  })
+  const SAMPLES = 48
+  const pts = [curve(0)]
+  const arc = [0]
+  for (let i = 1; i <= SAMPLES; i++) {
+    pts.push(curve(i / SAMPLES))
+    arc.push(arc[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y))
+  }
+  const L = arc[SAMPLES]
+  // Speed along the run: leaves the hole at hole speed, builds to top speed over
+  // ~4 yards, and slows into the tackle over the last ~2.5 yards.
+  const speedAt = (sv: number) => {
+    const build = RUN_HOLE_SPEED + (RUN_TOP_SPEED - RUN_HOLE_SPEED) * Math.min(1, sv / 4)
+    return Math.max(1.6, build * Math.min(1, 0.3 + (0.7 * (L - sv)) / 2.5))
+  }
+  const runT = [0]
+  for (let i = 1; i <= SAMPLES; i++) {
+    const mid = (arc[i] + arc[i - 1]) / 2
+    runT.push(runT[i - 1] + ((arc[i] - arc[i - 1]) / speedAt(mid)) * 1000)
+  }
+  const runMs = Math.max(260, runT[SAMPLES])
+  const total = holeMs + runMs
+  const holeT = holeMs / total
+  const handT = handMs / total
+  const sc = holeT / 0.42
+  const snapT = 60 / total
+  const p = startPaths(f, 80 / total)
 
-  const handT = qbRun ? 0.1 : 0.2
-  const holeT = 0.42
+  // Line: run blockers drive forward, DL engage at the line.
+  for (let i = 0; i < 5; i++) p[`ol${i}`].push({ t: 0.35 * sc, x: los + 1 + (wide ? 0.5 : 1.2), y: f[`ol${i}`].y + side * (wide ? 1.5 : 0.4) })
+  for (let i = 0; i < 4; i++) p[`dl${i}`].push({ t: 0.35 * sc, x: los + 0.6, y: f[`dl${i}`].y + side * 0.6 })
+  // Receivers block downfield.
+  ;['wr0', 'wr1', 'wr2', 'te'].forEach((k, i) => p[k].push({ t: 0.45 * sc, x: f[k].x + 4 + i, y: f[k].y + (MID_Y - f[k].y) * 0.15 }))
+  // A fullback leads into the hole on a two-back run.
+  if (p.fb) p.fb.push({ t: 0.3 * sc, x: los - 1, y: MID_Y + (holeY - MID_Y) * 0.6 }, { t: 0.5 * sc, x: los + 1.5, y: holeY + side * 1.2 })
+
   if (qbRun) {
-    p.qb.push({ t: 0.18, x: f.qb.x - 1, y: MID_Y })
-    p.rb.push({ t: 0.3, x: los - 1, y: MID_Y - side * 5 })
+    p.qb.push({ t: handT, x: meshX, y: meshY })
+    p.rb.push({ t: 0.3 * sc, x: los - 1, y: MID_Y - side * 5 })
   } else {
     // Mesh point: QB turns, the back takes the handoff (they meet exactly).
-    p.qb.push({ t: handT, x: f.qb.x + 0.7, y: MID_Y + side * 1.4 })
-    p.rb.push({ t: handT, x: f.qb.x + 0.7, y: MID_Y + side * 1.4 })
-    p.qb.push({ t: 0.4, x: f.qb.x - 1.5, y: MID_Y - side * 4 }) // carries out the fake
+    p.qb.push({ t: handT, x: meshX, y: meshY })
+    p.rb.push({ t: handT, x: meshX, y: meshY })
+    p.qb.push({ t: 0.4 * sc, x: f.qb.x - 1.5, y: MID_Y - side * 4 }) // carries out the fake
   }
-  // Hit the hole, make the cut, run to the spot. The run is spread into even,
-  // un-eased steps and capped to the clock so a long gain never teleports.
-  const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
+  // Hit the hole, then follow the curve on the speed profile (dense locked
+  // waypoints, so the motion is smooth and the pace is the profile's).
   p[carrier].push({ t: holeT, x: holeX, y: holeY })
-  const bow = side * (0.5 + hash(seed + 4) * 2.5)
-  const span = Math.max(0.12, 1 - holeT)
-  const dx0 = endX - holeX
-  const dy0 = endY - holeY
-  const dist = Math.hypot(dx0, dy0)
-  const k = dist > 1.25 * span * 100 ? (1.25 * span * 100) / dist : 1
-  const finX = clampX(holeX + dx0 * k)
-  const finY = clampY(holeY + dy0 * k)
-  const steps = Math.max(2, Math.min(8, Math.ceil(Math.hypot(finX - holeX, finY - holeY) / 12)))
-  for (let i = 1; i <= steps; i++) {
-    const fr = i / steps
-    p[carrier].push({ t: holeT + span * fr, x: clampX(holeX + (finX - holeX) * fr), y: clampY(holeY + (finY - holeY) * fr + Math.sin(Math.PI * fr) * bow), lock: true })
+  for (let i = 1; i <= SAMPLES; i++) {
+    p[carrier].push({ t: holeT + (runT[i] / runMs) * (1 - holeT), x: pts[i].x, y: pts[i].y, lock: true })
   }
 
   // Linebackers fill, safeties come down; then everyone pursues to the tackle.
@@ -338,8 +374,8 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   ;['s0', 's1'].forEach((k) => p[k].push({ t: holeT, x: f[k].x - 4, y: f[k].y + (holeY - f[k].y) * 0.3 }))
   ;['cb0', 'cb1'].forEach((k) => p[k].push({ t: holeT, x: f[k].x - 1, y: f[k].y + (holeY - f[k].y) * 0.1 }))
 
-  const ballPath: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.06, ...posAt(p.qb, 0.06) }]
-  const holders: PlayAnim['holders'] = [{ t: 0, key: null }, { t: 0.06, key: 'qb' }]
+  const ballPath: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: snapT, ...posAt(p.qb, snapT) }]
+  const holders: PlayAnim['holders'] = [{ t: 0, key: null }, { t: snapT, key: 'qb' }]
   if (!qbRun) holders.push({ t: handT, key: 'rb' })
 
   if (fumble) {
@@ -352,10 +388,10 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     p[recover].push({ t: 0.9, x: loose.x, y: loose.y }, { t: 1, x: clampX(spotX), y: loose.y })
     markEaseAll(p)
     const carried = shadow(p[carrier], handT, popT)
-    const ball: WP[] = [...ballPath, ...shadow(p.qb, 0.06, handT).slice(1), ...carried, { t: 0.9, ...loose }, ...shadow(p[recover], 0.9)]
+    const ball: WP[] = [...ballPath, ...shadow(p.qb, snapT, handT).slice(1), ...carried, { t: 0.9, ...loose }, ...shadow(p[recover], 0.9)]
     markEase(ball)
     return finish(f, p, {
-      duration: 2700,
+      duration: Math.round(total / 0.9),
       ball,
       holders: [...holders, { t: popT, key: null }, { t: 0.9, key: recover }],
       flights: [{ t0: popT, t1: 0.9, height: 0.4 }],
@@ -363,10 +399,10 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   }
   pursue(p, DEF_KEYS, holeT, { x: finX + 0.8, y: finY }, 1, seed)
   markEaseAll(p)
-  const ball: WP[] = [...ballPath, ...shadow(p.qb, 0.06, handT).slice(1), ...shadow(p[carrier], handT)]
+  const ball: WP[] = [...ballPath, ...shadow(p.qb, snapT, handT).slice(1), ...shadow(p[carrier], handT)]
   markEase(ball)
   return finish(f, p, {
-    duration: play.yards >= 20 ? 2900 : 2300,
+    duration: Math.round(total),
     ball,
     holders,
     flights: [],
