@@ -12,7 +12,7 @@ _Updated 2026-10-08 ~21:40 AEDT by Claude Opus 5.5 (5-hour usage 83%) for ChatGP
 - At 95% plan usage: stop and update this file (memory rule).
 
 ## Repo state
-- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 serves `c2f6929`** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
+- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 serves `3d48e7b`** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
 - Stable build worktree: `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap`, served by `vite preview --port 4173` from the user's terminal. Rebuild after every merge:
   `SNAP=<that path>; git -C $SNAP checkout -q --detach main && (cd $SNAP && PATH="$HOME/.local/node/bin:$PATH" npx vite build --outDir $SNAP/dist)` — then tell the user "stable build updated: 4173 serves <hash>" and what's new.
 
@@ -38,10 +38,11 @@ _Updated 2026-10-08 ~21:40 AEDT by Claude Opus 5.5 (5-hour usage 83%) for ChatGP
 | `stars` / `wt-stars` | `NEXT_PHASE_L12_15.md` S1–S4 stars are rare (OVR remap) | /private/tmp/gridiron-stars.txt | must remap trade.ts/cap.ts OVR thresholds by rank |
 | `realism` / `wt-realism` | `NEXT_PHASE_REALISM.md` R1–R3 + R5 NFL 2015–2024 retune + missed tackles | /private/tmp/gridiron-realism.txt | sim constants; calibration bands change — re-baseline after merge |
 `stars` and `realism` both affect results: merge one, re-run the other's checks in its worktree after merging main into it (or resolve on merge and re-verify).
+| `qbpay` / `wt-qbpay` | queue item 1 + 3 (QB pay to 2025 money; dead-money double count) | /private/tmp/gridiron-qbpay.txt | cap.ts fit step + deadMoney; conflicts possible with `stars` in cap.ts |
 DeepSeek connections drop (ECONNRESET) with 5+ pushes at once; ds-push retries 3× automatically.
 
 ## Queue — next, in order
-1. **QB pay to real 2025 money** (user said yes, 2026-10-08): top-5 signed QB AAV is $43.6M because `fitToCap` (cap.ts / generate) compresses every contract toward 0.79–0.86 cap use; the market curve is $62M. Make QB (and the other premium positions) keep their market share when fitting (e.g. fit by scaling non-QB / mid-tier deals first, or exempt the top-12 QBs), so signed top-5 QB AAV ≈ $55–60M while league cap use stays 0.76–0.90 and nobody is over the cap. Check with `__marketProbe` + `__balanceProbe(6,'personnel')`. Backlog row 67.
+1. **QB pay to real 2025 money** — 🔨 push `qbpay` running (user said yes, 2026-10-08): top-5 signed QB AAV is $43.6M because `fitToCap` (cap.ts / generate) compresses every contract toward 0.79–0.86 cap use; the market curve is $62M. Make QB (and the other premium positions) keep their market share when fitting (e.g. fit by scaling non-QB / mid-tier deals first, or exempt the top-12 QBs), so signed top-5 QB AAV ≈ $55–60M while league cap use stays 0.76–0.90 and nobody is over the cap. Check with `__marketProbe` + `__balanceProbe(6,'personnel')`. Backlog row 67.
 2. ~~Cap ledger sortable~~ ✅ done (Claude).
 3. **Possible dead-money double count** to check: Garrett shows cap hit $47.7M, 2 yrs, guaranteed $52.8M, dead $97.8M (= the whole remaining contract). `deadMoney = min(proration×years + guaranteed, remaining)` — if `guaranteed` already includes bonus, it double counts. Verify against the NFL rule (dead = remaining proration + remaining *guaranteed base*), fix in `cap.ts`.
 4. `NEXT_PHASE_UI.md` UI Broadcast 2.0 (U1 TV field … U4), one push per section, after `anim` (merged) — U1 touches playAnim/MatchView.
