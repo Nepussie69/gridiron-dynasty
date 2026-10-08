@@ -11,6 +11,7 @@ import type { World } from './generate'
 import { teamStrength } from './generate'
 import { depthAt, STARTERS } from './depth'
 import { fitLabel } from './style'
+import { hash32 } from './rng'
 
 export interface TradeBlockEntry {
   playerId: string
@@ -23,6 +24,13 @@ export interface TradeBlockEntry {
  * the 70 highest-rated names after the per-club selection. Deterministic.
  */
 const MAX_BLOCK = 70
+/** User (2026-10-08): stars should be a rare find. OVR at or above this is a star. */
+const STAR_OVR = 88
+/** At most this many stars on the whole board at once. */
+const MAX_STARS = 2
+/** Good starters (80–87) are limited too, and only some of them show in a given month. */
+const HIGH_OVR = 80
+const MAX_HIGH = 8
 
 /** Win percentage from a club's record (0 with no games played). */
 function winPct(world: World, teamId: string): number {
@@ -115,7 +123,19 @@ export function tradeBlock(world: World, userTeamId?: string): TradeBlockEntry[]
     const eligible: { player: Player; reason: string }[] = []
     for (const p of world.roster[team.id] ?? []) {
       const reason = blockReason(world, team.id, p, { rebuilding, playoff: inSpot })
-      if (reason) eligible.push({ player: p, reason })
+      if (!reason) continue
+      // A star only hits the block when the club is really moving on (rebuilding
+      // vet or an old expiring deal), and even then only some months: the draw
+      // changes every 4 weeks (deterministic hash, no rng).
+      if (p.ovr >= STAR_OVR) {
+        const movingOn = (rebuilding && p.age >= 30) || (p.contract.years === 1 && p.age >= 32)
+        const month = Math.floor(world.week / 4)
+        if (!movingOn || (hash32(p.id, world.season * 13 + month) >>> 0) % 100 >= 25) continue
+      } else if (p.ovr >= HIGH_OVR) {
+        const month = Math.floor(world.week / 4)
+        if ((hash32(p.id, world.season * 17 + month) >>> 0) % 100 >= 40) continue
+      }
+      eligible.push({ player: p, reason })
     }
     eligible.sort((a, b) => b.player.ovr - a.player.ovr || a.player.id.localeCompare(b.player.id))
     for (const e of eligible.slice(0, 3)) {
@@ -124,5 +144,10 @@ export function tradeBlock(world: World, userTeamId?: string): TradeBlockEntry[]
   }
 
   out.sort((a, b) => b.ovr - a.ovr || a.entry.playerId.localeCompare(b.entry.playerId))
-  return out.slice(0, MAX_BLOCK).map((x) => x.entry)
+  let stars = 0
+  let high = 0
+  const kept = out.filter((x) =>
+    x.ovr >= STAR_OVR ? ++stars <= MAX_STARS : x.ovr >= HIGH_OVR ? ++high <= MAX_HIGH : true,
+  )
+  return kept.slice(0, MAX_BLOCK).map((x) => x.entry)
 }

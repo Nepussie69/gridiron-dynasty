@@ -39,3 +39,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 33 | 2026-10-08 | Playoff hunt chart per division and conference like the NFL (+ found: seeding ignored division winners) | DeepSeek push 'playoffs' | 🔨 building |
 | 34 | 2026-10-08 | Make the UI look more modern and advanced (game day field first) | NEXT_PHASE_UI.md U1–U4 | ⏳ after running pushes merge |
 | 35 | 2026-10-08 | Unit Grades: show each position and overall | Claude: Dashboard position grades (10 groups, league rank) + overall badge | ✅ (this commit) |
+| 36 | 2026-10-08 | Hover a player's name (roster etc.) for complete ratings, skills, contract | Claude: PlayerName hover on Roster + Depth chart (Find a Player/teams pushes use PlayerHoverCard) | ✅ |
+| 37 | 2026-10-08 | Smaller, slightly transparent hover box | Claude: 264px, 80% opacity + blur, 6-col ratings | ✅ |
+| 38 | 2026-10-08 | Make fullback a position | L12.10 B0 (Utility/Blocking RBs → FB) | ⏳ with the playbook push |
+| 39 | 2026-10-08 | Stars / higher-rated players less of a find on the trade block | Claude: ≤2 stars (88+, only moving-on clubs, rotate monthly), ≤8 at 80–87 | ✅ |
