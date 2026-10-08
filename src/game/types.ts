@@ -544,6 +544,10 @@ export interface CareerState {
   seasonHits: number
   /** Per-role mastery (0-100), keyed `${path}:${level}`. Excellence carries over. */
   roleMastery?: Record<string, number>
+  /** L12.11: unspent skill points, carried between seasons. */
+  skillPoints?: number
+  /** L12.11: skill points earned each season, and why. */
+  skillLog?: { season: number; earned: number; reasons: string[] }[]
   /** Every call you've made: grades, recommendations, picks, advice. */
   ledger?: LedgerEntry[]
   /** Your ranked board for the upcoming draft (prospect ids, best first). */

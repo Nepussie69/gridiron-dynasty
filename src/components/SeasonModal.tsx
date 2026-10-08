@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Award, Fingerprint, Ghost, HelpCircle, Target, Trophy, X } from 'lucide-react'
+import { ArrowRight, Award, Fingerprint, Ghost, HelpCircle, Sparkles, Target, Trophy, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { ladderFor, tierFor } from '../game/engine/career'
@@ -100,6 +100,25 @@ export function SeasonModal() {
                 </div>
               ))}
             </div>
+          </Card>
+        )}
+
+        {summary.skillPoints && summary.skillPoints.earned > 0 && (
+          <Card className="mb-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="label flex items-center gap-1">
+                <Sparkles size={12} /> Skill points
+              </div>
+              <Badge tone="gold">+{summary.skillPoints.earned}</Badge>
+            </div>
+            <p className="text-sm text-ink-2">
+              You earned {summary.skillPoints.earned} skill point
+              {summary.skillPoints.earned === 1 ? '' : 's'}:{' '}
+              <span className="font-600 text-ink">{summary.skillPoints.reasons.join(', ')}</span>.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              {summary.skillPoints.unspent} unspent — spend them in My Career → Skills.
+            </p>
           </Card>
         )}
 

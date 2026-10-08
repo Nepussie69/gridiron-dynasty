@@ -35,6 +35,7 @@ import { depthAt, STARTERS } from './depth'
 import {
   canDraft,
   demote,
+  earnSkillPoints,
   generateJobOffers,
   gradeObjectives,
   ladderFor,
@@ -45,6 +46,7 @@ import {
   reviewSeason,
   roleObjectives,
   salaryFor,
+  spendSkillPointsEvenly,
   tierFor,
   unitRanks,
   updateRoleMastery,
@@ -191,7 +193,7 @@ function resetSeason(world: World) {
   refreshProspectClass(world)
 }
 
-export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coach' | 'personnel'; data?: RealData | null } = {}): BalanceReport {
+export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coach' | 'personnel'; data?: RealData | null; skillPolicy?: boolean } = {}): BalanceReport {
   const seasons = opts.seasons ?? 10
   const path = opts.path ?? 'personnel'
   const rng = makeRng(opts.seed ?? 987654)
@@ -240,6 +242,22 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
     skills.evaluation = clamp(skills.evaluation + (scout.accuracy >= 60 ? 4 : scout.graded > 0 ? 2 : 0), 0, 99)
     for (const [k, v] of Object.entries(review.skillDelta)) {
       ;(skills as unknown as Record<string, number>)[k] = clamp(((skills as unknown as Record<string, number>)[k] ?? 0) + (v as number), 0, 99)
+    }
+    // L12.11: model a player who earns his skill points and spends them evenly.
+    if (opts.skillPolicy) {
+      const award = earnSkillPoints({
+        objectivesMet: graded.doneCount,
+        ambitionsMet: 0,
+        wins: rec?.wins ?? 0,
+        losses: rec?.losses ?? 0,
+        madePlayoffs,
+        wonTitle,
+        awards: 0,
+        questionGood: false,
+        ledgerGraded: 0,
+        ledgerHits: 0,
+      })
+      Object.assign(skills, spendSkillPointsEvenly(skills, award.earned))
     }
     if (scout.graded >= 5 && scout.accuracy >= 80) rep.profile = clamp(rep.profile + 4, 0, 100)
     if (wonTitle) rep.profile = clamp(rep.profile + 8, 0, 100)

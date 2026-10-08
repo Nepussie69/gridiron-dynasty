@@ -40,6 +40,86 @@ export interface Skills {
 
 export const ZERO_SKILLS: Skills = { evaluation: 20, negotiation: 15, leadership: 15, scheme: 15, recruiting: 15 }
 
+// ── Skill points (L12.11): earned each season, spent by the player ───────────
+/** A season can earn at most this many skill points. */
+export const MAX_SKILL_POINTS = 8
+
+/** Everything a season did, fed into the skill-point award. */
+export interface SkillPointInput {
+  /** Job objectives met this season. */
+  objectivesMet: number
+  /** Personal ambitions met this season. */
+  ambitionsMet: number
+  wins: number
+  losses: number
+  madePlayoffs: boolean
+  wonTitle: boolean
+  /** Staff awards the user won this season. */
+  awards: number
+  /** The season question resolved in the user's favour. */
+  questionGood: boolean
+  /** Ledger calls graded this season. */
+  ledgerGraded: number
+  ledgerHits: number
+}
+
+export interface SkillPointAward {
+  earned: number
+  reasons: string[]
+}
+
+/**
+ * Award skill points for a season's accomplishments: +2 per job objective met,
+ * +1 per personal ambition met, +1 for a winning record, +1 playoffs, +2 title,
+ * +1 per staff award, +1 for a season question answered "yes", and +1 for a
+ * Ledger success rate ≥ 60% on ≥ 5 graded calls this season. Capped at 8.
+ */
+export function earnSkillPoints(ctx: SkillPointInput): SkillPointAward {
+  const reasons: string[] = []
+  let earned = 0
+  const add = (n: number, why: string) => {
+    if (n > 0) {
+      earned += n
+      reasons.push(why)
+    }
+  }
+  add(ctx.objectivesMet * 2, `${ctx.objectivesMet} objective${ctx.objectivesMet === 1 ? '' : 's'}`)
+  add(ctx.ambitionsMet, `${ctx.ambitionsMet} ambition${ctx.ambitionsMet === 1 ? '' : 's'}`)
+  if (ctx.wins > ctx.losses) add(1, 'winning record')
+  if (ctx.madePlayoffs) add(1, 'playoffs')
+  if (ctx.wonTitle) add(2, 'title')
+  add(ctx.awards, `${ctx.awards} staff award${ctx.awards === 1 ? '' : 's'}`)
+  if (ctx.questionGood) add(1, 'season question')
+  if (ctx.ledgerGraded >= 5 && ctx.ledgerHits / ctx.ledgerGraded >= 0.6) add(1, 'Ledger rate')
+  const capped = Math.min(MAX_SKILL_POINTS, earned)
+  if (capped < earned) reasons.push(`capped at ${MAX_SKILL_POINTS}`)
+  return { earned: capped, reasons }
+}
+
+/**
+ * Spend `points` skill points evenly: +2 to each skill in turn, round-robin,
+ * never past 99. Used by the headless balance harness to model a player who
+ * invests his points without favouritism.
+ */
+export function spendSkillPointsEvenly(skills: Skills, points: number): Skills {
+  const order: (keyof Skills)[] = ['evaluation', 'scheme', 'leadership', 'negotiation', 'recruiting']
+  const next = { ...skills }
+  let left = Math.max(0, Math.floor(points))
+  let i = 0
+  let guard = 0
+  while (left > 0 && guard < 1000) {
+    const k = order[i % order.length]
+    if (next[k] < 99) {
+      next[k] = Math.min(99, next[k] + 2)
+      left -= 1
+    }
+    i += 1
+    guard += 1
+    if (order.every((x) => next[x] >= 99)) break
+  }
+  return next
+}
+
 // ── The dual ladder ──────────────────────────────────────────────────────────
 /**
  * The ONE verb a rung exercises (#1). Every mechanic at a rung should serve its

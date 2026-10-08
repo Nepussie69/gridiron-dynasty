@@ -4,6 +4,7 @@ import { money } from '../lib/format'
 import { canSignFreeAgents } from '../game/engine/career'
 import { stageOf } from '../game/engine/draft'
 import { freeAgentContract } from '../game/engine/progress'
+import { negotiationAskMultiplier } from '../game/engine/skills'
 import { waiverBlockedReason, waiverPriority } from '../game/engine/waivers'
 import { canShadow } from '../game/engine/shadow'
 import { accessFor } from '../game/engine/access'
@@ -204,7 +205,14 @@ export function FreeAgency() {
             right={(p) => {
               // W1: a released player's stored contract is zeroed; the real cost
               // is the priced one-year deal (pro-rated during the season).
-              const deal = freeAgentContract(p, league.season, league.week, league.phase)
+              const deal = freeAgentContract(
+                p,
+                league.season,
+                league.week,
+                league.phase,
+                undefined,
+                negotiationAskMultiplier(career.skills.negotiation),
+              )
               const noRoom = cap.space < deal.capHit
               return (
                 <div className="flex items-center justify-end gap-1.5">
