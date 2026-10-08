@@ -6,7 +6,7 @@ import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
 import { originTag } from '../game/selectors'
-import { coverageGrade, passerRating } from '../game/engine/stats'
+import { boxScore, coverageGrade, passerRating } from '../game/engine/stats'
 import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
@@ -118,6 +118,10 @@ export function MatchView() {
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [anim, idx, speed, replay])
+
+  // The box score follows the replay: every play up to and including the one on
+  // screen, so it never shows stats from further ahead than you've watched.
+  const liveBox = useMemo(() => (match ? boxScore(world, { ...match, plays: match.plays.slice(0, idx + 1) }) : undefined), [world, match, idx])
 
   // Space plays / pauses (not while typing in a field).
   useEffect(() => {
@@ -444,7 +448,7 @@ export function MatchView() {
                     </button>
                   ))}
                 </div>
-                <BoxScore world={world} teamId={boxTeamId} box={match.box} gmName={career?.gmName} myTeamId={career?.teamId} />
+                <BoxScore world={world} teamId={boxTeamId} box={liveBox} gmName={career?.gmName} myTeamId={career?.teamId} />
               </div>
             )}
             {activeTab === 'plan' && gameDay && <GameDayPlanPanel gameDay={gameDay} />}
