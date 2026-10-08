@@ -18,8 +18,8 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | S4 | `__statShape` probe vs NFL bands; box-score table layout fix | P3 | ✅ done — verified (P3) |
 | E0 | Every player carries every rating his position uses (generated players included) | P4 | ✅ done — verified (P4) |
 | E1 | Offense ratings in the sim: QB, RB, receivers, OL | P4 | ✅ done — verified (P4) |
-| E2 | Defense, kicking and general ratings in the sim: DL, LB, CB, S, K/P, STA, TGH | P5 | not started |
-| E3 | Recalibrate to today's numbers; glossary and ⚙ marks updated to "every rating counts" | P5 | not started |
+| E2 | Defense, kicking and general ratings in the sim: DL, LB, CB, S, K/P, STA, TGH | P5 | ✅ done — verified (P5) |
+| E3 | Recalibrate to today's numbers; glossary and ⚙ marks updated to "every rating counts" | P5 | ✅ done — verified (P5; planMatrix 800 pending) |
 
 **Guardrails:** keep L10 determinism (`__gameDayEquivalence` n/n), `__simTest` calibration (AI-vs-AI unchanged), `__planMatrix` no-dominant-strategy, canonical player objects, optional save fields.
 User-only sim bonuses stay inside the existing clamp (wrinkle + install + practice ∈ [−0.6, +1.5] per side). Rewards ≤ +3 per reputation dimension per feature per season. No changes to gates, objectives,
@@ -256,3 +256,4 @@ After every task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && n
   33333 24.1/68.2/65.2/1.45/0.92/4.89 → **24.2/68.4/65.2/1.43/0.90/4.88**; 2222 24.7/67.9/65.7/1.50/1.00/4.82 → **24.3/68.1/65.1/1.53/0.96/4.75**; 5150 24.9/68.4/66.4/1.25/0.89/4.82 → **24.8/68.6/66.3/1.26/0.87/4.86** (all inside ±bands of the paired baselines).
   Equivalence 20/20; smoke coach 4 and personnel 4 0/0; `statShape` 15/16 ✅ — the INT CB/S row hovers on the S ≤ 0.45 edge before and after (500 games: 0.44/0.47 before, 0.43/0.48 after), noise; P5 reworks INT credit.
   **Flash's flag:** with E1_W = 1 a ±15 swap moves the margin only ~0.1–0.2 pts for most new keys (below E3's +0.2–1.5 target); P5/E3 should raise weights within the calibration bands.
+- **P5** (Flash, two pushes; finished/verified by Claude). E2: DL/LB rush extras, pursuit, recognition, LB man, CB press/S speed, JMP/PRC INTs + credit, TAK/HPW after the catch, Q4 stamina, TGH injuries, K/P AWR; `E1_W` 1.1, `E2_W` 1.0. 500 games: 33333 23.7/67.9/65.0/1.37/0.94/4.84, 2222 24.9/67.8/65.3/1.46/0.96/4.83, 5150 24.5/68.3/65.8/1.39/0.89/4.80 (in bands); statShape 16/16 (INT CB/S/LB 0.50/0.40/0.10); equivalence 20/20; smokes 6/6 0/0. E3: `__ratingSpread`, RATING_INFO sim lines. planMatrix(800) was still running at merge (log /private/tmp/e3-plan800.log). The user has since approved a full retune to NFL 2015–24 averages (`NEXT_PHASE_REALISM.md`), which supersedes these anchors.
