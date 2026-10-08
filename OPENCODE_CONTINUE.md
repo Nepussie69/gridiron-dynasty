@@ -1,6 +1,6 @@
 # Handoff — start here in a new chat (Claude, GPT/Codex or OpenCode)
 
-_Written 2026-10-08 ~20:30 AEDT by Claude Opus 5.5 for a fresh chat. Re-check processes and git before acting. Longer background: `ORCHESTRATION_HANDOVER.md`. Every user request: `PLAYTEST_BACKLOG.md` (55 rows). Long-term build order: `FUTURES.md`._
+_Updated 2026-10-08 ~21:40 AEDT by Claude Opus 5.5 (5-hour usage 83%) for ChatGPT/Codex or a fresh Claude chat. Re-check processes and git before acting. Longer background: `ORCHESTRATION_HANDOVER.md`. Every user request: `PLAYTEST_BACKLOG.md` (55 rows). Long-term build order: `FUTURES.md`._
 
 ## Your role and the user's standing instructions
 - You are the **orchestrator**: spec → send to DeepSeek Flash → verify → merge → rebuild the stable build → tell the user. Small UI fixes you do yourself.
@@ -12,32 +12,41 @@ _Written 2026-10-08 ~20:30 AEDT by Claude Opus 5.5 for a fresh chat. Re-check pr
 - At 95% plan usage: stop and update this file (memory rule).
 
 ## Repo state
-- `main` HEAD: see `git log` (last code merge: culture `b8d5051`); stable build **4173 serves `304f68e`** (same code as main — later commits are docs/specs only). Lint baseline **exactly 4 warnings**. Dev server 5173 (user's terminal, HMR).
-- Stable build worktree: `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap`, served by `vite preview --port 4173` from the user's terminal. Rebuild:
-  `SNAP=<that path>; git -C $SNAP checkout -q --detach main && (cd $SNAP && PATH="$HOME/.local/node/bin:$PATH" npx vite build --outDir $SNAP/dist)` — then tell the user to reload. If that worktree is gone, make a new one and ask the user to restart `vite preview --outDir <wt>/dist --port 4173 --strictPort`.
+- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 serves `c2f6929`** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
+- Stable build worktree: `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap`, served by `vite preview --port 4173` from the user's terminal. Rebuild after every merge:
+  `SNAP=<that path>; git -C $SNAP checkout -q --detach main && (cd $SNAP && PATH="$HOME/.local/node/bin:$PATH" npx vite build --outDir $SNAP/dist)` — then tell the user "stable build updated: 4173 serves <hash>" and what's new.
+
+## Merged this session (2026-10-08 evening) — all on stable `c2f6929`
+- L12.10 P1 fullback + route tree + formations×concepts playbook (`src/game/data/playbookData.ts`, `routes.ts`); P2 every player's pace/actions in the animation come from ratings (`playAnim.ts` movers, `animProbe.ts`) + formation→play picker with route diagrams (`RouteDiagram.tsx`, MomentCard `CallPicker`, GamePlan script).
+- L12.13 mastery M1–M4 (realistic start, learns from snaps/production, relative effects).
+- L12.14 contracts C1–C5 (fixed 2025 cap $279.2M, market, dead money ≤ remaining value, ask the GM to extend, explainer).
+- Claude fixes: run animation distance-timed/smooth; **trade values rewritten** in `src/game/engine/trade.ts` (position values QB ×2.2 … K/P ×0.3, steep OVR curve, expected rating for young players, smooth position-specific age decline, starting-QB premium 85+ ×1.7 / 78+ ×1.4, deal finder fills gaps with right-sized picks, never offers a same-position player unless < 60% of the target's value). Starting QBs now cost ~2.5–4 firsts; Mahomes unavailable.
 
 ## Tools
 - **Parallel push:** `/private/tmp/ds-wt <name> <prompt-file>` → new worktree `…/94a3f1af-f186-4767-8ce0-d8d014f62978/scratchpad/wt-<name>` on branch `wt-<name>` off `main`, node_modules symlinked, runs a copy of `~/.claude/bin/ds-push` (DeepSeek Flash 4.1 via OpenCode; watchdog + 3 retries) under nohup. Log `/private/tmp/gridiron-<name>.log` (ends `[push] … finished` / `GAVE UP`, then Flash's report). If `/private/tmp` was cleaned: recreate it (git worktree add + `ln -s` node_modules + copy of ds-push with `REPO=` pointed at the worktree).
 - **Merge a push:** read the report; in the worktree `npm run build`, `npm run lint` (4), review `git diff`; `git add -A src && git commit` (trailer); in main `git merge --no-edit wt-<name>`; resolve conflicts keeping both sides (usual spots: `gameStore.ts` ScreenId/imports, `main.tsx` probe imports, `App.tsx`/`AppShell.tsx`, shared table props); rebuild + lint + offline checks in main; update the spec progress/verification log + backlog; commit; rebuild 4173; tell the user.
 - **Offline verification with the real Madden data** (jiti does NOT load it): `~/.local/node/bin/node --import /private/tmp/gridiron-loader.mjs /private/tmp/gridiron-calib.mjs 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4` (~6 s/seed). `/private/tmp/gridiron-shape.mjs <seed> <games>` prints statShape rows. Both import the MAIN repo; copy and change `repo` for a worktree. Browser: built-in browser pane at 5173; dev globals `__game`, `__world()`, `__simTest`, `__statShape`, `__careerSmoke`, `__gameDayEquivalence`, `__ratingSpread`, `__rookieProbe`, `__faFlowProbe`, `__skillProbe`.
-- Current calibration (500 games, 33333 / 2222 / 5150): 23.7 pts/68.2%/65.0 plays/1.39 sacks/0.91 INT/4.84 ypc · 24.5/67.6/65.3/1.49/0.94/4.80 · 24.6/68.5/66.2/1.38/0.86/4.80 (passing ~262–269 yds). Equivalence 20/20; smokes 0/0.
+- Current calibration (500 games, 33333 / 2222 / 5150, after playbook+mastery+anim): 23.6 pts/68.1%/65.1 plays/1.47 sacks/0.96 INT/4.90 ypc · 24.6/67.4/65.6/1.63/0.97/4.81 · 25.0/68.4/66.1/1.35/0.85/4.88 (passing ~264–276 yds). The `realism` push retunes these to NFL 2015–2024.
+- Animation probe: `/private/tmp/anim-main.mjs` (= gridiron-calib + `ANIM` line from `src/game/engine/animProbe.ts`): end spots must match 100%, SPD ratio ≥1.25, max frame Δ ~3.6 now.
+- Usage: check with the app's usage tool; at 95% plan usage stop and update this file. Equivalence 20/20; smokes 0/0.
 
-## Running at handoff (check `pgrep -fl ds-push`)
+## Running at handoff (check `pgrep -fl ds-push`; logs `/private/tmp/gridiron-<name>.log`)
 | Name / branch | Spec | Prompt | Notes |
 |---|---|---|---|
-| `playbook` / `wt-playbook` — **FINISHED 2026-10-08 ~20:35, not yet merged: verify + merge first** | `NEXT_PHASE_L12_10.md` P1 B0–B4: fullback, route tree, formations × concepts playbook, sim draws from it, data-driven animation | /private/tmp/gridiron-playbook.txt | Big; calibration must hold. Since it branched I added `blitzRush` + `play.blitz` (playAnim/playsim) and the every-snap cap lift (playsim `canAsk`) — keep both on merge |
-| `mastery` / `wt-mastery` | `NEXT_PHASE_L12_13.md` M1–M4: realistic starting mastery, learning from snaps + production, relative effects for every unit | /private/tmp/gridiron-mastery.txt | playsim.ts + playbook.ts |
-| `contracts` / `wt-contracts` | `NEXT_PHASE_L12_14.md` C1–C5: **fixed 2025 cap $279.2M every season** (user: "keep it at 2025"), market sanity, dead-money fix, "Ask the GM to extend", how-it-works panel | /private/tmp/gridiron-contracts.txt | Pricing approved; culture's discount already in negotiation.ts |
-If a push ran out of steps, finish leftovers yourself or send a continuation prompt listing exactly what's done/left.
+| `hof` / `wt-hof` | `NEXT_PHASE_L12_16.md` H0–H5: **persist statDb + awards in the save (they are lost on reload today!)**, record retirees' last season, real HOF vote 3 seasons after retirement, Awards HOF tab, legacy panel, `__hofProbe` | /private/tmp/gridiron-hof.txt | try 2 (try 1 idle-hung) |
+| `gmdesk` / `wt-gmdesk` | `NEXT_PHASE_L12_14.md` C6 GM requests desk | /private/tmp/gridiron-gmdesk.txt | gameStore + new UI |
+| `stars` / `wt-stars` | `NEXT_PHASE_L12_15.md` S1–S4 stars are rare (OVR remap) | /private/tmp/gridiron-stars.txt | must remap trade.ts/cap.ts OVR thresholds by rank |
+| `realism` / `wt-realism` | `NEXT_PHASE_REALISM.md` R1–R3 + R5 NFL 2015–2024 retune + missed tackles | /private/tmp/gridiron-realism.txt | sim constants; calibration bands change — re-baseline after merge |
+`stars` and `realism` both affect results: merge one, re-run the other's checks in its worktree after merging main into it (or resolve on merge and re-verify).
+DeepSeek connections drop (ECONNRESET) with 5+ pushes at once; ds-push retries 3× automatically.
 
-## Queue — next, in order (user requests first)
-1. `NEXT_PHASE_L12_14.md` **C6 GM requests desk** (HC asks the GM to extend, restructure for a push, get a trade/FA target, release) — after `contracts` merges.
-2. `NEXT_PHASE_L12_15.md` **Stars are rare** (82 at 90+ today → ~25–32; monotonic OVR remap, attrs unchanged, OVR-keyed systems re-mapped, save migration) — after `contracts`.
-3. `NEXT_PHASE_REALISM.md` **NFL 2015–2024 retune (approved) + R5 missed tackles** (explicit tackle attempts, MT/FMT stats, rating realism probes) — after `playbook` + `mastery` merge.
-4. `NEXT_PHASE_L12_10.md` **P2**: B5 ratings in the animation, B6 pick formation → play on calls.
-5. `NEXT_PHASE_UI.md` **UI Broadcast 2.0** (TV field first, then scorebug, dark mode, ⌘K, screen passes).
-6. `FUTURES.md` rows 3 → 25 one by one.
-- Small known items: extra points recorded at `startYard: 2` in playsim (should be 85; animation compensates via `snapYard`); one cosmetic speed spike in the routes animation (cb0, Quick Slant); planMatrix(800) result may be in `/private/tmp/e3-plan800.log`; balance cap use reads ~0.70–0.74 (contracts push re-checks).
+## Queue — next, in order
+1. **QB pay to real 2025 money** (user said yes, 2026-10-08): top-5 signed QB AAV is $43.6M because `fitToCap` (cap.ts / generate) compresses every contract toward 0.79–0.86 cap use; the market curve is $62M. Make QB (and the other premium positions) keep their market share when fitting (e.g. fit by scaling non-QB / mid-tier deals first, or exempt the top-12 QBs), so signed top-5 QB AAV ≈ $55–60M while league cap use stays 0.76–0.90 and nobody is over the cap. Check with `__marketProbe` + `__balanceProbe(6,'personnel')`. Backlog row 67.
+2. **Cap screen contract ledger sortable** (user request, row 68): `src/screens/Cap.tsx` table — click headers (Player, Pos, Age, Cap hit, AAV, Guaranteed, Yrs, Dead $, % cap) to sort asc/desc with ▲/▼, like the other tables (see `PlayerTable.tsx` sort pattern).
+3. **Possible dead-money double count** to check: Garrett shows cap hit $47.7M, 2 yrs, guaranteed $52.8M, dead $97.8M (= the whole remaining contract). `deadMoney = min(proration×years + guaranteed, remaining)` — if `guaranteed` already includes bonus, it double counts. Verify against the NFL rule (dead = remaining proration + remaining *guaranteed base*), fix in `cap.ts`.
+4. `NEXT_PHASE_UI.md` UI Broadcast 2.0 (U1 TV field … U4), one push per section, after `anim` (merged) — U1 touches playAnim/MatchView.
+5. `FUTURES.md` rows 3 → 25 one by one (row 20 press conferences was **dropped by the user** — skip; row 23 = hof running).
+- Small known items: extra points recorded at `startYard: 2` in playsim (animation compensates via `snapYard`); one pursuit reversal frame spike (3.6 yd/s) in the animation; mastery at world creation caps 6–7-yr vets at ~45–72% (cohesion cap).
 - Nothing is blocked on the user.
 
 ## Done on 2026-10-08 (all on `main` and the stable build)
