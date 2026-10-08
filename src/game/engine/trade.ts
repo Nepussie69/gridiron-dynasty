@@ -237,6 +237,156 @@ export function findDeals(world: World, userTeamId: string, playerId: string): D
   return offers.slice(0, 6)
 }
 
+/** Stable identity for a package, so the search can dedupe its candidates. */
+function packageKey(assets: TradeAsset[]): string {
+  return assets
+    .map((a) => `${a.kind}:${a.id}`)
+    .sort()
+    .join('|')
+}
+
+/** Raw value the user is giving up in a package. */
+function packageCost(world: World, assets: TradeAsset[]): number {
+  return assets.reduce((s, a) => s + assetValue(world, a), 0)
+}
+
+/**
+ * L12.5 T3: shop the USER around another club. The target belongs to club X;
+ * every returned offer is a package of the user's players / picks that
+ * `evaluateTrade(world, X, userTeamId, give, [target])` already accepts. Greedy,
+ * deterministic, no rng. Sorted by least total value given, at most five.
+ */
+export function findPackagesFor(world: World, userTeamId: string, playerId: string): DealOffer[] {
+  const targetPlayer = findPlayer(world, playerId)
+  if (!targetPlayer || !targetPlayer.teamId || targetPlayer.teamId === userTeamId) return []
+  const partnerId = targetPlayer.teamId
+  const target: TradeAsset = { kind: 'player', id: playerId }
+  const up = upcomingDraftSeason(world)
+
+  const roster = world.roster[userTeamId] ?? []
+  // Never strip the user of his last body at a position (same rule as findDeals).
+  const players = [...roster]
+    .filter((p) => roster.filter((x) => x.pos === p.pos).length > 1)
+    .sort((a, b) => playerTradeValue(a) - playerTradeValue(b) || a.id.localeCompare(b.id))
+  const picks = world.draftPicks
+    .filter((pk) => pk.ownerTeam === userTeamId && isTradeablePick(world, pk))
+    .sort((a, b) => pickTradeValue(a, up) - pickTradeValue(b, up) || a.id.localeCompare(b.id))
+
+  const accepted = (give: TradeAsset[]) => evaluateTrade(world, partnerId, userTeamId, give, [target]).accepted
+  const candidates: TradeAsset[][] = []
+
+  // 1. Picks only — add the user's cheapest picks until the club says yes.
+  const picksOnly: TradeAsset[] = []
+  for (const pk of picks) {
+    if (picksOnly.length >= 4) break
+    picksOnly.push({ kind: 'pick', id: pk.id })
+    if (accepted(picksOnly)) candidates.push([...picksOnly])
+  }
+
+  // 2. One player: the cheapest single player who gets it done on his own.
+  for (const p of players) {
+    if (accepted([{ kind: 'player', id: p.id }])) {
+      candidates.push([{ kind: 'player', id: p.id }])
+      break
+    }
+  }
+
+  // 3. A player just short of the price, plus the cheapest picks that close the gap.
+  let short: Player | null = null
+  for (let i = players.length - 1; i >= 0; i--) {
+    if (!accepted([{ kind: 'player', id: players[i].id }])) {
+      short = players[i]
+      break
+    }
+  }
+  if (short) {
+    const pkg: TradeAsset[] = [{ kind: 'player', id: short.id }]
+    for (const pk of picks) {
+      if (pkg.length >= 4) break
+      pkg.push({ kind: 'pick', id: pk.id })
+      if (accepted(pkg)) {
+        candidates.push([...pkg])
+        break
+      }
+    }
+  }
+
+  // 4. Players only, greedy ascending value (max three).
+  const playersOnly: TradeAsset[] = []
+  for (const p of players) {
+    if (playersOnly.length >= 3) break
+    playersOnly.push({ kind: 'player', id: p.id })
+    if (accepted(playersOnly)) {
+      candidates.push([...playersOnly])
+      break
+    }
+  }
+
+  const seen = new Set<string>()
+  const unique: TradeAsset[][] = []
+  const sorted = candidates.sort(
+    (a, b) => packageCost(world, a) - packageCost(world, b) || packageKey(a).localeCompare(packageKey(b)),
+  )
+  for (const give of sorted) {
+    const key = packageKey(give)
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(give)
+    if (unique.length >= 5) break
+  }
+
+  return unique.map((give) => {
+    const verdict = evaluateTrade(world, partnerId, userTeamId, give, [target])
+    return {
+      partnerId,
+      give,
+      get: [target],
+      theyGive: verdict.theyGive,
+      theyReceive: verdict.theyReceive,
+      userValue: assetValue(world, target),
+      summary: dealSummary(world, userTeamId, give),
+    }
+  })
+}
+
+/**
+ * L12.5 T4: the best gettable players at a position. Every other club's players
+ * passing the filters, ranked by OVR, each paired with its cheapest acceptable
+ * package from `findPackagesFor`. Players no package can land are dropped.
+ */
+export function findTargetsAtPosition(
+  world: World,
+  userTeamId: string,
+  pos: Position,
+  opts: { minOvr?: number; maxAge?: number } = {},
+): { player: Player; teamId: string; offer: DealOffer }[] {
+  const candidates: { player: Player; teamId: string }[] = []
+  for (const team of world.teams) {
+    if (team.id === userTeamId) continue
+    for (const p of world.roster[team.id] ?? []) {
+      if (p.pos !== pos) continue
+      if (opts.minOvr != null && p.ovr < opts.minOvr) continue
+      if (opts.maxAge != null && p.age > opts.maxAge) continue
+      candidates.push({ player: p, teamId: team.id })
+    }
+  }
+  candidates.sort(
+    (a, b) =>
+      b.player.ovr - a.player.ovr ||
+      playerTradeValue(b.player) - playerTradeValue(a.player) ||
+      a.player.id.localeCompare(b.player.id),
+  )
+
+  const out: { player: Player; teamId: string; offer: DealOffer }[] = []
+  for (const c of candidates.slice(0, 12)) {
+    const offers = findPackagesFor(world, userTeamId, c.player.id)
+    if (!offers.length) continue
+    out.push({ player: c.player, teamId: c.teamId, offer: offers[0] })
+    if (out.length >= 8) break
+  }
+  return out
+}
+
 function movePlayer(world: World, playerId: string, toTeamId: string, log: string[]) {
   const p = findPlayer(world, playerId)
   if (!p) return

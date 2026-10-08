@@ -617,6 +617,8 @@ export interface CareerState {
   philosophy?: string
   /** Every trade your club has made (#6), newest last, capped at 60. */
   trades?: TradeRecord[]
+  /** L12.5 T5: players you are shopping (max 5) — your side of the trade block. */
+  tradeBlock?: string[]
   /** The starting situation this career began from (F3). */
   scenario?: ScenarioId
   /** L10 G2: the head coach's standing orders for 4th down and 2-point tries. */

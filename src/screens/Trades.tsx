@@ -1,12 +1,15 @@
-import { useMemo, useState } from 'react'
-import { ArrowLeftRight, Handshake, Plus, Search, X } from 'lucide-react'
+import { useMemo, useState, type ReactNode } from 'react'
+import { ArrowLeftRight, Handshake, Plus, Search, Tag, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
-import { rosterOf } from '../game/selectors'
+import { playerById, rosterOf } from '../game/selectors'
 import { picksOwnedBy } from '../game/engine/picks'
 import {
+  assetValue,
   evaluateTrade,
   findDeals,
+  findPackagesFor,
+  findTargetsAtPosition,
   isTradeablePick,
   pickTradeValue,
   playerTradeValue,
@@ -14,13 +17,16 @@ import {
   type DealOffer,
   type TradeAsset,
 } from '../game/engine/trade'
+import { tradeBlock, type TradeBlockEntry } from '../game/engine/tradeBlock'
 import { canShadow } from '../game/engine/shadow'
 import { NFL_TEAMS } from '../game/data/nflTeams'
-import type { Player } from '../game/types'
+import type { Player, Position } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
-import { Badge, Button, Card, PageHeader, OvrBadge, TeamCrest } from '../ui/kit'
+import { HoverCard } from '../components/HoverCard'
+import { PlayerHoverCard } from '../components/PlayerHoverCard'
+import { Badge, Button, Card, PageHeader, OvrBadge, SectionTitle, TeamCrest } from '../ui/kit'
 
 interface Asset {
   id: string
@@ -36,21 +42,36 @@ interface Asset {
 
 const toRef = (a: Asset): TradeAsset => ({ kind: a.kind, id: a.id })
 
+/** Which way the deal card reads: selling one of your players, or buying theirs. */
+type DealMode = 'sell' | 'buy'
+
+/** L12.5 T5: the Trade Center's three tabs. */
+type TabId = 'build' | 'block' | 'position'
+
+const TABS: [TabId, string][] = [
+  ['build', 'Build a trade'],
+  ['block', 'Trade block'],
+  ['position', 'Find by position'],
+]
+
 export function Trades() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const career = useGame((s) => s.career)
   const proposeTrade = useGame((s) => s.proposeTrade)
+  const toggleTradeBlock = useGame((s) => s.toggleTradeBlock)
 
+  const [tab, setTab] = useState<TabId>('build')
   const [partnerId, setPartnerId] = useState(NFL_TEAMS.find((t) => t.id !== activeTeamId)!.id)
   const [give, setGive] = useState<Asset[]>([])
   const [get, setGet] = useState<Asset[]>([])
-  const [dealTarget, setDealTarget] = useState<Asset | null>(null)
+  const [deal, setDeal] = useState<{ asset: Asset; mode: DealMode } | null>(null)
   const [deals, setDeals] = useState<DealOffer[]>([])
 
   const team = league.byId[activeTeamId]
   const partner = league.byId[partnerId]
   const canScout = !!career && canShadow(career)
+  const blockIds = career?.tradeBlock ?? []
 
   const myAssets = useMemo(() => assetsFor(league, activeTeamId), [league, activeTeamId])
   const theirAssets = useMemo(() => assetsFor(league, partnerId), [league, partnerId])
@@ -75,16 +96,17 @@ export function Trades() {
     }
   }
 
-  const onFindDeals = (a: Asset) => {
-    setDealTarget(a)
-    setDeals(findDeals(league, activeTeamId, a.id))
+  const onFindDeals = (a: Asset, mode: DealMode) => {
+    setDeal({ asset: a, mode })
+    setDeals(mode === 'sell' ? findDeals(league, activeTeamId, a.id) : findPackagesFor(league, activeTeamId, a.id))
   }
 
   const onLoadDeal = (o: DealOffer) => {
     setPartnerId(o.partnerId)
     setGive(resolveAssets(league, activeTeamId, o.give))
     setGet(resolveAssets(league, o.partnerId, o.get))
-    setDealTarget(null)
+    setDeal(null)
+    setTab('build')
   }
 
   const canTrade = give.length > 0 && get.length > 0
@@ -113,18 +135,36 @@ export function Trades() {
         }
       />
 
-      {canScout && <ShadowBoardCard className="mb-4" />}
+      <div className="mb-4 flex rounded-lg bg-surface-2 p-0.5">
+        {TABS.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={cn(
+              'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
+              tab === id ? 'bg-white text-ink shadow-sm' : 'text-muted',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {dealTarget && (
+      {tab === 'build' && (
+        <>
+          {canScout && <ShadowBoardCard className="mb-4" />}
+
+          {deal && (
         <Card className="mb-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="font-display text-lg font-700 uppercase tracking-wide text-ink">
-              Deals for {dealTarget.label}
+              {deal.mode === 'sell' ? `Deals for ${deal.asset.label}` : `Packages for ${deal.asset.label}`}
             </h3>
             <button
               type="button"
               title="Close"
-              onClick={() => setDealTarget(null)}
+              onClick={() => setDeal(null)}
               className="grid h-7 w-7 place-items-center rounded-md border border-line text-faint transition hover:text-ink"
             >
               <X size={15} />
@@ -132,26 +172,37 @@ export function Trades() {
           </div>
           {deals.length ? (
             <div className="grid gap-2 md:grid-cols-2">
-              {deals.map((o) => (
-                <div
-                  key={o.partnerId}
-                  className="flex items-center gap-3 rounded-lg border border-line px-3 py-2"
-                >
-                  <TeamCrest team={league.byId[o.partnerId]} size={26} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-600 text-ink">{o.summary}</div>
-                    <div className="text-[11px] tnum text-muted">
-                      Value back {Math.round(o.userValue).toLocaleString()} · for {Math.round(dealTarget.value).toLocaleString()}
-                    </div>
+              {deals.map((o) => {
+                const cost = o.give.reduce((s, a) => s + assetValue(league, a), 0)
+                return (
+                  <div
+                    key={`${o.partnerId}-${o.give.map((a) => a.id).join('-')}`}
+                    className="flex items-center gap-3 rounded-lg border border-line px-3 py-2"
+                  >
+                    <TeamCrest team={league.byId[o.partnerId]} size={26} />
+                    <DealHover world={league} offer={o} className="min-w-0 flex-1">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-600 text-ink">{o.summary}</div>
+                        <div className="text-[11px] tnum text-muted">
+                          {deal.mode === 'sell'
+                            ? `Value back ${Math.round(o.userValue).toLocaleString()} · for ${Math.round(deal.asset.value).toLocaleString()}`
+                            : `You give ${Math.round(cost).toLocaleString()} · get ${Math.round(o.userValue).toLocaleString()}`}
+                        </div>
+                      </div>
+                    </DealHover>
+                    <Button variant="team" onClick={() => onLoadDeal(o)}>
+                      Load deal
+                    </Button>
                   </div>
-                  <Button variant="team" onClick={() => onLoadDeal(o)}>
-                    Load deal
-                  </Button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
-            <p className="text-sm text-muted">No club will pay real value for {dealTarget.label} right now.</p>
+            <p className="text-sm text-muted">
+              {deal.mode === 'sell'
+                ? `No club will pay real value for ${deal.asset.label} right now.`
+                : `No package you can put together lands ${deal.asset.label} right now.`}
+            </p>
           )}
         </Card>
       )}
@@ -163,7 +214,9 @@ export function Trades() {
           assets={myAssets}
           selected={give}
           onToggle={(a) => toggle(give, setGive, a)}
-          onFindDeals={onFindDeals}
+          onFindDeals={(a) => onFindDeals(a, 'sell')}
+          blockIds={blockIds}
+          onToggleBlock={(a) => toggleTradeBlock(a.id)}
         />
 
         <div className="flex flex-col items-center justify-center gap-3">
@@ -216,12 +269,464 @@ export function Trades() {
           assets={theirAssets}
           selected={get}
           onToggle={(a) => toggle(get, setGet, a)}
+          onFindDeals={(a) => onFindDeals(a, 'buy')}
           showShadow={canScout}
         />
       </div>
+        </>
+      )}
+
+      {tab === 'position' && <PositionFinder onLoadDeal={onLoadDeal} />}
+      {tab === 'block' && <TradeBlockTab onLoadDeal={onLoadDeal} />}
     </div>
   )
 }
+
+// ── T4: find by position ─────────────────────────────────────────────────────
+
+const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
+const POSITION_FILTERS: (Position | 'ALL')[] = ['ALL', ...POSITIONS]
+const MIN_OVR_OPTIONS = [60, 65, 70, 75, 80, 85, 90, 95]
+const MAX_AGE_OPTIONS: (number | 'any')[] = ['any', 26, 29, 32]
+
+/**
+ * L12.5 T4: "I want a WR". Picks a position (and optional OVR / age floor),
+ * then on Search lists the best gettable players with the cheapest package the
+ * user could offer for each. Load deal drops it onto the Build tab.
+ */
+function PositionFinder({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
+  const league = useWorld()
+  const activeTeamId = useGame((s) => s.activeTeamId)
+  const [pos, setPos] = useState<Position>('WR')
+  const [minOvr, setMinOvr] = useState(75)
+  const [maxAge, setMaxAge] = useState<number | 'any'>('any')
+  const [results, setResults] = useState<{ player: Player; teamId: string; offer: DealOffer }[]>([])
+
+  const search = () => {
+    setResults(
+      findTargetsAtPosition(league, activeTeamId, pos, {
+        minOvr,
+        maxAge: maxAge === 'any' ? undefined : maxAge,
+      }),
+    )
+  }
+
+  return (
+    <Card>
+      <div className="mb-3 flex flex-wrap items-end gap-3">
+        <div>
+          <div className="label mb-1">Position</div>
+          <div className="flex flex-wrap gap-1">
+            {POSITIONS.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPos(p)}
+                className={cn(
+                  'rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
+                  pos === p ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-2',
+                )}
+                style={pos === p ? { background: 'var(--team)' } : undefined}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="label mb-1">Min OVR</div>
+          <select
+            value={minOvr}
+            onChange={(e) => setMinOvr(Number(e.target.value))}
+            className="rounded-lg border border-line bg-surface px-2 py-1.5 font-cond text-sm font-600 outline-none"
+          >
+            {MIN_OVR_OPTIONS.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <div className="label mb-1">Max age</div>
+          <select
+            value={String(maxAge)}
+            onChange={(e) => setMaxAge(e.target.value === 'any' ? 'any' : Number(e.target.value))}
+            className="rounded-lg border border-line bg-surface px-2 py-1.5 font-cond text-sm font-600 outline-none"
+          >
+            {MAX_AGE_OPTIONS.map((v) => (
+              <option key={String(v)} value={String(v)}>
+                {v === 'any' ? 'Any' : v}
+              </option>
+            ))}
+          </select>
+        </div>
+        <Button variant="team" onClick={search}>
+          <Search size={14} /> Search
+        </Button>
+      </div>
+
+      {results.length ? (
+        <div className="grid gap-2">
+          {results.map((r) => (
+            <div key={r.player.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2">
+              <TeamCrest team={league.byId[r.teamId]} size={26} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <PlayerHoverCard player={r.player} className="min-w-0 text-sm font-600 text-ink" />
+                  <span className="font-cond text-[10px] font-700 uppercase text-muted">{r.player.pos}</span>
+                </div>
+                <div className="text-[11px] tnum text-muted">
+                  Age {r.player.age} · {money(r.player.contract.capHit)} · value{' '}
+                  {playerTradeValue(r.player).toLocaleString()}
+                </div>
+                <DealHover world={league} offer={r.offer} className="mt-0.5 min-w-0">
+                  <span className="truncate text-[11px] text-ink-2">{r.offer.summary}</span>
+                </DealHover>
+              </div>
+              <OvrBadge value={r.player.ovr} pot={r.player.pot} size={30} />
+              <Button variant="team" onClick={() => onLoadDeal(r.offer)}>
+                Load deal
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted">
+          Pick a position and press Search to see who's gettable — and what it would cost.
+        </p>
+      )}
+    </Card>
+  )
+}
+
+// ── T5: the trade block ──────────────────────────────────────────────────────
+
+function reasonTone(reason: string): 'info' | 'warn' | 'gold' | 'loss' {
+  if (reason.startsWith('Surplus')) return 'info'
+  if (reason.startsWith('Rebuilding')) return 'warn'
+  if (reason.startsWith('Expiring')) return 'gold'
+  return 'loss'
+}
+
+/**
+ * L12.5 T5: the AI clubs' shopping lists this week, plus your own block. Purely
+ * informational — being listed never changes what a club pays. Filter by
+ * position / OVR, sort it, and shop a listing with Find deals in place.
+ */
+function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
+  const league = useWorld()
+  const activeTeamId = useGame((s) => s.activeTeamId)
+  const career = useGame((s) => s.career)
+  const canScout = !!career && canShadow(career)
+
+  const [pos, setPos] = useState<Position | 'ALL'>('ALL')
+  const [minOvr, setMinOvr] = useState(0)
+  const [sort, setSort] = useState<'ovr' | 'value' | 'age'>('ovr')
+  const [deals, setDeals] = useState<{ playerId: string; offers: DealOffer[] } | null>(null)
+
+  const rosterIds = useMemo(
+    () => new Set(rosterOf(league, activeTeamId).map((p) => p.id)),
+    [league, activeTeamId],
+  )
+
+  // The league's block for this week (deterministic, no rng).
+  const board = useMemo(() => tradeBlock(league, activeTeamId), [league, activeTeamId])
+
+  const rows = useMemo(() => {
+    const withPlayer = board
+      .map((e) => ({ e, p: playerById(league, e.playerId) }))
+      .filter((r): r is { e: TradeBlockEntry; p: Player } => !!r.p)
+    const filtered = withPlayer.filter(
+      ({ p }) => (pos === 'ALL' || p.pos === pos) && p.ovr >= minOvr,
+    )
+    filtered.sort((a, b) => {
+      if (sort === 'value') return playerTradeValue(b.p) - playerTradeValue(a.p)
+      if (sort === 'age') return a.p.age - b.p.age || b.p.ovr - a.p.ovr
+      return b.p.ovr - a.p.ovr
+    })
+    return filtered
+  }, [board, league, pos, minOvr, sort])
+
+  const mine = useMemo(() => {
+    const ids = (career?.tradeBlock ?? []).filter((id) => rosterIds.has(id))
+    return ids
+      .map((id) => {
+        const p = playerById(league, id)
+        return p ? { player: p, offers: findDeals(league, activeTeamId, id).slice(0, 3) } : null
+      })
+      .filter((x): x is { player: Player; offers: DealOffer[] } => !!x)
+  }, [career?.tradeBlock, rosterIds, league, activeTeamId])
+
+  const onFind = (playerId: string) => {
+    setDeals({ playerId, offers: findPackagesFor(league, activeTeamId, playerId) })
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <SectionTitle right={<Badge tone={mine.length ? 'team' : 'neutral'}>{mine.length}/5</Badge>}>
+          Your block
+        </SectionTitle>
+        {mine.length ? (
+          <div className="space-y-2">
+            {mine.map(({ player, offers }) => (
+              <div key={player.id} className="rounded-lg border border-line px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <OvrBadge value={player.ovr} pot={player.pot} size={28} />
+                  <PlayerHoverCard player={player} className="min-w-0 text-sm font-600 text-ink" />
+                  <span className="font-cond text-[10px] font-700 uppercase text-muted">{player.pos}</span>
+                  <span className="ml-auto text-[11px] tnum text-muted">{money(player.contract.capHit)}</span>
+                </div>
+                {offers.length ? (
+                  <div className="mt-1.5 space-y-1">
+                    {offers.map((o) => (
+                      <div
+                        key={o.partnerId}
+                        className="flex items-center gap-2 rounded-md bg-surface-2 px-2 py-1"
+                      >
+                        <TeamCrest team={league.byId[o.partnerId]} size={20} />
+                        <DealHover world={league} offer={o} className="min-w-0 flex-1">
+                          <span className="truncate text-[11px] text-ink-2">{o.summary}</span>
+                        </DealHover>
+                        <span className="text-[10px] tnum text-muted">
+                          back {Math.round(o.userValue).toLocaleString()}
+                        </span>
+                        <Button size="sm" variant="team" onClick={() => onLoadDeal(o)}>
+                          Load
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-[11px] text-muted">No club is offering for him right now.</p>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted">
+            Star a player with the tag button in your column on the Build tab to shop him here.
+          </p>
+        )}
+      </Card>
+
+      <Card>
+        <SectionTitle right={<Badge tone="neutral">{rows.length}</Badge>}>League trade block</SectionTitle>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap gap-1">
+            {POSITION_FILTERS.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPos(p)}
+                className={cn(
+                  'rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
+                  pos === p ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-2',
+                )}
+                style={pos === p ? { background: 'var(--team)' } : undefined}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="label">Min OVR</span>
+            <select
+              value={minOvr}
+              onChange={(e) => setMinOvr(Number(e.target.value))}
+              className="rounded-lg border border-line bg-surface px-2 py-1 font-cond text-xs font-600 outline-none"
+            >
+              {[0, 65, 70, 75, 80].map((v) => (
+                <option key={v} value={v}>
+                  {v === 0 ? 'Any' : v}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="label">Sort</span>
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as 'ovr' | 'value' | 'age')}
+              className="rounded-lg border border-line bg-surface px-2 py-1 font-cond text-xs font-600 outline-none"
+            >
+              <option value="ovr">OVR</option>
+              <option value="value">Trade value</option>
+              <option value="age">Age</option>
+            </select>
+          </div>
+        </div>
+
+        {rows.length ? (
+          <div className="space-y-2">
+            {rows.map(({ e, p }) => (
+              <div key={p.id} className="rounded-lg border border-line">
+                <div className="flex items-center gap-3 px-3 py-2">
+                  <TeamCrest team={league.byId[e.teamId]} size={24} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <PlayerHoverCard player={p} className="min-w-0 text-sm font-600 text-ink" />
+                      <span className="font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
+                      <Badge tone={reasonTone(e.reason)}>{e.reason}</Badge>
+                    </div>
+                    <div className="text-[11px] tnum text-muted">
+                      Age {p.age} · {money(p.contract.capHit)} · value {playerTradeValue(p).toLocaleString()}
+                    </div>
+                  </div>
+                  <OvrBadge value={p.ovr} pot={p.pot} size={28} />
+                  <button
+                    type="button"
+                    title="Find deals"
+                    onClick={() => onFind(p.id)}
+                    className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
+                  >
+                    <Search size={13} />
+                  </button>
+                  {canScout && <ShadowStar playerId={p.id} />}
+                </div>
+                {deals?.playerId === p.id && (
+                  <div className="space-y-1 border-t border-line bg-surface-2 px-3 py-2">
+                    {deals.offers.length ? (
+                      deals.offers.map((o) => (
+                        <div
+                          key={o.give.map((a) => a.id).join('-')}
+                          className="flex items-center gap-2 rounded-md bg-surface px-2 py-1"
+                        >
+                          <DealHover world={league} offer={o} className="min-w-0 flex-1">
+                            <span className="truncate text-[11px] text-ink-2">{o.summary}</span>
+                          </DealHover>
+                          <span className="text-[10px] tnum text-muted">
+                            give {o.give.reduce((s, a) => s + assetValue(league, a), 0).toLocaleString()}
+                          </span>
+                          <Button size="sm" variant="team" onClick={() => onLoadDeal(o)}>
+                            Load
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-[11px] text-muted">No package you can offer lands him right now.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted">No clubs are shopping players at these filters.</p>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+// ── T1: the itemized deal panel ──────────────────────────────────────────────
+
+function DealHover({
+  world,
+  offer,
+  children,
+  className,
+}: {
+  world: World
+  offer: DealOffer
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <HoverCard className={className} label="Full deal" content={<DealDetail world={world} offer={offer} />}>
+      {children}
+    </HoverCard>
+  )
+}
+
+function capOf(world: World, a: TradeAsset): number {
+  if (a.kind !== 'player') return 0
+  return playerById(world, a.id)?.contract.capHit ?? 0
+}
+
+function DealDetail({ world, offer }: { world: World; offer: DealOffer }) {
+  const giveVal = offer.give.reduce((s, a) => s + assetValue(world, a), 0)
+  const getVal = offer.get.reduce((s, a) => s + assetValue(world, a), 0)
+  const capIn = offer.get.reduce((s, a) => s + capOf(world, a), 0)
+  const capOut = offer.give.reduce((s, a) => s + capOf(world, a), 0)
+  const net = capIn - capOut
+  return (
+    <div className="space-y-2.5">
+      <DealSide title="You give" world={world} refs={offer.give} />
+      <DealSide title="You get" world={world} refs={offer.get} />
+      <div className="flex items-center justify-between border-t border-line pt-2 text-[11px] tnum">
+        <span className="text-muted">
+          Value · give {giveVal.toLocaleString()} · get {getVal.toLocaleString()}
+        </span>
+        <span className={cn('font-cond font-700 uppercase', net >= 0 ? 'text-loss' : 'text-win')}>
+          Cap {money(net, { sign: true })}
+        </span>
+      </div>
+      <p className="text-[10px] text-faint">This season's cap change for you (incoming hits minus outgoing).</p>
+    </div>
+  )
+}
+
+function DealSide({ title, world, refs }: { title: string; world: World; refs: TradeAsset[] }) {
+  return (
+    <div>
+      <div className="label mb-1">{title}</div>
+      {refs.length ? (
+        <div className="space-y-1">
+          {refs.map((r) => (
+            <DealAssetRow key={`${r.kind}:${r.id}`} world={world} asset={r} />
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-muted">Nothing</div>
+      )}
+    </div>
+  )
+}
+
+function DealAssetRow({ world, asset }: { world: World; asset: TradeAsset }) {
+  if (asset.kind === 'player') {
+    const p = playerById(world, asset.id)
+    if (!p) return null
+    return (
+      <div className="flex items-center gap-2">
+        <OvrBadge value={p.ovr} pot={p.pot} size={26} />
+        <div className="min-w-0 flex-1">
+          <PlayerHoverCard player={p} className="text-xs font-600 text-ink" />
+          <div className="truncate text-[11px] tnum text-muted">
+            {p.pos} · age {p.age} · {money(p.contract.capHit)} · {p.contract.years} yr
+            {p.contract.years === 1 ? '' : 's'}
+          </div>
+        </div>
+        <span className="font-cond text-[11px] font-700 tnum text-muted">
+          {assetValue(world, asset).toLocaleString()}
+        </span>
+      </div>
+    )
+  }
+  const pk = world.draftPicks.find((x) => x.id === asset.id)
+  if (!pk) return null
+  const via = world.byId[pk.originalTeam]
+  return (
+    <div className="flex items-center gap-2">
+      <span className="grid h-6 w-6 place-items-center rounded-md bg-ink font-display text-[10px] font-700 text-white">
+        R{pk.round}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-600 text-ink">
+          {pk.season} Round {pk.round} Pick{pk.comp ? ' (comp)' : ''}
+        </div>
+        <div className="truncate text-[11px] text-muted">via {via?.abbr ?? pk.originalTeam}</div>
+      </div>
+      <span className="font-cond text-[11px] font-700 tnum text-muted">
+        {assetValue(world, asset).toLocaleString()}
+      </span>
+    </div>
+  )
+}
+
+// ── Asset helpers & columns ──────────────────────────────────────────────────
 
 function assetsFor(world: World, teamId: string): Asset[] {
   const players: Player[] = [...rosterOf(world, teamId)].sort(
@@ -262,6 +767,8 @@ function AssetColumn({
   onToggle,
   onFindDeals,
   showShadow,
+  blockIds,
+  onToggleBlock,
 }: {
   title: string
   teamId: string
@@ -270,6 +777,8 @@ function AssetColumn({
   onToggle: (a: Asset) => void
   onFindDeals?: (a: Asset) => void
   showShadow?: boolean
+  blockIds?: string[]
+  onToggleBlock?: (a: Asset) => void
 }) {
   const league = useWorld()
   const team = league.byId[teamId]
@@ -287,6 +796,8 @@ function AssetColumn({
           const on = selected.some((s) => s.id === a.id)
           const prev = assets[i - 1]
           const showYear = a.kind === 'pick' && (!prev || prev.kind !== 'pick' || prev.season !== a.season)
+          const player = a.kind === 'player' ? playerById(league, a.id) : undefined
+          const blocked = !!blockIds?.includes(a.id)
           return (
             <div key={a.id}>
               {showYear && (
@@ -309,7 +820,11 @@ function AssetColumn({
                   </span>
                 )}
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-600 text-ink">{a.label}</span>
+                  {player ? (
+                    <PlayerHoverCard player={player} className="min-w-0 text-sm font-600 text-ink" />
+                  ) : (
+                    <span className="block truncate text-sm font-600 text-ink">{a.label}</span>
+                  )}
                   <span className="block truncate text-xs text-muted">{a.sub}</span>
                 </span>
                 <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
@@ -325,6 +840,24 @@ function AssetColumn({
                     className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
                   >
                     <Search size={13} />
+                  </button>
+                )}
+                {a.kind === 'player' && onToggleBlock && (
+                  <button
+                    type="button"
+                    title={blocked ? 'Remove from your trade block' : 'Add to your trade block'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onToggleBlock(a)
+                    }}
+                    className={cn(
+                      'grid h-6 w-6 place-items-center rounded-md border transition',
+                      blocked
+                        ? 'border-transparent text-[var(--team)]'
+                        : 'border-line text-faint hover:border-[var(--team)] hover:text-ink',
+                    )}
+                  >
+                    <Tag size={13} fill={blocked ? 'currentColor' : 'none'} />
                   </button>
                 )}
                 <span
