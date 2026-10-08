@@ -20,7 +20,6 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 ## Running at handoff (check `pgrep -fl ds-push`)
 | Name / branch | Worktree | Spec / task | Prompt | Notes |
 |---|---|---|---|---|
-| `culture` / `wt-culture` | scratchpad/wt-culture | NEXT_PHASE_L12_9.md P2: K1 cohesion in sim + K2 winning-culture discount (approved) | /private/tmp/gridiron-l12_9p2.txt | Sim + pricing; check bands and cap use |
 | `playbook` / `wt-playbook` | scratchpad/wt-playbook | FUTURES #1: NEXT_PHASE_L12_10.md P1 B0–B4 (FB, route tree, playbook, sim + animation) | /private/tmp/gridiron-playbook.txt | Big; calibration bands |
 | `mastery` / `wt-mastery` | scratchpad/wt-mastery | NEXT_PHASE_L12_13.md M1–M4 playbook mastery | /private/tmp/gridiron-mastery.txt | playsim + playbook.ts; merge after culture |
 | `contracts` / `wt-contracts` | scratchpad/wt-contracts | NEXT_PHASE_L12_14.md C1–C5 fixed 2025 cap, HC asks GM, dead money | /private/tmp/gridiron-contracts.txt | pricing (approved) |

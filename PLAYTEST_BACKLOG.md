@@ -25,7 +25,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 19 | 2026-10-08 | Rookies need much lower ratings; show current + potential side by side without giving it away | L12.7 D1 ✅ + D5 (follow-up push) | ✅ merged |
 | 20 | 2026-10-08 | "Batting average" → a football term | Claude: "Success Rate" (Ledger.tsx) | ✅ (this commit) |
 | 21 | 2026-10-08 | What is the Ledger? Make it work for the coaching track (coach calls graded) | L12.9 L1 | ✅ merged |
-| 22 | 2026-10-08 | Is Culture linked to the actual game? (cohesion/culture are display-only today) | L12.9 K1–K2 | ⏳ queued (K2 contract discount needs user OK) |
+| 22 | 2026-10-08 | Is Culture linked to the actual game? (cohesion/culture are display-only today) | L12.9 K1–K2 | ✅ merged |
 | 23 | 2026-10-08 | Doesn't like the weekly hours card → remove it | L12.9 H1 | ✅ merged |
 | 24 | 2026-10-08 | (found in QA) AI QBs show 0 rushing in the Stats Hub — fast-sim stat allocation gives QBs no carries | statAlloc follow-up | ✅ merged |
 | 25 | 2026-10-08 | Routes should look like real routes and move more smoothly | DeepSeek push 'routes' | ✅ merged |
@@ -46,7 +46,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 40 | 2026-10-08 | Call-mode buttons seemed to do nothing / make it apply straight away | Claude: switching rebuilds the game to the play on screen (deterministic replay of your answers, verified identical) and applies the mode to the very next snap; call card pops up | ✅ |
 | 41 | 2026-10-08 | Redesign Staff & Hiring: easier to navigate/hire, readable skills and stats | DeepSeek push 'staff' (org chart + table, market filters + compare vs current holder, plain effects, hover) | ✅ merged |
 | 42 | 2026-10-08 | Space pauses the play/animation exactly where it is (in game) | Claude: freeze/resume mid-play in MatchView | ✅ |
-| 43 | 2026-10-08 | Culture discount only for clubs that won heaps in the last 3 years or have top offense/defense, by the player's side of the ball | L12.9 K2 (approved rule) | 🔨 building with K1 |
+| 43 | 2026-10-08 | Culture discount only for clubs that won heaps in the last 3 years or have top offense/defense, by the player's side of the ball | L12.9 K2 (approved rule) | ✅ merged |
 | 44 | 2026-10-08 | Add all the ideas into a futures workflow, go down the list one by one | FUTURES.md (25 rows, ordered) | ✅ |
 | 45 | 2026-10-08 | Retune passing yards and all stats to the last 10 years of the NFL (approved) | NEXT_PHASE_REALISM.md R1–R4 | ⏳ right after playbook + culture merge |
 | 46 | 2026-10-08 | Make sure everything done is on the stable build | 4173 rebuilt at every merge (now 6e81328 = main) | ✅ ongoing |
@@ -57,3 +57,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | 🔨 building |
 | 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | 🔨 building |
 | 53 | 2026-10-08 | Head coach + GM work together: ask to extend, restructure for a push, go get a trade/FA target, release a player | L12.14 C6 (GM requests desk) | ⏳ after contracts P1 |
+| 54 | 2026-10-08 | Too many franchise players: only a few 90+, more 80s | NEXT_PHASE_L12_15.md S1–S4 (82 at 90+ today → ~25–32) | ⏳ after contracts merges |
