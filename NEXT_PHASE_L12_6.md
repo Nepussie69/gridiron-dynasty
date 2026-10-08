@@ -61,6 +61,10 @@ Today: `endSeason` sets `world.phase = 'offseason'`; the draft class for the com
   `signFreeAgent` is blocked during `resign` (toast: "Free agency opens in March"); the FA screen shows the pool as a preview with that banner.
 - From `freeAgency` on, signing works as today (offseason pricing via `freeAgentContract(p, season, week, phase)` unchanged).
 - AI clubs sign free agents when the `freeAgency` stage ends (see C1), not before — so the user gets first crack in March.
+- **User (2026-10-08): "free agency can be during the season, but make sure proper free agency — players get released and can start playing for another team — is working."** Verify and fix the whole path in season:
+  a user or AI release → waiver wire (L11) → unclaimed players clear to `world.freeAgents` on Waiver Tuesday → the user can sign them (FA screen) and **AI clubs sign them when they need a body** (`aiInjuryMoves`
+  and any AI depth signing) → the signed player is on the new club's roster, in `world.players` with the right `teamId`, shows on its depth chart and **actually plays** (appears in that club's box scores the
+  next week). Add a dev probe `__faFlowProbe()` that releases a starter from an AI club and from the user club, advances two weeks, and reports each player's path (waivers → FA/claimed → club → snaps played).
 
 ### Acceptance (P2)
 build + lint 4; `careerSmoke(4,'personnel')` and `careerSmoke(4,'coach')` 0 errors / 0 violations (probe drives the stages via `startNextSeason`); in a regular-season week, `draftProspect` / `finishDraft` change nothing;
