@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, statShape, gameDayEquivalence, clockProbe, decisionProbe, waiverProbe, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, statShape, gameDayEquivalence, clockProbe, decisionProbe, waiverProbe, faFlowProbe, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 
@@ -36,6 +36,7 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__decisionProbe = decisionProbe
   ;(window as unknown as Record<string, unknown>).__aiManagerProbe = aiManagerProbe
   ;(window as unknown as Record<string, unknown>).__waiverProbe = waiverProbe
+  ;(window as unknown as Record<string, unknown>).__faFlowProbe = faFlowProbe
   ;(window as unknown as Record<string, unknown>).__leagueWorkerDebug = leagueWorkerDebug
   ;(window as unknown as Record<string, unknown>).__game = useGame
   ;(window as unknown as Record<string, unknown>).__world = getWorld

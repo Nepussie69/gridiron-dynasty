@@ -1,7 +1,7 @@
 import { CalendarClock, FastForward, Timer, Trophy } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { gradeColor, inkOn } from '../lib/format'
-import { DRAFT_ROUNDS, currentRound, currentTeamId, overallPick } from '../game/engine/draft'
+import { DRAFT_ROUNDS, currentRound, currentTeamId, draftOpen, overallPick, stageOf, stagesUntilDraft } from '../game/engine/draft'
 import { accessFor } from '../game/engine/access'
 import { readProspect, rangeText } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
@@ -25,6 +25,16 @@ export function Draft() {
   const deciding = access === 'decide'
   const advising = access === 'advise'
   const complete = league.draftState.complete
+  // L12.6 C2: the draft is an April event. Off it, the board is a read-only
+  // scouting surface and the draft-day buttons are disabled.
+  const draftIsOpen = draftOpen(league)
+  const stage = stageOf(league)
+  const untilDraft = stagesUntilDraft(league)
+  const closedReason = draftIsOpen
+    ? ''
+    : stage
+      ? `The draft opens in April (${untilDraft} stage${untilDraft === 1 ? '' : 's'} away).`
+      : 'The draft is in April — scout the class now.'
   const available = league.draft.filter((p) => !p.draftedBy).sort((a, b) => b.grade - a.grade)
 
   const myPicks = league.draft.filter((p) => p.draftedBy === career.teamId)
@@ -45,7 +55,9 @@ export function Draft() {
         right={
           <div className="flex items-center gap-2">
             <AccessBadge area="draft" />
-            {!complete ? (
+            {!draftIsOpen ? (
+              <Badge tone="warn"><CalendarClock size={12} /> April</Badge>
+            ) : !complete ? (
               <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
                 <Timer size={16} className={mine ? 'text-loss' : 'text-muted'} />
                 <span className="font-cond text-sm font-700 uppercase">
@@ -59,6 +71,12 @@ export function Draft() {
         }
       />
 
+      {!draftIsOpen && (
+        <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
+          {closedReason} Scout the class, rank your board, file conviction calls and red flags — the picks wait until April.
+        </div>
+      )}
+
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card><Stat label="Your Picks Made" value={myPicks.length} sub="this class" /></Card>
         <Card><Stat label="Best Available" value={available[0]?.grade ?? 0} sub={available[0]?.name} /></Card>
@@ -68,7 +86,7 @@ export function Draft() {
 
       <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
         <div className="space-y-4">
-          {onClock && !complete && (
+          {draftIsOpen && onClock && !complete && (
             <Card pad={false} className="overflow-hidden">
               <div className="p-4" style={{ background: `linear-gradient(120deg, ${onClock.primary}, ${onClock.secondary})` }}>
                 <div className="flex items-center gap-2 text-white">
@@ -132,10 +150,21 @@ export function Draft() {
           </Card>
 
           <div className="flex flex-col gap-2">
-            <Button className="w-full" disabled={complete} onClick={simToMyPick}>
+            <Button
+              className="w-full"
+              disabled={complete || !draftIsOpen}
+              title={!draftIsOpen ? closedReason : undefined}
+              onClick={simToMyPick}
+            >
               <FastForward size={15} /> Sim to my next pick
             </Button>
-            <Button variant="ghost" className="w-full" disabled={complete} onClick={finishDraft}>
+            <Button
+              variant="ghost"
+              className="w-full"
+              disabled={complete || !draftIsOpen}
+              title={!draftIsOpen ? closedReason : undefined}
+              onClick={finishDraft}
+            >
               Complete the draft
             </Button>
           </div>
@@ -174,8 +203,9 @@ export function Draft() {
                       <Button
                         size="sm"
                         variant="team"
-                        disabled={!mine}
-                        className={cn(!mine && 'opacity-40')}
+                        disabled={!mine || !draftIsOpen}
+                        title={!draftIsOpen ? closedReason : undefined}
+                        className={cn((!mine || !draftIsOpen) && 'opacity-40')}
                         onClick={() => draftProspect(p.id)}
                       >
                         Draft
