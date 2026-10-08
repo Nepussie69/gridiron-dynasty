@@ -112,6 +112,15 @@ function changeSpot(play: Play, next?: Play): number | null {
   return 10 + (100 - next.startYard)
 }
 
+/**
+ * The yard line (offense frame, 0–100) the ball is snapped from. Extra points are
+ * recorded at yard 2 by the sim; they're kicked from the 15 (the 85).
+ */
+export function snapYard(play: Play): number {
+  if (play.type === 'pat' && play.concept !== 'Two-point try') return 85
+  return play.startYard
+}
+
 // ── formation ────────────────────────────────────────────────────────────────
 interface Formation {
   [key: string]: { x: number; y: number; side: 'off' | 'def'; role: string }
@@ -260,7 +269,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
 }
 
 /** Which receiver dot the throw goes to. */
-function targetKey(play: Play, ctx: AnimContext): string {
+export function targetKey(play: Play, ctx: AnimContext): string {
   if (ctx.targetPos === 'RB') return 'rb'
   if (ctx.targetPos === 'TE') return 'te'
   if (/Screen/.test(play.concept)) return 'rb'
@@ -421,7 +430,7 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
 }
 
 function buildKick(play: Play): PlayAnim {
-  const los = 10 + play.startYard
+  const los = 10 + snapYard(play)
   const f = formation(los)
   f.qb = { ...f.qb, x: los - 7, role: 'H' }
   f.rb = { ...f.rb, x: los - 9.5, y: MID_Y - 2, role: 'K' }

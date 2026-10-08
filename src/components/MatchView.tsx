@@ -14,7 +14,8 @@ import { PlanEditor } from './PlanEditor'
 import { KeysCard } from './KeysCard'
 import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
-import { buildPlayAnim, holderAt, liftAt, posAt } from './playAnim'
+import { buildPlayAnim, holderAt, liftAt, posAt, snapYard, targetKey } from './playAnim'
+import { actorPlayers, teamJerseys } from './jersey'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
 const CENTER_Y = 26.65
@@ -75,6 +76,8 @@ export function MatchView() {
   const [speed, setSpeed] = useState(1)
   // Animation clock for the play on screen: t runs 0..1 after a short pre-snap beat.
   const [clock, setClock] = useState<{ i: number; t: number }>({ i: -1, t: 0 })
+  // Bumped to replay the play on screen (Play pressed on the last play).
+  const [replay, setReplay] = useState(0)
   const timer = useRef<number | null>(null)
   const [tab, setTab] = useState<'plays' | 'box' | 'plan' | 'keys' | 'film'>('plays')
   const [boxTeam, setBoxTeam] = useState<string | null>(null)
@@ -114,7 +117,34 @@ export function MatchView() {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [anim, idx, speed])
+  }, [anim, idx, speed, replay])
+
+  // Space plays / pauses (not while typing in a field).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' && e.key !== ' ') return
+      const el = e.target as HTMLElement | null
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return
+      e.preventDefault()
+      document.querySelector<HTMLButtonElement>('[data-play-toggle]')?.click()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Jersey numbers on the dots: the real player each dot stands for this play.
+  const numbers = useMemo(() => {
+    if (!match) return null
+    return new Map([...teamJerseys(world, match.homeId), ...teamJerseys(world, match.awayId)])
+  }, [world, match])
+  const actorMap = useMemo(() => {
+    if (!match || !play) return null
+    const defId = play.offId === match.homeId ? match.awayId : match.homeId
+    const tKey = play.type === 'pass' && play.targetId
+      ? targetKey(play, { targetPos: byId.get(play.targetId)?.pos })
+      : null
+    return actorPlayers(world, play, defId, tKey)
+  }, [world, match, play, byId])
 
   // auto-advance
   useEffect(() => {
@@ -145,7 +175,7 @@ export function MatchView() {
   const jerseys = jerseyColors(home, away)
   const offColor = play.offId === match.homeId ? jerseys.home : jerseys.away
   const defColor = play.offId === match.homeId ? jerseys.away : jerseys.home
-  const los = mx(10 + play.startYard)
+  const los = mx(10 + snapYard(play))
   const t = clock.i === idx ? clock.t : 0
   const holder = anim ? holderAt(anim, t) : null
   // G3: pause the replay at the end of what has been simulated so the moment
@@ -188,6 +218,27 @@ export function MatchView() {
   const advance = (stop: 'play' | 'drive' | 'moment') => {
     setPlaying(true)
     void gameDayAdvance(stop)
+  }
+
+  // Play / pause. On the last play of a live coached game, Play keeps the game
+  // going to the next moment; with a moment waiting (or a finished game) it
+  // replays the play on screen.
+  const live = !!gameDay && !gameDay.state.done
+  const togglePlay = () => {
+    if (playing && !atEnd) {
+      setPlaying(false)
+      return
+    }
+    if (atEnd) {
+      if (live && !showMoment) {
+        advance('moment')
+        return
+      }
+      setReplay((r) => r + 1)
+      setPlaying(false)
+      return
+    }
+    setPlaying(true)
   }
 
   const simToEnd = () => {
@@ -266,10 +317,18 @@ export function MatchView() {
               {anim?.actors.map((a) => {
                 const pt = posAt(a.path, t)
                 const carrying = holder === a.key
+                const who = actorMap?.get(a.key)
+                const num = who ? numbers?.get(who.id) : undefined
                 return (
                   <g key={a.key} transform={`translate(${mx(pt.x)} ${pt.y})`}>
+                    {who && <title>{`#${num ?? ''} ${who.name} (${who.pos})`}</title>}
                     {carrying && <circle r={2} fill="#ffd34d" opacity={0.35} />}
                     <circle r={1.15} fill={a.side === 'off' ? offColor : defColor} stroke={carrying ? '#ffd34d' : '#fff'} strokeWidth={carrying ? 0.35 : 0.2} />
+                    {num !== undefined && (
+                      <text y={0.42} fontSize={1.2} textAnchor="middle" fill="#fff" stroke="#000" strokeOpacity={0.55} strokeWidth={0.14} paintOrder="stroke" className="font-cond" style={{ fontWeight: 700, pointerEvents: 'none' }}>
+                        {num}
+                      </text>
+                    )}
                   </g>
                 )
               })}
@@ -303,7 +362,7 @@ export function MatchView() {
             </div>
             <div className="ml-auto flex items-center gap-1 rounded-lg bg-white/5 p-1">
               <IconBtn title="Previous play" onClick={() => jump(Math.max(0, idx - 1))}><ChevronLeft size={15} /></IconBtn>
-              <IconBtn title={playing ? 'Pause replay' : 'Play replay'} onClick={() => setPlaying((p) => !p)}>{playing ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
+              <IconBtn playToggle title={playing && !atEnd ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{playing && !atEnd ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
               <IconBtn title="Next play" onClick={() => jump(Math.min(match.plays.length - 1, idx + 1))}><ChevronRight size={15} /></IconBtn>
               <IconBtn title="Jump to the latest play" onClick={() => jump(match.plays.length - 1)}><SkipForward size={15} /></IconBtn>
               <span className="mx-1 h-4 w-px bg-white/15" />
@@ -464,9 +523,9 @@ function ScoreSide({ team, score, hasBall, align }: { team: import('../game/type
   )
 }
 
-function IconBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
+function IconBtn({ title, onClick, children, playToggle }: { title: string; onClick: () => void; children: React.ReactNode; playToggle?: boolean }) {
   return (
-    <button title={title} aria-label={title} onClick={onClick} className="grid h-7 w-7 place-items-center rounded text-white/80 hover:bg-white/15 hover:text-white">
+    <button title={title} aria-label={title} onClick={onClick} data-play-toggle={playToggle || undefined} className="grid h-7 w-7 place-items-center rounded text-white/80 hover:bg-white/15 hover:text-white">
       {children}
     </button>
   )
