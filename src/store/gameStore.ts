@@ -515,6 +515,8 @@ interface GameStore {
 
   // Trades
   proposeTrade: (partnerId: string, give: TradeAsset[], get: TradeAsset[]) => { accepted: boolean; message: string }
+  /** L12.5 T5: add/remove a player from your trade block (max 5). */
+  toggleTradeBlock: (playerId: string) => void
 
   markRead: (id: string) => void
   /** L11.5 Q12: mark every current news item read. */
@@ -2207,6 +2209,27 @@ export const useGame = create<GameStore>((set, get) => ({
     get().showToast(msg)
     get().save()
     return { accepted: true, message: msg }
+  },
+
+  // L12.5 T5: your side of the trade block (max 5, pruned to the current roster).
+  toggleTradeBlock: (playerId) => {
+    const career = get().career
+    if (!career) return
+    const rosterIds = new Set((world.roster[career.teamId] ?? []).map((p) => p.id))
+    const current = (career.tradeBlock ?? []).filter((id) => rosterIds.has(id))
+    const on = current.includes(playerId)
+    let next = current
+    if (on) {
+      next = current.filter((id) => id !== playerId)
+    } else if (rosterIds.has(playerId)) {
+      if (current.length >= 5) {
+        get().showToast('Your trade block is full (5 players).')
+      } else {
+        next = [...current, playerId]
+      }
+    }
+    set({ career: { ...career, tradeBlock: next }, tick: get().tick + 1 })
+    get().save()
   },
 
   hireStaff: (candidateId, salary, scheme) => {
