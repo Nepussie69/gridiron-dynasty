@@ -17,6 +17,7 @@ import { currentSeason, recordGameStats } from './stats'
 import type { GameSim, Play } from './playsim'
 
 import { masteryMultiplier } from './playbook'
+import { styleProfile } from './style'
 
 const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
   QB: 'OFF', RB: 'OFF', WR: 'OFF', TE: 'OFF', OT: 'OFF', OG: 'OFF', C: 'OFF',
@@ -108,11 +109,40 @@ export function allocateTeamGame(
   if (rbs.items.length) {
     const carries = Math.round(rushYds / (isNFL ? 4.35 : 4.5))
     const shares = rbs.weights.map((w, i) => (i === 0 ? w * 2.4 : w))
-    const split_ = split(rng, carries, shares)
-    const yardsSplit = split(rng, rushYds, shares)
+    // L12 S2 parity: score-only games must show the QB's rushing like play-by-play
+    // does. Mirror playsim's carry split (RB1 0.60 / RB2 0.27 / QB 0.13, raised for a
+    // scrambler) and use his own legs for yards per carry. Deterministic (style only,
+    // no rng draws), and the QB's share is carved out of the backs' so the team's
+    // rush attempts, yards and TDs are unchanged. If the QB does not exist he is
+    // simply skipped, keeping the old behaviour.
+    const qa = qb ? mkAttrs(qb) : undefined
+    const qbScramble = qb ? styleProfile(qb).scramble : 0
+    const wq = 0.13 + qbScramble * 0.12
+    const qbFrac = qb ? clamp(wq / (0.6 + 0.27 + wq), 0, 0.4) : 0
+    const qbCarries = qb ? Math.min(carries, Math.round(carries * qbFrac)) : 0
+    let qbYds = 0
+    if (qb && qa && qbCarries > 0) {
+      // Same elusiveness playsim gives a QB run: SPD / AGI / BCV.
+      const legs = (qa.SPD ?? 70) * 0.5 + (qa.AGI ?? 70) * 0.4 + (qa.BCV ?? 70) * 0.1
+      const qbYpc = clamp((isNFL ? 4.35 : 4.5) + (legs - 70) * 0.08, 1.5, 9)
+      qbYds = Math.min(rushYds, Math.round(qbCarries * qbYpc))
+    }
+    const split_ = split(rng, carries - qbCarries, shares)
+    const yardsSplit = split(rng, rushYds - qbYds, shares)
     const rushTd = Math.max(0, Math.round((points / 7) * 0.28 * (0.6 + rng() * 0.8)))
-    const tdSplit = split(rng, rushTd, shares)
+    const qbTd = qb && carries > 0 ? Math.min(rushTd, Math.round((rushTd * qbCarries) / carries)) : 0
+    const tdSplit = split(rng, rushTd - qbTd, shares)
     rbs.items.forEach((p, i) => addLine(p.id, { playerId: p.id, rushAtt: split_[i] ?? 0, rushYds: yardsSplit[i] ?? 0, rushTD: tdSplit[i] ?? 0 }))
+    // Fold the keepers onto the QB's existing (passing) line so he is only counted
+    // once per game, matching how a played game's box score merges by player.
+    if (qb && qbCarries > 0) {
+      const ql = out.find((o) => o.playerId === qb.id)?.line
+      if (ql) {
+        ql.rushAtt = (ql.rushAtt ?? 0) + qbCarries
+        ql.rushYds = (ql.rushYds ?? 0) + qbYds
+        ql.rushTD = (ql.rushTD ?? 0) + qbTd
+      }
+    }
   }
 
   // ── Receiving ──
