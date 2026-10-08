@@ -44,7 +44,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 38 | 2026-10-08 | Make fullback a position | L12.10 B0 (Utility/Blocking RBs → FB) | ⏳ with the playbook push |
 | 39 | 2026-10-08 | Stars / higher-rated players less of a find on the trade block | Claude: ≤2 stars (88+, only moving-on clubs, rotate monthly), ≤8 at 80–87 | ✅ |
 | 40 | 2026-10-08 | Call-mode buttons seemed to do nothing / make it apply straight away | Claude: switching rebuilds the game to the play on screen (deterministic replay of your answers, verified identical) and applies the mode to the very next snap; call card pops up | ✅ |
-| 41 | 2026-10-08 | Redesign Staff & Hiring: easier to navigate/hire, readable skills and stats | DeepSeek push 'staff' (org chart + table, market filters + compare vs current holder, plain effects, hover) | 🔨 building |
+| 41 | 2026-10-08 | Redesign Staff & Hiring: easier to navigate/hire, readable skills and stats | DeepSeek push 'staff' (org chart + table, market filters + compare vs current holder, plain effects, hover) | ✅ merged |
 | 42 | 2026-10-08 | Space pauses the play/animation exactly where it is (in game) | Claude: freeze/resume mid-play in MatchView | ✅ |
 | 43 | 2026-10-08 | Culture discount only for clubs that won heaps in the last 3 years or have top offense/defense, by the player's side of the ball | L12.9 K2 (approved rule) | 🔨 building with K1 |
 | 44 | 2026-10-08 | Add all the ideas into a futures workflow, go down the list one by one | FUTURES.md (25 rows, ordered) | ✅ |

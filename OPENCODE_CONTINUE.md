@@ -20,7 +20,6 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 ## Running at handoff (check `pgrep -fl ds-push`)
 | Name / branch | Worktree | Spec / task | Prompt | Notes |
 |---|---|---|---|---|
-| `staff` / `wt-staff` | scratchpad/wt-staff | Backlog #41 Staff & Hiring redesign | /private/tmp/gridiron-staff.txt | UI only |
 | `culture` / `wt-culture` | scratchpad/wt-culture | NEXT_PHASE_L12_9.md P2: K1 cohesion in sim + K2 winning-culture discount (approved) | /private/tmp/gridiron-l12_9p2.txt | Sim + pricing; check bands and cap use |
 | `playbook` / `wt-playbook` | scratchpad/wt-playbook | FUTURES #1: NEXT_PHASE_L12_10.md P1 B0–B4 (FB, route tree, playbook, sim + animation) | /private/tmp/gridiron-playbook.txt | Big; calibration bands |
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
