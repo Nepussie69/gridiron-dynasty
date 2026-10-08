@@ -20,7 +20,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 14 | 2026-10-08 | Draft in April, not during the season; same with true free agency | L12.6 C1–C2 | ✅ merged |
 | 15 | 2026-10-08 | In-season FA is fine, but released players must properly sign and play for another team | L12.6 C3 + `__faFlowProbe` | ✅ merged |
 | 16 | 2026-10-08 | Rookies too highly rated; rely on ceiling, grow with stats/experience | L12.7 D1–D4 | ✅ 2097501 |
-| 17 | 2026-10-08 | Click teams to see/scout their players; top O/D players with hover ratings (also on Up next card) | L12.8 V1–V3 | 🔨 building |
+| 17 | 2026-10-08 | Click teams to see/scout their players; top O/D players with hover ratings (also on Up next card) | L12.8 V1–V3 | ✅ merged |
 | 18 | 2026-10-08 | Potential/ceiling in a colour bubble by how good it is | Claude, kit.tsx OvrBadge | ✅ (this commit) |
 | 19 | 2026-10-08 | Rookies need much lower ratings; show current + potential side by side without giving it away | L12.7 D1 ✅ + D5 (follow-up push) | ✅ merged |
 | 20 | 2026-10-08 | "Batting average" → a football term | Claude: "Success Rate" (Ledger.tsx) | ✅ (this commit) |
@@ -33,7 +33,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 27 | 2026-10-08 | Include all routes and all plays (Madden 26 style) | L12.10 B1–B4, B6 (generic football concepts; EA data not copied) | ⏳ after P5 + routes |
 | 28 | 2026-10-08 | All ratings transfer to animations, stats and play | L12 P4 ✅ + P5 🔨 (play/stats); L12.10 B5 (animation) | ⏳ |
 | 29 | 2026-10-08 | History tab: character history and what they've done, team record, offense/defense stats through the years | L12.12 Y1–Y3 | ✅ merged |
-| 30 | 2026-10-08 | Trade Center columns: position select + order by rating | with L12.8 push (Trades.tsx) | 🔨 building |
+| 30 | 2026-10-08 | Trade Center columns: position select + order by rating | with L12.8 push (Trades.tsx) | ✅ merged |
 | 31 | 2026-10-08 | Rescale my save's rookies drafted before the fix (user approved) | Claude: rescaleLegacyRookies in migrateWorld (one-time flag rookieScaleV2) | ✅ (this commit) |
 | 32 | 2026-10-08 | Find a Player tab: all players, ratings or stats, position select, sort any column asc/desc | DeepSeek push 'findplayer' | ✅ merged |
 | 33 | 2026-10-08 | Playoff hunt chart per division and conference like the NFL (+ found: seeding ignored division winners) | DeepSeek push 'playoffs' | ✅ merged |
