@@ -29,6 +29,7 @@ import {
 import { refreshProspectClass, developPlayers, evaluateScouting, runAIFreeAgency, runAIResign, runAITrades, enforceCapCompliance, tickAllContracts } from './progress'
 import { gainSeasonTraining, refreshCohesion, teamCohesion } from './playbook'
 import { awardCompensatoryPicks, initDraft, runUDFAs, simulateRestOfDraft } from './draft'
+import { readRookieRanges } from './evaluation'
 import { ensureDraftWindow } from './picks'
 import { simulatePlayoffs, simWeek } from './sim'
 import { depthAt, STARTERS } from './depth'
@@ -450,6 +451,13 @@ export interface RookieProbeReport {
     starters: { n: number; reached: number; pct: number }
     bench: { n: number; reached: number; pct: number }
   }
+  /** (d) D5: a well-scouted read brackets what the rookies actually sign at. */
+  projectionCheck: {
+    n: number
+    nowInside: number
+    ceilingInside: number
+    samples: { name: string; pos: string; now: [number, number]; ceiling: [number, number]; ovr: number; pot: number }[]
+  }
 }
 
 function quantile(sorted: number[], q: number): number {
@@ -501,6 +509,7 @@ export function runRookieProbe(opts: { seasons?: number; seed?: number; data?: R
   const world = buildWorld(seed, opts.data ?? null)
   const tracked = new Map<string, TrackedRookie>()
   let firstDraft: { ovr: number; round: number }[] = []
+  let projectionCheck: RookieProbeReport['projectionCheck'] = { n: 0, nowInside: 0, ceilingInside: 0, samples: [] }
   const starterAvgBySeason: number[] = []
 
   for (let s = 0; s < seasons; s++) {
@@ -549,6 +558,27 @@ export function runRookieProbe(opts: { seasons?: number; seed?: number; data?: R
       const ranked = [...world.draft].sort((a, b) => b.trueGrade - a.trueGrade || (a.id < b.id ? -1 : 1))
       const roundByProspect = new Map(ranked.map((x, i) => [x.id, Math.ceil((i + 1) / 32)]))
       firstDraft = drafted.map((p) => ({ ovr: p.ovr, round: roundByProspect.get(p.id.slice(3)) ?? p.origin?.round ?? 0 }))
+
+      // (d) D5: a well-scouted read must bracket what each rookie actually
+      // signs at. Scout the class to 85% (truth still hidden at this rung) with
+      // the read matching the true grade, then compare the first ten picks.
+      for (const p of world.draft) {
+        p.confidence = 85
+        p.myGrade = p.trueGrade
+      }
+      const probeCareer = { level: 3, skills: { evaluation: 60 }, earnedTraits: [], teamId: 'BUF' } as unknown as CareerState
+      let nowInside = 0
+      let ceilingInside = 0
+      const samples: RookieProbeReport['projectionCheck']['samples'] = []
+      for (const pl of drafted.slice(0, 10)) {
+        const prospect = world.draft.find((x) => `pl_${x.id}` === pl.id)
+        if (!prospect) continue
+        const rr = readRookieRanges(probeCareer, prospect, world.draft)
+        if (pl.ovr >= rr.now[0] && pl.ovr <= rr.now[1]) nowInside++
+        if (pl.pot >= rr.ceiling[0] && pl.pot <= rr.ceiling[1]) ceilingInside++
+        samples.push({ name: pl.name, pos: pl.pos, now: rr.now, ceiling: rr.ceiling, ovr: pl.ovr, pot: pl.pot })
+      }
+      projectionCheck = { n: samples.length, nowInside, ceilingInside, samples }
     }
     for (const p of drafted) {
       tracked.set(p.id, { pot: p.pot, seasonsPlayed: 0, starterFirstTwo: false, reached: false })
@@ -599,5 +629,6 @@ export function runRookieProbe(opts: { seasons?: number; seed?: number; data?: R
       starters: { n: starters.length, reached: starters.filter((t) => t.reached).length, pct: share(starters) },
       bench: { n: bench.length, reached: bench.filter((t) => t.reached).length, pct: share(bench) },
     },
+    projectionCheck,
   }
 }

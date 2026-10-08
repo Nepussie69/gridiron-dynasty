@@ -9,8 +9,9 @@ import {
   type CombineKind,
 } from '../game/engine/combine'
 import { CHARACTER_FACETS } from '../game/engine/character'
+import { readRookieRanges } from '../game/engine/evaluation'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card } from '../ui/kit'
+import { Badge, Button, Card, RookieRangeBadges } from '../ui/kit'
 
 const ACTIONS: { kind: CombineKind; label: string; Icon: typeof Phone }[] = [
   { kind: 'interview', label: 'Interview', Icon: Phone },
@@ -53,6 +54,7 @@ export function CombineCard({ className }: { className?: string }) {
   const hoursLeft = combine?.hoursLeft ?? COMBINE_HOURS
   const seen = combine?.seen ?? []
   const prospect = selected ? league.draft.find((p) => p.id === selected) : undefined
+  const rr = prospect ? readRookieRanges(career, prospect, league.draft) : null
   const charDone = !!prospect?.character && (prospect.characterReads ?? []).length >= CHARACTER_FACETS.length
   const atLimit = !!prospect && !seen.includes(prospect.id) && seen.length >= MAX_COMBINE_PROSPECTS
 
@@ -90,6 +92,7 @@ export function CombineCard({ className }: { className?: string }) {
               matches.map((p) => {
                 const on = selected === p.id
                 const s = seen.includes(p.id)
+                const rr = readRookieRanges(career, p, league.draft)
                 return (
                   <button
                     key={p.id}
@@ -102,8 +105,9 @@ export function CombineCard({ className }: { className?: string }) {
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-xs font-600 text-ink">{p.name}</span>
-                      <span className="block truncate font-cond text-[10px] font-700 uppercase text-muted">
-                        {p.pos} · {p.college} · {p.myGrade ?? p.grade}
+                      <span className="flex items-center gap-1.5 font-cond text-[10px] font-700 uppercase text-muted">
+                        <span className="min-w-0 truncate">{p.pos} · {p.college}</span>
+                        <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact />
                       </span>
                     </span>
                     {s && <span className="shrink-0 font-cond text-[10px] font-700 uppercase text-[var(--team)]">Seen</span>}
@@ -124,8 +128,9 @@ export function CombineCard({ className }: { className?: string }) {
                   {prospect.name}{' '}
                   <span className="font-cond text-[11px] font-700 uppercase text-muted">{prospect.pos}</span>
                 </span>
-                <span className="shrink-0 font-cond text-[11px] text-muted">
-                  Grade {prospect.myGrade ?? prospect.grade} · {prospect.confidence}% known
+                <span className="flex shrink-0 items-center gap-1.5 font-cond text-[11px] text-muted">
+                  {rr && <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact />}
+                  <span>{prospect.confidence}% known</span>
                 </span>
               </div>
               <div className="grid gap-1.5 sm:grid-cols-3">

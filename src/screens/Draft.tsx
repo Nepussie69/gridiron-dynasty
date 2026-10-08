@@ -1,13 +1,13 @@
 import { CalendarClock, FastForward, Timer, Trophy } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { gradeColor, inkOn } from '../lib/format'
+import { gradeColor } from '../lib/format'
 import { DRAFT_ROUNDS, currentRound, currentTeamId, draftOpen, overallPick, rookieProjection, stageOf, stagesUntilDraft } from '../game/engine/draft'
 import { accessFor } from '../game/engine/access'
-import { readProspect, rangeText } from '../game/engine/evaluation'
+import { readProspect, readRookieRanges } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { AccessBadge } from '../components/AccessBadge'
-import { Badge, Button, Card, PageHeader, RatingBar, Stat, TeamCrest } from '../ui/kit'
+import { Badge, Button, Card, PageHeader, RatingBar, RookieRangeBadges, Stat, TeamCrest } from '../ui/kit'
 
 export function Draft() {
   const league = useWorld()
@@ -136,7 +136,7 @@ export function Draft() {
             </div>
             <div className="max-h-[280px] divide-y divide-line/60 overflow-y-auto">
               {myPicks.map((p) => {
-                const proj = rookieProjection(league.draft, p)
+                const rr = readRookieRanges(career, p, league.draft)
                 return (
                   <div key={p.id} className="flex items-center gap-3 px-4 py-2">
                     <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-3 font-display text-xs font-700 text-ink-2">
@@ -145,7 +145,7 @@ export function Draft() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-cond text-sm font-600 text-ink">{p.name}</div>
                       <div className="text-xs text-muted">{p.pos} · {p.college}</div>
-                      <div className="font-cond text-[10px] tnum text-muted">Now ~{proj.now} · Ceiling {proj.ceiling}</div>
+                      <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact className="mt-0.5" />
                     </div>
                     <Badge tone="neutral">{p.grade}</Badge>
                   </div>
@@ -186,17 +186,12 @@ export function Draft() {
               {available.map((p) => {
                 const read = readProspect(career, p)
                 const rank = board.indexOf(p.id)
-                const proj = rookieProjection(league.draft, p)
+                const rr = readRookieRanges(career, p, league.draft)
                 return (
                   <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
-                    <div className="flex w-16 shrink-0 flex-col items-center gap-0.5">
-                      <span
-                        className="grid h-9 w-16 place-items-center rounded-md font-display text-sm font-700 tnum"
-                        style={{ background: gradeColor(read.center), color: inkOn(gradeColor(read.center)) }}
-                      >
-                        {rangeText(read)}
-                      </span>
-                      <span className="font-cond text-[8px] font-700 uppercase tracking-wide text-muted">Prospect grade</span>
+                    <div className="flex w-[128px] shrink-0 flex-col items-center gap-0.5">
+                      <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} />
+                      <span className="font-cond text-[8px] font-700 uppercase tracking-wide text-muted">Now · Ceiling</span>
                     </div>
                     <span className="w-9 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
                     <span className="min-w-0 flex-1">
@@ -205,7 +200,6 @@ export function Draft() {
                         {rank >= 0 && <Badge tone="warn">#{rank + 1} your board</Badge>}
                       </span>
                       <span className="block truncate text-xs text-muted">{p.college} · {read.bandLabel}</span>
-                      <span className="block font-cond text-[10px] tnum text-muted">Now ~{proj.now} · Ceiling {proj.ceiling}</span>
                     </span>
                     <div className="hidden w-24 md:block">
                       <RatingBar value={read.center} height={5} color={gradeColor(read.center)} />
