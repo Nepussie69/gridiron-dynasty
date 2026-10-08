@@ -32,9 +32,10 @@ export function agentStyle(playerId: string): AgentStyle {
  * The agent's opening ask: market AAV, cap-scaled, marked up by his personality,
  * rounded to the nearest $100K. L12.11: for the user's own club, a higher
  * Negotiation skill shaves up to 3% off the ask (never more expensive).
+ * L12.9 K2: a winning-culture discount (`discountPct`) also comes off the ask.
  */
-export function marketAsk(p: Player, season: number, negotiateSkill?: number): number {
-  const mult = negotiateSkill == null ? 1 : negotiationAskMultiplier(negotiateSkill)
+export function marketAsk(p: Player, season: number, negotiateSkill?: number, discountPct = 0): number {
+  const mult = (negotiateSkill == null ? 1 : negotiationAskMultiplier(negotiateSkill)) * (1 - discountPct / 100)
   const ask = marketAAV(p.ovr, p.pos, p.age) * capScale(season) * STYLE_MULT[agentStyle(p.id)] * mult
   return Math.round(ask / 1e5) * 1e5
 }
@@ -59,9 +60,10 @@ export function judgeOffer(
   season: number,
   offer: ExtensionOffer,
   negotiateSkill?: number,
+  discountPct = 0,
 ): { accepted: boolean; pctOfAsk: number; needed: number; message: string } {
   const style = agentStyle(p.id)
-  const ask = marketAsk(p, season, negotiateSkill)
+  const ask = marketAsk(p, season, negotiateSkill, discountPct)
   const pctOfAsk = ask > 0 ? (offer.aav / ask) * 100 : 100
   const needed = acceptanceLine(p, style)
   // Guarantees count toward acceptance; a 4+ year ask on a veteran costs a little.

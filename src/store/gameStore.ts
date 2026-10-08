@@ -148,6 +148,7 @@ import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummar
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
 import { MAX_SHADOW, canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../game/engine/negotiation'
+import { cultureDiscountFor } from '../game/engine/culture'
 import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
 import {
   SKILL_KEYS,
@@ -1257,7 +1258,7 @@ export const useGame = create<GameStore>((set, get) => ({
     } else if (stage === 'freeAgency') {
       // Leaving March: the AI clubs have their first crack at what is left.
       if (!done.fa) {
-        runAIFreeAgency(world, career.teamId)
+        runAIFreeAgency(world, career.teamId, statDb)
         done.fa = true
       }
       world.offseasonStage = 'draft'
@@ -1953,7 +1954,9 @@ export const useGame = create<GameStore>((set, get) => ({
     const p = world.freeAgents[idx]
     // W1: a released player carries a zeroed contract, so price the signing
     // here (one year at market, pro-rated for the weeks left in season).
-    const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, negotiationAskMultiplier(career.skills.negotiation))
+    // L12.9 K2: a winning-culture club signs him at a discounted asking price.
+    const disc = cultureDiscountFor(world, statDb, career.teamId, p)
+    const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, negotiationAskMultiplier(career.skills.negotiation), disc.pct)
     const cap = summarizeCap(world.roster[career.teamId] ?? [], world.deadMoney[career.teamId] ?? 0, world.season)
     if (cap.space < contract.capHit) {
       get().showToast('Not enough cap space to sign this player.')
@@ -2101,7 +2104,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('His camp has stopped taking calls this season.')
       return
     }
-    const verdict = judgeOffer(p, world.season, offer, career.skills.negotiation)
+    const verdict = judgeOffer(p, world.season, offer, career.skills.negotiation, cultureDiscountFor(world, statDb, career.teamId, p).pct)
     if (!verdict.accepted) {
       const nextTries = tries + 1
       talks[playerId] = { season: world.season, tries: nextTries, closed: nextTries >= 3 }
@@ -2958,7 +2961,7 @@ function completeDraft(world: World, career: CareerState | null) {
 function completeOffseasonStages(world: World, career: CareerState | null) {
   const done = (world.offseasonDone ??= {})
   if (!done.fa) {
-    runAIFreeAgency(world, career?.teamId)
+    runAIFreeAgency(world, career?.teamId, statDb)
     done.fa = true
   }
   if (!done.draft) completeDraft(world, career)
@@ -3033,7 +3036,7 @@ function runEndOfRegularSeason(
   const ownsContracts = career
     ? capabilities(career).can.has('negotiate') || capabilities(career).can.has('manageCap')
     : false
-  runAIResign(world, ownsContracts && career ? career.teamId : undefined)
+  runAIResign(world, ownsContracts && career ? career.teamId : undefined, statDb)
   tickAllContracts(world)
 
   // Coaching continuity: a settled staff ages up; a churned side resets to year 1.
