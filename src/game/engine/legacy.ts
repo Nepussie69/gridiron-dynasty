@@ -9,6 +9,8 @@
 
 import type { CareerState } from '../types'
 import type { World } from './generate'
+import type { AwardHistory } from './awards'
+import type { CareerDatabase } from './statsDb'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { clamp, makeRng, rpick } from './rng'
 import { ladderFor, minNflLevel, salaryFor, tierFor, type Reputation } from './career'
@@ -71,6 +73,10 @@ export interface LegacyCase {
   myGuys: number
   cantonPlayers: number
   tree: number
+  /** L12.16 H4: honours (MVP/POY/All-Pro…) won by players on your club in your seasons. */
+  honoursForYourPlayers: number
+  /** L12.16 H4: ballot finalists you found (they appear on your Ledger). */
+  finalistsYouFound: number
   score: number
   threshold: number
   inducted: boolean
@@ -78,15 +84,66 @@ export interface LegacyCase {
 
 const HOF_THRESHOLD = 45
 
-export function legacyCase(career: CareerState, inductedIds: Set<string>): LegacyCase {
+export function legacyCase(
+  career: CareerState,
+  inductedIds: Set<string>,
+  awards?: AwardHistory,
+  db?: CareerDatabase,
+): LegacyCase {
   const rings = career.history.filter((h) => /champion/i.test(h.outcome)).length
   const ledgerHits = (career.ledger ?? []).filter((e) => e.hit).length
   const myGuys = (career.ledger ?? []).filter((e) => e.kind === 'pick').length
   const ids = new Set((career.ledger ?? []).map((e) => e.playerId).filter((x): x is string => !!x))
   const cantonPlayers = [...ids].filter((id) => inductedIds.has(id)).length
   const tree = (career.tree ?? []).length
-  const score = rings * 25 + Math.min(20, ledgerHits) + cantonPlayers * 8 + tree * 5
-  return { rings, ledgerHits, myGuys, cantonPlayers, tree, score, threshold: HOF_THRESHOLD, inducted: score >= HOF_THRESHOLD }
+
+  // L12.16 H4: honours won by players who were on your club in the season they
+  // won them, plus the ballot finalists your Ledger found.
+  let honoursForYourPlayers = 0
+  let finalistsYouFound = 0
+  if (awards) {
+    const teamBySeason = new Map(career.history.map((h) => [h.season, h.team]))
+    const teamOf = (playerId: string, season: number): string | undefined => {
+      if (!db) return undefined
+      return db.players[playerId]?.seasons.find((s) => s.season === season)?.teamId
+    }
+    const count = (w: { playerId: string } | null | undefined, season: number) => {
+      if (!w) return
+      const teamId = teamOf(w.playerId, season)
+      if (teamId && teamId === teamBySeason.get(season)) honoursForYourPlayers += 1
+    }
+    for (const s of awards.seasons) {
+      count(s.mvp, s.season)
+      count(s.opoy, s.season)
+      count(s.dpoy, s.season)
+      count(s.oroy, s.season)
+      count(s.droy, s.season)
+      for (const w of [...s.firstTeam.offense, ...s.firstTeam.defense, ...s.secondTeam.offense, ...s.secondTeam.defense]) {
+        count(w, s.season)
+      }
+    }
+    const ledgerIds = new Set((career.ledger ?? []).map((e) => e.playerId).filter((x): x is string => !!x))
+    const found = new Set<string>()
+    for (const cls of awards.classes ?? []) {
+      for (const f of cls.finalists) if (ledgerIds.has(f.playerId)) found.add(f.playerId)
+    }
+    finalistsYouFound = found.size
+  }
+  // The two new terms together are worth at most +10 (H4 guardrail).
+  const bonus = Math.min(10, honoursForYourPlayers * 2 + finalistsYouFound * 3)
+  const score = rings * 25 + Math.min(20, ledgerHits) + cantonPlayers * 8 + tree * 5 + bonus
+  return {
+    rings,
+    ledgerHits,
+    myGuys,
+    cantonPlayers,
+    tree,
+    honoursForYourPlayers,
+    finalistsYouFound,
+    score,
+    threshold: HOF_THRESHOLD,
+    inducted: score >= HOF_THRESHOLD,
+  }
 }
 
 /** Start a successor: a protégé who inherits part of your reputation and network. */

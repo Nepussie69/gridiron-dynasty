@@ -4,7 +4,7 @@ import { cn } from '../lib/cn'
 import { getAwards } from '../store/gameStore'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
-import type { AwardWinner, HofInductee, SeasonHonors } from '../game/engine/awards'
+import type { AwardWinner, HofClass, HofInductee, SeasonHonors } from '../game/engine/awards'
 import type { StaffAward } from '../game/engine/staffAwards'
 
 export function Awards() {
@@ -217,11 +217,15 @@ function AllProRow({ w, world }: { w: AwardWinner; world: ReturnType<typeof useW
 }
 
 function HallOfFame({ history, world }: { history: ReturnType<typeof getAwards>; world: ReturnType<typeof useWorld> }) {
+  const career = useGame((s) => s.career)
+  const ledgerIds = new Set((career?.ledger ?? []).map((e) => e.playerId).filter((x): x is string => !!x))
+  const classes = [...(history.classes ?? [])].sort((a, b) => b.season - a.season)
   const hof = [...history.hof].sort((a, b) => b.score - a.score)
-  if (!hof.length) {
+
+  if (!classes.length && !hof.length) {
     return (
       <Card className="py-12 text-center text-sm text-muted">
-        The Hall of Fame is empty. Legends are enshrined once their careers meet the bar.
+        The Hall of Fame is empty. Legends are enshrined once they retire, sit out three seasons, and meet the bar.
       </Card>
     )
   }
@@ -235,10 +239,100 @@ function HallOfFame({ history, world }: { history: ReturnType<typeof getAwards>;
           </span>
         </div>
       </Card>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {hof.map((ind) => (
-          <HofCard key={ind.playerId} ind={ind} world={world} />
+      {classes.length ? (
+        classes.map((c) => <HofClassCard key={c.season} cls={c} ledgerIds={ledgerIds} />)
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {hof.map((ind) => (
+            <HofCard key={ind.playerId} ind={ind} world={world} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** L12.16 H3: one year's class — the enshrined, the ballot, and who missed. */
+function HofClassCard({
+  cls,
+  ledgerIds,
+}: {
+  cls: HofClass
+  ledgerIds: Set<string>
+}) {
+  const [ballot, setBallot] = useState(false)
+  const inductedIds = new Set(cls.inducted.map((i) => i.playerId))
+  return (
+    <Card pad={false}>
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <span className="label flex items-center gap-1">
+          <Trophy size={11} className="text-gold" /> Class of {cls.season}
+        </span>
+        <span className="font-cond text-xs text-muted">
+          {cls.inducted.length} enshrined · {cls.finalists.length} finalists
+        </span>
+      </div>
+      <div className="divide-y divide-line">
+        {cls.inducted.map((ind) => (
+          <HofInducteeRow key={ind.playerId} ind={ind} yours={ledgerIds.has(ind.playerId)} />
         ))}
+      </div>
+      {cls.finalists.length > 0 && (
+        <>
+          <button
+            onClick={() => setBallot((v) => !v)}
+            className="flex w-full items-center justify-center gap-1 border-t border-line px-4 py-2 font-cond text-xs font-700 uppercase text-muted hover:text-ink"
+          >
+            {ballot ? 'Hide ballot' : `Ballot — ${cls.finalists.length} finalists`}
+            <ChevronDown size={12} className={cn('transition', ballot && 'rotate-180')} />
+          </button>
+          {ballot && (
+            <div className="divide-y divide-line border-t border-line">
+              {cls.finalists.map((f) => (
+                <div key={f.playerId} className="flex items-center gap-3 px-4 py-1.5 text-sm">
+                  <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{f.pos}</span>
+                  <span className="flex-1 truncate font-600 text-ink">{f.name}</span>
+                  {ledgerIds.has(f.playerId) && <Badge tone="gold">Your guy</Badge>}
+                  <span className="font-cond text-xs tnum text-muted">{f.score}</span>
+                  {inductedIds.has(f.playerId) ? (
+                    <Badge tone="gold">In</Badge>
+                  ) : (
+                    <span className="font-cond text-[10px] uppercase text-faint">Missed</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
+
+/** One enshrined legend, with his best line and honour chips. */
+function HofInducteeRow({
+  ind,
+  yours,
+}: {
+  ind: HofInductee
+  yours: boolean
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{ind.pos}</span>
+          <span className="truncate font-600 text-ink">{ind.name}</span>
+          {yours && <Badge tone="gold">Your guy</Badge>}
+        </div>
+        <div className="mt-0.5 text-[11px] text-muted">
+          {ind.careerYears} seasons · {ind.bestLine ?? `${ind.totalTD} TD`} · score {ind.score}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {!!ind.mvp && <Badge tone="gold">MVP×{ind.mvp}</Badge>}
+        {!!ind.allPro && <Badge tone="info">All-Pro×{ind.allPro}</Badge>}
+        {!!ind.titles && <Badge tone="gold">{ind.titles}× Champion</Badge>}
       </div>
     </div>
   )

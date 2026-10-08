@@ -30,7 +30,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 20 | **Press conferences** (`NEXT_PHASE_L12_17.md`, spec only) | Answers move owner trust, player morale and your profile | — | ⛔ dropped by the user 2026-10-08 |
 | 21 | **Coaching tree** | Your coordinators get hired away as head coaches; their success adds to your legacy; poach them back | History ✅ | ⏳ |
 | 22 | **Owner personalities** | Win-now, patient builder, meddler — different firing lines and mandates | — | ⏳ |
-| 23 | **Hall of Fame & legacy** (`NEXT_PHASE_L12_16.md`) | Career timeline, records, HOF vote at retirement (yours and your players'); also persists history/awards across reloads | History ✅ | 🔨 building (parallel) |
+| 23 | **Hall of Fame & legacy** (`NEXT_PHASE_L12_16.md`) | Career timeline, records, HOF vote at retirement (yours and your players'); also persists history/awards across reloads | History ✅ | ✅ merged |
 | 24 | **Trick plays** | Flea flicker, reverse, halfback pass, fake spike as calls with surprise value | 1 | ⏳ |
 | 25 | **Ask the GM / owner meetings** | Request budget, a star signing or a staff hire; owner reacts by personality | 22 | ⏳ |
 

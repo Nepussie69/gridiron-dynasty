@@ -4,7 +4,7 @@ import { contactIntel, philosophyLabel, rivalTitle } from '../game/engine/people
 import { WILDERNESS_PATHS, legacyCase } from '../game/engine/legacy'
 import { traitOrigin } from '../game/engine/earnedTraits'
 import { overallRep } from '../game/engine/career'
-import { getAwards, useGame, useWorld } from '../store/gameStore'
+import { getAwards, getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, RatingBar, TeamCrest } from '../ui/kit'
 
 /** #9 contacts, #10 traits, #11 mentor + tree, #12 rival class, #17 wilderness, #19 legacy. */
@@ -18,7 +18,8 @@ export function CareerPeople() {
   const traits = career.earnedTraits ?? []
   const myScore = overallRep(career.reputation)
   const myLevel = career.level
-  const legacy = legacyCase(career, new Set(getAwards().inducted))
+  const legacy = legacyCase(career, new Set(getAwards().inducted), getAwards(), getStatsDb())
+  const legacyPct = Math.min(100, Math.round((legacy.score / legacy.threshold) * 100))
 
   const rivals = [...(world.rivals ?? [])].sort((a, b) => b.level - a.level || b.reputation - a.reputation)
   const ladder = [
@@ -92,8 +93,25 @@ export function CareerPeople() {
           <Stat label="Ledger Hits" value={legacy.ledgerHits} />
           <Stat label="Guys in Canton" value={legacy.cantonPlayers} />
           <Stat label="Coaching Tree" value={legacy.tree} />
+          <Stat label="Player Honours" value={legacy.honoursForYourPlayers} />
+          <Stat label="Ballot Finalists" value={legacy.finalistsYouFound} />
+        </div>
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between font-cond text-[10px] uppercase text-muted">
+            <span>Progress to the Hall</span>
+            <span className="tnum">{legacy.score}/{legacy.threshold}</span>
+          </div>
+          <RatingBar
+            value={legacyPct}
+            height={6}
+            color={legacy.inducted ? '#9a7418' : 'var(--team)'}
+          />
         </div>
         <p className="mt-2 text-[11px] leading-snug text-muted">
+          <span className="font-600 text-ink-2">What gets you in:</span> rings ×25 · Ledger hits (max 20) · Guys in Canton ×8 ·
+          coaching tree ×5 · honours your players won and finalists you found (+10).
+        </p>
+        <p className="mt-1 text-[11px] leading-snug text-muted">
           When you retire, this is your Hall-of-Fame case as a contributor. Then you can keep playing as a protégé.
         </p>
         <Button

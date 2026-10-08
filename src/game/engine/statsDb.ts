@@ -63,10 +63,23 @@ export interface TeamSeasonStats {
   ranks: { pf: number; pa: number; offYds: number; defYds: number }
 }
 
+/** One player's career index entry. Retired players live only here. */
+export interface DbPlayer {
+  name: string
+  pos: string
+  seasons: SeasonStats[]
+  /** L12.16 H1: the season he left the league (set once, at that season's end). */
+  retiredSeason?: number
+  /** L12.16 H1: the highest OVR he was ever seen at, tracked each season end. */
+  peakOvr?: number
+  /** L12.16 H1: the club he finished with (from his last recorded season line). */
+  lastTeam?: string
+}
+
 export interface CareerDatabase {
   teams: TeamSeasonRecord[]
   /** Individual seasons indexed by player id for fast lookup. */
-  players: Record<string, { name: string; pos: string; seasons: SeasonStats[] }>
+  players: Record<string, DbPlayer>
 }
 
 export function newDatabase(): CareerDatabase {
@@ -203,10 +216,16 @@ export function recordTeamSeasons(
 export function recordPlayerSeasons(db: CareerDatabase, players: Player[]) {
   for (const p of players) {
     if (!p.stats?.length) continue
+    // L12.16 H1: never lose the retirement metadata once set. A player is
+    // re-indexed every season end, so his peak/retiredSeason must survive.
+    const prior = db.players[p.id]
     db.players[p.id] = {
       name: p.name,
       pos: p.pos,
       seasons: p.stats.map((s) => ({ ...s })),
+      ...(prior?.retiredSeason !== undefined ? { retiredSeason: prior.retiredSeason } : {}),
+      ...(prior?.peakOvr !== undefined ? { peakOvr: prior.peakOvr } : {}),
+      ...(prior?.lastTeam !== undefined ? { lastTeam: prior.lastTeam } : {}),
     }
   }
 }

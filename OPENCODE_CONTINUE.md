@@ -33,7 +33,6 @@ _Updated 2026-10-08 ~21:40 AEDT by Claude Opus 5.5 (5-hour usage 83%) for ChatGP
 ## Running at handoff (check `pgrep -fl ds-push`; logs `/private/tmp/gridiron-<name>.log`)
 | Name / branch | Spec | Prompt | Notes |
 |---|---|---|---|
-| `hof` / `wt-hof` | `NEXT_PHASE_L12_16.md` H0–H5: **persist statDb + awards in the save (they are lost on reload today!)**, record retirees' last season, real HOF vote 3 seasons after retirement, Awards HOF tab, legacy panel, `__hofProbe` | /private/tmp/gridiron-hof.txt | try 2 (try 1 idle-hung) |
 | `gmdesk` / `wt-gmdesk` | `NEXT_PHASE_L12_14.md` C6 GM requests desk | /private/tmp/gridiron-gmdesk.txt | gameStore + new UI |
 | `stars` / `wt-stars` | `NEXT_PHASE_L12_15.md` S1–S4 stars are rare (OVR remap) | /private/tmp/gridiron-stars.txt | must remap trade.ts/cap.ts OVR thresholds by rank |
 | `realism` / `wt-realism` | `NEXT_PHASE_REALISM.md` R1–R3 + R5 NFL 2015–2024 retune + missed tackles | /private/tmp/gridiron-realism.txt | sim constants; calibration bands change — re-baseline after merge |
