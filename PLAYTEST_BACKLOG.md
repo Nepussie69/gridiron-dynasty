@@ -33,3 +33,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 27 | 2026-10-08 | Include all routes and all plays (Madden 26 style) | L12.10 B1–B4, B6 (generic football concepts; EA data not copied) | ⏳ after P5 + routes |
 | 28 | 2026-10-08 | All ratings transfer to animations, stats and play | L12 P4 ✅ + P5 🔨 (play/stats); L12.10 B5 (animation) | ⏳ |
 | 29 | 2026-10-08 | History tab: character history and what they've done, team record, offense/defense stats through the years | L12.12 Y1–Y3 | 🔨 building |
+| 30 | 2026-10-08 | Trade Center columns: position select + order by rating | Claude after L12.5 merges (Trades.tsx) | ⏳ after L12.5 |
