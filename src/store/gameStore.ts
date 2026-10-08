@@ -188,7 +188,7 @@ import { runBalance, runRookieProbe } from '../game/engine/balance'
 export type ScreenId =
   | 'career' | 'history' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
   | 'freeagency' | 'trades' | 'cap' | 'schedule' | 'standings'
-  | 'stats' | 'awards' | 'league' | 'inbox'
+  | 'stats' | 'awards' | 'league' | 'inbox' | 'players'
 
 export interface ScreenMeta {
   id: ScreenId
@@ -212,6 +212,7 @@ export const SCREENS: ScreenMeta[] = [
   { id: 'trades', label: 'Trade Center', group: 'Personnel', tiers: ['NFL'] },
   { id: 'cap', label: 'Salary Cap', group: 'Club', tiers: ['NFL'] },
   { id: 'staff', label: 'Staff & Hiring', group: 'Club', tiers: ['NFL', 'FBS', 'FCS'] },
+  { id: 'players', label: 'Find a Player', group: 'League', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'standings', label: 'Standings', group: 'League', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'stats', label: 'Stats Hub', group: 'League', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'awards', label: 'Awards & HOF', group: 'League', tiers: ['NFL', 'FBS', 'FCS'] },

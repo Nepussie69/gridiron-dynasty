@@ -21,6 +21,7 @@ import { Trades } from './screens/Trades'
 import { Cap } from './screens/Cap'
 import { Schedule } from './screens/Schedule'
 import { Standings } from './screens/Standings'
+import { FindPlayer } from './screens/FindPlayer'
 import { StatsHub } from './screens/StatsHub'
 import { Awards } from './screens/Awards'
 import { League } from './screens/League'
@@ -69,6 +70,7 @@ export default function App() {
         {screen === 'cap' && <Cap />}
         {screen === 'schedule' && <Schedule />}
         {screen === 'standings' && <Standings />}
+        {screen === 'players' && <FindPlayer />}
         {screen === 'stats' && <StatsHub />}
         {screen === 'awards' && <Awards />}
         {screen === 'league' && <League />}
