@@ -39,4 +39,12 @@ _Planned by Claude Opus 5.5. User: "retune NFL passing yards to the NFL and all 
 - R4: update `NEXT_PHASE_L12.md`'s E3 anchors note and the in-game glossary/tooltips that quote league numbers.
 - No rng draws added or removed; AI and user use the same constants.
 
+## R5 — Missed tackles and rating realism (user request, 2026-10-08)
+User: "make sure missed tackles are involved in the gameplay … toughness → more injuries when low, speed breaks through holes, tackling means fewer missed tackles … realistic based on NFL statistics of the last 5–10 years."
+- **Explicit tackle attempts** on runs and completions: the first tackler (existing credit pick) attempts the tackle; miss chance = f(tackler TAK/PUR/HPW/AGI vs carrier BTK/TRK/JKM/SPM/SFA/ELU, contact speed) — deterministic hash, **no new rng draws**; a miss adds yards (taken from the existing yards/YAC distribution so team totals stay calibrated) and a second tackler finishes the play.
+- Targets (PFF-style public NFL 2019–2024 norms, approximate): ~7–9 missed tackles per team-game; league missed-tackle rate ~11–13% of attempts; elite tacklers (TAK 90+) ≤ 6%, poor (TAK < 65) ≥ 18%; RB forced missed tackles ~0.18–0.25 per carry for elusive backs, ~0.10 for average.
+- Stats: `missedTackles` (defender) and `forcedMissed` (carrier/receiver) per game and season; box score MT / FMT columns; Stats Hub + Find a Player columns; play-by-play text "broke a tackle by #54"; animation shows the dodge/stumble.
+- Re-check the rating table claims with the probe: TGH injury rate (NFL ~6–8 injuries per club per month of season, TGH 60 vs 95 ~1.5× difference), SPD on long runs (20+ yd runs share), TAK on missed tackles, CTH on drops (NFL drop rate ~3–5% of targets).
+- `__ratingSpread` re-run after R1–R5; report each rating's effect.
+
 ## Verification log
