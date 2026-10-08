@@ -2,6 +2,8 @@ import type { TeamRecord } from '../types'
 import { teamStrength, type Game, type World } from './generate'
 import { statGame } from './statAlloc'
 import { clamp, gauss, hash32, makeRng, type Rng } from './rng'
+import { attributesFor } from '../data/ratings'
+import { POS_MEAN } from './ratingMeans'
 
 /**
  * L12 W1: the user's weekly practice plan, applied only to the user's club. AI
@@ -102,9 +104,13 @@ function healPlayers(world: World, rng: Rng, week: number, recovery?: WeekRecove
     }
     // Minor injury risk. The user's practice plan can raise or lower the odds —
     // the threshold is all that changes, so the number of rng() draws is fixed.
+    // L12 E2: a player's TGH moves his own threshold (relative to his position mean).
     if (!p.injured && p.teamId) {
       const m = recovery?.teamId === p.teamId ? mult : 1
-      if (rng() < 0.012 * m) {
+      const tghMean = POS_MEAN[p.pos]?.TGH
+      const tgh = (p.attrs?.TGH ?? attributesFor(p.id, p.pos, p.ovr).TGH ?? tghMean ?? 70)
+      const tghMult = tghMean === undefined ? 1 : clamp(1 + (tghMean - tgh) / 150, 0.6, 1.4)
+      if (rng() < 0.012 * m * tghMult) {
         p.injured = { games: 1 + Math.floor(rng() * 3), note: pickNote(rng) }
       }
     }

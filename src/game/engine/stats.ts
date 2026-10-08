@@ -90,11 +90,11 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     const off = play.offId
     const def = play.defId
 
-    const isComp = play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!'
+    const isComp = play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId
     if (play.type === 'pass') {
       const qb = play.qbId
       if (qb) {
-        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result === 'Interception!' || play.result === 'TOUCHDOWN!') {
+        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result === 'Interception!' || play.result === 'TOUCHDOWN!' || play.fumbleId) {
           add(qb, off, 'passAtt', 1)
         }
         if (isComp) {
