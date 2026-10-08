@@ -1,24 +1,21 @@
-import { Clock, Flag, Handshake, X } from 'lucide-react'
-import { WEEK_HOURS, currentSetPiece, weeklyActions } from '../game/engine/weekly'
+import { Flag, Handshake, X } from 'lucide-react'
+import { currentSetPiece } from '../game/engine/weekly'
 import { PracticeCard } from './PracticeCard'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card, RatingBar } from '../ui/kit'
+import { Badge, Button, Card } from '../ui/kit'
 
 /**
- * The weekly rhythm (#5, #6, #8): a 40-hour time budget, the annual set piece,
- * and any stretch assignment on the table. This is what turns a rung from a
- * label into a job with decisions in it.
+ * The weekly rhythm (#6, #8): the annual set piece and any stretch assignment on
+ * the table. The 40-hour budget was removed in L12.9 — a rung's effects now
+ * arrive passively (store/advanceWeek), so this is just the season's set pieces.
  */
 export function CareerRhythm() {
   const world = useWorld()
   const career = useGame((s) => s.career)!
-  const spendHours = useGame((s) => s.spendHours)
   const resolveSetPiece = useGame((s) => s.resolveSetPiece)
   const acceptStretch = useGame((s) => s.acceptStretch)
   const declineStretch = useGame((s) => s.declineStretch)
 
-  const hours = career.hoursLeft ?? WEEK_HOURS
-  const actions = weeklyActions(career)
   const piece = currentSetPiece(world, career)
   const stretch = career.stretch
 
@@ -73,43 +70,6 @@ export function CareerRhythm() {
           </div>
         </Card>
       )}
-
-      <Card>
-        <div className="mb-3 flex items-center gap-2">
-          <Clock size={16} className="text-muted" />
-          <h3 className="font-display text-lg font-700 uppercase tracking-wide">This Week</h3>
-          <Badge tone={hours <= 10 ? 'warn' : 'team'} className="ml-auto">{hours} / {WEEK_HOURS} hrs</Badge>
-        </div>
-        <RatingBar value={(hours / WEEK_HOURS) * 100} height={8} color={hours <= 10 ? '#d98207' : 'var(--team)'} />
-        <p className="mt-2 text-[11px] text-muted">The job is choosing what not to do. Spend hours, then advance the week.</p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {actions.map((a) => {
-            const done = career.weekActionCounts?.[a.id] ?? 0
-            return (
-              <button
-                key={a.id}
-                disabled={hours < a.cost}
-                onClick={() => spendHours(a.id)}
-                className="flex items-start gap-2 rounded-lg border border-line p-2.5 text-left transition hover:bg-surface-2 disabled:opacity-40"
-              >
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-surface-3 font-display text-xs font-700 text-ink-2">
-                  {a.cost}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline gap-1.5">
-                    <span className="font-cond text-xs font-700 uppercase text-ink">{a.label}</span>
-                    {done > 0 && (
-                      <span className="ml-auto shrink-0 font-cond text-[10px] font-700 uppercase text-win">Done ×{done} this week</span>
-                    )}
-                  </span>
-                  <span className="block text-[11px] leading-snug text-ink-2">{a.effect}</span>
-                  <span className="block truncate text-[10px] text-muted">{a.blurb}</span>
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </Card>
 
       <PracticeCard />
     </div>

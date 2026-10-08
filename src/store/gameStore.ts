@@ -110,7 +110,7 @@ import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, red
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus } from '../game/engine/install'
 import { canPractice, practiceEdge, practiceInjuryMult, practiceIsRest, practiceMasteryMult, PRACTICE_OPTIONS, type PracticePlan } from '../game/engine/practice'
-import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId } from '../game/engine/keys'
+import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId, type KeyGrade } from '../game/engine/keys'
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
@@ -131,7 +131,7 @@ import {
 } from '../game/engine/people'
 import { evaluateTraits } from '../game/engine/earnedTraits'
 import { applyWilderness, makeSuccessor } from '../game/engine/legacy'
-import { pushLedger, gradeLedger } from '../game/engine/ledger'
+import { pushLedger, gradeLedger, logCoachCalls } from '../game/engine/ledger'
 import { CHARACTER_FACETS, FACET_LABEL, revealFacet } from '../game/engine/character'
 import { learnedBias, scoutReport, isEvaluator } from '../game/engine/scoutBias'
 import { currentDilemma, applyDilemma } from '../game/engine/dilemma'
@@ -143,7 +143,6 @@ import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../g
 import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
 import { applyCombine, combineOpen, type CombineKind } from '../game/engine/combine'
 import {
-  WEEK_HOURS,
   weeklyActions,
   currentSetPiece,
   resolveSetPiece as applySetPiece,
@@ -452,8 +451,8 @@ interface GameStore {
   setRoomPlan: (plan: 'concentrate' | 'spread') => void
   /** Work the phones to uncover one hidden character facet of a prospect. */
   investigateCharacter: (id: string) => void
-  /** Spend part of the weekly time budget on an action (#5). */
-  spendHours: (id: string) => void
+  /** L12.9 H1: study this week's opponent (free; a second read same week is sharp). */
+  studyOpponent: () => void
   /** Resolve this season's annual set piece (#6). */
   resolveSetPiece: (choice: string) => void
   resolveDilemma: (choice: string) => void
@@ -533,6 +532,55 @@ function weekOpponent(world: World, teamId: string): string | null {
   const g = world.schedule.find((x) => !x.played && x.week === world.week && (x.homeId === teamId || x.awayId === teamId))
   if (!g) return null
   return g.homeId === teamId ? g.awayId : g.homeId
+}
+
+/**
+ * L12.9 H1: the weekly hours actions are gone, but their effects remain.
+ *
+ * Each rung's unmoved actions (film, road, cross-check, install, agent, owner)
+ * now trickle in passively at one point every six weeks — the old menu's
+ * average spend, smoothed. Fractional amounts accumulate in `passiveBank` and
+ * pay out whole points. Runs meeting bias reveals one scout every four weeks;
+ * the room banks one development rep a week for rungs that ran drills.
+ */
+const PASSIVE_PER_WEEK = 1 / 6
+
+function applyPassiveGains(career: CareerState, world: World): CareerState {
+  const actions = new Set(weeklyActions(career).map((a) => a.id))
+  const rep: Reputation = { ...career.reputation }
+  const skills: Skills = { ...career.skills }
+  let jobSecurity = career.jobSecurity
+  const bank: Record<string, number> = { ...(career.passiveBank ?? {}) }
+  // Accrue a fraction each week; pay out whole points only.
+  const accrue = (key: string, apply: (whole: number) => void) => {
+    bank[key] = (bank[key] ?? 0) + PASSIVE_PER_WEEK
+    const whole = Math.floor(bank[key])
+    if (whole > 0) {
+      bank[key] -= whole
+      apply(whole)
+    }
+  }
+  if (actions.has('film')) accrue('film', (n) => { skills.evaluation = clamp(skills.evaluation + n, 0, 99) })
+  if (actions.has('road')) accrue('road', (n) => { rep.evaluation = clamp(rep.evaluation + n, 0, 100) })
+  if (actions.has('crosscheck')) accrue('crosscheck', (n) => { rep.profile = clamp(rep.profile + n, 0, 100) })
+  if (actions.has('install')) accrue('install', (n) => { skills.scheme = clamp(skills.scheme + n, 0, 99) })
+  if (actions.has('agent')) accrue('agent', (n) => { rep.roster = clamp(rep.roster + n, 0, 100) })
+  if (actions.has('owner')) accrue('owner', (n) => { jobSecurity = clamp(jobSecurity + n, 0, 100) })
+  // A scouts meeting surfaces one evaluator's bias every four weeks.
+  if (actions.has('scouts')) {
+    bank.scouts = (bank.scouts ?? 0) + 1
+    if (bank.scouts >= 4) {
+      bank.scouts = 0
+      updateStaffLedgers(world, career.teamId)
+    }
+  }
+  // Run drills: the room banks one rep a week automatically.
+  let room = career.room
+  if (actions.has('drills') && hasRoom(career)) {
+    const base = room ?? { focus: [], plan: 'concentrate' as const, reps: 0 }
+    room = { ...base, reps: Math.min(17, (base.reps ?? 0) + 1) }
+  }
+  return { ...career, reputation: rep, skills, jobSecurity, passiveBank: bank, ...(room ? { room } : {}) }
 }
 
 export const useGame = create<GameStore>((set, get) => ({
@@ -627,13 +675,11 @@ export const useGame = create<GameStore>((set, get) => ({
       misses: 0,
       seasonRecs: 0,
       seasonHits: 0,
-      hoursLeft: WEEK_HOURS,
       ledger: [],
       contacts: makeContacts(makeRng(world.seed + world.season * 77), 'National'),
       earnedTraits: [],
       mentor: mentorFor(world, resolvedTeam),
       weekFlags: {},
-      weekActionCounts: {},
       tree: [],
       history: [],
       seasonMoments: [],
@@ -753,14 +799,18 @@ export const useGame = create<GameStore>((set, get) => ({
         career.keys && career.keys.season === world.season && career.keys.week === week
           ? (career.keys.ids as GameKeyId[])
           : []
+      let keyGrades: KeyGrade[] = []
       if (pickedKeys.length) {
         const grades = gradeKeys(world, sim, career.teamId, pickedKeys)
         if (grades.length) {
+          keyGrades = grades
           userGame.keys = grades
           sim.keys = grades
           keysRepDelta = keysReward(grades)
         }
       }
+      // L12.9 L1: date and grade this game's coaching calls in the Ledger.
+      logCoachCalls(career, world, sim, career.teamId, keyGrades, film)
       // L10 G6: a halftime QB change costs the benched starter's confidence.
       const switchedQb = (sim.decisions ?? []).some((d) => d.kind === 'qbChange' && d.choiceId === 'switch' && d.source === 'user')
       if (switchedQb) {
@@ -807,7 +857,9 @@ export const useGame = create<GameStore>((set, get) => ({
       set({ scoutingPoints: MAX_SCOUT_POINTS })
     }
     const c = get().career!
-    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, hoursLeft: WEEK_HOURS, weekFlags: {}, weekActionCounts: {} }
+    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, weekFlags: {} }
+    // L12.9 H1: the weekly hours card is gone; its effects arrive passively.
+    nextCareer = applyPassiveGains(nextCareer, world)
     // L12 W2: fold the graded keys into this season's leadership ledger, capped
     // at ±3 net per season (the applied amount is what actually moves the rep).
     if (keysRepDelta !== 0) {
@@ -1402,6 +1454,16 @@ export const useGame = create<GameStore>((set, get) => ({
           ? next.pitches
           : { season: world.season, accepted: 0 }
       next = { ...next, pitches: { season: world.season, accepted: current.accepted + 1 } }
+      // L12.9 L1: an accepted pitch is a dated call — graded at season end.
+      const player = world.players.find((p) => p.id === playerId)
+      pushLedger(next, {
+        kind: 'pitch',
+        playerId,
+        name: player?.name ?? playerId,
+        pos,
+        college: player?.college ?? '—',
+        note: `Pitched ${player?.name ?? 'a starter'} to the coordinator — accepted.`,
+      })
     }
     set({ career: next, tick: get().tick + 1 })
     get().showToast(verdict.message)
@@ -1439,8 +1501,11 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career) return
     const p = world.draft.find((d) => d.id === id)
     if (!p || !p.character) return
-    if (get().scoutingPoints <= 0) {
-      get().showToast('No scouting points left this week.')
+    // L12.9 H1: the old "work the phones" hours action is now a free Character
+    // read, capped at two a week.
+    const used = (career.weekFlags?.character ? 1 : 0) + (career.weekFlags?.character2 ? 1 : 0)
+    if (used >= 2) {
+      get().showToast('Two character reads a week — the phones are busy.')
       return
     }
     const reads = p.characterReads ?? []
@@ -1455,115 +1520,35 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!read) return
     p.characterReads = [...reads, read]
     const c2 = get().career
-    set({ scoutingPoints: get().scoutingPoints - 1, career: c2 ? withFlag(c2, 'character') : c2, tick: get().tick + 1 })
-    get().showToast(`Worked the phones: ${FACET_LABEL[read.facet]} — ${read.label}.`)
+    if (!c2) return
+    set({ career: withFlag(c2, used === 0 ? 'character' : 'character2'), tick: get().tick + 1 })
+    get().showToast(`Character read on ${p.name}: ${FACET_LABEL[read.facet]} — ${read.label}.`)
     get().save()
   },
 
-  spendHours: (id) => {
+  // L12.9 H1: opponent film moved from the hours card to the Game Plan screen.
+  studyOpponent: () => {
     const career = get().career
     if (!career) return
-    const action = weeklyActions(career).find((a) => a.id === id)
-    if (!action) return
-    const left = career.hoursLeft ?? WEEK_HOURS
-    if (left < action.cost) {
-      get().showToast('Not enough hours left this week.')
+    if (!capabilities(career).can.has('callPlays')) return
+    const oppId = weekOpponent(world, career.teamId)
+    if (!oppId) {
+      get().showToast('No opponent this week to scout.')
       return
     }
-    const rep: Reputation = { ...career.reputation }
-    const skills: Skills = { ...career.skills }
-    let note = ''
-    let jobSecurity = career.jobSecurity
-    let nextRoom: CareerState['room']
-    let nextOppRead: CareerState['oppRead']
-    switch (id) {
-      case 'film':
-        skills.evaluation = clamp(skills.evaluation + 1, 0, 99)
-        note = 'Film study: your eye sharpens (+Evaluation).'
-        break
-      case 'phones': {
-        const cand = [...world.draft]
-          .filter((p) => p.character && (p.characterReads ?? []).length < 4)
-          .sort((a, b) => b.confidence - a.confidence)[0]
-        if (cand && cand.character) {
-          const accuracy = clamp(0.4 + skills.evaluation / 200 + rep.evaluation / 500, 0.4, 0.92)
-          const rng = makeRng(world.seed + world.season * 811 + hash32(cand.id, 13))
-          const r = revealFacet(cand.character, cand.characterReads ?? [], accuracy, rng)
-          if (r) {
-            cand.characterReads = [...(cand.characterReads ?? []), r]
-            note = `Worked the phones on ${cand.name}: ${FACET_LABEL[r.facet]} — ${r.label}.`
-          }
-        } else note = 'No new character intel to gather right now.'
-        break
-      }
-      case 'road':
-        rep.evaluation = clamp(rep.evaluation + 1, 0, 100)
-        note = 'Covered more ground: +Evaluation.'
-        break
-      case 'crosscheck':
-        rep.profile = clamp(rep.profile + 1, 0, 100)
-        note = 'Cross-checked the room: +Profile.'
-        break
-      case 'drills': {
-        if (career.weekFlags?.drills) {
-          get().showToast('Drills already run this week.')
-          return
-        }
-        if (!hasRoom(career)) {
-          get().showToast('No room to run.')
-          return
-        }
-        const room: NonNullable<CareerState['room']> = career.room ?? { focus: [], plan: 'concentrate', reps: 0 }
-        nextRoom = { ...room, reps: Math.min(17, (room.reps ?? 0) + 1) }
-        note = `Drills: ${nextRoom.reps} reps banked for your room.`
-        break
-      }
-      case 'install':
-        skills.scheme = clamp(skills.scheme + 1, 0, 99)
-        note = 'Film session: +Scheme.'
-        break
-      case 'tendencies': {
-        const oppId = weekOpponent(world, career.teamId)
-        if (!oppId) {
-          get().showToast('No opponent this week to scout.')
-          return
-        }
-        const prev = career.oppRead
-        if (prev && prev.week === world.week && prev.oppId === oppId && prev.sharp) {
-          get().showToast('Your read on this opponent is already sharp.')
-          return
-        }
-        // First purchase this week is fuzzy; a second sharpens it.
-        const sharp = !!prev && prev.week === world.week && prev.oppId === oppId
-        nextOppRead = { week: world.week, oppId, sharp }
-        note = sharp
-          ? `Sharp film read on the ${world.byId[oppId].name} — their tendencies are clear.`
-          : `Scouted the ${world.byId[oppId].name} — a fuzzy read on their tendencies.`
-        break
-      }
-      case 'scouts':
-        updateStaffLedgers(world, career.teamId)
-        rep.profile = clamp(rep.profile + 1, 0, 100)
-        note = 'Scouts meeting: you learned more about your evaluators.'
-        break
-      case 'agent':
-        rep.roster = clamp(rep.roster + 1, 0, 100)
-        note = 'Agent calls: advanced a negotiation (+Roster).'
-        break
-      case 'owner':
-        jobSecurity = clamp(jobSecurity + 2, 0, 100)
-        note = 'Owner meeting: the mandate is clearer (+job security).'
-        break
+    const prev = career.oppRead
+    if (prev && prev.week === world.week && prev.oppId === oppId && prev.sharp) {
+      get().showToast('Your read on this opponent is already sharp.')
+      return
     }
-    const counts = { ...(career.weekActionCounts ?? {}) }
-    counts[id] = (counts[id] ?? 0) + 1
-    let nextCareer = withFlag(
-      { ...career, hoursLeft: left - action.cost, reputation: rep, skills, jobSecurity, weekActionCounts: counts, ...(nextRoom ? { room: nextRoom } : {}), ...(nextOppRead ? { oppRead: nextOppRead } : {}) },
-      'hours',
+    // The first look this week is fuzzy; a second sharpens it.
+    const sharp = !!prev && prev.week === world.week && prev.oppId === oppId
+    set({ career: { ...career, oppRead: { week: world.week, oppId, sharp } }, tick: get().tick + 1 })
+    get().showToast(
+      sharp
+        ? `Sharp film read on the ${world.byId[oppId].name} — their tendencies are clear.`
+        : `Studied the ${world.byId[oppId].name} — a fuzzy read on their tendencies.`,
     )
-    if (id === 'drills') nextCareer = withFlag(nextCareer, 'drills')
-    set({ career: nextCareer, tick: get().tick + 1 })
-    get().showToast(note)
     get().save()
   },
 
@@ -3618,9 +3603,9 @@ export function rhythmProbe() {
     season: w.season,
     level: career?.level,
     path: career?.path,
-    hours: career?.hoursLeft,
     setPieceDone: career?.setPieceDone,
     actions: career ? weeklyActions(career).map((a) => a.id) : [],
+    passiveBank: career?.passiveBank ?? {},
     piece: career ? currentSetPiece(w, career) : null,
     stretch: career?.stretch ?? null,
   }
@@ -3857,10 +3842,11 @@ export async function careerSmoke(
   const exerciseWeekly = () => {
     const career = get().career
     if (!career) return
-    // #5: bank a week of drills in your room.
-    if (hasRoom(career) && weeklyActions(career).some((a) => a.id === 'drills')) {
-      exercise('spendHours', () => get().spendHours('drills'))
-    }
+    // L12.9 H1: hours are gone. Exercise the actions they moved to instead:
+    // opponent film (Game Plan) and the Scouting character read.
+    exercise('studyOpponent', () => get().studyOpponent())
+    const target = world.draft.find((p) => p.character && (p.characterReads ?? []).length < CHARACTER_FACETS.length)
+    if (target) exercise('investigateCharacter', () => get().investigateCharacter(target.id))
     // K1: rotate the weekly wrinkle so the film never settles.
     if (canWrinkle(career)) {
       for (const side of wrinkleSides(career)) {

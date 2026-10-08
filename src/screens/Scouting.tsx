@@ -155,12 +155,12 @@ export function Scouting() {
             </button>
             <button
               type="button"
-              title={locked ? 'Scouting is locked at this rung' : charDone ? 'Character fully uncovered' : 'Work the phones (1 pt)'}
+              title={locked ? 'Scouting is locked at this rung' : charDone ? 'Character fully uncovered' : 'Character read (free, twice a week)'}
               disabled={locked || charDone}
               onClick={() => investigateCharacter(p.id)}
               className={cn(
                 'grid h-6 w-6 place-items-center rounded-md border transition',
-                locked || charDone || noPts
+                locked || charDone
                   ? 'border-line text-faint opacity-60'
                   : 'border-line text-ink-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
               )}
@@ -397,10 +397,10 @@ function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
             <Button
               size="sm"
               className="mt-2 w-full"
-              disabled={points <= 0 || (open.characterReads ?? []).length >= CHARACTER_FACETS.length}
+              disabled={level === 'locked' || (open.characterReads ?? []).length >= CHARACTER_FACETS.length}
               onClick={() => investigateCharacter(open.id)}
             >
-              <Phone size={13} /> Work the phones (1 pt)
+              <Phone size={13} /> Character read
             </Button>
           </div>
 

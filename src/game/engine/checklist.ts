@@ -35,14 +35,6 @@ export function weeklyTasks(
   const c = caps.can
   const out: WeekTask[] = []
 
-  out.push({
-    id: 'hours',
-    label: 'Use your weekly hours',
-    hint: 'My Career → This Week (film, drive the region, phones…)',
-    done: (career.hoursLeft ?? 40) < 40,
-    screen: 'career',
-  })
-
   if (c.has('grade')) {
     out.push({
       id: 'scout',

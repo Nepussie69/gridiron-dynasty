@@ -65,7 +65,7 @@ function clockSec(clock: string): number {
 }
 
 /** The user's kicker's combined power/accuracy, matching resolveSpecial. */
-function kickPowerFor(world: World, teamId: string): number {
+export function kickPowerFor(world: World, teamId: string): number {
   const k = depthGroup(world, teamId, ['K'], 1)[0]
   if (!k) return 78
   const attrs = { ...attributesFor(k.id, k.pos, k.ovr), ...(k.attrs ?? {}) }
@@ -94,7 +94,7 @@ const FIX_METRIC: Record<string, string> = {
 }
 
 /** The play index a moment was raised at, parsed from `${kind}-${n}`. */
-function playIndexOf(momentId: string): number {
+export function playIndexOf(momentId: string): number {
   const n = Number(momentId.slice(momentId.lastIndexOf('-') + 1))
   return Number.isFinite(n) ? n : 0
 }

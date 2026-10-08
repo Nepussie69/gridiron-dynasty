@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, ClipboardList, Plus, Repeat, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ClipboardList, Plus, Repeat, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
 import { DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
@@ -80,6 +80,7 @@ export function GamePlanScreen() {
 
           <SchemeFitReport teamId={team.id} side={side} />
           <KeysCard oppId={opp?.id} />
+          <StudyOpponentCard oppId={opp?.id} />
           {canWrinkle(career) && <WrinkleCard />}
           <InstallCard />
           <ScriptCard />
@@ -139,6 +140,36 @@ export function GamePlanScreen() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** L12.9 H1: opponent film moved here from the removed weekly hours card. */
+function StudyOpponentCard({ oppId }: { oppId?: string }) {
+  const league = useWorld()
+  const career = useGame((s) => s.career)!
+  const studyOpponent = useGame((s) => s.studyOpponent)
+  if (!capabilities(career).can.has('callPlays') || !oppId) return null
+  const opp = league.byId[oppId]
+  const read = career.oppRead && career.oppRead.week === league.week && career.oppRead.oppId === oppId ? career.oppRead : null
+  const sharp = !!read?.sharp
+  return (
+    <Card>
+      <div className="mb-3 flex items-center gap-2">
+        <Search size={16} className="text-muted" />
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Opponent Film</h3>
+        {read && <Badge tone={sharp ? 'win' : 'info'} className="ml-auto">{sharp ? 'Sharp read' : 'Fuzzy read'}</Badge>}
+      </div>
+      <p className="mb-3 text-sm text-muted">
+        {sharp
+          ? `You have a sharp read on the ${opp.name} — their tendencies are clear this week.`
+          : read
+            ? `You have a fuzzy read on the ${opp.name}. Study again to sharpen it.`
+            : `Study the ${opp.name} to learn their tendencies before kickoff.`}
+      </p>
+      <Button size="sm" variant={sharp ? 'ghost' : 'team'} disabled={sharp} onClick={studyOpponent}>
+        {read ? `Sharpen the read on the ${opp.abbr}` : `Study ${opp.name}`}
+      </Button>
+    </Card>
   )
 }
 
