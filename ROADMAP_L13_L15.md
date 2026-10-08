@@ -1,6 +1,6 @@
 # Roadmap after L12 (from IDEAS_ROUND2.md and the user's 2026-10-07 picks)
 
-## Status board (updated 2026-10-07)
+## Status board (updated 2026-10-08)
 | Phase | What | Status |
 |---|---|---|
 | L5–L11 | Long-arc stories, rung jobs, economy, staff room, long game, game day, in-season roster life | ✅ done |
@@ -13,7 +13,7 @@
 | UI | Field: team colors, each club on its own end | ✅ done |
 | UI | Game-day screen redesign (one page, plays by drive, tabs) | ✅ done |
 | UI | Play animation (runs, routes, YAC, scrambles, sacks, fumbles, returns, kicks) | ✅ done |
-| L12 P2 | Practice week, keys to the game | ⏳ next (prompt ready) |
+| L12 P2 | Practice week, keys to the game | ✅ done |
 | L12 P3 | Realistic stat lines: target shares, carry split, tackles/sacks/INTs by position, box-score layout | ✅ done |
 | L12 P4–P5 | Every rating counts in the sim, then recalibrate | 📝 specced |
 | L13 | Personnel packages, special-teams calls | 🗺 outlined |

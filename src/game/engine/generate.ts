@@ -42,6 +42,8 @@ export interface Game {
   }
   /** L10 G5: film grade of the user's decisions (kept with the box, one season). */
   film?: { grade: number; letter: string; lines: string[]; userCalls?: number }
+  /** L12 W2: the graded keys to the game (kept with the box, one season). */
+  keys?: import('./keys').KeyGrade[]
 }
 
 export interface World {

@@ -10,8 +10,8 @@ _Implemented push by push by DeepSeek Flash 4.1. Lint baseline: exactly 5 warnin
 | R2 | Rating glossary: full names + what each rating does in the sim (tooltips, help panel, player profile) | P1 | ✅ done — verified (P1) |
 | R4 | Orchestrator polish (user request): key ratings inline in Overview when one position is filtered; a **Stats** tab (season stats by position, sortable) + a stat option in the sort dropdown; **coverage grade 0–100** per game (passer rating allowed when targeted, + INT/incompletions, − TD/explosives; INTs credited to the coverage defender) in the box score (COV), Stats tab and profile | P1 | ✅ done — verified (R4) |
 | R3 | "Engine composites": the exact scores the sim builds from ratings (QB accuracy, separation, pass rush…) as sortable columns | P1 | ✅ done — verified (P1) |
-| W1 | Practice week: Balanced / Install / Sharpen / Rest, each week | P2 | not started |
-| W2 | Keys to the game: pick 2 before kickoff, graded after, builds trust | P2 | not started |
+| W1 | Practice week: Balanced / Install / Sharpen / Rest, each week | P2 | ✅ done — verified (P2) |
+| W2 | Keys to the game: pick 2 before kickoff, graded after, builds trust | P2 | ✅ done — verified (P2) |
 | S1 | Realistic target shares (weighted pick, no argmax) | P3 | ✅ done — verified (P3) |
 | S2 | Realistic carry split (RB1 / RB2 / QB runs) | P3 | ✅ done — verified (P3) |
 | S3 | Realistic tackle / sack / INT credit by position (bookkeeping, incl. tackles on completions) | P3 | ✅ done — verified (P3) |
@@ -244,3 +244,9 @@ After every task: `export PATH="$HOME/.local/node/bin:$PATH"; npm run build && n
   (`TARGET_TUNE`: tau 160, rbPrior −34) → RB 5.0 / TE 7.3 / WR 8.2 yds per target; (4) Flash's run change dropped the user's 'feature' +1 edge and the 'committee' draw — both restored;
   (5) LBs held 28% of INTs — a linebacker in coverage keeps the pick 25% of the time (DBs 60%). Box score: `table-fixed`, fixed numeric widths, "ALW", 8 rows, defense sorted by tackles.
   **Open (needs the user's OK):** team passing yards are ~265/team-game vs ~220 in the NFL, so the top receiver's yards run high (median ~100); fixing it means retuning team calibration.
+- **P2** (Flash, 2026-10-08: first run gave up after 3 provider timeouts with partial work; Codex (GPT) reviewed it and sent a continuation; Flash finished; verified by Claude). `practice.ts`, `keys.ts`, `PracticeCard` (This Week), `KeysCard` (Game Plan + game-day Keys tab),
+  practice chip on the game-day header, graded keys in the film card. Weekly recovery (`WeekRecovery`) goes through both `simWeek` and the authentic `healAfterWeek` path; the injury threshold only changes for the user's club (same draw count);
+  Rest heal uses `hash32(id, week)` after the loop. Install's +0.3 comes from `practice.prev`, so it survives switching or re-picking next week; a kept Install reads −0.1 + 0.3 = +0.2. Keys: WR1 = opponent's depth-chart WR1;
+  red-zone trip = a scrimmage snap from the 20 or closer in a same-offense drive (penalties don't split it). Ledger ±3 per season; practice/keys/ledger reset at season rollover. Keys lock at the first user decision of a coached game.
+  Offline (Node, real data) seed 33333 `simTest(500)`: **24.1 pts / 68.2% / 65.2 plays / 1.45 sacks / 0.92 INT / 4.89 ypc**, identical to the pre-P2 run. `gameDayEquivalence(20)` 20/20. `careerSmoke(4,'coach')` 0/0 (pickPractice 18, toggleKey 36).
+  Browser: Practice card shows "+0.4 this week" on Sharpen; a week with keys run120 + clean graded "128 rush yds ✅ / 3 sacks allowed ❌" = box score (CLE 128 rush, DAL 3 sacks), leadership unchanged (one hit = 0); plan kept into week 2.

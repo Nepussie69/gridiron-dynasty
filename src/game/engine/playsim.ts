@@ -102,6 +102,8 @@ export interface GameSim {
   decisions?: DecisionLog[]
   /** L10 G5: film grade of the user's calls, for the post-game view. */
   film?: { grade: number; letter: string; lines: string[]; userCalls?: number }
+  /** L12 W2: the graded keys to the game, for the post-game film card. */
+  keys?: import('./keys').KeyGrade[]
   /** L11.5 Q3: mid-game plan switches, for the post-game film card. */
   planChanges?: PlanChange[]
   homeLines?: { playerId: string; line: import('../types').GameStatLine }[]

@@ -10,7 +10,7 @@ import {
   ERAS,
   type World,
 } from '../game/engine/generate'
-import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs } from '../game/engine/sim'
+import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecovery } from '../game/engine/sim'
 import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
@@ -109,6 +109,8 @@ import { MAX_CONVICTION, canConvict, convictionIds, convictionPayout, logConvict
 import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus } from '../game/engine/install'
+import { canPractice, practiceEdge, practiceInjuryMult, practiceIsRest, practiceMasteryMult, PRACTICE_OPTIONS, type PracticePlan } from '../game/engine/practice'
+import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId } from '../game/engine/keys'
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
@@ -269,12 +271,13 @@ function refreshAllCohesion() {
 }
 
 /** Grow mastery for players who appeared in a completed game. */
-function growPlaybookFromGame(world: World, sim: GameSim) {
+function growPlaybookFromGame(world: World, sim: GameSim, gainMult = 1, bonusTeamId?: string) {
   const playedIds = new Set<string>()
   for (const line of sim.box ?? []) playedIds.add(line.playerId)
   for (const teamId of [sim.homeId, sim.awayId]) {
+    const mult = bonusTeamId && teamId === bonusTeamId ? gainMult : 1
     for (const p of world.roster[teamId] ?? []) {
-      const next = gainGameReps(p, playedIds.has(p.id))
+      const next = gainGameReps(p, playedIds.has(p.id), mult)
       if (next) p.playbook = next
     }
   }
@@ -435,6 +438,10 @@ interface GameStore {
   pickWrinkle: (side: 'off' | 'def', id: string) => void
   /** K2: choose this offseason's install plan for the coming season. */
   chooseInstall: (plan: 'lean' | 'full') => void
+  /** L12 W1: pick this week's practice plan (kept week to week). */
+  pickPractice: (plan: PracticePlan) => void
+  /** L12 W2: add or remove a key to the game (up to two). */
+  toggleKey: (id: GameKeyId) => void
   /** K3: pitch a starter on your side to the coordinator (once a week). */
   pitchStarter: (pos: Position, playerId: string) => void
   /** G3: add/remove a player from your room's focus list (max 3). */
@@ -695,17 +702,27 @@ export const useGame = create<GameStore>((set, get) => ({
     const userGame = world.schedule.find(
       (g) => g.week === week && !g.played && (g.homeId === career.teamId || g.awayId === career.teamId),
     )
+    // L12 W1: the week's practice plan shapes the user's club only — its weekly
+    // injury odds, Rest healing/fatigue, and (below) Install's mastery gain. AI
+    // clubs pass no recovery, so league-wide injuries are unchanged.
+    const recovery: WeekRecovery = {
+      teamId: career.teamId,
+      injuryMult: practiceInjuryMult(career, world),
+      restHeal: practiceIsRest(career, world),
+      fatigueRelief: practiceIsRest(career, world),
+    }
     // Authentic mode runs the whole league through play-by-play in a worker,
     // falling back to the fast allocator if the worker is unavailable.
     if (get().leaguePbp) {
-      const ok = await simulateLeagueWeek(world, week, userGame?.id)
-      if (!ok) simWeek(world, week, userGame?.id)
+      const ok = await simulateLeagueWeek(world, week, userGame?.id, recovery)
+      if (!ok) simWeek(world, week, userGame?.id, recovery)
     } else {
-      simWeek(world, week, userGame?.id)
+      simWeek(world, week, userGame?.id, recovery)
     }
     let sim: GameSim | null = null
     let qbSwitchLine: string | null = null
     let rbInjuryLine: string | null = null
+    let keysRepDelta = 0
     if (userGame) {
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
@@ -717,7 +734,7 @@ export const useGame = create<GameStore>((set, get) => ({
       // R4: keep a season-scoped box score for the user's game.
       userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
-      growPlaybookFromGame(world, sim)
+      growPlaybookFromGame(world, sim, practiceMasteryMult(career, world), career.teamId)
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
       // L10 G5: grade the user's fourth-down and two-point calls; keep the film
@@ -726,6 +743,21 @@ export const useGame = create<GameStore>((set, get) => ({
       if (film) {
         userGame.film = film
         sim.film = film
+      }
+      // L12 W2: grade the promises you made before kickoff against the real box
+      // score. Only the keys picked for this week count; none picked = nothing
+      // graded. The leadership swing is capped at ±3 per season by a ledger.
+      const pickedKeys: GameKeyId[] =
+        career.keys && career.keys.season === world.season && career.keys.week === week
+          ? (career.keys.ids as GameKeyId[])
+          : []
+      if (pickedKeys.length) {
+        const grades = gradeKeys(world, sim, career.teamId, pickedKeys)
+        if (grades.length) {
+          userGame.keys = grades
+          sim.keys = grades
+          keysRepDelta = keysReward(grades)
+        }
       }
       // L10 G6: a halftime QB change costs the benched starter's confidence.
       const switchedQb = (sim.decisions ?? []).some((d) => d.kind === 'qbChange' && d.choiceId === 'switch' && d.source === 'user')
@@ -774,6 +806,20 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     const c = get().career!
     let nextCareer: CareerState = { ...c, week: world.week, season: world.season, hoursLeft: WEEK_HOURS, weekFlags: {}, weekActionCounts: {} }
+    // L12 W2: fold the graded keys into this season's leadership ledger, capped
+    // at ±3 net per season (the applied amount is what actually moves the rep).
+    if (keysRepDelta !== 0) {
+      const priorNet = c.keysLedger?.season === world.season ? c.keysLedger.net : 0
+      const net = clamp(priorNet + keysRepDelta, -3, 3)
+      const applied = net - priorNet
+      nextCareer = {
+        ...nextCareer,
+        keysLedger: { season: world.season, net },
+        reputation: applied
+          ? { ...nextCareer.reputation, leadership: clamp(nextCareer.reputation.leadership + applied, 0, 100) }
+          : nextCareer.reputation,
+      }
+    }
     // L10 G6: remember a halftime QB switch in the season's story.
     if (qbSwitchLine) nextCareer = logMoment(nextCareer, { week, text: qbSwitchLine, tone: 'info' })
     if (rbInjuryLine) nextCareer = logMoment(nextCareer, { week, text: rbInjuryLine, tone: 'loss' })
@@ -869,6 +915,7 @@ export const useGame = create<GameStore>((set, get) => ({
     const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101)
     sim.box = boxScore(world, sim)
     sim.film = game.film
+    sim.keys = game.keys
     set({ match: sim, matchSeq: get().matchSeq + 1, tick: get().tick + 1 })
   },
   closeMatch: () => set({ match: null }),
@@ -1066,6 +1113,11 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     seasonCareer.seasonQuestion = makeSeasonQuestion(world, seasonCareer)
     seasonCareer.devBaseline = snapshotDevBaseline(world, seasonCareer)
+    // L12 W1/W2: the weekly practice plan, the keys you promised and the
+    // season's leadership ledger all belong to the season that set them.
+    seasonCareer.practice = undefined
+    seasonCareer.keys = undefined
+    seasonCareer.keysLedger = undefined
     // K1: opponents' film resets with the new season.
     seasonCareer.wrinkles = seasonCareer.wrinkles ? { season: world.season, history: [] } : undefined
     // L10 G8: opponents start a new book on your tendencies; the old read is stale.
@@ -1273,6 +1325,47 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career || !canInstall(world, career)) return
     if (plan !== 'lean' && plan !== 'full') return
     set({ career: { ...career, install: { season: world.season + 1, plan } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  pickPractice: (plan) => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    if (!PRACTICE_OPTIONS.some((o) => o.id === plan)) return
+    const current = career.practice
+    // Selecting the active plan again is a no-op; otherwise record the new plan
+    // (the `week` marks the week it took effect, for Install's next-week payoff).
+    if (current && current.season === world.season && current.plan === plan && current.week === world.week) return
+    // Remember the plan that was in effect last week so a one-week Install payoff
+    // survives changing — or re-picking — next week's plan.
+    let prev = current?.prev
+    if (current && current.season === world.season && current.week < world.week) {
+      prev = { plan: current.plan, week: world.week - 1 }
+    }
+    set({ career: { ...career, practice: { plan, week: world.week, season: world.season, prev } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  toggleKey: (id) => {
+    const career = get().career
+    if (!career || !canPickKeys(career)) return
+    // Keys lock at kickoff: once the game is being coached (past the first user
+    // decision) or the week's game is already played, the promise is final.
+    const gd = get().gameDay
+    if (gd && (gd.state.done || (gd.state.decisions ?? []).some((d) => d.source === 'user'))) return
+    const game = world.schedule.find(
+      (g) => g.week === world.week && (g.homeId === career.teamId || g.awayId === career.teamId),
+    )
+    if (game?.played) return
+    if (!pickableKeys(career).some((k) => k.id === id)) return
+    const current = career.keys && career.keys.season === world.season && career.keys.week === world.week ? career.keys.ids : []
+    let ids: string[]
+    if (current.includes(id)) ids = current.filter((x) => x !== id)
+    else if (current.length >= MAX_KEYS) {
+      get().showToast(`You can promise only ${MAX_KEYS} keys a game.`)
+      return
+    } else ids = [...current, id]
+    set({ career: { ...career, keys: { week: world.week, season: world.season, ids } }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -2225,10 +2318,14 @@ function applyUserCoaching(career: CareerState | null) {
   const b = holdsRole
     ? userBonusFromSkills(career.skills, true, career.unitFocus === 'both' ? 'both' : career.unitFocus ?? 'both')
     : NO_USER_BONUS
-  // K1/K2: the combined per-side bonus is clamped so it can never blow up the sim.
+  // K1/K2/W1: the combined per-side bonus is clamped so it can never blow up the sim.
   const wrinkle = wrinkleBonus(career, world.week)
   const install = installBonus(career, world)
-  const extra = { off: wrinkle.off + install.off, def: wrinkle.def + install.def }
+  const practice = practiceEdge(career, world)
+  const extra = {
+    off: wrinkle.off + install.off + practice.off,
+    def: wrinkle.def + install.def + practice.def,
+  }
   setUserCoaching({
     teamId: career.teamId,
     off: b.off + clamp(extra.off, -0.6, 1.5),
@@ -2291,7 +2388,7 @@ function clockText(sec: number): string {
  * and apply the results with real box scores. Returns false on worker failure so
  * the caller can fall back to the fast allocator.
  */
-async function simulateLeagueWeek(world: World, week: number, exceptGameId?: string): Promise<boolean> {
+async function simulateLeagueWeek(world: World, week: number, exceptGameId?: string, recovery?: WeekRecovery): Promise<boolean> {
   const games = world.schedule.filter((g) => g.week === week && !g.played && g.id !== exceptGameId)
   if (!games.length) return true
   const reqs = games.map((g, i) => ({
@@ -2311,7 +2408,7 @@ async function simulateLeagueWeek(world: World, week: number, exceptGameId?: str
     recordBoxLines(world, r.box, world.season, level)
     g.statsDone = true
   }
-  healAfterWeek(world, week)
+  healAfterWeek(world, week, recovery)
   return true
 }
 
@@ -3759,6 +3856,18 @@ export async function careerSmoke(
         if (id) exercise('pickWrinkle', () => get().pickWrinkle(side, id))
       }
     }
+    // L12 W1: run the weekly practice plan (cycles through Install/Sharpen/Rest/
+    // Balanced so the Install payoff and the recovery paths all get exercised).
+    if (canPractice(career)) {
+      const plans: PracticePlan[] = ['install', 'sharpen', 'rest', 'balanced']
+      exercise('pickPractice', () => get().pickPractice(plans[(world.week - 1) % plans.length]))
+    }
+    // L12 W2: promise two keys to the game.
+    if (canPickKeys(career)) {
+      for (const k of pickableKeys(career).slice(0, MAX_KEYS)) {
+        exercise('toggleKey', () => get().toggleKey(k.id))
+      }
+    }
     // K3: pitch the first backup on your side of the ball.
     if (canPitch(career) && !career.weekFlags?.pitch) {
       for (const pos of pitchSide(career)) {
@@ -3849,13 +3958,14 @@ export async function careerSmoke(
     if (convLen > MAX_CONVICTION) violations.push(`${where}: conviction has ${convLen} (max ${MAX_CONVICTION})`)
     const rfLen = career.redFlags?.ids.length ?? 0
     if (rfLen > MAX_RED_FLAGS) violations.push(`${where}: redFlags has ${rfLen} (max ${MAX_RED_FLAGS})`)
-    // The applied wrinkle/install extra stays inside its sim clamp.
+    // The applied wrinkle/install/practice extra stays inside its sim clamp.
     const wrinkle = wrinkleBonus(career, world.week)
     const install = installBonus(career, world)
+    const practice = practiceEdge(career, world)
     for (const side of ['off', 'def'] as const) {
-      const extra = clamp(wrinkle[side] + install[side], -0.6, 1.5)
+      const extra = clamp(wrinkle[side] + install[side] + practice[side], -0.6, 1.5)
       if (extra < -0.6 || extra > 1.5) {
-        violations.push(`${where}: ${side} wrinkle/install extra ${extra.toFixed(2)} outside [-0.6, 1.5]`)
+        violations.push(`${where}: ${side} wrinkle/install/practice extra ${extra.toFixed(2)} outside [-0.6, 1.5]`)
       }
     }
   }

@@ -543,6 +543,18 @@ export interface CareerState {
   }
   /** K2: this offseason's install plan, chosen for the season it applies to. */
   install?: { season: number; plan: 'lean' | 'full' }
+  /** L12 W1: this week's practice plan, kept week to week until changed. */
+  practice?: {
+    plan: 'balanced' | 'sharpen' | 'install' | 'rest'
+    week: number
+    season: number
+    /** L12 W1: the plan in effect the previous week, for Install's next-week payoff. */
+    prev?: { plan: 'balanced' | 'sharpen' | 'install' | 'rest'; week: number }
+  }
+  /** L12 W2: the keys to the game picked for a week. */
+  keys?: { week: number; season: number; ids: string[] }
+  /** L12 W2: the season's key-hit ledger, capped at ±3 leadership. */
+  keysLedger?: { season: number; net: number }
   /** K3: starter pitches accepted by the coordinator this season. */
   pitches?: { season: number; accepted: number }
   /** G1: players on other clubs or in free agency you're tracking (max 10). */

@@ -109,11 +109,11 @@ function applyCap(s: PlaybookState, fit: number): PlaybookState {
 }
 
 /** Advance raw experience after a game in which the player saw the field. */
-export function gainGameReps(p: Player, played: boolean): PlaybookState | undefined {
+export function gainGameReps(p: Player, played: boolean, gainMult = 1): PlaybookState | undefined {
   if (!p.playbook) return undefined
   if (!played) return p.playbook
   const fit = schemeFit(p, p.playbook.scheme, sideOf(p))
-  const gain = REP_GAIN_PER_GAME * ageFactor(p.age) * devFactor(p.dev)
+  const gain = REP_GAIN_PER_GAME * ageFactor(p.age) * devFactor(p.dev) * gainMult
   const experience = Math.min(100, p.playbook.experience + gain)
   return applyCap({ ...p.playbook, reps: p.playbook.reps + 1, experience }, fit)
 }

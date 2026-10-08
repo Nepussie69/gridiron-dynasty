@@ -11,6 +11,9 @@ import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from './PlanEditor'
+import { KeysCard } from './KeysCard'
+import { canPractice, practicePlan } from '../game/engine/practice'
+import { canPickKeys } from '../game/engine/keys'
 import { buildPlayAnim, holderAt, liftAt, posAt } from './playAnim'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
@@ -73,7 +76,7 @@ export function MatchView() {
   // Animation clock for the play on screen: t runs 0..1 after a short pre-snap beat.
   const [clock, setClock] = useState<{ i: number; t: number }>({ i: -1, t: 0 })
   const timer = useRef<number | null>(null)
-  const [tab, setTab] = useState<'plays' | 'box' | 'plan' | 'film'>('plays')
+  const [tab, setTab] = useState<'plays' | 'box' | 'plan' | 'keys' | 'film'>('plays')
   const [boxTeam, setBoxTeam] = useState<string | null>(null)
 
   const play = match?.plays[idx]
@@ -157,11 +160,12 @@ export function MatchView() {
   const moment = gameDay?.moment ?? null
   const showMoment = !!gameDay && !!moment && atEnd
 
-  const sideTabs: { id: 'plays' | 'box' | 'plan' | 'film'; label: string }[] = [
+  const sideTabs: { id: 'plays' | 'box' | 'plan' | 'keys' | 'film'; label: string }[] = [
     { id: 'plays', label: 'Plays' },
     { id: 'box', label: 'Box score' },
     ...(gameDay ? [{ id: 'plan' as const, label: 'Game plan' }] : []),
-    ...(match.film && !gameDay ? [{ id: 'film' as const, label: 'Film' }] : []),
+    ...(gameDay && career && canPickKeys(career) ? [{ id: 'keys' as const, label: 'Keys' }] : []),
+    ...(match.film || match.keys ? [{ id: 'film' as const, label: 'Film' }] : []),
   ]
   const activeTab = sideTabs.some((t) => t.id === tab) ? tab : 'plays'
   const boxTeamId = boxTeam === match.homeId || boxTeam === match.awayId ? boxTeam : (career?.teamId === match.homeId ? match.homeId : match.awayId)
@@ -219,6 +223,11 @@ export function MatchView() {
               return `${t.abbr}: ${c.ocScheme} / ${c.dcScheme}`
             }).join('   ·   ')}
           </span>
+          {career && canPractice(career) && (
+            <span className="mt-0.5 font-cond text-[10px] font-700 uppercase tracking-wide text-[#ffd34d]/85">
+              Practice: {practicePlan(career, world)}
+            </span>
+          )}
         </div>
         <ScoreSide team={home} score={shownScore.home} hasBall={play.offId === home.id} align="right" />
         <button onClick={onClose} title={gameDay ? 'Abandon game' : 'Close'} className="ml-2 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/10 hover:bg-white/20">
@@ -380,16 +389,50 @@ export function MatchView() {
               </div>
             )}
             {activeTab === 'plan' && gameDay && <GameDayPlanPanel gameDay={gameDay} />}
-            {activeTab === 'film' && match.film && (
+            {activeTab === 'keys' && gameDay && career && (
               <div className="p-3">
-                <div className="flex items-baseline gap-2">
-                  <span className="font-display text-3xl font-700">{match.film.letter}</span>
-                  <span className="font-cond text-xs text-white/50">{match.film.grade}/100 film grade</span>
-                </div>
-                {match.film.lines.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {match.film.lines.map((l, i) => <li key={i} className="text-xs leading-snug text-white/70">• {l}</li>)}
-                  </ul>
+                <KeysCard
+                  dark
+                  oppId={gameDay.state.homeId === career.teamId ? gameDay.state.awayId : gameDay.state.homeId}
+                  locked={
+                    gameDay.state.done ||
+                    (gameDay.state.decisions ?? []).some((d) => d.source === 'user')
+                  }
+                />
+              </div>
+            )}
+            {activeTab === 'film' && (match.film || match.keys) && (
+              <div className="p-3">
+                {match.film && (
+                  <>
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-display text-3xl font-700">{match.film.letter}</span>
+                      <span className="font-cond text-xs text-white/50">{match.film.grade}/100 film grade</span>
+                    </div>
+                    {match.film.lines.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {match.film.lines.map((l, i) => <li key={i} className="text-xs leading-snug text-white/70">• {l}</li>)}
+                      </ul>
+                    )}
+                  </>
+                )}
+                {/* L12 W2: the keys you promised, graded against the box score. */}
+                {match.keys && match.keys.length > 0 && (
+                  <div className="mt-3 border-t border-white/10 pt-3">
+                    <div className="label mb-1.5 !text-white/45">Keys to the game</div>
+                    <ul className="space-y-1">
+                      {match.keys.map((k) => (
+                        <li key={k.id} className="flex items-start gap-2 text-xs leading-snug">
+                          <span className={cn('font-700', k.hit ? 'text-[#8ef0b5]' : 'text-[#ffb3ba]')}>
+                            {k.hit ? '✅' : '❌'}
+                          </span>
+                          <span className="text-white/80">
+                            <strong className="text-white">{k.label}</strong> — {k.detail}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 {match.planChanges && match.planChanges.length > 0 && (
                   <ul className="mt-2 space-y-1">

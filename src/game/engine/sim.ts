@@ -1,7 +1,22 @@
 import type { TeamRecord } from '../types'
 import { teamStrength, type Game, type World } from './generate'
 import { statGame } from './statAlloc'
-import { clamp, gauss, makeRng, type Rng } from './rng'
+import { clamp, gauss, hash32, makeRng, type Rng } from './rng'
+
+/**
+ * L12 W1: the user's weekly practice plan, applied only to the user's club. AI
+ * clubs pass nothing, so league-wide injuries are unchanged.
+ */
+export interface WeekRecovery {
+  /** The user's club — the only roster a practice plan may affect. */
+  teamId?: string
+  /** Weekly minor-injury threshold multiplier (1 = normal). */
+  injuryMult?: number
+  /** Rest week: injured players can shed one extra game (deterministic, no rng). */
+  restHeal?: boolean
+  /** Rest week: the club's players shed 10 fatigue (deterministic, no rng). */
+  fatigueRelief?: boolean
+}
 
 const HOME_ADV = 2.4
 
@@ -53,19 +68,19 @@ function applyResult(rec: TeamRecord, scored: number, allowed: number) {
 }
 
 /** Simulate every unplayed game in a given week, then recover players a bit. */
-export function simWeek(world: World, week: number, exceptGameId?: string) {
+export function simWeek(world: World, week: number, exceptGameId?: string, recovery?: WeekRecovery) {
   const rng = makeRng(world.seed + week * 7919)
   for (const game of world.schedule) {
     if (game.week === week && !game.played && game.id !== exceptGameId) simGame(world, game, rng)
   }
-  healPlayers(world, rng)
+  healPlayers(world, rng, week, recovery)
   // Give every completed game outside the user's a distributed box score.
   allocateWeekStats(world, week, exceptGameId)
 }
 
 /** Weekly recovery only — used by the authentic league path, which sims elsewhere. */
-export function healAfterWeek(world: World, week: number) {
-  healPlayers(world, makeRng(world.seed + week * 7919 + 101))
+export function healAfterWeek(world: World, week: number, recovery?: WeekRecovery) {
+  healPlayers(world, makeRng(world.seed + week * 7919 + 101), week, recovery)
 }
 
 /** Fill league-wide player stats for games that were score-simulated. */
@@ -78,15 +93,39 @@ function allocateWeekStats(world: World, week: number, exceptGameId?: string) {
   }
 }
 
-function healPlayers(world: World, rng: Rng) {
+function healPlayers(world: World, rng: Rng, week: number, recovery?: WeekRecovery) {
+  const mult = recovery?.injuryMult ?? 1
   for (const p of world.players) {
     if (p.injured) {
       p.injured.games -= 1
       if (p.injured.games <= 0) p.injured = undefined
     }
-    // Minor injury risk
-    if (!p.injured && p.teamId && rng() < 0.012) {
-      p.injured = { games: 1 + Math.floor(rng() * 3), note: pickNote(rng) }
+    // Minor injury risk. The user's practice plan can raise or lower the odds —
+    // the threshold is all that changes, so the number of rng() draws is fixed.
+    if (!p.injured && p.teamId) {
+      const m = recovery?.teamId === p.teamId ? mult : 1
+      if (rng() < 0.012 * m) {
+        p.injured = { games: 1 + Math.floor(rng() * 3), note: pickNote(rng) }
+      }
+    }
+  }
+  // L12 W1 Rest: the user's dinged players can shed one extra game 25% of the
+  // time. A deterministic hash (no rng), applied after the loop so the draw
+  // sequence above is untouched.
+  if (recovery?.restHeal && recovery.teamId) {
+    for (const p of world.players) {
+      if (!p.injured || p.teamId !== recovery.teamId) continue
+      if (hash32(p.id, week) % 100 < 25) {
+        p.injured.games -= 1
+        if (p.injured.games <= 0) p.injured = undefined
+      }
+    }
+  }
+  // L12 W1 Rest: the user's club sheds 10 fatigue. No rng.
+  if (recovery?.fatigueRelief && recovery.teamId) {
+    for (const p of world.players) {
+      if (p.teamId !== recovery.teamId) continue
+      p.fatigue = Math.max(0, (p.fatigue ?? 0) - 10)
     }
   }
 }

@@ -1,5 +1,6 @@
 import { Clock, Flag, Handshake, X } from 'lucide-react'
 import { WEEK_HOURS, currentSetPiece, weeklyActions } from '../game/engine/weekly'
+import { PracticeCard } from './PracticeCard'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, RatingBar } from '../ui/kit'
 
@@ -109,6 +110,8 @@ export function CareerRhythm() {
           })}
         </div>
       </Card>
+
+      <PracticeCard />
     </div>
   )
 }
