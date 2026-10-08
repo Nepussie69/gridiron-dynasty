@@ -50,3 +50,5 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 44 | 2026-10-08 | Add all the ideas into a futures workflow, go down the list one by one | FUTURES.md (25 rows, ordered) | ✅ |
 | 45 | 2026-10-08 | Retune passing yards and all stats to the last 10 years of the NFL (approved) | NEXT_PHASE_REALISM.md R1–R4 | ⏳ right after playbook + culture merge |
 | 46 | 2026-10-08 | Make sure everything done is on the stable build | 4173 rebuilt at every merge (now 6e81328 = main) | ✅ ongoing |
+| 47 | 2026-10-08 | Blitz only shows 4 rushers | Claude: plays record `blitz`; animation sends 1–2 LBs (+ sometimes a S) at the QB | ✅ |
+| 48 | 2026-10-08 | Every O / D / all snap stopped asking after a couple of calls (went automated) | Claude: per-game cap of 2 play calls lifted in every-snap modes (full game: 86 O calls, 47 D calls) | ✅ |

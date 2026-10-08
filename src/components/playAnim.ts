@@ -584,6 +584,8 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const sX = los + Math.max(15, (ROUTES[routeMap[deepKey]]?.depth ?? 10) + 4)
   p.s0.push({ t: 0.45, x: clampX(sX), y: clampY(15 + (deepPos.y - 15) * 0.35) })
   p.s1.push({ t: 0.45, x: clampX(sX), y: clampY(38 + (deepPos.y - 38) * 0.35) })
+  // Blitz: extra rushers (1–2 linebackers, sometimes a safety) attack the QB.
+  if (play.blitz) blitzRush(p, f, los, seed, posAt(p.qb, 0.4))
   // The nearest defender breaks on the ball — over a beat, not teleporting.
   const near = DEF_KEYS.map((k) => ({ k, d: Math.hypot(posAt(p[k], catchT).x - catchPt.x, posAt(p[k], catchT).y - catchPt.y) })).sort((a, b) => a.d - b.d)[0].k
   const nearLast = p[near].reduce((m, w) => Math.max(m, w.t), 0)
@@ -675,6 +677,24 @@ function nudge(pt: { x: number; y: number }, dx: number, dy: number) {
   return { x: clampX(pt.x + dx), y: clampY(pt.y + dy) }
 }
 
+/**
+ * A blitz: the middle linebacker plus one outside linebacker (and sometimes a
+ * safety) creep up before the snap and rush the quarterback. Returns their keys.
+ */
+function blitzRush(p: Record<string, WP[]>, f: Formation, los: number, seed: number, qbAt: { x: number; y: number }): string[] {
+  const keys = ['lb1', hash(seed + 31) < 0.5 ? 'lb0' : 'lb2', ...(hash(seed + 37) < 0.3 ? ['s1'] : [])]
+  keys.forEach((k, i) => {
+    const side = f[k].y < MID_Y ? -1 : 1
+    p[k] = [
+      { t: 0, x: f[k].x, y: f[k].y },
+      { t: 0.06, x: los + 2, y: clampY(f[k].y + (MID_Y - f[k].y) * 0.3) },
+      { t: 0.28, x: los - 1, y: clampY(MID_Y + side * (3.5 + i)) },
+      { t: 0.46, x: clampX(qbAt.x + 1), y: clampY(qbAt.y + side * (1 + i * 0.6)) },
+    ]
+  })
+  return keys
+}
+
 function buildSack(play: Play): PlayAnim {
   const los = 10 + play.startYard
   const f = formation(los)
@@ -689,7 +709,8 @@ function buildSack(play: Play): PlayAnim {
   for (let i = 0; i < 4; i++) if (`dl${i}` !== rusher) p[`dl${i}`].push({ t: 0.5, x: los - 1.4, y: f[`dl${i}`].y })
   ;['wr0', 'wr1', 'wr2', 'te'].forEach((k, i) => p[k].push({ t: 0.6, x: los + 6 + i * 2, y: f[k].y }))
   p.rb.push({ t: 0.35, x: los - 4, y: MID_Y - dodge * 3 })
-  ;['cb0', 'cb1', 's0', 's1', 'lb0', 'lb1', 'lb2'].forEach((k) => p[k].push({ t: 0.6, x: posAt(p[k], 0).x + 3, y: posAt(p[k], 0).y }))
+  const blitzers = play.blitz ? blitzRush(p, f, los, seed, { x: endX + 0.8, y: MID_Y + dodge * 3 }) : []
+  ;['cb0', 'cb1', 's0', 's1', 'lb0', 'lb1', 'lb2'].filter((k) => !blitzers.includes(k)).forEach((k) => p[k].push({ t: 0.6, x: posAt(p[k], 0).x + 3, y: posAt(p[k], 0).y }))
   markEaseAll(p)
   const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.06, ...posAt(p.qb, 0.06) }, ...shadow(p.qb, 0.06, 1).slice(1)]
   markEase(ball)

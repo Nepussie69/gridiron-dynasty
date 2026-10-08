@@ -70,6 +70,8 @@ export interface Play {
   targetId?: string
   passDepth?: number
   pressure?: boolean
+  /** The defense sent extra rushers on this pass (animation only). */
+  blitz?: boolean
   bigPlay?: boolean
   timeUsed?: number
   /** L10 G8: offensive class of this snap (run / short / deep), for the tendency book. */
@@ -507,6 +509,8 @@ interface PlayOutcome {
   targetId?: string
   passDepth?: number
   pressure?: boolean
+  /** The defense sent extra rushers on this pass (animation only). */
+  blitz?: boolean
   bigPlay?: boolean
   timeUsed: number
   // attribution for individual stats
@@ -918,7 +922,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       ? lbs[hash32(`${n}:${defId}:blitzlb`) % lbs.length]?.id
       : undefined
     const sackId = blitzLb ?? dlPick
-    return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, pressure: true, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId, coverId }
+    return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, pressure: true, blitz, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId, coverId }
   }
 
   const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
@@ -1018,7 +1022,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const takeCover = !!coverId && (coverIsLb ? ir < 32 : coverIsS ? ir < 80 : ir < 42)
     const intId = takeCover ? coverId : fallback
     return {
-      type: 'pass', concept: concept.name, yards: 0, result: 'Interception!', turnover: true,
+      type: 'pass', concept: concept.name, yards: 0, result: 'Interception!', turnover: true, blitz,
       timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId, coverId,
       targetId: target?.id,
     }
@@ -1053,14 +1057,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const tu = rng()
     const forceFumble = !!stopped && gain > 0 && yard + gain < 100 && tu < tacklerHitPower(stopped, tacklerGroups)
     return {
-      type: 'pass', concept: concept.name, yards: gain,
+      type: 'pass', concept: concept.name, yards: gain, blitz,
       result: forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete',
       turnover: forceFumble, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !forceFumble && big,
       fumbleId: forceFumble ? stopped : undefined,
       timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopped ? [stopped] : undefined,
     }
   }
-  return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
+  return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
 }
 
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0): PlayOutcome {
@@ -1427,8 +1431,13 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
     logOnce(s, id, spec, s.answers[id], s.autoAnswered?.[id] ? 'standing' : 'user')
     return s.answers[id]
   }
+  // L12.6: in "call every play" mode the per-game cap on play calls is lifted
+  // for the side you chose — every snap asks.
+  const callAll = s.ctx?.callAll
+  const uncapped = (spec.kind === 'call' && (callAll === 'off' || callAll === 'both')) ||
+    (spec.kind === 'defCall' && (callAll === 'def' || callAll === 'both'))
   const canAsk = isUser && scopeAllows(s.ctx!.scope, spec.side) && spec.ask &&
-    (isPlayCall(spec.kind) || s.momentsUsed < TOTAL_MOMENT_CAP) && (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind]
+    (isPlayCall(spec.kind) || s.momentsUsed < TOTAL_MOMENT_CAP) && (uncapped || (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind])
   if (canAsk) {
     const us = spec.teamId === s.homeId ? s.homeScore : s.awayScore
     const them = spec.teamId === s.homeId ? s.awayScore : s.homeScore
