@@ -74,4 +74,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 68 | 2026-10-08 | Make the Cap screen contract ledger sortable | Claude: every column header sorts (▲/▼), click again to flip | ✅ |
 | 69 | 2026-10-08 | Write a ChatGPT handover before 95% usage | Claude: OPENCODE_CONTINUE.md + AGENTS.md (08a896e) | ✅ |
 | 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: sole ownership; GM desk merged, QB pay independently verified; stars4/realism ongoing | 🔨 continuing |
-| 71 | 2026-10-08 | Push the current progress to the stable build | Codex: GM desk verified/merged52d1df7; stable rebuild | ✅ publishing |
+| 71 | 2026-10-08 | Push the current progress to the stable build | Codex: GM desk verified/merged52d1df7; stable4173 serves90508fd | ✅ published |

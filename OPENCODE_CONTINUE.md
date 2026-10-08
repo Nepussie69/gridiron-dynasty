@@ -2,7 +2,7 @@
 
 _Updated 2026-10-08 ~22:05 AEDT by Claude Opus 5.5 (stopped at 5-hour usage ~93%; resets ~00:10 AEDT) for ChatGPT/Codex or a fresh Claude chat. Re-check processes and git before acting. Longer background: `ORCHESTRATION_HANDOVER.md`. Every user request: `PLAYTEST_BACKLOG.md` (55 rows). Long-term build order: `FUTURES.md`._
 
-_Codex takeover: sole orchestration ownership confirmed by Claude in `ORCHESTRATION_COORDINATION.md`. GM desk C6 is verified and merged `52d1df7`; stable publication is being rebuilt from main. Stars3 stopped at its tool limit with unfinished edits; `stars4` continues `/private/tmp/gridiron-stars4.txt` (exec session10147). Realism is on automatic try2 after its45-minute timeout. Pending user preference: define long-term OVR population as active NFL rosters versus adding unsigned-player retirement; no target relaxation or retirement has been applied._
+_Codex takeover: sole orchestration ownership confirmed by Claude in `ORCHESTRATION_COORDINATION.md`. GM desk C6 is verified and merged `52d1df7`; stable4173 serves `90508fd` (GM desk code52d1df7). Stars3 stopped at its tool limit with unfinished edits; `stars4` continues `/private/tmp/gridiron-stars4.txt` (exec session10147). Realism is on automatic try2 after its45-minute timeout. Pending user preference: define long-term OVR population as active NFL rosters versus adding unsigned-player retirement; no target relaxation or retirement has been applied._
 
 ## Your role and the user's standing instructions
 - You are the **orchestrator**: spec → send to DeepSeek Flash → verify → merge → rebuild the stable build → tell the user. Small UI fixes you do yourself.
@@ -14,7 +14,7 @@ _Codex takeover: sole orchestration ownership confirmed by Claude in `ORCHESTRAT
 - At 95% plan usage: stop and update this file (memory rule).
 
 ## Repo state
-- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 is being rebuilt from main (GM desk code `52d1df7`)** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
+- `main` HEAD = `90508fd`-or-later (see `git log`). **Stable build4173 serves `90508fd` (GM desk code52d1df7)** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
 - Stable build worktree: `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap`, served by `vite preview --port 4173` from the user's terminal. Rebuild after every merge:
   `SNAP=<that path>; git -C $SNAP checkout -q --detach main && (cd $SNAP && PATH="$HOME/.local/node/bin:$PATH" npx vite build --outDir $SNAP/dist)` — then tell the user "stable build updated: 4173 serves <hash>" and what's new.
 
