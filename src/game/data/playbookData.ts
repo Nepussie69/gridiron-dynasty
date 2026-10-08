@@ -170,6 +170,11 @@ const sim = (name: string): SimConcept => {
   return { name: p.name, type: p.type, depth: p.depth, yac: p.yac, description: p.description }
 }
 
+/** Any playbook play as a sim concept (L12.10 B6: a user-picked play). */
+export function conceptFromPlaybook(name: string): SimConcept | undefined {
+  return byName.has(name) ? sim(name) : undefined
+}
+
 /**
  * Each scheme's menu. These reproduce the concepts the sim already used, in the
  * same order and with the same depth/yac/description, so the concept pick and

@@ -15,7 +15,7 @@ import { depthGroup } from './depth'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
-import { SCHEME_MENUS } from '../data/playbookData'
+import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
 
 // The user's own coaching skill, set once per game by the store when they hold a
@@ -680,18 +680,9 @@ function pickConceptOfClass(rng: Rng, style: OffenseStyle, cls: OffClass): Conce
   return pool[Math.floor(rng() * pool.length)]
 }
 
-/** G9: the user's three call cards — the first run, short pass, and deep pass. */
-function callCards(style: OffenseStyle): Concept[] {
-  const cards: Concept[] = []
-  const add = (c: Concept | undefined) => { if (c && !cards.includes(c)) cards.push(c) }
-  add(style.concepts.find((c) => c.type === 'run'))
-  add(style.concepts.find((c) => c.type === 'pass' && c.depth <= 8))
-  add(style.concepts.find((c) => c.type === 'pass' && c.depth >= 9))
-  for (const c of style.concepts) {
-    if (cards.length >= 3) break
-    add(c)
-  }
-  return cards.slice(0, 3)
+/** G9: the user's call cards — the run, short pass and deep pass in the book. */
+function callCards(): Concept[] {
+  return PLAYBOOK.map((p) => ({ name: p.name, type: p.type, depth: p.depth, yac: p.yac, description: p.description }))
 }
 
 function downDistance(down: number, distance: number, yard: number): string {
@@ -2059,11 +2050,11 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const choice = decide(s, {
       kind: 'call', side: 'off', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
       yard: s.yard, title: downDistance(s.down, s.distance, s.yard),
-      options: callCards(style).map((c) => ({ id: c.name, label: c.name, hint: c.description })),
+      options: callCards().map((c) => ({ id: c.name, label: c.name, hint: c.description })),
       defaultId: standing.name, staffRead: read, ask: true, margin: marginOf(s.offId),
     })
     if (choice === null) return 'moment'
-    concept = style.concepts.find((c) => c.name === choice) ?? standing
+    concept = style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
     const aiDef = drawAIDefCall(world, s, s.defId, bucket)
     // The matrix only applies to a call the user made; a standing order plays the
     // snap exactly as fast sim would (no edge either way).
@@ -2097,7 +2088,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   } else {
     const script = s.ctx?.script
     const scripted = offIsUser && script && script.length > 0 && s.scriptUsed < script.length
-      ? style.concepts.find((c) => c.name === script[s.scriptUsed])
+      ? conceptFromPlaybook(script[s.scriptUsed])
       : undefined
     if (scripted) {
       concept = scripted

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronRight, ClipboardList, Plus, Repeat, Search, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronRight, ClipboardList, Repeat, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
 import { DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
@@ -13,7 +13,9 @@ import { InstallCard } from '../components/InstallCard'
 import { KeysCard } from '../components/KeysCard'
 import { canWrinkle } from '../game/engine/wrinkle'
 import { teamRatings } from '../game/engine/depth'
-import { coachLabels, offStyle } from '../game/engine/playsim'
+import { coachLabels } from '../game/engine/playsim'
+import { FORMATIONS, PLAYBOOK } from '../game/data/playbookData'
+import { RouteDiagram } from '../components/RouteDiagram'
 import { recordOf, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { TopPlayers } from '../components/TopPlayers'
@@ -401,13 +403,12 @@ function MatchupLine({
 
 /** L10 G10: order the first offensive snaps from the scheme's concepts. */
 function ScriptCard() {
-  const league = useWorld()
   const career = useGame((s) => s.career)!
   const setScript = useGame((s) => s.setScript)
   const scope = capabilities(career).planScope
+  const [formation, setFormation] = useState(FORMATIONS[0]?.name ?? 'Gun Trips')
   // The script is an offense-side tool.
   if (scope === 'none' || career.unitFocus === 'def') return null
-  const concepts = offStyle(league, career.teamId).concepts
   const script = career.script ?? []
   const add = (name: string) => {
     if (script.length >= 8 || script.includes(name)) return
@@ -423,6 +424,7 @@ function ScriptCard() {
     next[j] = tmp
     setScript(next)
   }
+  const plays = PLAYBOOK.filter((p) => p.formation === formation)
   return (
     <Card>
       <div className="mb-3 flex items-center gap-2">
@@ -466,24 +468,41 @@ function ScriptCard() {
           ))}
         </ol>
       )}
-      <div className="label mb-1">Scheme concepts</div>
-      <div className="flex flex-wrap gap-1.5">
-        {concepts.map((c) => {
-          const used = script.includes(c.name)
+      <div className="label mb-1">Formation</div>
+      <div className="mb-2 flex flex-wrap gap-1">
+        {FORMATIONS.map((f) => (
+          <button
+            key={f.name}
+            onClick={() => setFormation(f.name)}
+            className={cn(
+              'rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase tracking-wide',
+              formation === f.name ? 'bg-[var(--team)] text-white' : 'bg-surface-2 text-muted hover:text-ink',
+            )}
+          >
+            {f.name}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {plays.map((p) => {
+          const used = script.includes(p.name)
+          const full = script.length >= 8
           return (
             <button
-              key={c.name}
-              disabled={used || script.length >= 8}
-              onClick={() => add(c.name)}
+              key={p.name}
+              disabled={used || full}
+              onClick={() => add(p.name)}
+              title={p.description}
               className={cn(
-                'inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition',
-                used || script.length >= 8
-                  ? 'border-line bg-surface-2 text-faint'
-                  : 'border-line bg-surface hover:border-line-strong',
+                'flex flex-col gap-1 rounded-lg border p-1.5 text-left transition',
+                used || full ? 'border-line bg-surface-2 opacity-55' : 'border-line bg-surface hover:border-line-strong',
               )}
             >
-              {!used && <Plus size={11} />}
-              {c.name}
+              <RouteDiagram name={p.name} className="h-14 w-full rounded" />
+              <span className="flex items-center gap-1">
+                <span className="font-cond text-xs font-700 uppercase text-ink">{p.name}</span>
+                <span className="ml-auto font-cond text-[9px] uppercase text-muted">{p.type}</span>
+              </span>
             </button>
           )
         })}
