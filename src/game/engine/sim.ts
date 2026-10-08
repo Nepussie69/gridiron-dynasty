@@ -1,5 +1,6 @@
 import type { TeamRecord } from '../types'
 import { teamStrength, type Game, type World } from './generate'
+import { playoffPicture } from './playoffs'
 import { statGame } from './statAlloc'
 import { clamp, gauss, hash32, makeRng, type Rng } from './rng'
 import { attributesFor } from '../data/ratings'
@@ -151,13 +152,10 @@ export interface PlayoffResult {
 /** Simulate a top-7-per-conference NFL playoff bracket. */
 export function simulatePlayoffs(world: World): PlayoffResult {
   const rng = makeRng(world.seed + world.season * 104729)
-  const nfl = world.teams.filter((t) => t.tier === 'NFL')
-  const byConf = (conf: string) =>
-    nfl
-      .filter((t) => t.conference === conf)
-      .map((t) => ({ id: t.id, rec: world.standings[t.id] }))
-      .sort((a, b) => b.rec.wins - a.rec.wins || a.rec.losses - b.rec.losses || b.rec.pointsFor - a.rec.pointsFor)
-      .slice(0, 7)
+  // NFL seeding: the four division winners take seeds 1–4, the three best
+  // non-division-winners are the wild cards 5–7. Only *which* clubs fill the
+  // seeds changes here — the rng draw below is untouched.
+  const byConf = (conf: string) => playoffPicture(world, conf).seeds.map((s) => ({ id: s.teamId }))
 
   const afc = byConf('AFC')
   const nfc = byConf('NFC')
