@@ -36,3 +36,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 30 | 2026-10-08 | Trade Center columns: position select + order by rating | Claude after L12.5 merges (Trades.tsx) | ⏳ after L12.5 |
 | 31 | 2026-10-08 | Rescale my save's rookies drafted before the fix (user approved) | Claude: rescaleLegacyRookies in migrateWorld (one-time flag rookieScaleV2) | ✅ (this commit) |
 | 32 | 2026-10-08 | Find a Player tab: all players, ratings or stats, position select, sort any column asc/desc | DeepSeek push 'findplayer' | 🔨 building |
+| 33 | 2026-10-08 | Playoff hunt chart per division and conference like the NFL (+ found: seeding ignored division winners) | DeepSeek push 'playoffs' | 🔨 building |
