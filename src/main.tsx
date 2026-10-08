@@ -5,6 +5,7 @@ import App from './App.tsx'
 import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
+import { animProbe } from './game/engine/animProbe'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -45,4 +46,5 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__world = getWorld
   ;(window as unknown as Record<string, unknown>).__simOne = (homeId = 'BUF', awayId = 'MIA') =>
     simulatePlayByPlay(getWorld(), homeId, awayId, 12345)
+  ;(window as unknown as Record<string, unknown>).__animProbe = (games = 2) => animProbe(getWorld(), games)
 }

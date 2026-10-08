@@ -14,13 +14,16 @@ import { PlanEditor } from './PlanEditor'
 import { KeysCard } from './KeysCard'
 import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
-import { buildPlayAnim, holderAt, liftAt, posAt, snapYard, targetKey } from './playAnim'
+import { buildPlayAnim, holderAt, liftAt, posAt, snapYard, targetKey, actorWhy } from './playAnim'
+import { RouteDiagram } from './RouteDiagram'
+import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
 const CENTER_Y = 26.65
 const W = 120
 const H = 53.3
+const FORMATION_ORDER = FORMATIONS.map((f) => f.name)
 
 function hexRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '')
@@ -98,14 +101,25 @@ export function MatchView() {
 
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
   const nextForAnim = match?.plays[idx + 1]
+  // Which real player each dot stands for this play, so the motion can follow
+  // his ratings (L12.10 B5) and the hover card can name him.
+  const actorMap = useMemo(() => {
+    if (!match || !play) return null
+    const defId = play.offId === match.homeId ? match.awayId : match.homeId
+    const tKey = play.type === 'pass' && play.targetId
+      ? targetKey(play, { targetPos: byId.get(play.targetId)?.pos })
+      : null
+    return actorPlayers(world, play, defId, tKey)
+  }, [world, match, play, byId])
   const anim = useMemo(() => {
     if (!play) return null
     return buildPlayAnim(play, {
       next: nextForAnim,
       targetPos: play.targetId ? byId.get(play.targetId)?.pos : undefined,
       carrierIsQB: play.type === 'run' && !!play.carrierId && byId.get(play.carrierId)?.pos === 'QB',
+      actors: actorMap ?? undefined,
     })
-  }, [play, nextForAnim, byId])
+  }, [play, nextForAnim, byId, actorMap])
   const PRE_SNAP = 250
 
   // Run the play's animation: a pre-snap beat, then t from 0 to 1.
@@ -151,14 +165,6 @@ export function MatchView() {
     if (!match) return null
     return new Map([...teamJerseys(world, match.homeId), ...teamJerseys(world, match.awayId)])
   }, [world, match])
-  const actorMap = useMemo(() => {
-    if (!match || !play) return null
-    const defId = play.offId === match.homeId ? match.awayId : match.homeId
-    const tKey = play.type === 'pass' && play.targetId
-      ? targetKey(play, { targetPos: byId.get(play.targetId)?.pos })
-      : null
-    return actorPlayers(world, play, defId, tKey)
-  }, [world, match, play, byId])
 
   // auto-advance
   useEffect(() => {
@@ -355,7 +361,12 @@ export function MatchView() {
                 const num = who ? numbers?.get(who.id) : undefined
                 return (
                   <g key={a.key} transform={`translate(${mx(pt.x)} ${pt.y})`}>
-                    {who && <title>{`#${num ?? ''} ${who.name} (${who.pos})`}</title>}
+                    {who && (
+                      <title>
+                        {`#${num ?? ''} ${who.name} (${who.pos})`}
+                        {frozen ? ` · SPD ${Math.round(who.attrs?.SPD ?? who.ovr)} · ${actorWhy(play, a.key, who)}` : ''}
+                      </title>
+                    )}
                     {carrying && <circle r={2} fill="#ffd34d" opacity={0.35} />}
                     <circle r={1.15} fill={a.side === 'off' ? offColor : defColor} stroke={carrying ? '#ffd34d' : '#fff'} strokeWidth={carrying ? 0.35 : 0.2} />
                     {num !== undefined && (
@@ -801,24 +812,92 @@ function MomentCard({ moment, fieldPos, onAnswer }: { moment: Moment; fieldPos: 
           <span>{moment.staffRead}</span>
         </div>
       )}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-        {moment.options.map((o) => (
+      {moment.kind === 'call' ? (
+        <CallPicker moment={moment} onAnswer={onAnswer} />
+      ) : (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          {moment.options.map((o) => (
+            <button
+              key={o.id}
+              onClick={() => onAnswer(o.id)}
+              className="flex flex-col items-start gap-0.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-left transition hover:bg-white/20"
+            >
+              <span className="flex w-full items-center gap-1.5">
+                <span className="font-cond text-sm font-700 uppercase text-white">{o.label}</span>
+                {o.id === moment.defaultId && (
+                  <span className="ml-auto rounded bg-white/20 px-1 py-px font-cond text-[9px] font-700 uppercase text-white/80">
+                    Standing order
+                  </span>
+                )}
+              </span>
+              {o.hint && <span className="text-[11px] leading-snug text-white/60">{o.hint}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * L12.10 B6: pick a formation, then a play, each drawn with its route diagram.
+ * The picked play is a playbook play; the sim runs its concept/class exactly as
+ * the standing order would, so the result path and rng draws are unchanged.
+ */
+function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: string) => void }) {
+  const groups = useMemo(() => {
+    const m = new Map<string, Moment['options']>()
+    for (const o of moment.options) {
+      const f = playbookPlay(o.id)?.formation ?? 'Other'
+      const arr = m.get(f) ?? []
+      arr.push(o)
+      m.set(f, arr)
+    }
+    return [...m.entries()].sort((a, b) => FORMATION_ORDER.indexOf(a[0]) - FORMATION_ORDER.indexOf(b[0]))
+  }, [moment.options])
+  const defaultFormation = playbookPlay(moment.defaultId)?.formation ?? groups[0]?.[0] ?? ''
+  const [formation, setFormation] = useState(defaultFormation)
+  const active = groups.some(([f]) => f === formation) ? formation : groups[0]?.[0] ?? ''
+  const plays = groups.find(([f]) => f === active)?.[1] ?? []
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1">
+        {groups.map(([f]) => (
           <button
-            key={o.id}
-            onClick={() => onAnswer(o.id)}
-            className="flex flex-col items-start gap-0.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-left transition hover:bg-white/20"
+            key={f}
+            onClick={() => setFormation(f)}
+            className={cn(
+              'rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide',
+              active === f ? 'bg-white text-ink' : 'bg-white/10 text-white/70 hover:bg-white/20',
+            )}
           >
-            <span className="flex w-full items-center gap-1.5">
-              <span className="font-cond text-sm font-700 uppercase text-white">{o.label}</span>
-              {o.id === moment.defaultId && (
-                <span className="ml-auto rounded bg-white/20 px-1 py-px font-cond text-[9px] font-700 uppercase text-white/80">
-                  Standing order
-                </span>
-              )}
-            </span>
-            {o.hint && <span className="text-[11px] leading-snug text-white/60">{o.hint}</span>}
+            {f}
           </button>
         ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {plays.map((o) => {
+          const pb = playbookPlay(o.id)
+          return (
+            <button
+              key={o.id}
+              onClick={() => onAnswer(o.id)}
+              className={cn(
+                'flex flex-col gap-1 rounded-lg border p-1.5 text-left transition',
+                o.id === moment.defaultId ? 'border-[#ffd34d]/70 bg-white/15' : 'border-white/20 bg-white/10 hover:bg-white/20',
+              )}
+            >
+              <RouteDiagram name={o.id} className="h-14 w-full rounded" />
+              <span className="flex items-center gap-1.5">
+                <span className="font-cond text-xs font-700 uppercase text-white">{o.label}</span>
+                {pb && <span className="ml-auto font-cond text-[9px] uppercase text-white/45">{pb.type}</span>}
+              </span>
+              <span className="line-clamp-2 text-[10px] leading-snug text-white/55">
+                {o.id === moment.defaultId ? 'Standing order · ' : ''}{o.hint}
+              </span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )
