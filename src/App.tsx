@@ -7,6 +7,7 @@ import { MatchView } from './components/MatchView'
 import { useGame } from './store/gameStore'
 import { CareerHub } from './screens/CareerHub'
 import { Career } from './screens/Career'
+import { History } from './screens/History'
 import { Dashboard } from './screens/Dashboard'
 import { Ledger } from './screens/Ledger'
 import { Roster } from './screens/Roster'
@@ -54,6 +55,7 @@ export default function App() {
     <>
       <AppShell>
         {screen === 'career' && <Career />}
+        {screen === 'history' && <History />}
         {screen === 'dashboard' && <Dashboard />}
         {screen === 'ledger' && <Ledger />}
         {screen === 'roster' && <Roster />}

@@ -175,7 +175,7 @@ import { loadCalibration } from '../game/data/calibration'
 import { runBalance, runRookieProbe } from '../game/engine/balance'
 
 export type ScreenId =
-  | 'career' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
+  | 'career' | 'history' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
   | 'freeagency' | 'trades' | 'cap' | 'schedule' | 'standings'
   | 'stats' | 'awards' | 'league' | 'inbox'
 
@@ -188,6 +188,7 @@ export interface ScreenMeta {
 
 export const SCREENS: ScreenMeta[] = [
   { id: 'career', label: 'My Career', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
+  { id: 'history', label: 'History', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'dashboard', label: 'Dashboard', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'ledger', label: 'The Ledger', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'scouting', label: 'Scouting', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
@@ -2976,6 +2977,11 @@ function runEndOfRegularSeason(
       demoted = true
     }
 
+    // L12.12 Y1: net reputation swing this season, for the History timeline.
+    const repDelta = Math.round(
+      (Object.keys(rep) as (keyof Reputation)[]).reduce((s, k) => s + rep[k] - career.reputation[k], 0),
+    )
+
     careerNext = {
       ...career,
       reputation: rep,
@@ -2997,6 +3003,9 @@ function runEndOfRegularSeason(
             : madePlayoffs
               ? 'Made the playoffs'
               : `${scout.graded} recommends · ${scout.accuracy}% hit rate${retired ? ` · ${retired} retirements` : ''}`,
+          repDelta,
+          objectivesMet: graded.doneCount,
+          objectivesTotal: objs.length,
         },
       ],
     }
@@ -3018,7 +3027,18 @@ function runEndOfRegularSeason(
           100,
         )
       }
-      careerNext = { ...careerNext, reputation: rep2, ambitions: grade.results }
+      const historySoFar = careerNext.history
+      careerNext = {
+        ...careerNext,
+        reputation: rep2,
+        ambitions: grade.results,
+        // L12.12 Y1: record the ambitions met on this season's timeline row.
+        history: historySoFar.map((h, i) =>
+          i === historySoFar.length - 1
+            ? { ...h, ambitionsMet: grade.results.filter((r) => r.done).length, ambitionsTotal: grade.results.length }
+            : h,
+        ),
+      }
     }
     // G1: trust calibrated well beats the all-normal board — reward the read.
     if (canSetTrust(career)) {
