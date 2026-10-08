@@ -28,7 +28,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 22 | 2026-10-08 | Is Culture linked to the actual game? (cohesion/culture are display-only today) | L12.9 K1–K2 | ⏳ queued (K2 contract discount needs user OK) |
 | 23 | 2026-10-08 | Doesn't like the weekly hours card → remove it | L12.9 H1 | ✅ merged |
 | 24 | 2026-10-08 | (found in QA) AI QBs show 0 rushing in the Stats Hub — fast-sim stat allocation gives QBs no carries | statAlloc follow-up | ✅ merged |
-| 25 | 2026-10-08 | Routes should look like real routes and move more smoothly | DeepSeek push 'routes' (playAnim.ts: speed-continuous motion, route trees per concept, coverage follows) | 🔨 building |
+| 25 | 2026-10-08 | Routes should look like real routes and move more smoothly | DeepSeek push 'routes' | ✅ merged |
 | 26 | 2026-10-08 | Every year, goals/accomplishments earn skill points; skills must grow you | L12.11 P1–P4 | ✅ merged |
 | 27 | 2026-10-08 | Include all routes and all plays (Madden 26 style) | L12.10 B1–B4, B6 (generic football concepts; EA data not copied) | ⏳ after P5 + routes |
 | 28 | 2026-10-08 | All ratings transfer to animations, stats and play | L12 P4 ✅ + P5 🔨 (play/stats); L12.10 B5 (animation) | ⏳ |
@@ -45,3 +45,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 39 | 2026-10-08 | Stars / higher-rated players less of a find on the trade block | Claude: ≤2 stars (88+, only moving-on clubs, rotate monthly), ≤8 at 80–87 | ✅ |
 | 40 | 2026-10-08 | Call-mode buttons seemed to do nothing / make it apply straight away | Claude: switching rebuilds the game to the play on screen (deterministic replay of your answers, verified identical) and applies the mode to the very next snap; call card pops up | ✅ |
 | 41 | 2026-10-08 | Redesign Staff & Hiring: easier to navigate/hire, readable skills and stats | DeepSeek push 'staff' (org chart + table, market filters + compare vs current holder, plain effects, hover) | 🔨 building |
+| 42 | 2026-10-08 | Space pauses the play/animation exactly where it is (in game) | Claude: freeze/resume mid-play in MatchView | ✅ |

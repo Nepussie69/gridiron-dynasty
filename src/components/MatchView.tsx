@@ -73,6 +73,9 @@ export function MatchView() {
 
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
+  // Space / Pause freezes the animation exactly where it is; Play resumes from there.
+  const [frozen, setFrozen] = useState(false)
+  const tRef = useRef<{ i: number; t: number }>({ i: -1, t: 0 })
   const [speed, setSpeed] = useState(1)
   // Animation clock for the play on screen: t runs 0..1 after a short pre-snap beat.
   const [clock, setClock] = useState<{ i: number; t: number }>({ i: -1, t: 0 })
@@ -106,18 +109,21 @@ export function MatchView() {
 
   // Run the play's animation: a pre-snap beat, then t from 0 to 1.
   useEffect(() => {
-    if (!anim) return
+    if (!anim || frozen) return
     let raf = 0
-    const start = performance.now() + PRE_SNAP / speed
     const span = anim.duration / speed
+    // Resume from a frozen frame of this play; otherwise start after the pre-snap beat.
+    const from = tRef.current.i === idx && tRef.current.t < 1 ? tRef.current.t : 0
+    const start = from > 0 ? performance.now() - from * span : performance.now() + PRE_SNAP / speed
     const tick = (now: number) => {
       const t = Math.max(0, Math.min(1, (now - start) / span))
+      tRef.current = { i: idx, t }
       setClock({ i: idx, t })
       if (t < 1) raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [anim, idx, speed, replay])
+  }, [anim, idx, speed, replay, frozen])
 
   // The box score follows the replay: every play up to and including the one on
   // screen, so it never shows stats from further ahead than you've watched.
@@ -155,8 +161,10 @@ export function MatchView() {
 
   // auto-advance
   useEffect(() => {
-    if (!match || !playing || !play) return
-    const dur = ((anim?.duration ?? 1600) + PRE_SNAP) / speed + (play.type === 'end' ? 200 : 550)
+    if (!match || !playing || frozen || !play) return
+    // Only the part of this play still to animate (it may resume mid-play).
+    const done = tRef.current.i === idx ? tRef.current.t : 0
+    const dur = ((anim?.duration ?? 1600) * (1 - done) + (done > 0 ? 0 : PRE_SNAP)) / speed + (play.type === 'end' ? 200 : 550)
     timer.current = window.setTimeout(() => {
       setIdx((i) => {
         if (i >= match.plays.length - 1) {
@@ -169,7 +177,7 @@ export function MatchView() {
     return () => {
       if (timer.current) window.clearTimeout(timer.current)
     }
-  }, [idx, playing, speed, match, play, anim])
+  }, [idx, playing, frozen, speed, match, play, anim])
 
   if (!match || !play) return null
 
@@ -218,11 +226,13 @@ export function MatchView() {
   }
 
   const answer = (choiceId: string) => {
+    setFrozen(false)
     setPlaying(true)
     void answerGameMoment(choiceId)
   }
 
   const advance = (stop: 'play' | 'drive' | 'moment') => {
+    setFrozen(false)
     setPlaying(true)
     void gameDayAdvance(stop)
   }
@@ -231,7 +241,20 @@ export function MatchView() {
   // going to the next moment; with a moment waiting (or a finished game) it
   // replays the play on screen.
   const live = !!gameDay && !gameDay.state.done
+  const showPause = !frozen && ((playing && !atEnd) || (clock.i === idx && clock.t > 0 && clock.t < 1))
   const togglePlay = () => {
+    // Mid-animation: freeze / unfreeze exactly where it is.
+    if (frozen) {
+      setFrozen(false)
+      setPlaying(!atEnd || playing)
+      return
+    }
+    const animating = clock.i === idx && clock.t > 0 && clock.t < 1
+    if (animating) {
+      setFrozen(true)
+      setPlaying(false)
+      return
+    }
     if (playing && !atEnd) {
       setPlaying(false)
       return
@@ -241,6 +264,7 @@ export function MatchView() {
         advance('moment')
         return
       }
+      tRef.current = { i: -1, t: 0 }
       setReplay((r) => r + 1)
       setPlaying(false)
       return
@@ -255,6 +279,8 @@ export function MatchView() {
 
   const downText = (p: PlayEvent) => (p.down ? `${['1st', '2nd', '3rd', '4th'][p.down - 1]} & ${p.distance}` : '')
   const jump = (i: number) => {
+    setFrozen(false)
+    tRef.current = { i: -1, t: 0 }
     setIdx(i)
     setPlaying(false)
   }
@@ -369,7 +395,7 @@ export function MatchView() {
             </div>
             <div className="ml-auto flex items-center gap-1 rounded-lg bg-white/5 p-1">
               <IconBtn title="Previous play" onClick={() => jump(Math.max(0, idx - 1))}><ChevronLeft size={15} /></IconBtn>
-              <IconBtn playToggle title={playing && !atEnd ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{playing && !atEnd ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
+              <IconBtn playToggle title={showPause ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{showPause ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
               <IconBtn title="Next play" onClick={() => jump(Math.min(match.plays.length - 1, idx + 1))}><ChevronRight size={15} /></IconBtn>
               <IconBtn title="Jump to the latest play" onClick={() => jump(match.plays.length - 1)}><SkipForward size={15} /></IconBtn>
               <span className="mx-1 h-4 w-px bg-white/15" />
