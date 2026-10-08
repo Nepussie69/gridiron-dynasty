@@ -8,10 +8,10 @@ Screenshot: a 5th-round CB (pick 169) at 87 OVR, a 2nd-round DE at 92.
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| D1 | Real-data prospects convert college OVR to an NFL rookie OVR + a ceiling (POT) | P1 | not started |
-| D2 | Young players grow toward POT with playing time and production, not just age | P1 | not started |
-| D3 | Show it: Draft board "Now / Ceiling", profile development line, season-end growth report | P1 | not started |
-| D4 | Probe: league talent stays level over 8 seasons; rookie OVR distribution by round | P1 | not started |
+| D1 | Real-data prospects convert college OVR to an NFL rookie OVR + a ceiling (POT) | P1 | ✅ done — verified (P1) |
+| D2 | Young players grow toward POT with playing time and production, not just age | P1 | ✅ done — verified (P1) |
+| D3 | Show it: Draft board "Now / Ceiling", profile development line, season-end growth report | P1 | ✅ done — verified (P1) |
+| D4 | Probe: league talent stays level over 8 seasons; rookie OVR distribution by round | P1 | ✅ done — verified (P1) |
 | D5 | Scouting reads on the NFL scale: **Now** and **Ceiling** ranges side by side, fuzzy by scouting confidence | P2 | not started |
 
 ## Found in code
@@ -75,3 +75,4 @@ build + lint 4; `__rookieProbe(8)` inside its targets; `careerSmoke(6,'personnel
 - Do not edit `ORCHESTRATION_HANDOVER.md`, `OPENCODE_CONTINUE.md`, any `NEXT_PHASE*.md`, `ROADMAP_*.md`, `IDEAS_*.md`, `HANDOFF.md`, `PLAYTEST_BACKLOG.md`. No git commands.
 
 ## Verification log
+- **P1** (Flash 10 min, worktree; verified by Claude). `__rookieProbe(8)`: R1 median 74 (71–77), R3 66, R7 56, max rookie 79; starter talent drift 1.02 over 8 seasons; reach POT−3 in 4 yrs: starters 64% vs bench 21%. Equivalence 20/20, smokes personnel 6 / coach 4 0/0, season-1 calibration unchanged. Probe (a) buckets by talent round (true-grade rank ÷ 32), not pick round.
