@@ -642,6 +642,8 @@ export interface CareerState {
   trades?: TradeRecord[]
   /** L12.5 T5: players you are shopping (max 5) — your side of the trade block. */
   tradeBlock?: string[]
+  /** L12.8 V3: the clubs scouted this week (once per club per week; resets each week). */
+  scoutedClubs?: { season: number; week: number; teamIds: string[] }
   /** The starting situation this career began from (F3). */
   scenario?: ScenarioId
   /** L10 G2: the head coach's standing orders for 4th down and 2-point tries. */

@@ -51,6 +51,7 @@ const ICONS: Record<ScreenId, IconType> = {
   staff: UserCog,
   league: Globe,
   inbox: Inbox,
+  team: Users,
 }
 
 /** Which access area each screen belongs to (for the top-bar access badge). */

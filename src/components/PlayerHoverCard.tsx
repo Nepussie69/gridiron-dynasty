@@ -6,6 +6,7 @@ import { fitLabel } from '../game/engine/style'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, OvrBadge } from '../ui/kit'
 import { HoverCard } from './HoverCard'
+import type { ReactNode } from 'react'
 import type { Player } from '../game/types'
 
 /** Same tint tiers as the Ratings tab (L12 R2). */
@@ -20,8 +21,21 @@ function valueClass(v: number): string {
  * L12.5 T2: a player name whose hover / focus reveals his card without leaving
  * the Trade Center. Shows bio, contract, injury, scheme fit for YOUR club, then
  * the position group's composites and rating columns from `playerAttrs`.
+ *
+ * L12.8 V2: pass `children` to use a custom trigger (a compact top-player chip);
+ * pass `info={false}` to drop the ⓘ button on those chips.
  */
-export function PlayerHoverCard({ player, className }: { player: Player; className?: string }) {
+export function PlayerHoverCard({
+  player,
+  className,
+  children,
+  info = true,
+}: {
+  player: Player
+  className?: string
+  children?: ReactNode
+  info?: boolean
+}) {
   const league = useWorld()
   const career = useGame((s) => s.career)
   const activeTeamId = useGame((s) => s.activeTeamId)
@@ -45,6 +59,7 @@ export function PlayerHoverCard({ player, className }: { player: Player; classNa
     <HoverCard
       className={className}
       label={`Details for ${player.name}`}
+      info={info}
       content={
         <div className="space-y-2.5">
           <div className="flex items-center gap-2.5">
@@ -108,7 +123,7 @@ export function PlayerHoverCard({ player, className }: { player: Player; classNa
         </div>
       }
     >
-      <span className={cn('truncate', className)}>{player.name}</span>
+      {children ?? <span className={cn('truncate', className)}>{player.name}</span>}
     </HoverCard>
   )
 }

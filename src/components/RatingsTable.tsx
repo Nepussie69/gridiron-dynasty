@@ -18,6 +18,8 @@ interface Props {
   group: string
   scheme?: string
   defScheme?: string
+  /** L12.8 V1: optional per-row action cell (the club page's "Trade for…"). */
+  right?: (p: Player) => ReactNode
 }
 
 function rawValue(
@@ -102,7 +104,7 @@ function Th({
   )
 }
 
-export function RatingsTable({ players, group, scheme, defScheme }: Props) {
+export function RatingsTable({ players, group, scheme, defScheme, right }: Props) {
   const selectPlayer = useGame((s) => s.selectPlayer)
   const [sortKey, setSortKey] = useState<SortKey>('ovr')
   const [dir, setDir] = useState<Dir>('desc')
@@ -214,6 +216,7 @@ export function RatingsTable({ players, group, scheme, defScheme }: Props) {
                     {k}
                   </Th>
                 ))}
+                {right && <Th className="sticky top-0 z-20 text-right">Action</Th>}
               </tr>
             </thead>
             <tbody>
@@ -264,6 +267,11 @@ export function RatingsTable({ players, group, scheme, defScheme }: Props) {
                         </td>
                       )
                     })}
+                    {right && (
+                      <td className="whitespace-nowrap px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        {right(p)}
+                      </td>
+                    )}
                   </tr>
                 )
               })}

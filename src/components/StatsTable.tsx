@@ -120,9 +120,11 @@ interface Props {
   group: string
   season: number
   level: StatLevel
+  /** L12.8 V1: optional per-row action cell (the club page's "Trade for…"). */
+  right?: (p: Player) => ReactNode
 }
 
-export function StatsTable({ players, group, season, level }: Props) {
+export function StatsTable({ players, group, season, level, right }: Props) {
   const selectPlayer = useGame((s) => s.selectPlayer)
   const [sortKey, setSortKey] = useState<SortKey>('ovr')
   const [dir, setDir] = useState<Dir>('desc')
@@ -187,6 +189,7 @@ export function StatsTable({ players, group, season, level }: Props) {
                     {c.label}
                   </Th>
                 ))}
+                {right && <Th className="sticky top-0 z-20 text-right">Action</Th>}
               </tr>
             </thead>
             <tbody>
@@ -213,6 +216,11 @@ export function StatsTable({ players, group, season, level }: Props) {
                         {c.fmt(line, p)}
                       </td>
                     ))}
+                    {right && (
+                      <td className="whitespace-nowrap px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        {right(p)}
+                      </td>
+                    )}
                   </tr>
                 )
               })}

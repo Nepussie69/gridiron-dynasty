@@ -179,6 +179,8 @@ export type ScreenId =
   | 'career' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
   | 'freeagency' | 'trades' | 'cap' | 'schedule' | 'standings'
   | 'stats' | 'awards' | 'league' | 'inbox'
+  // L12.8 V1: a read-only page for another club (not in the sidebar).
+  | 'team'
 
 export interface ScreenMeta {
   id: ScreenId
@@ -365,6 +367,10 @@ interface GameStore {
   screen: ScreenId
   career: CareerState | null
   activeTeamId: string
+  /** L12.8 V1: the club shown on the read-only team page (null → the active club). */
+  teamViewId: string | null
+  /** L12.8 V1: where Back returns from the team page. */
+  teamReturn: ScreenId
   selectedPlayerId: string | null
   selectedProspectId: string | null
   readNews: Record<string, boolean>
@@ -411,6 +417,10 @@ interface GameStore {
   setLeaguePbp: (v: boolean) => void
   setScreen: (s: ScreenId) => void
   setActiveTeam: (id: string) => void
+  /** L12.8 V1: open the read-only page for another club (your own club opens Roster). */
+  viewTeam: (teamId: string) => void
+  /** L12.8 V3: scout another club this week (once per club per week). */
+  scoutClub: (teamId: string) => void
   selectPlayer: (id: string | null) => void
   selectProspect: (id: string | null) => void
   /** Depth chart: move a player up/down or promote him to starter for your club. */
@@ -598,6 +608,8 @@ export const useGame = create<GameStore>((set, get) => ({
   screen: 'career',
   career: null,
   activeTeamId: 'BUF',
+  teamViewId: null,
+  teamReturn: 'career',
   selectedPlayerId: null,
   selectedProspectId: null,
   readNews: {},
@@ -618,6 +630,43 @@ export const useGame = create<GameStore>((set, get) => ({
   statsDb: () => statDb,
   setScreen: (screen) => set({ screen }),
   setActiveTeam: (activeTeamId) => set({ activeTeamId }),
+
+  // L12.8 V1: another club's page. Your own club just opens the normal Roster.
+  viewTeam: (teamId) => {
+    const { activeTeamId, screen, teamReturn } = get()
+    if (teamId === activeTeamId) {
+      set({ screen: 'roster' })
+      return
+    }
+    set({
+      teamViewId: teamId,
+      teamReturn: screen === 'team' ? teamReturn : screen,
+      screen: 'team',
+    })
+  },
+
+  // L12.8 V3: one scouting visit per club per week. (L12.9 H1 removed the old
+  // hours budget, so the weekly limit is the cost, exactly like Opponent Film.)
+  scoutClub: (teamId) => {
+    const career = get().career
+    if (!career) return
+    const current =
+      career.scoutedClubs && career.scoutedClubs.season === world.season && career.scoutedClubs.week === world.week
+        ? career.scoutedClubs
+        : { season: world.season, week: world.week, teamIds: [] as string[] }
+    const name = world.byId[teamId]?.name ?? 'that club'
+    if (current.teamIds.includes(teamId)) {
+      get().showToast(`You have already scouted the ${name} this week.`)
+      return
+    }
+    set({
+      career: { ...career, scoutedClubs: { ...current, teamIds: [...current.teamIds, teamId] } },
+      tick: get().tick + 1,
+    })
+    get().showToast(`Scouted the ${name} — their tendencies and key players are on the board.`)
+    get().save()
+  },
+
   selectPlayer: (selectedPlayerId) => set({ selectedPlayerId }),
   selectProspect: (selectedProspectId) => set({ selectedProspectId }),
 

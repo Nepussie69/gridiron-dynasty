@@ -10,6 +10,7 @@ export function Schedule() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const openMatch = useGame((s) => s.openMatch)
+  const viewTeam = useGame((s) => s.viewTeam)
   const [boxGameId, setBoxGameId] = useState<string | null>(null)
 
   const rec = recordOf(league, activeTeamId)
@@ -59,13 +60,18 @@ export function Schedule() {
                   <div className="label">Week {g.week}</div>
                 </div>
                 <div className="w-10 shrink-0 font-cond text-xs font-700 uppercase text-muted">{g.home ? 'vs' : '@'}</div>
-                <div className="flex flex-1 items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => viewTeam(opp.id)}
+                  title={`View the ${opp.name}`}
+                  className="flex flex-1 items-center gap-2.5 text-left transition hover:opacity-80"
+                >
                   <TeamCrest team={opp} size={28} />
-                  <span className="font-cond text-sm font-600 text-ink">
+                  <span className="font-cond text-sm font-600 text-ink underline-offset-2 hover:underline">
                     {opp.tier === 'NFL' ? `${opp.city} ${opp.name}` : opp.name}
                   </span>
                   {isNext && <Badge tone="team">Up Next</Badge>}
-                </div>
+                </button>
 
                 {g.played ? (
                   <div className="flex items-center gap-3">
@@ -127,8 +133,8 @@ export function Schedule() {
               <TeamTotals name={league.byId[boxGame.homeId].name} t={boxGame.box.team[boxGame.homeId] ?? EMPTY_TOTALS} />
             </div>
             <div className="grid gap-3 rounded-xl bg-[#101820] p-3 md:grid-cols-2">
-              <BoxScore world={league} teamId={boxGame.awayId} box={boxGame.box.players} />
-              <BoxScore world={league} teamId={boxGame.homeId} box={boxGame.box.players} />
+              <BoxScore world={league} teamId={boxGame.awayId} box={boxGame.box.players} onTeamClick={viewTeam} />
+              <BoxScore world={league} teamId={boxGame.homeId} box={boxGame.box.players} onTeamClick={viewTeam} />
             </div>
           </div>
         </div>

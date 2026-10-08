@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ArrowLeftRight, Handshake, Plus, Search, Tag, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
@@ -18,6 +18,7 @@ import {
   type TradeAsset,
 } from '../game/engine/trade'
 import { tradeBlock, type TradeBlockEntry } from '../game/engine/tradeBlock'
+import { clearTradeRequest, peekTradeRequest } from '../game/tradeRequest'
 import { canShadow } from '../game/engine/shadow'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import type { Player, Position } from '../game/types'
@@ -60,13 +61,27 @@ export function Trades() {
   const career = useGame((s) => s.career)
   const proposeTrade = useGame((s) => s.proposeTrade)
   const toggleTradeBlock = useGame((s) => s.toggleTradeBlock)
+  const viewTeam = useGame((s) => s.viewTeam)
+
+  // L12.8 V1: a club page can hand off "trade for this player". Consume it once.
+  const request = peekTradeRequest()
 
   const [tab, setTab] = useState<TabId>('build')
-  const [partnerId, setPartnerId] = useState(NFL_TEAMS.find((t) => t.id !== activeTeamId)!.id)
+  const [partnerId, setPartnerId] = useState(
+    () => (request && league.byId[request.teamId] ? request.teamId : NFL_TEAMS.find((t) => t.id !== activeTeamId)!.id),
+  )
   const [give, setGive] = useState<Asset[]>([])
-  const [get, setGet] = useState<Asset[]>([])
+  const [get, setGet] = useState<Asset[]>(() => {
+    if (!request) return []
+    const asset = assetsFor(league, request.teamId).find((a) => a.id === request.playerId)
+    return asset ? [asset] : []
+  })
   const [deal, setDeal] = useState<{ asset: Asset; mode: DealMode } | null>(null)
   const [deals, setDeals] = useState<DealOffer[]>([])
+
+  useEffect(() => {
+    clearTradeRequest()
+  }, [])
 
   const team = league.byId[activeTeamId]
   const partner = league.byId[partnerId]
@@ -217,6 +232,7 @@ export function Trades() {
           onFindDeals={(a) => onFindDeals(a, 'sell')}
           blockIds={blockIds}
           onToggleBlock={(a) => toggleTradeBlock(a.id)}
+          onTeamClick={() => viewTeam(activeTeamId)}
         />
 
         <div className="flex flex-col items-center justify-center gap-3">
@@ -271,6 +287,7 @@ export function Trades() {
           onToggle={(a) => toggle(get, setGet, a)}
           onFindDeals={(a) => onFindDeals(a, 'buy')}
           showShadow={canScout}
+          onTeamClick={() => viewTeam(partnerId)}
         />
       </div>
         </>
@@ -759,6 +776,32 @@ function resolveAssets(world: World, teamId: string, refs: TradeAsset[]): Asset[
   return refs.map((r) => all.find((a) => a.id === r.id)).filter((a): a is Asset => !!a)
 }
 
+/** L12.8 backlog #30: position chips on each asset column. Picks are their own chip. */
+const COLUMN_POSITIONS: { id: string; positions?: Position[]; picks?: boolean }[] = [
+  { id: 'ALL' },
+  { id: 'QB', positions: ['QB'] },
+  { id: 'RB', positions: ['RB'] },
+  { id: 'WR', positions: ['WR'] },
+  { id: 'TE', positions: ['TE'] },
+  { id: 'OL', positions: ['OT', 'OG', 'C'] },
+  { id: 'DL', positions: ['DE', 'DT'] },
+  { id: 'LB', positions: ['LB'] },
+  { id: 'CB', positions: ['CB'] },
+  { id: 'S', positions: ['S'] },
+  { id: 'K/P', positions: ['K', 'P'] },
+  { id: 'Picks', picks: true },
+]
+
+type AssetSort = 'trade' | 'ovr' | 'pot' | 'age' | 'cap'
+
+const ASSET_SORTS: [AssetSort, string][] = [
+  ['trade', 'Trade value'],
+  ['ovr', 'OVR'],
+  ['pot', 'POT'],
+  ['age', 'Age'],
+  ['cap', 'Cap hit'],
+]
+
 function AssetColumn({
   title,
   teamId,
@@ -769,6 +812,7 @@ function AssetColumn({
   showShadow,
   blockIds,
   onToggleBlock,
+  onTeamClick,
 }: {
   title: string
   teamId: string
@@ -779,99 +823,208 @@ function AssetColumn({
   showShadow?: boolean
   blockIds?: string[]
   onToggleBlock?: (a: Asset) => void
+  /** L12.8 V1: make the club header open its team page. */
+  onTeamClick?: () => void
 }) {
   const league = useWorld()
   const team = league.byId[teamId]
+  const [pos, setPos] = useState('ALL')
+  const [sort, setSort] = useState<AssetSort>('trade')
+  const [dir, setDir] = useState<'asc' | 'desc'>('desc')
+
+  // Filtering/sorting is display-only: `selected` lives in the parent, so assets
+  // stay selected even when a filter hides them.
+  const filtered = useMemo(() => {
+    const group = COLUMN_POSITIONS.find((g) => g.id === pos)
+    const matches = assets.filter((a) => {
+      if (pos === 'ALL') return true
+      if (group?.picks) return a.kind === 'pick'
+      if (a.kind !== 'player') return false
+      const p = playerById(league, a.id)
+      return !!p && !!group?.positions?.includes(p.pos)
+    })
+    const val = (a: Asset): number | null => {
+      if (sort === 'trade') return a.value
+      if (a.kind === 'pick') return null
+      const p = playerById(league, a.id)
+      if (!p) return null
+      if (sort === 'ovr') return a.ovr ?? p.ovr
+      if (sort === 'pot') return a.pot ?? p.pot
+      if (sort === 'age') return p.age
+      return p.contract.capHit
+    }
+    const copy = [...matches]
+    copy.sort((a, b) => {
+      const va = val(a)
+      const vb = val(b)
+      if (va == null && vb == null) return 0
+      if (va == null) return 1
+      if (vb == null) return -1
+      return dir === 'asc' ? va - vb : vb - va
+    })
+    return copy
+  }, [assets, pos, sort, dir, league])
+
+  const hiddenSelected = selected.filter((s) => !filtered.some((f) => f.id === s.id)).length
+
   return (
     <Card pad={false} className="overflow-hidden">
       <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-2.5">
-        <TeamCrest team={team} size={26} />
-        <span className="font-display text-base font-700 uppercase tracking-wide text-ink">{title}</span>
+        {onTeamClick ? (
+          <button
+            type="button"
+            onClick={onTeamClick}
+            title={`View the ${team.name}`}
+            className="flex min-w-0 items-center gap-2 transition hover:opacity-80"
+          >
+            <TeamCrest team={team} size={26} />
+            <span className="truncate font-display text-base font-700 uppercase tracking-wide text-ink underline-offset-2 hover:underline">
+              {title}
+            </span>
+          </button>
+        ) : (
+          <>
+            <TeamCrest team={team} size={26} />
+            <span className="font-display text-base font-700 uppercase tracking-wide text-ink">{title}</span>
+          </>
+        )}
         <Badge tone="neutral" className="ml-auto">
-          {assets.length}
+          {filtered.length}
+          {hiddenSelected > 0 ? ` +${hiddenSelected}` : ''}
         </Badge>
       </div>
-      <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
-        {assets.map((a, i) => {
-          const on = selected.some((s) => s.id === a.id)
-          const prev = assets[i - 1]
-          const showYear = a.kind === 'pick' && (!prev || prev.kind !== 'pick' || prev.season !== a.season)
-          const player = a.kind === 'player' ? playerById(league, a.id) : undefined
-          const blocked = !!blockIds?.includes(a.id)
-          return (
-            <div key={a.id}>
-              {showYear && (
-                <div className="bg-surface-2 px-4 py-1 font-cond text-[10px] font-700 uppercase tracking-widest text-muted">
-                  {a.season} Draft
-                </div>
+
+      <div className="space-y-1.5 border-b border-line bg-surface-2 px-3 py-2">
+        <div className="flex flex-wrap gap-1">
+          {COLUMN_POSITIONS.map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => setPos(g.id)}
+              className={cn(
+                'rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase transition',
+                pos === g.id ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-3',
               )}
-              <div
-                onClick={() => onToggle(a)}
-                className={cn(
-                  'flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left transition',
-                  on ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
+              style={pos === g.id ? { background: 'var(--team)' } : undefined}
+            >
+              {g.id}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="label !mb-0">Sort</span>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as AssetSort)}
+            className="rounded-md border border-line bg-surface px-2 py-1 font-cond text-xs font-600 outline-none"
+          >
+            {ASSET_SORTS.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            title={dir === 'desc' ? 'Descending — click for ascending' : 'Ascending — click for descending'}
+            onClick={() => setDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
+            className="grid h-7 w-7 place-items-center rounded-md border border-line bg-surface text-xs text-ink-2 transition hover:bg-surface-2"
+          >
+            {dir === 'desc' ? '▼' : '▲'}
+          </button>
+          {hiddenSelected > 0 && (
+            <span className="ml-auto font-cond text-[10px] font-700 uppercase tracking-wide text-warn">
+              {hiddenSelected} selected hidden
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
+        {filtered.length === 0 ? (
+          <div className="px-4 py-6 text-center text-xs text-muted">No assets match this filter.</div>
+        ) : (
+          filtered.map((a, i) => {
+            const on = selected.some((s) => s.id === a.id)
+            const prev = filtered[i - 1]
+            const showYear = a.kind === 'pick' && (!prev || prev.kind !== 'pick' || prev.season !== a.season)
+            const player = a.kind === 'player' ? playerById(league, a.id) : undefined
+            const blocked = !!blockIds?.includes(a.id)
+            return (
+              <div key={a.id}>
+                {showYear && (
+                  <div className="bg-surface-2 px-4 py-1 font-cond text-[10px] font-700 uppercase tracking-widest text-muted">
+                    {a.season} Draft
+                  </div>
                 )}
-              >
-                {a.kind === 'player' ? (
-                  <OvrBadge value={a.ovr!} pot={a.pot} size={30} />
-                ) : (
-                  <span className="grid h-7 w-7 place-items-center rounded-md bg-ink font-display text-xs font-700 text-white">
-                    R{a.round}
-                  </span>
-                )}
-                <span className="min-w-0 flex-1">
-                  {player ? (
-                    <PlayerHoverCard player={player} className="min-w-0 text-sm font-600 text-ink" />
-                  ) : (
-                    <span className="block truncate text-sm font-600 text-ink">{a.label}</span>
-                  )}
-                  <span className="block truncate text-xs text-muted">{a.sub}</span>
-                </span>
-                <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
-                {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
-                {a.kind === 'player' && onFindDeals && (
-                  <button
-                    type="button"
-                    title="Find deals"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onFindDeals(a)
-                    }}
-                    className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
-                  >
-                    <Search size={13} />
-                  </button>
-                )}
-                {a.kind === 'player' && onToggleBlock && (
-                  <button
-                    type="button"
-                    title={blocked ? 'Remove from your trade block' : 'Add to your trade block'}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onToggleBlock(a)
-                    }}
-                    className={cn(
-                      'grid h-6 w-6 place-items-center rounded-md border transition',
-                      blocked
-                        ? 'border-transparent text-[var(--team)]'
-                        : 'border-line text-faint hover:border-[var(--team)] hover:text-ink',
-                    )}
-                  >
-                    <Tag size={13} fill={blocked ? 'currentColor' : 'none'} />
-                  </button>
-                )}
-                <span
+                <div
+                  onClick={() => onToggle(a)}
                   className={cn(
-                    'grid h-6 w-6 place-items-center rounded-md border',
-                    on ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]' : 'border-line text-faint',
+                    'flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left transition',
+                    on ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
                   )}
                 >
-                  {on ? <X size={13} /> : <Plus size={13} />}
-                </span>
+                  {a.kind === 'player' ? (
+                    <OvrBadge value={a.ovr!} pot={a.pot} size={30} />
+                  ) : (
+                    <span className="grid h-7 w-7 place-items-center rounded-md bg-ink font-display text-xs font-700 text-white">
+                      R{a.round}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    {player ? (
+                      <PlayerHoverCard player={player} className="min-w-0 text-sm font-600 text-ink" />
+                    ) : (
+                      <span className="block truncate text-sm font-600 text-ink">{a.label}</span>
+                    )}
+                    <span className="block truncate text-xs text-muted">{a.sub}</span>
+                  </span>
+                  <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
+                  {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
+                  {a.kind === 'player' && onFindDeals && (
+                    <button
+                      type="button"
+                      title="Find deals"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onFindDeals(a)
+                      }}
+                      className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
+                    >
+                      <Search size={13} />
+                    </button>
+                  )}
+                  {a.kind === 'player' && onToggleBlock && (
+                    <button
+                      type="button"
+                      title={blocked ? 'Remove from your trade block' : 'Add to your trade block'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onToggleBlock(a)
+                      }}
+                      className={cn(
+                        'grid h-6 w-6 place-items-center rounded-md border transition',
+                        blocked
+                          ? 'border-transparent text-[var(--team)]'
+                          : 'border-line text-faint hover:border-[var(--team)] hover:text-ink',
+                      )}
+                    >
+                      <Tag size={13} fill={blocked ? 'currentColor' : 'none'} />
+                    </button>
+                  )}
+                  <span
+                    className={cn(
+                      'grid h-6 w-6 place-items-center rounded-md border',
+                      on ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]' : 'border-line text-faint',
+                    )}
+                  >
+                    {on ? <X size={13} /> : <Plus size={13} />}
+                  </span>
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })
+        )}
       </div>
     </Card>
   )
