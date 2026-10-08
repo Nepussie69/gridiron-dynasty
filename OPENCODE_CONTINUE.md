@@ -24,7 +24,6 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 | ~~`p5` / `wt-p5`~~ merged | scratchpad/wt-p5 | NEXT_PHASE_L12.md P5 (E2 defense/K/general ratings, E3 recalibrate, `__ratingSpread`) | /private/tmp/gridiron-l12p5.txt | Sim change: verify all 3 seeds in bands, statShape all ✅, equivalence 20/20, spread table. Appends L12 section to HANDOFF.md |
 | `reads` / `wt-reads` | scratchpad/wt-reads | NEXT_PHASE_L12_7.md D5 (Now/Ceiling ranges on scouting reads) | /private/tmp/gridiron-l12_7p2.txt | Display only |
 | `routes` / `wt-routes` | scratchpad/wt-routes | Backlog #25: real route trees per concept + smooth motion in `playAnim.ts` | /private/tmp/gridiron-routes.txt | Visual only; check in the browser |
-| `skills` / `wt-skills` | scratchpad/wt-skills | NEXT_PHASE_L12_11.md P1–P4 skill points from goals; negotiation/development wired (user-only, small) | /private/tmp/gridiron-skills.txt | Pacing ±1 season |
 | `history` / `wt-history` | scratchpad/wt-history | NEXT_PHASE_L12_12.md History tab | /private/tmp/gridiron-history.txt | New screen + statsDb aggregation |
 | `findplayer` / `wt-findplayer` | scratchpad/wt-findplayer | Backlog #32 Find a Player screen | /private/tmp/gridiron-findplayer.txt | UI only |
 | `playoffs` / `wt-playoffs` | scratchpad/wt-playoffs | Backlog #33 playoff picture + NFL seeding/tiebreakers | /private/tmp/gridiron-playoffs.txt | Changes who makes playoffs (correct NFL rules); rng draws unchanged |

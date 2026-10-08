@@ -11,10 +11,10 @@ evaluation), passive gains (L12.9). **Used today:** evaluation (prospect read wi
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| P1 | Skill points earned each season from goals and accomplishments | P1 | not started |
-| P2 | Spend them: a Skills panel (My Career) with what each point does | P1 | not started |
-| P3 | Every skill does something real (wire negotiation + rename/wire recruiting) | P1 | not started |
-| P4 | Probe: pacing unchanged within ±1 season; effect sizes bounded | P1 | not started |
+| P1 | Skill points earned each season from goals and accomplishments | P1 | ✅ done — verified (P1) |
+| P2 | Spend them: a Skills panel (My Career) with what each point does | P1 | ✅ done — verified (P1) |
+| P3 | Every skill does something real (wire negotiation + rename/wire recruiting) | P1 | ✅ done — verified (P1) |
+| P4 | Probe: pacing unchanged within ±1 season; effect sizes bounded | P1 | ✅ done — verified (P1) |
 
 ## P1 — Earning points (season end, in the season review)
 - +2 for each job objective met (`objectives.ts`), +1 for each personal ambition met (`gradeAmbitions`), +1 winning record, +1 playoffs, +2 title, +1 per staff award (`staffAwards`), +1 season question answered "yes",
@@ -44,3 +44,4 @@ No rng draws added/removed; no changes to gates, objectives (only read their res
 Do not edit `ORCHESTRATION_HANDOVER.md`, `OPENCODE_CONTINUE.md`, any `NEXT_PHASE*.md`, `ROADMAP_*.md`, `IDEAS_*.md`, `HANDOFF.md`, `PLAYTEST_BACKLOG.md`. No git commands.
 
 ## Verification log
+- **P1** (Flash 18 min, worktree; verified + merged by Claude). Pacing delta 0 on every seed that reaches the top rung; effects at 99: negotiation 3% cheaper asks / +2% trade margin (user only), development ×1.08, leadership +4 culture/morale. Equivalence 20/20, smokes 0/0, calibration unchanged.
