@@ -28,6 +28,7 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 | `findplayer` / `wt-findplayer` | scratchpad/wt-findplayer | Backlog #32 Find a Player screen | /private/tmp/gridiron-findplayer.txt | UI only |
 | `playoffs` / `wt-playoffs` | scratchpad/wt-playoffs | Backlog #33 playoff picture + NFL seeding/tiebreakers | /private/tmp/gridiron-playoffs.txt | Changes who makes playoffs (correct NFL rules); rng draws unchanged |
 | `teams` / `wt-teams` | scratchpad/wt-teams | NEXT_PHASE_L12_8.md V1–V3 + backlog #30 trade column filters | /private/tmp/gridiron-l12_8.txt | |
+| `staff` / `wt-staff` | scratchpad/wt-staff | Backlog #41 Staff & Hiring redesign | /private/tmp/gridiron-staff.txt | UI only |
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
 
 ## Queue (after the running pushes)
