@@ -115,7 +115,7 @@ export function Ledger() {
 
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
-          <Stat label="Batting Average" value={rate.calls ? `${rate.pct}%` : '—'} sub={`${rate.hits} / ${rate.calls} graded`} tone={rate.pct >= 60 ? 'win' : rate.pct >= 45 ? undefined : 'loss'} />
+          <Stat label="Success Rate" value={rate.calls ? `${rate.pct}%` : '—'} sub={`${rate.hits} / ${rate.calls} graded`} tone={rate.pct >= 60 ? 'win' : rate.pct >= 45 ? undefined : 'loss'} />
         </Card>
         <Card><Stat label="Total Calls" value={entries.length} sub="logged to your résumé" /></Card>
         <Card><Stat label="My Guys" value={guys.length} sub="picks & blue-chip calls" /></Card>

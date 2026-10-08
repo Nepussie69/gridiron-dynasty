@@ -5,7 +5,7 @@
 // director — is date-stamped. Years later it comes back: "You graded him a
 // 2nd-rounder as an Area Scout in 2027; he's a 3x Pro Bowler now."
 //
-// The career hit rate is your batting average, and "My Guys" follows everyone
+// The career hit rate is your success rate, and "My Guys" follows everyone
 // you championed. This is what makes the one-living-universe hook felt.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ export function pushLedger(career: CareerState, entry: Omit<LedgerEntry, 'id' | 
   return full
 }
 
-/** Your batting average across every graded call. */
+/** Your success rate across every graded call. */
 export function ledgerHitRate(career: CareerState): { calls: number; hits: number; pct: number } {
   const graded = (career.ledger ?? []).filter((e) => e.hit !== undefined)
   const hits = graded.filter((e) => e.hit).length
