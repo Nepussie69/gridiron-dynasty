@@ -33,7 +33,7 @@ _Updated 2026-10-08 ~22:05 AEDT by Claude Opus 5.5 (stopped at 5-hour usage ~93%
 ## Running at handoff (check `pgrep -fl ds-push`; logs `/private/tmp/gridiron-<name>.log`)
 | Name / branch | Spec | Prompt | Notes |
 |---|---|---|---|
-| `gmdesk2` (in `wt-gmdesk`, uncommitted) | `NEXT_PHASE_L12_14.md` C6 GM requests desk — mostly done; continuation finishes Cap.tsx GmCapRowActions/GmRestructureCard + verify | /private/tmp/gridiron-gmdesk2.txt (log gridiron-gmdesk2.log) | Cap.tsx will conflict with the sortable ledger on main: keep both |
+| `gmdesk2` (in `wt-gmdesk`, uncommitted) — **FINISHED 22:05, ready to verify + merge (read the end of /private/tmp/gridiron-gmdesk2.log)** | `NEXT_PHASE_L12_14.md` C6 GM requests desk — continuation finished Cap.tsx GmCapRowActions/GmRestructureCard + verify | /private/tmp/gridiron-gmdesk2.txt (log gridiron-gmdesk2.log) | Cap.tsx will conflict with the sortable ledger on main: keep both |
 | `stars2` (in `wt-stars`, uncommitted) | `NEXT_PHASE_L12_15.md` S1–S4 implemented + verified (calib in band, 20/20, 0/0, season-1 bands exact). Continuation fixes drift: 90+ falls 28 → 11–15 by season 6 | /private/tmp/gridiron-stars2.txt (log gridiron-stars2.log) | re-run `/private/tmp/stars-verify.mjs` (prints DIST) before merging |
 | `realism` / `wt-realism` | `NEXT_PHASE_REALISM.md` R1–R3 + R5 NFL 2015–2024 retune + missed tackles | /private/tmp/gridiron-realism.txt | sim constants; calibration bands change — re-baseline after merge |
 
