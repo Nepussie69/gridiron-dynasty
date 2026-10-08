@@ -17,11 +17,39 @@ export interface TradeAsset {
   id: string
 }
 
-/** Present value of a player: production curve × youth × remaining upside. */
+/**
+ * How much a position is worth on the trade market, NFL-style: quarterbacks
+ * cost a fortune, edge rushers / tackles / corners / receivers carry a premium,
+ * running backs, fullbacks and specialists come cheap.
+ */
+export const POSITION_TRADE_VALUE: Record<string, number> = {
+  QB: 2.2, DE: 1.15, OT: 1.1, WR: 1.05, CB: 1.05, DT: 0.95, TE: 0.85, S: 0.85, LB: 0.85,
+  OG: 0.8, C: 0.8, RB: 0.7, FB: 0.35, K: 0.3, P: 0.3,
+}
+/** Age a player's decline starts, and how fast it runs per year after that. */
+const DECLINE: Record<string, { start: number; rate: number }> = {
+  QB: { start: 33, rate: 0.1 }, RB: { start: 27, rate: 0.16 }, FB: { start: 28, rate: 0.14 },
+  WR: { start: 29, rate: 0.14 }, TE: { start: 29, rate: 0.13 }, OT: { start: 30, rate: 0.12 },
+  OG: { start: 30, rate: 0.12 }, C: { start: 30, rate: 0.12 }, DE: { start: 29, rate: 0.13 },
+  DT: { start: 29, rate: 0.13 }, LB: { start: 28, rate: 0.14 }, CB: { start: 28, rate: 0.15 },
+  S: { start: 29, rate: 0.14 }, K: { start: 35, rate: 0.06 }, P: { start: 35, rate: 0.06 },
+}
+
+/**
+ * Present value of a player on the trade chart (a mid first-round pick ≈ 1,300).
+ * Young players are valued at the rating they are expected to grow into; the
+ * rating curve is steep at the top (a 99 is worth about twice a 90); value
+ * holds through a player's prime and fades smoothly once his position's decline
+ * age arrives; then it is scaled by what the position is worth.
+ */
 export function playerTradeValue(p: Player): number {
-  const youth = p.age <= 26 ? 1.25 : p.age <= 29 ? 1.0 : p.age <= 32 ? 0.7 : 0.45
-  const upside = 1 + Math.max(0, p.pot - p.ovr) * 0.012
-  return Math.round(Math.pow(Math.max(p.ovr - 45, 1), 2) * 1.2 * youth * upside)
+  const grow = p.age <= 22 ? 0.6 : p.age === 23 ? 0.45 : p.age === 24 ? 0.3 : p.age === 25 ? 0.15 : 0
+  const eff = p.ovr + Math.max(0, p.pot - p.ovr) * grow
+  const curve = Math.pow(Math.max(eff - 50, 1) / 10, 3.5)
+  const d = DECLINE[p.pos] ?? { start: 29, rate: 0.14 }
+  const prime = p.age <= 24 ? 1.15 : Math.max(1, 1.15 - 0.05 * (p.age - 24))
+  const ageMul = p.age <= d.start ? prime : Math.max(0.12, 1 - d.rate * (p.age - d.start))
+  return Math.round(curve * ageMul * (POSITION_TRADE_VALUE[p.pos] ?? 1) * 14.7)
 }
 
 /**
@@ -77,7 +105,7 @@ export function assetValue(world: World, a: TradeAsset): number {
 }
 
 const NEED_TARGET: Record<string, number> = {
-  QB: 3, RB: 3, WR: 6, TE: 3, OT: 4, OG: 4, C: 2, DE: 4, DT: 4, LB: 6, CB: 6, S: 4, K: 1, P: 1,
+  QB: 3, RB: 3, FB: 1, WR: 6, TE: 3, OT: 4, OG: 4, C: 2, DE: 4, DT: 4, LB: 6, CB: 6, S: 4, K: 1, P: 1,
 }
 
 /** How badly a team needs a position, 0 (stocked) to 1 (empty). */
@@ -107,7 +135,14 @@ function partnerValue(world: World, partnerId: string, a: TradeAsset, rebuild: b
   const roster = world.roster[partnerId] ?? []
   const rank = [...roster].sort((x, y) => y.ovr - x.ovr).findIndex((x) => x.id === p.id)
   const starPremium = rank >= 0 && rank < 3 ? 1.45 : 1
-  return base * ageMul * need * starPremium
+  // Nobody hands over the quarterback: a club's starting QB carries a steep
+  // premium (franchise QBs — 85+ — the steepest), as in real NFL trades.
+  let qbPremium = 1
+  if (p.pos === 'QB') {
+    const qbs = roster.filter((x) => x.pos === 'QB').sort((x, y) => y.ovr - x.ovr)
+    if (qbs[0]?.id === p.id) qbPremium = p.ovr >= 85 ? 1.7 : p.ovr >= 78 ? 1.4 : 1.15
+  }
+  return base * ageMul * need * Math.max(starPremium, qbPremium)
 }
 
 export interface TradeVerdict {
@@ -279,13 +314,29 @@ export function findPackagesFor(world: World, userTeamId: string, playerId: stri
   const accepted = (give: TradeAsset[]) => evaluateTrade(world, partnerId, userTeamId, give, [target]).accepted
   const candidates: TradeAsset[][] = []
 
-  // 1. Picks only — add the user's cheapest picks until the club says yes.
-  const picksOnly: TradeAsset[] = []
-  for (const pk of picks) {
-    if (picksOnly.length >= 4) break
-    picksOnly.push({ kind: 'pick', id: pk.id })
-    if (accepted(picksOnly)) candidates.push([...picksOnly])
+  // Close a value gap with picks: each step adds the smallest pick that clears
+  // what's left, or the biggest one if none does (so a deal is never padded
+  // with a first when a third would do).
+  const fillWithPicks = (start: TradeAsset[], maxPicks: number): TradeAsset[] | null => {
+    const pkg = [...start]
+    const pool = [...picks]
+    for (let n = 0; n < maxPicks && pool.length; n++) {
+      if (accepted(pkg)) return pkg
+      const verdict = evaluateTrade(world, partnerId, userTeamId, pkg, [target])
+      const gap = verdict.theyGive - verdict.theyReceive
+      // Read pick values the way this partner does (rebuilders like picks more).
+      const val = (pk: DraftPick) => partnerValue(world, partnerId, { kind: 'pick', id: pk.id }, isRebuilding(partnerId))
+      let idx = pool.findIndex((pk) => val(pk) >= gap)
+      if (idx < 0) idx = pool.length - 1
+      pkg.push({ kind: 'pick', id: pool[idx].id })
+      pool.splice(idx, 1)
+    }
+    return accepted(pkg) ? pkg : null
   }
+
+  // 1. Picks only.
+  const picksOnly = fillWithPicks([], 4)
+  if (picksOnly) candidates.push(picksOnly)
 
   // 2. One player: the cheapest single player who gets it done on his own.
   for (const p of players) {
@@ -295,35 +346,19 @@ export function findPackagesFor(world: World, userTeamId: string, playerId: stri
     }
   }
 
-  // 3. A player just short of the price, plus the cheapest picks that close the gap.
-  let short: Player | null = null
-  for (let i = players.length - 1; i >= 0; i--) {
-    if (!accepted([{ kind: 'player', id: players[i].id }])) {
-      short = players[i]
-      break
-    }
-  }
-  if (short) {
-    const pkg: TradeAsset[] = [{ kind: 'player', id: short.id }]
-    for (const pk of picks) {
-      if (pkg.length >= 4) break
-      pkg.push({ kind: 'pick', id: pk.id })
-      if (accepted(pkg)) {
-        candidates.push([...pkg])
-        break
-      }
-    }
+  // 3. A player short of the price plus the picks that close the gap — tried
+  //    for the user's five most valuable players who can't do it alone.
+  const shortOnes = players.filter((p) => !accepted([{ kind: 'player', id: p.id }])).slice(-5)
+  for (const p of shortOnes) {
+    const pkg = fillWithPicks([{ kind: 'player', id: p.id }], 3)
+    if (pkg) candidates.push(pkg)
   }
 
-  // 4. Players only, greedy ascending value (max three).
-  const playersOnly: TradeAsset[] = []
-  for (const p of players) {
-    if (playersOnly.length >= 3) break
-    playersOnly.push({ kind: 'player', id: p.id })
-    if (accepted(playersOnly)) {
-      candidates.push([...playersOnly])
-      break
-    }
+  // 4. Two players, then picks if still short.
+  if (shortOnes.length >= 2) {
+    const two = shortOnes.slice(-2).map((p) => ({ kind: 'player' as const, id: p.id }))
+    const pkg = fillWithPicks(two, 2)
+    if (pkg) candidates.push(pkg)
   }
 
   const seen = new Set<string>()
