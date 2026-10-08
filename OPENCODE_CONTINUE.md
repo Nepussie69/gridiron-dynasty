@@ -24,6 +24,7 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 | ~~`p5` / `wt-p5`~~ merged | scratchpad/wt-p5 | NEXT_PHASE_L12.md P5 (E2 defense/K/general ratings, E3 recalibrate, `__ratingSpread`) | /private/tmp/gridiron-l12p5.txt | Sim change: verify all 3 seeds in bands, statShape all ✅, equivalence 20/20, spread table. Appends L12 section to HANDOFF.md |
 | `teams` / `wt-teams` | scratchpad/wt-teams | NEXT_PHASE_L12_8.md V1–V3 + backlog #30 trade column filters | /private/tmp/gridiron-l12_8.txt | |
 | `staff` / `wt-staff` | scratchpad/wt-staff | Backlog #41 Staff & Hiring redesign | /private/tmp/gridiron-staff.txt | UI only |
+| `culture` / `wt-culture` | scratchpad/wt-culture | NEXT_PHASE_L12_9.md P2: K1 cohesion in sim + K2 winning-culture discount (approved) | /private/tmp/gridiron-l12_9p2.txt | Sim + pricing; check bands and cap use |
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
 
 ## Queue (after the running pushes)
