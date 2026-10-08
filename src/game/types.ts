@@ -551,6 +551,8 @@ export interface CareerState {
     /** L12 W1: the plan in effect the previous week, for Install's next-week payoff. */
     prev?: { plan: 'balanced' | 'sharpen' | 'install' | 'rest'; week: number }
   }
+  /** L12.6: coached games — call every snap on offense, defense or both (unset = key moments only). */
+  callMode?: 'off' | 'def' | 'both'
   /** L12 W2: the keys to the game picked for a week. */
   keys?: { week: number; season: number; ids: string[] }
   /** L12 W2: the season's key-hit ledger, capped at ±3 leadership. */

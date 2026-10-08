@@ -1125,6 +1125,8 @@ export interface GameCtx {
   matchups?: MatchupSet
   /** L10 G12: the user's workload / rotation settings for this game. */
   usage?: UsageSet
+  /** L12.6: call every snap on this side (coached games only); unset = key moments only. */
+  callAll?: 'off' | 'def' | 'both'
 }
 export interface GameState {
   rng: Rng
@@ -1817,12 +1819,16 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   let call: CallEffect | undefined
   let userDefCall: DefCall | undefined
 
+  // L12.6: in "call every play" mode the user's side is asked on every snap.
+  const callAll = s.ctx?.callAll
   const callTriggered = offIsUser && (!isFourth || fourthChoice === 'go') && (
+    callAll === 'off' || callAll === 'both' ||
     (s.down === 3 && s.distance <= 3) ||
     (s.yard >= 80 && s.down >= 3) ||
     (s.qtr === 4 && s.clock <= 120 && marginOf(s.offId) >= -8 && marginOf(s.offId) <= 0)
   )
   const defCallTriggered = defIsUser && (
+    callAll === 'def' || callAll === 'both' ||
     (s.down === 3 && s.yard >= 40) ||
     (s.qtr === 4 && s.clock <= 120 && marginOf(s.ctx!.userTeamId) >= 1 && marginOf(s.ctx!.userTeamId) <= 8)
   )

@@ -385,6 +385,8 @@ interface GameStore {
   /** L11.5 Q3: adjust one side of the live plan for the rest of the game. */
   setGameDayPlan: (side: 'off' | 'def', plan: GamePlan) => void
   answerGameMoment: (choiceId: string) => Promise<void>
+  /** L12.6: how often a coached game asks for your call (applies from the next snap). */
+  setCallMode: (mode: 'key' | 'off' | 'def' | 'both') => void
   simGameDayToEnd: () => Promise<void>
   abandonGameDay: () => void
   statsDb: () => CareerDatabase
@@ -920,6 +922,16 @@ export const useGame = create<GameStore>((set, get) => ({
   },
   closeMatch: () => set({ match: null }),
 
+  setCallMode: (mode) => {
+    const career = get().career
+    if (!career) return
+    const callMode = mode === 'key' ? undefined : mode
+    const gd = get().gameDay
+    if (gd?.state.ctx) gd.state.ctx.callAll = callMode
+    set({ career: { ...career, callMode }, tick: get().tick + 1 })
+    get().save()
+  },
+
   startGameDay: () => {
     const career = get().career
     if (!career) return
@@ -935,7 +947,8 @@ export const useGame = create<GameStore>((set, get) => ({
     const plan = { off: { ...off }, def: { ...def } }
     setLivePlan({ teamId: career.teamId, off: plan.off, def: plan.def })
     applyUserCoaching(career)
-    const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, ctx)
+    // L12.6: "call every play" only applies to a coached game, never to fast sim.
+    const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, { ...ctx, callAll: career.callMode })
     // L11.5 Q2: run out the first drive so the user sees the game start.
     const moment = runUntil(world, state, 'drive')
     set({

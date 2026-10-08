@@ -394,6 +394,7 @@ export function MatchView() {
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-display text-sm font-700 uppercase tracking-wide">Game day</span>
+                  {career && <CallModePicker scope={gameDay.state.ctx?.scope} mode={career.callMode} />}
                   <span className="text-[11px] text-white/55">
                     {moment ? 'Your call is coming up — the replay is catching up.' : 'Paused. Change the plan in the side panel, or move the game on.'}
                   </span>
@@ -628,6 +629,32 @@ function gameDayFieldPosForPlay(world: World, p: PlayEvent): string {
 }
 
 /** L11.5 Q3: a collapsible in-game plan editor, limited to the side(s) you coach. */
+/** L12.6: how often a coached game stops for your call. */
+function CallModePicker({ scope, mode }: { scope?: 'off' | 'def' | 'both' | 'hc'; mode?: 'off' | 'def' | 'both' }) {
+  const setCallMode = useGame((s) => s.setCallMode)
+  if (!scope) return null
+  const all: { id: 'key' | 'off' | 'def' | 'both'; label: string }[] = [
+    { id: 'key', label: 'Key moments' },
+    ...(scope !== 'def' ? [{ id: 'off' as const, label: 'Every O snap' }] : []),
+    ...(scope !== 'off' ? [{ id: 'def' as const, label: 'Every D snap' }] : []),
+    ...(scope === 'hc' || scope === 'both' ? [{ id: 'both' as const, label: 'Every snap' }] : []),
+  ]
+  const active = mode ?? 'key'
+  return (
+    <div className="inline-flex rounded-lg bg-white/10 p-0.5" title="How often the game stops for your call (from the next snap)">
+      {all.map((o) => (
+        <button
+          key={o.id}
+          onClick={() => setCallMode(o.id)}
+          className={cn('rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase', active === o.id ? 'bg-white text-ink' : 'text-white/65 hover:text-white')}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   const world = useWorld()
   const career = useGame((s) => s.career)
