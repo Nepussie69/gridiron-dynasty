@@ -37,6 +37,7 @@ import {
 import { setSchemeLookup } from '../game/engine/stats'
 import {
   computeHallOfFame,
+  hofEligible,
   newAwardHistory,
   selectHonors,
   type AwardHistory,
@@ -179,7 +180,7 @@ import {
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
-import type { CapMemo, CareerPath, CareerState, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet } from '../game/types'
+import type { CapMemo, CareerPath, CareerState, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, SeasonStats, UsageSet } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
@@ -368,6 +369,10 @@ export interface SaveData {
   activeTeamId: string
   screen: ScreenId
   readNews: Record<string, boolean>
+  /** L12.16 H0: the league's career statistics database (team seasons, retirees). */
+  statDb?: CareerDatabase
+  /** L12.16 H0: season honours and the Hall of Fame ballots/classes. */
+  awards?: AwardHistory
 }
 
 /** A human-readable summary of an available save for the "Continue" card. */
@@ -715,6 +720,9 @@ export const useGame = create<GameStore>((set, get) => ({
 
   startCareer: ({ name, path: chosenPath, archetype, teamId: chosenTeamId, startLevel = 0, seed, scenarioId }) => {
     world = buildWorld(seed ?? (Date.now() % 2147483647), getRealData())
+    // L12.16 H0: a new career starts with an empty league database and no honours.
+    statDb = newDatabase()
+    awards = newAwardHistory()
     initAllPlaybooks()
     // A scenario can override the path, the starting rung and the club.
     const scenario = scenarioById(scenarioId)
@@ -788,6 +796,9 @@ export const useGame = create<GameStore>((set, get) => ({
 
   resetCareer: () => {
     world = buildWorld(20261004, getRealData())
+    // L12.16 H0: a fresh world means a fresh database and award history.
+    statDb = newDatabase()
+    awards = newAwardHistory()
     initAllPlaybooks()
     void clearSave()
     set({ career: null, screen: 'career', tick: get().tick + 1, summary: null, modal: 'none', offers: [], match: null, pendingSave: null, saveInfo: null, saveError: null })
@@ -1377,6 +1388,9 @@ export const useGame = create<GameStore>((set, get) => ({
     const p = get().pendingSave
     if (!p || !p.career) return
     world = migrateWorld(p.world)
+    // L12.16 H0: the league database and award history travel with the save.
+    statDb = restoreStatsDb(p.statDb, world)
+    awards = restoreAwards(p.awards)
     const career = reconcileCareerTeam(world, migrateCareer(p.career))
     set({
       career,
@@ -2453,7 +2467,7 @@ export const useGame = create<GameStore>((set, get) => ({
 
   save: () => {
     const { career, activeTeamId, screen, readNews } = get()
-    void saveGame({ world, career, activeTeamId, screen, readNews })
+    void saveGame({ world, career, activeTeamId, screen, readNews, statDb, awards })
   },
 
   exportSaveText: () => exportSave(),
@@ -2465,6 +2479,8 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     world = migrateWorld(data.world)
+    statDb = restoreStatsDb(data.statDb, world)
+    awards = restoreAwards(data.awards)
     const career = reconcileCareerTeam(world, migrateCareer(data.career))
     set({
       career,
@@ -2936,6 +2952,26 @@ function reconcileCareerTeam(w: World, c: CareerState): CareerState {
 // ── Season transition ────────────────────────────────────────────────────────
 
 /**
+ * L12.16 H0: restore the league database from a save. Saves written before this
+ * field existed are rebuilt from the individual season lines each player still
+ * carries — team seasons and retiree metadata cannot be recovered, which is fine.
+ */
+function restoreStatsDb(saved: CareerDatabase | undefined, w: World): CareerDatabase {
+  if (saved && Array.isArray(saved.teams) && saved.players && typeof saved.players === 'object') return saved
+  const db = newDatabase()
+  recordPlayerSeasons(db, w.players)
+  return db
+}
+
+/** L12.16 H0: restore the award history, migrating a save written before classes. */
+function restoreAwards(saved: AwardHistory | undefined): AwardHistory {
+  if (saved && Array.isArray(saved.seasons) && Array.isArray(saved.hof) && Array.isArray(saved.inducted)) {
+    return { seasons: saved.seasons, hof: saved.hof, inducted: saved.inducted, classes: saved.classes ?? [] }
+  }
+  return newAwardHistory()
+}
+
+/**
  * L12.6 C1/C2: finish the draft class — the AI picks out the board, UDFAs sign —
  * and log the conviction / red-flag calls. Idempotent: once the class is complete
  * it only re-runs the (also idempotent) logging. Marks the stage done.
@@ -2983,10 +3019,29 @@ function runEndOfRegularSeason(
   const mvp = computeMVP()
   world.awards = { mvp: mvp ?? undefined }
 
+  // L12.16 H1: index every player's season BEFORE development, so a retiree's
+  // final line is never lost, and stamp each active player's peak OVR.
+  const idsBeforeDev = new Set(world.players.map((p) => p.id))
+  recordPlayerSeasons(statDb, world.players)
+  for (const p of world.players) {
+    const entry = statDb.players[p.id]
+    if (entry) entry.peakOvr = Math.max(entry.peakOvr ?? 0, p.ovr)
+  }
+
   const retired = developPlayers(
     world,
     career ? { teamId: career.teamId, growth: developmentGrowthMult(career.skills.recruiting) } : undefined,
   )
+  // L12.16 H1: whoever leave the league this year get a retirement stamp.
+  const idsAfterDev = new Set(world.players.map((p) => p.id))
+  for (const id of idsBeforeDev) {
+    if (idsAfterDev.has(id)) continue
+    const entry = statDb.players[id]
+    if (!entry) continue
+    entry.retiredSeason = world.season
+    const last = entry.seasons.reduce<SeasonStats | undefined>((m, s) => (!m || s.season > m.season ? s : m), undefined)
+    entry.lastTeam = entry.lastTeam ?? last?.teamId
+  }
   // L12.11: a respected leader gets his players back on board over the offseason.
   if (career) {
     const morale = leadershipMoraleBonus(career.skills.leadership)
@@ -3065,17 +3120,31 @@ function runEndOfRegularSeason(
 
   // Snapshot the season into the career statistics database.
   recordTeamSeasons(world, statDb, { playoffSeeds: playoffs.seeds, champion: playoffs.champion })
-  recordPlayerSeasons(statDb, world.players)
 
   // Select this season's awards and All-Pro teams from production.
   const nflHonors = selectHonors(world, world.season, 'NFL')
   if (nflHonors) awards.seasons.push(nflHonors)
 
-  // Induct newly eligible legends into the Hall of Fame.
-  const newInductees = computeHallOfFame(world, statDb, new Set(awards.inducted))
-  for (const ind of newInductees) {
+  // L12.16 H2: hold the year's Hall of Fame vote — only retired, cooled-off
+  // players are eligible, and the class is scored on production plus honours.
+  const hofClass = computeHallOfFame(statDb, awards, world.season)
+  // Only record a ballot once somebody is actually eligible — otherwise the
+  // early years clutter the Hall of Fame tab with "0 enshrined" cards.
+  if (hofClass.finalists.length) awards.classes = [...(awards.classes ?? []), hofClass]
+  for (const ind of hofClass.inducted) {
     awards.inducted.push(ind.playerId)
     awards.hof.push(ind)
+  }
+  // L12.16 H3: tell the inbox who was enshrined, naming your own guys first.
+  if (career && hofClass.inducted.length) {
+    const ledgerIds = new Set((career.ledger ?? []).map((e) => e.playerId).filter((x): x is string => !!x))
+    const ordered = [...hofClass.inducted].sort((a, b) => Number(ledgerIds.has(b.playerId)) - Number(ledgerIds.has(a.playerId)))
+    const names = ordered.map((i) => `${i.name} (${i.pos})`).join(', ')
+    pushCareerNews(world, career, {
+      category: 'League',
+      headline: `Class of ${world.season}: ${ordered.map((i) => i.name).join(', ')}`,
+      body: `${names} are enshrined in the Hall of Fame.${ordered.some((i) => ledgerIds.has(i.playerId)) ? ' Your fingerprints are on this class.' : ''}`,
+    })
   }
 
   let scout: ScoutingReport | null = null
@@ -4505,6 +4574,104 @@ export async function careerSmoke(
     violations,
     featuresExercised,
   }
+}
+
+/** One year of the Hall of Fame probe. */
+export interface HofProbeSeason {
+  season: number
+  retirees: number
+  eligible: number
+  finalists: { name: string; pos: string; score: number }[]
+  inducted: { name: string; pos: string; score: number }[]
+}
+
+export interface HofProbeReport {
+  seed: number
+  seasons: number
+  rows: HofProbeSeason[]
+  avgClassAfterWait: number
+  positions: string[]
+  error: string | null
+  roundTrip: { teamsSaved: number; hofSaved: number; teamsLoaded: number; hofLoaded: number; ok: boolean; via: string }
+}
+
+/**
+ * L12.16 H5 dev probe: run full seasons through the store the way `careerSmoke`
+ * does, reporting each year's retirement, ballot and induction — then prove the
+ * league database and Hall of Fame survive a save/load round trip. This drives
+ * the live world exactly like a real career (the store is left on the probe's
+ * world afterwards).
+ */
+export async function hofProbe(seasons = 12, seed = 4242): Promise<HofProbeReport> {
+  const get = () => useGame.getState()
+  get().startCareer({ name: 'HOF Probe', path: 'coach', archetype: 'off', teamId: 'CLE', seed, startLevel: 5 })
+  const rows: HofProbeSeason[] = []
+  let error: string | null = null
+
+  for (let s = 0; s < seasons; s++) {
+    let weeks = 0
+    while (world.phase === 'regular' && weeks < 30) {
+      weeks++
+      await get().advanceWeek()
+      if (get().modal !== 'none') get().dismissModal()
+    }
+    if (world.phase === 'regular') {
+      error = `season ${s + 1}: regular season never ended after ${weeks} advances`
+      break
+    }
+    const season = world.season
+    const cls = (awards.classes ?? []).find((c) => c.season === season)
+    const eligible = hofEligible(statDb, awards, season)
+    const retirees = Object.values(statDb.players).filter((e) => e.retiredSeason === season).length
+    rows.push({
+      season,
+      retirees,
+      eligible: eligible.length,
+      finalists: (cls?.finalists ?? []).map((f) => ({ name: f.name, pos: f.pos, score: f.score })),
+      inducted: (cls?.inducted ?? []).map((i) => ({ name: i.name, pos: i.pos, score: i.score })),
+    })
+    // Offseason → next season, exactly as the calendar does it.
+    if (s < seasons - 1) {
+      await get().advanceWeek()
+      if (get().modal !== 'none') get().dismissModal()
+    }
+  }
+
+  // Average class size once the league has a ballot — i.e. from the first
+  // season where someone has cleared the three-year waiting period.
+  const firstBallot = rows.findIndex((r) => r.eligible > 0)
+  const afterWait = firstBallot >= 0 ? rows.slice(firstBallot) : []
+  const avgClassAfterWait = afterWait.length
+    ? +(afterWait.reduce((n, r) => n + r.inducted.length, 0) / afterWait.length).toFixed(2)
+    : 0
+  const positions = [...new Set(rows.flatMap((r) => r.inducted.map((i) => i.pos)))]
+
+  // Round trip: prefer the real persistence path (browser); fall back to the
+  // same JSON envelope `exportSave`/`importSave` use when IndexedDB is absent.
+  const payload: SaveData = {
+    world,
+    career: get().career,
+    activeTeamId: get().activeTeamId,
+    screen: get().screen,
+    readNews: get().readNews,
+    statDb,
+    awards,
+  }
+  const roundTrip = { teamsSaved: statDb.teams.length, hofSaved: awards.hof.length, teamsLoaded: -1, hofLoaded: -1, ok: false, via: 'json' }
+  await saveGame(payload)
+  const loaded = await loadGame<SaveData>()
+  if (loaded?.data?.statDb && loaded.data.awards) {
+    roundTrip.teamsLoaded = loaded.data.statDb.teams.length
+    roundTrip.hofLoaded = loaded.data.awards.hof.length
+    roundTrip.via = 'idb'
+  } else {
+    const parsed = JSON.parse(JSON.stringify(payload)) as SaveData
+    roundTrip.teamsLoaded = parsed.statDb?.teams.length ?? -1
+    roundTrip.hofLoaded = parsed.awards?.hof.length ?? -1
+  }
+  roundTrip.ok = roundTrip.teamsLoaded === roundTrip.teamsSaved && roundTrip.hofLoaded === roundTrip.hofSaved
+
+  return { seed, seasons, rows, avgClassAfterWait, positions, error, roundTrip }
 }
 
 /** Dev-only probe: run the league play-by-play worker on the current week (no mutation). */
