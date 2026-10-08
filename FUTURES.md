@@ -6,6 +6,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | # | Feature | What it is | Depends on | Status |
 |---|---|---|---|---|
 | 1 | **Full playbook + fullback** (`NEXT_PHASE_L12_10.md`) | Route tree (~26 routes), formations × real concepts, FB position, pick formation → play on calls, ratings visible in the animation | P5 ✅, routes ✅ | 🔨 building (P1: B0–B4) |
+| 1b | **Real NFL numbers retune** (`NEXT_PHASE_REALISM.md`) | Every team stat to the 2015–2024 NFL averages (passing ~241, comp 64%, sacks 2.4, ypc 4.3, red-zone TD 56% …) | playbook, culture | ⏳ next after them |
 | 2 | **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`) | TV field (yard numbers, blue LOS + yellow 1st-down line, end zones, camera follow, result toasts), scorebug/dock, dark mode, ⌘K, screen passes | current batch merged | ⏳ |
 | 3 | **Personnel packages** (L13) | 11/12/21/22 personnel vs Base/Nickel/Dime; who's on the field and the matchups that follow | 1 | ⏳ |
 | 4 | **Special-teams calls** (L13) | Onside kick, fake punt/FG, return strategy; fakes get scouted (tendency memory) | — | ⏳ |

@@ -28,6 +28,7 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
 
 ## Queue (after the running pushes)
+- **NEXT: `NEXT_PHASE_REALISM.md`** (user-approved retune of existing sim constants to NFL 2015–2024) as soon as `playbook` and `culture` are merged. The old 'don't retune passing yards' block is lifted.
 **The long-term build order is `FUTURES.md` — take the top unstarted row, spec it, push it, verify, merge, rebuild 4173, tell the user, tick it.** User playtest requests jump the queue.
 - **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`): U1 game-day field (yard numbers, hashes, blue LOS + yellow first-down line, end-zone gradients, bigger dots, trails, auto-zoom, down&distance chip, result toasts) → U2 scorebug/dock → U3 design system (dark mode, depth, motion, ⌘K) → U4 screen passes. Start after the current pushes merge; U1 also after `routes`.
 0. **L12.10 full playbook** (`NEXT_PHASE_L12_10.md`) — after P5 and `routes` merge. Generic football concepts only (no EA data).
@@ -36,7 +37,7 @@ Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade
 3. Sim record fix: extra points are pushed with `startYard: 2` in `playsim.ts` (~line 1635); should be 85 (the animation already compensates via `snapYard` in `playAnim.ts`). After P5.
 4. Update the frozen 4173 preview: `git -C …/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap checkout --detach main && (cd that dir && npm run build)` — the vite preview on 4173 serves its `dist`; tell the user to reload. (The snap worktree belongs to an older session's scratchpad; if it's gone, create a new worktree and restart `vite preview --port 4173` from the user's terminal.)
 5. After L12: write `NEXT_PHASE_L13.md` per `ROADMAP_L13_L15.md`; the user was shown 20 gameplay ideas (challenges, weather, halftime speech, primetime stakes, holdouts/tags, bye week, cap planner, analytics, press conferences, coaching tree, owner personalities, Hall of Fame + the roadmap ones) and has not picked yet.
-- **Blocked on the user:** L12.9 K2 culture contract discount (contract pricing); team passing yards ~265 vs NFL ~220 (retune needs OK).
+- Nothing blocked on the user right now (culture discount rule and the retune are both approved).
 
 ## Done today (main)
 L12 P2 `e1497f3` · game-day: jersey numbers, Space/Play, extra-point spot `10c7eb8`, live box `c34772a`, play log `ae568dd`, call every play `86b1c28` · L12 P4 `f129307` · potential bubble `3fc162e` · "Success Rate" `c3e3d00` · Stats Hub `1726392` · rookies D1–D4 `2097501` · calendar C1–C3 `983b153` (merged `7265ebb`).
