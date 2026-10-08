@@ -1,5 +1,10 @@
 import { ArrowRight, ChevronRight, TrendingDown, TrendingUp } from 'lucide-react'
-import { money } from '../lib/format'
+import { useMemo } from 'react'
+import { gradeColor, inkOn, money } from '../lib/format'
+import { cn } from '../lib/cn'
+import { depthGroup } from '../game/engine/depth'
+import type { World } from '../game/engine/generate'
+import type { Position } from '../game/types'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import {
   capSpace,
@@ -192,13 +197,22 @@ export function Dashboard() {
               <h3 className="font-display text-lg font-700 uppercase tracking-wide">Unit Grades</h3>
               <Badge tone="team">Scheme: {league.staff[activeTeamId]?.[0]?.scheme ?? 'Balanced'}</Badge>
             </div>
-            <MiniBars
-              items={[
-                { label: 'OFF', value: off, color: 'var(--team)' },
-                { label: 'DEF', value: def, color: '#0b62ff' },
-                { label: 'ST', value: stRating, color: '#c99a2e' },
-              ]}
-            />
+            <div className="flex items-center gap-4">
+              <div className="shrink-0 text-center" title="Team overall (average of the starters)">
+                <OvrBadge value={Math.round(ovr)} size={52} />
+                <div className="mt-1 font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Overall</div>
+              </div>
+              <div className="min-w-0 flex-1">
+                <MiniBars
+                  items={[
+                    { label: 'OFF', value: off, color: 'var(--team)' },
+                    { label: 'DEF', value: def, color: '#0b62ff' },
+                    { label: 'ST', value: stRating, color: '#c99a2e' },
+                  ]}
+                />
+              </div>
+            </div>
+            {isNFL && <PositionGrades teamId={activeTeamId} />}
           </Card>
 
           {/* Culture / cohesion */}
@@ -345,6 +359,55 @@ export function Dashboard() {
           </Card>
         </div>
       </div>
+    </div>
+  )
+}
+
+// User request (2026-10-08): every position group's grade beside OFF / DEF / ST,
+// with its league rank. A group's grade is the average OVR of its starters on the
+// depth chart (healthy players first), the same slice the sim fields.
+const POSITION_GROUPS: { label: string; positions: Position[]; n: number }[] = [
+  { label: 'QB', positions: ['QB'], n: 1 },
+  { label: 'RB', positions: ['RB'], n: 1 },
+  { label: 'WR', positions: ['WR'], n: 3 },
+  { label: 'TE', positions: ['TE'], n: 1 },
+  { label: 'OL', positions: ['OT', 'OG', 'C'], n: 5 },
+  { label: 'DL', positions: ['DE', 'DT'], n: 4 },
+  { label: 'LB', positions: ['LB'], n: 3 },
+  { label: 'CB', positions: ['CB'], n: 3 },
+  { label: 'S', positions: ['S'], n: 2 },
+  { label: 'K/P', positions: ['K', 'P'], n: 2 },
+]
+
+function groupGrade(world: World, teamId: string, g: (typeof POSITION_GROUPS)[number]): number {
+  const list = depthGroup(world, teamId, g.positions, g.n)
+  return list.length ? list.reduce((s, p) => s + p.ovr, 0) / list.length : 0
+}
+
+function PositionGrades({ teamId }: { teamId: string }) {
+  const world = useWorld()
+  const tick = useGame((s) => s.tick)
+  const rows = useMemo(() => {
+    void tick
+    const clubs = world.teams.filter((t) => t.tier === 'NFL').map((t) => t.id)
+    return POSITION_GROUPS.map((g) => {
+      const all = clubs.map((id) => ({ id, v: groupGrade(world, id, g) })).sort((a, b) => b.v - a.v)
+      const mine = all.find((x) => x.id === teamId)
+      return { label: g.label, value: Math.round(mine?.v ?? 0), rank: all.findIndex((x) => x.id === teamId) + 1 }
+    })
+  }, [world, teamId, tick])
+  return (
+    <div className="mt-4 grid grid-cols-5 gap-2 border-t border-line pt-3">
+      {rows.map((r) => {
+        const c = gradeColor(r.value)
+        return (
+          <div key={r.label} className="flex flex-col items-center gap-1 rounded-lg bg-surface-2 px-1 py-2" title={`${r.label}: ${r.value} — ranked ${r.rank} of 32`}>
+            <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">{r.label}</span>
+            <span className="grid h-8 w-9 place-items-center rounded-md font-display text-sm font-700 tnum" style={{ background: c, color: inkOn(c) }}>{r.value}</span>
+            <span className={cn('font-cond text-[10px] font-700 tnum', r.rank <= 8 ? 'text-win' : r.rank >= 25 ? 'text-loss' : 'text-muted')}>#{r.rank}</span>
+          </div>
+        )
+      })}
     </div>
   )
 }
