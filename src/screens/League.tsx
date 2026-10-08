@@ -69,6 +69,7 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
 export function League() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
+  const viewTeam = useGame((s) => s.viewTeam)
   const [selected, setSelected] = useState<string>(activeTeamId)
 
   const groups = leagueGroups('NFL')
@@ -107,7 +108,18 @@ export function League() {
                         selected === id ? 'border-[var(--team)] ring-1 ring-[var(--team)]' : 'border-line',
                       )}
                     >
-                      <TeamCrest team={t} size={36} />
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title={`View the ${t.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          viewTeam(id)
+                        }}
+                        className="cursor-pointer transition hover:opacity-80"
+                      >
+                        <TeamCrest team={t} size={36} />
+                      </span>
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-cond text-sm font-700 uppercase text-ink">
                           {t.tier === 'NFL' ? `${t.city} ${t.name}` : t.name}
@@ -159,6 +171,13 @@ export function League() {
                   <div className="font-display text-lg font-700 tnum">{Math.round(teamAvgOvr(roster))}</div>
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => viewTeam(team.id)}
+                className="mt-3 w-full rounded-lg border border-white/30 bg-black/20 px-3 py-1.5 font-cond text-[11px] font-700 uppercase tracking-wide text-white transition hover:bg-black/30"
+              >
+                View team page
+              </button>
             </div>
           </Card>
 

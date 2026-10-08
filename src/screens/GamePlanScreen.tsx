@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, ClipboardList, Plus, Repeat, Search, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronRight, ClipboardList, Plus, Repeat, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
 import { DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
@@ -16,6 +16,8 @@ import { teamRatings } from '../game/engine/depth'
 import { coachLabels, offStyle } from '../game/engine/playsim'
 import { recordOf, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
+import { TopPlayers } from '../components/TopPlayers'
+import { ScoutButton } from '../components/ScoutClub'
 import { Badge, Button, Card, PageHeader, TeamCrest } from '../ui/kit'
 
 export function GamePlanScreen() {
@@ -23,6 +25,7 @@ export function GamePlanScreen() {
   const career = useGame((s) => s.career)!
   const defaultPlan = useGame((s) => s.defaultPlan)
   const setDefaultPlan = useGame((s) => s.setDefaultPlan)
+  const viewTeam = useGame((s) => s.viewTeam)
   const [side, setSide] = useState<'off' | 'def'>('off')
 
   const team = league.byId[career.teamId]
@@ -98,17 +101,29 @@ export function GamePlanScreen() {
                 <span className="label">Up Next · Week {next.week}</span>
               </div>
               <div className="flex items-center gap-4 p-4">
-                <TeamCrest team={team} size={44} />
-                <div className="flex-1">
-                  <div className="font-display text-lg font-700 uppercase leading-none">{team.name}</div>
-                  <div className="font-cond text-xs text-muted">{recordOf(league, team.id).wins}-{recordOf(league, team.id).losses}</div>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => viewTeam(team.id)}
+                  className="flex flex-1 items-center gap-3 text-left transition hover:opacity-80"
+                >
+                  <TeamCrest team={team} size={44} />
+                  <div>
+                    <div className="font-display text-lg font-700 uppercase leading-none">{team.name}</div>
+                    <div className="font-cond text-xs text-muted">{recordOf(league, team.id).wins}-{recordOf(league, team.id).losses}</div>
+                  </div>
+                </button>
                 <span className="font-display text-faint">vs</span>
-                <div className="flex-1 text-right">
-                  <div className="font-display text-lg font-700 uppercase leading-none">{opp.name}</div>
-                  <div className="font-cond text-xs text-muted">{recordOf(league, opp.id).wins}-{recordOf(league, opp.id).losses}</div>
-                </div>
-                <TeamCrest team={opp} size={44} />
+                <button
+                  type="button"
+                  onClick={() => viewTeam(opp.id)}
+                  className="flex flex-1 items-center justify-end gap-3 text-right transition hover:opacity-80"
+                >
+                  <div>
+                    <div className="font-display text-lg font-700 uppercase leading-none hover:underline">{opp.name}</div>
+                    <div className="font-cond text-xs text-muted">{recordOf(league, opp.id).wins}-{recordOf(league, opp.id).losses}</div>
+                  </div>
+                  <TeamCrest team={opp} size={44} />
+                </button>
               </div>
               <div className="grid grid-cols-2 gap-4 border-t border-line px-4 py-3">
                 <RatingColumn label="You" r={myRatings} />
@@ -117,6 +132,17 @@ export function GamePlanScreen() {
               <div className="space-y-1.5 border-t border-line bg-surface-2/40 px-4 py-2.5">
                 <MatchupLine text="Your offense" mine={myRatings.off} other="their defense" theirs={oppRatings.def} />
                 <MatchupLine text="Your defense" mine={myRatings.def} other="their offense" theirs={oppRatings.off} />
+              </div>
+              {/* L12.8 V2/V3: their best players (hover for ratings) and a scout visit. */}
+              <div className="space-y-2 border-t border-line px-4 py-3">
+                <TopPlayers teamId={opp.id} side="off" n={5} label="Their offense" />
+                <TopPlayers teamId={opp.id} side="def" n={5} label="Their defense" />
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <Button size="sm" variant="ghost" onClick={() => viewTeam(opp.id)}>
+                    View team <ChevronRight size={14} />
+                  </Button>
+                  <ScoutButton teamId={opp.id} />
+                </div>
               </div>
               <div className="border-t border-line px-4 py-2.5 text-xs text-muted">
                 Opponent runs <strong className="text-ink">{opponentScheme}</strong>

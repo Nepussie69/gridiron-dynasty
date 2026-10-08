@@ -69,6 +69,7 @@ export function MatchView() {
   const answerGameMoment = useGame((s) => s.answerGameMoment)
   const simGameDayToEnd = useGame((s) => s.simGameDayToEnd)
   const abandonGameDay = useGame((s) => s.abandonGameDay)
+  const viewTeam = useGame((s) => s.viewTeam)
   const career = useGame((s) => s.career)
 
   const [idx, setIdx] = useState(0)
@@ -478,7 +479,21 @@ export function MatchView() {
                     </button>
                   ))}
                 </div>
-                <BoxScore world={world} teamId={boxTeamId} box={liveBox} gmName={career?.gmName} myTeamId={career?.teamId} />
+                <BoxScore
+                  world={world}
+                  teamId={boxTeamId}
+                  box={liveBox}
+                  gmName={career?.gmName}
+                  myTeamId={career?.teamId}
+                  onTeamClick={
+                    gameDay
+                      ? undefined
+                      : (id) => {
+                          closeMatch()
+                          viewTeam(id)
+                        }
+                  }
+                />
               </div>
             )}
             {activeTab === 'plan' && gameDay && <GameDayPlanPanel gameDay={gameDay} />}
@@ -809,7 +824,7 @@ function MomentCard({ moment, fieldPos, onAnswer }: { moment: Moment; fieldPos: 
   )
 }
 
-export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; gmName?: string; myTeamId?: string }) {
+export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; gmName?: string; myTeamId?: string; onTeamClick?: (teamId: string) => void }) {
   const team = world.byId[teamId]
   const rows = (box ?? []).filter((b) => b.teamId === teamId)
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
@@ -822,10 +837,22 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId }: { world: Worl
   const fp = { gmName, myTeamId, byId }
   return (
     <div className="rounded-lg bg-black/30 p-2">
-      <div className="mb-2 flex items-center gap-2">
-        <TeamCrest team={team} size={22} />
-        <span className="font-display text-sm font-700 uppercase">{team.name}</span>
-      </div>
+      {onTeamClick ? (
+        <button
+          type="button"
+          onClick={() => onTeamClick(team.id)}
+          title={`View the ${team.name}`}
+          className="mb-2 flex items-center gap-2 transition hover:opacity-80"
+        >
+          <TeamCrest team={team} size={22} />
+          <span className="font-display text-sm font-700 uppercase underline-offset-2 hover:underline">{team.name}</span>
+        </button>
+      ) : (
+        <div className="mb-2 flex items-center gap-2">
+          <TeamCrest team={team} size={22} />
+          <span className="font-display text-sm font-700 uppercase">{team.name}</span>
+        </div>
+      )}
       {passing.length > 0 && <BoxBlock title="Passing" rows={passing} fp={fp} cols={[
         { k: 'passComp', l: 'C/ATT', fmt: (r) => `${r.passComp ?? 0}/${r.passAtt ?? 0}` },
         { k: 'passYds', l: 'YDS' }, { k: 'passTD', l: 'TD' }, { k: 'ints', l: 'INT' },

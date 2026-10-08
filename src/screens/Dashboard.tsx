@@ -28,12 +28,14 @@ import { RoomCard } from '../components/RoomCard'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { WeeklyDecision } from '../components/WeeklyDecision'
 import { Badge, Button, Card, Donut, MiniBars, OvrBadge, PageHeader, RatingBar, Stat, TeamCrest } from '../ui/kit'
+import { TopPlayers } from '../components/TopPlayers'
 
 export function Dashboard() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const career = useGame((s) => s.career)!
   const setScreen = useGame((s) => s.setScreen)
+  const viewTeam = useGame((s) => s.viewTeam)
   const selectPlayer = useGame((s) => s.selectPlayer)
 
   const team = league.byId[activeTeamId]
@@ -159,7 +161,11 @@ export function Dashboard() {
                 <div className="label">{next.home ? 'Home' : 'Away'}</div>
               </div>
               <div className="flex items-center gap-4 p-5">
-                <div className="flex flex-1 items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => viewTeam(team.id)}
+                  className="flex flex-1 items-center gap-3 text-left transition hover:opacity-80"
+                >
                   <TeamCrest team={team} size={52} />
                   <div>
                     <div className="font-display text-xl font-700 uppercase leading-none">
@@ -167,20 +173,29 @@ export function Dashboard() {
                     </div>
                     <div className="mt-1 font-cond text-sm text-muted">{recordStr(rec)}</div>
                   </div>
-                </div>
+                </button>
                 <div className="text-center">
                   <div className="font-display text-2xl font-700 uppercase text-faint">vs</div>
                   <Badge tone="info" className="mt-1">{team.abbr && isNFL ? `${team.abbr} - ${opp.abbr}` : 'Matchup'}</Badge>
                 </div>
-                <div className="flex flex-1 items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => viewTeam(opp.id)}
+                  className="flex flex-1 items-center justify-end gap-3 text-right transition hover:opacity-80"
+                >
                   <div className="text-right">
-                    <div className="font-display text-xl font-700 uppercase leading-none">{opp.name}</div>
+                    <div className="font-display text-xl font-700 uppercase leading-none hover:underline">{opp.name}</div>
                     <div className="mt-1 font-cond text-sm text-muted">
                       {recordStr(recordOf(league, opp.id))}
                     </div>
                   </div>
                   <TeamCrest team={opp} size={52} />
-                </div>
+                </button>
+              </div>
+              {/* L12.8 V2: the opponent's best three on each side (hover for ratings). */}
+              <div className="space-y-2 border-t border-line px-4 py-3">
+                <TopPlayers teamId={opp.id} side="off" n={3} label="Their offense" />
+                <TopPlayers teamId={opp.id} side="def" n={3} label="Their defense" />
               </div>
               <div className="flex items-center justify-between border-t border-line bg-surface-2 px-4 py-2.5">
                 <span className="text-xs text-muted">Vegas line: {team.abbr} -3.5 · O/U 44.5</span>

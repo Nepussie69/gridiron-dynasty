@@ -30,6 +30,8 @@ interface Props {
   /** Cap the rows rendered; pair with `onShowMore` for a "Show more" footer. */
   limit?: number
   onShowMore?: () => void
+  /** L12.8 V1: optional per-row action cell (the club page's "Trade for…"). */
+  right?: (p: Player) => ReactNode
 }
 
 function rawValue(
@@ -126,6 +128,7 @@ export function RatingsTable({
   mineTeamId,
   limit,
   onShowMore,
+  right,
 }: Props) {
   const world = useWorld()
   const selectPlayer = useGame((s) => s.selectPlayer)
@@ -244,6 +247,7 @@ export function RatingsTable({
                     {k}
                   </Th>
                 ))}
+                {right && <Th className="sticky top-0 z-20 text-right">Action</Th>}
               </tr>
             </thead>
             <tbody>
@@ -327,6 +331,11 @@ export function RatingsTable({
                         </td>
                       )
                     })}
+                    {right && (
+                      <td className="whitespace-nowrap px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        {right(p)}
+                      </td>
+                    )}
                   </tr>
                 )
               })}

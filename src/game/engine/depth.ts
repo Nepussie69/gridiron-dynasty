@@ -119,3 +119,14 @@ export function teamRatings(world: World, teamId: string): { off: number; def: n
     overall: meanOvr([...offPlayers, ...defPlayers]),
   }
 }
+
+/**
+ * L12.8 V2: the best starters on one side by OVR — the same slice the sim
+ * fields (depth order, healthy players first). Used by the top-player chips.
+ */
+export function topPlayers(world: World, teamId: string, side: 'off' | 'def', n = 5): Player[] {
+  const players = slicePlayers(world, teamId, side === 'off' ? OFF_SLICE : DEF_SLICE)
+  const seen = new Set<string>()
+  const unique = players.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)))
+  return [...unique].sort((a, b) => b.ovr - a.ovr).slice(0, n)
+}

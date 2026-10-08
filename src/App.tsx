@@ -26,6 +26,7 @@ import { StatsHub } from './screens/StatsHub'
 import { Awards } from './screens/Awards'
 import { League } from './screens/League'
 import { Inbox } from './screens/Inbox'
+import { TeamView } from './screens/TeamView'
 
 export default function App() {
   const career = useGame((s) => s.career)
@@ -75,6 +76,7 @@ export default function App() {
         {screen === 'awards' && <Awards />}
         {screen === 'league' && <League />}
         {screen === 'inbox' && <Inbox />}
+        {screen === 'team' && <TeamView />}
       </AppShell>
       <PlayerProfile />
       <SeasonModal />
