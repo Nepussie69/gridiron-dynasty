@@ -424,7 +424,7 @@ function buildNews(teamId: string, teamName: string, _teamTier: string): NewsIte
   const raw: [NewsItem['category'], string, string][] = [
     ['Owner', `${teamName} leadership sets expectations`, `The owner wants measurable progress this season. Performance will be reviewed at year end.`],
     ['Draft', `Scouting department finalizing the board`, `Area scouts are filing final grades. The war room convenes to stack the board and hunt for trade-back scenarios.`],
-    ['League', `League releases updated cap projections`, `The cap is expected to rise again next year, creating flexibility for extension talks.`],
+    ['League', `League confirms a flat salary cap`, `The cap is fixed for the foreseeable future, so every extension is a direct trade against the rest of the roster.`],
     ['Injury', `Starting defender day-to-day`, `A soft-tissue strain will be monitored through the week. No IR decision yet.`],
     ['Staff', `Coordinator interviews on the horizon`, `League sources expect a busy hiring cycle this winter.`],
     ['League', `Combine invites go out to the draft class`, `The top prospects in the class will work out for every club in Indianapolis.`],

@@ -149,6 +149,7 @@ import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/
 import { MAX_SHADOW, canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../game/engine/negotiation'
 import { cultureDiscountFor } from '../game/engine/culture'
+import { canAskGm, gmAskCovers, gmExtendDecision, gmOffer, type GmAskResult } from '../game/engine/gmAsk'
 import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
 import {
   SKILL_KEYS,
@@ -174,12 +175,13 @@ import {
   extendContract,
   makeVeteranContract,
   marketAAV,
+  remainingContractValue,
   restructure,
   summarizeCap,
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
-import type { CapMemo, CareerPath, CareerState, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet } from '../game/types'
+import type { CapMemo, CareerPath, CareerState, Contract, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
@@ -528,6 +530,8 @@ interface GameStore {
   extendPlayer: (id: string) => void
   /** G2: negotiate an extension with a player's agent (negotiate rungs). */
   offerExtension: (playerId: string, offer: ExtensionOffer) => void
+  /** L12.14 C4: a coach asks the AI GM to extend a player (once per season). */
+  askGmToExtend: (playerId: string) => GmAskResult | null
   /** L12.11: spend one unspent skill point for +2 in a skill (max 99). */
   spendSkillPoint: (skill: keyof Skills) => void
   /** G1: add/remove a non-own player from the shadow board (proScout rungs). */
@@ -2146,6 +2150,63 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  askGmToExtend: (playerId) => {
+    const career = get().career
+    if (!career) return null
+    if (!canAskGm(career)) {
+      get().showToast('Only the head coach or a play-caller can ask the GM.')
+      return null
+    }
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+    if (!p) return null
+    if (!gmAskCovers(career, p.pos)) {
+      get().showToast('Coordinators can only ask about their side of the ball.')
+      return null
+    }
+    if (p.contract.years > 2) {
+      get().showToast('The GM only extends players with two years or fewer left.')
+      return null
+    }
+    if (career.gmAsks?.[playerId] === world.season) {
+      get().showToast(`You already asked the GM about ${p.name} this season.`)
+      return null
+    }
+    const result = gmExtendDecision(world, career, p)
+    const asks = { ...(career.gmAsks ?? {}), [playerId]: world.season }
+    let nextCareer: CareerState = { ...career, gmAsks: asks }
+    if (result.outcome === 'extends') {
+      p.contract = buildExtension(p, world.season, gmOffer(p, world.season))
+      nextCareer = {
+        ...nextCareer,
+        gmExtensions: [...(nextCareer.gmExtensions ?? []), { playerId: p.id, season: world.season, name: p.name }],
+      }
+      pushLedger(career, {
+        kind: 'contract',
+        playerId: p.id,
+        name: p.name,
+        pos: p.pos,
+        college: '—',
+        aav: result.aav,
+        ovrAtSign: p.ovr,
+        note: `Asked the GM: extended ${p.name}: ${result.years} yrs, ${money(result.aav)}/yr`,
+      })
+      pushCareerNews(world, nextCareer, {
+        category: 'Roster',
+        headline: `GM extended ${p.name}: ${result.years} yrs / ${money(result.total)}`,
+        body: `Your push got it done. ${p.name} (${p.pos}, age ${p.age}) signs for ${result.years} years, ${money(result.aav)}/yr.`,
+      })
+      get().showToast(`GM extended ${p.name}: ${result.years} yrs / ${money(result.total)}.`)
+    } else {
+      const label = result.outcome === 'declined' ? 'GM declined' : 'GM: not now'
+      pushCareerNews(world, nextCareer, { category: 'Roster', headline: `${label} — ${p.name}`, body: result.message })
+      get().showToast(result.message)
+    }
+    set({ career: nextCareer })
+    bump(set, get)
+    get().save()
+    return result
+  },
+
   spendSkillPoint: (skill) => {
     const career = get().career
     if (!career) return
@@ -3400,6 +3461,38 @@ function runEndOfRegularSeason(
       repP.leadership = clamp(repP.leadership + Math.min(3, acceptedPitches), 0, 100)
       careerNext = { ...careerNext, reputation: repP }
     }
+    // L12.14 C4: a GM extension the coach pushed for pays off — +1 leadership for
+    // each extended player who starts and produces, capped at +3 for the feature.
+    const gmExts = (careerNext.gmExtensions ?? []).filter((g) => !g.awarded)
+    if (gmExts.length) {
+      let gmAwarded = 0
+      const updated = (careerNext.gmExtensions ?? []).map((g) => {
+        if (g.awarded) return g
+        const player = world.players.find((x) => x.id === g.playerId)
+        if (!player || !player.teamId) return { ...g, awarded: true }
+        const line = (player.stats ?? []).find((s) => s.season === world.season && s.level === 'NFL')
+        const idx = depthAt(world, player.teamId, player.pos).findIndex((x) => x.id === player.id)
+        const starts = idx >= 0 && idx < (STARTERS[player.pos] ?? 1)
+        if (starts && (line?.games ?? 0) >= 8) {
+          gmAwarded++
+          return { ...g, awarded: true }
+        }
+        return g
+      })
+      careerNext = { ...careerNext, gmExtensions: updated }
+      if (gmAwarded > 0) {
+        const gain = Math.min(3, gmAwarded)
+        careerNext = {
+          ...careerNext,
+          reputation: { ...careerNext.reputation, leadership: clamp(careerNext.reputation.leadership + gain, 0, 100) },
+        }
+        careerNext = logMoment(careerNext, {
+          week: careerNext.week,
+          text: `The players you pushed the GM to lock up delivered (leadership +${gain}).`,
+          tone: 'win',
+        })
+      }
+    }
     // G3: summarise what the room's reps produced.
     if (roomGains.length) {
       const total = roomGains.reduce((s, g) => s + (g.to - g.from), 0)
@@ -4149,6 +4242,170 @@ export function adviceProbe() {
 /** Dev-only balance probe: run whole seasons headlessly and report the long arc. */
 export function balanceProbe(seasons = 10, path: 'coach' | 'personnel' = 'personnel') {
   return runBalance({ seasons, path, seed: world.seed, data: getRealData() })
+}
+
+/** L12.14 C2: 2025 top-of-market bands by position (dollars). */
+const MARKET_BANDS: Record<string, [number, number]> = {
+  QB: [55e6, 60e6], DE: [40e6, 46e6], WR: [35e6, 40e6], DT: [30e6, 34e6],
+  OT: [28e6, 30e6], CB: [25e6, 30e6], OG: [20e6, 23e6], S: [20e6, 20e6],
+  LB: [20e6, 20e6], RB: [19e6, 19e6], TE: [17e6, 19e6], C: [18e6, 18e6],
+  K: [6e6, 6e6], P: [4e6, 4e6],
+}
+
+export interface MarketRow {
+  pos: Position
+  top5: number
+  top: number
+  /** Pre-fit market AAV: average `marketAAV` of the position's top-5 OVR players. */
+  mkt5: number
+  band: [number, number]
+  /** Signed % the top-5 AAV sits outside its band (0 when inside). */
+  dev: number
+  n: number
+}
+
+/**
+ * Dev-only probe (L12.14 C2): the generated/real top-5 AAV by position against
+ * the 2025 top-of-market bands. A position is "out of band" only when its top-5
+ * average is more than 15% outside its band. Reports both the fitted contract
+ * AAV and the pre-fit market AAV (which is what POS_TOP actually controls).
+ */
+export function marketProbe() {
+  const w = buildWorld(Number.isFinite(world.seed) ? world.seed : 33333, getRealData())
+  const order: Position[] = ['QB', 'DE', 'WR', 'DT', 'OT', 'CB', 'OG', 'S', 'LB', 'RB', 'TE', 'C', 'K', 'P']
+  const rows: MarketRow[] = order.map((pos) => {
+    const roster = w.players.filter((p) => p.pos === pos && p.teamId)
+    const aavs = roster
+      .map((p) => p.contract.annual)
+      .sort((a, b) => b - a)
+      .slice(0, 5)
+    const top5 = aavs.length ? aavs.reduce((s, v) => s + v, 0) / aavs.length : 0
+    const top = aavs[0] ?? 0
+    const topOvr = [...roster].sort((a, b) => b.ovr - a.ovr).slice(0, 5)
+    const mkt5 = topOvr.length ? topOvr.reduce((s, p) => s + marketAAV(p.ovr, p.pos, p.age), 0) / topOvr.length : 0
+    const band = MARKET_BANDS[pos] ?? [0, 0]
+    const [lo, hi] = band
+    let dev = 0
+    if (hi > 0 && mkt5 > hi) dev = (mkt5 - hi) / hi
+    else if (lo > 0 && mkt5 < lo) dev = (mkt5 - lo) / lo
+    return {
+      pos,
+      top5: Math.round(top5),
+      top: Math.round(top),
+      mkt5: Math.round(mkt5),
+      band: [Math.round(lo), Math.round(hi)] as [number, number],
+      dev: +(dev * 100).toFixed(1),
+      n: aavs.length,
+    }
+  })
+  return { seed: w.seed, rows, outOfBand: rows.filter((r) => Math.abs(r.dev) > 15).map((r) => r.pos) }
+}
+
+export interface DeadMoneyRow {
+  name: string
+  pos: Position
+  years: number
+  dead: number
+  remaining: number
+  over: boolean
+}
+
+/**
+ * Dev-only probe (L12.14 C3): the biggest dead-money values in the league against
+ * each contract's remaining total value. Scans the opening world and also runs
+ * the extension path (the old formula drifted there), listing the 20 largest.
+ * No case may exceed the remaining value.
+ */
+export function deadMoneyProbe() {
+  const w = buildWorld(Number.isFinite(world.seed) ? world.seed : 33333, getRealData())
+  const rows: DeadMoneyRow[] = []
+  const add = (label: string, p: Player, c: Contract) => {
+    const dead = deadMoney(c)
+    const remaining = remainingContractValue(c)
+    rows.push({ name: label, pos: p.pos, years: c.years, dead, remaining, over: dead > remaining })
+  }
+  for (const p of w.players) {
+    if (!p.teamId || p.contract.years <= 0) continue
+    add(p.name, p, p.contract)
+  }
+  // Exercise the path the old formula over-counted: extension pricing.
+  const expiring = w.players
+    .filter((p) => p.teamId && p.contract.years > 0 && p.contract.years <= 2)
+    .sort((a, b) => b.ovr - a.ovr)
+    .slice(0, 40)
+  for (const p of expiring) {
+    const offer: ExtensionOffer = { years: 4, aav: marketAsk(p, w.season), guarantee: 'high' }
+    add(`${p.name} (ext)`, p, buildExtension(p, w.season, offer))
+  }
+  rows.sort((a, b) => b.dead - a.dead)
+  return {
+    scanned: rows.length,
+    exceeds: rows.filter((r) => r.over).length,
+    nonFinite: rows.filter((r) => !Number.isFinite(r.dead) || !Number.isFinite(r.remaining)).length,
+    top20: rows.slice(0, 20),
+  }
+}
+
+export interface GmAskProbeRow {
+  name: string
+  pos: Position
+  ovr: number
+  age: number
+  yearsLeft: number
+  outcome?: GmAskResult['outcome']
+  reason?: GmAskResult['reason']
+  years?: number
+  aav?: number
+}
+
+/**
+ * Dev-only probe (L12.14 C4): start a head-coach career and ask the GM to extend
+ * three eligible players, reporting each outcome. A spread of yes / not-now /
+ * declined is the goal.
+ */
+export function askGmProbe(seed = 33333) {
+  const get = () => useGame.getState()
+  get().startCareer({ name: 'GM Ask', path: 'coach', archetype: 'off', teamId: 'CLE', seed, startLevel: 7 })
+  // Pick a club that actually has a young, extension-worthy player so the probe
+  // can show a yes as well as a no. (At the start only expiring veterans are
+  // eligible at most clubs.)
+  let teamId = get().career!.teamId
+  let bestOvr = -1
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL') continue
+    for (const p of world.roster[t.id] ?? []) {
+      if (p.contract.years <= 2 && p.age <= 31 && p.ovr >= 86 && p.ovr > bestOvr) {
+        bestOvr = p.ovr
+        teamId = t.id
+      }
+    }
+  }
+  if (teamId !== get().career!.teamId) {
+    get().startCareer({ name: 'GM Ask', path: 'coach', archetype: 'off', teamId, seed, startLevel: 7 })
+  }
+  const career = get().career!
+  const roster = world.roster[career.teamId] ?? []
+  const eligible = roster.filter((p) => p.contract.years <= 2).sort((a, b) => b.ovr - a.ovr)
+  // A spread by age, so the probe exercises yes / not-now / declined.
+  const buckets = [eligible.filter((p) => p.age <= 26), eligible.filter((p) => p.age >= 27 && p.age <= 29), eligible.filter((p) => p.age >= 30)]
+  const picks: Player[] = []
+  for (const b of buckets) if (b[0]) picks.push(b[0])
+  for (const p of eligible) {
+    if (picks.length >= 3) break
+    if (!picks.includes(p)) picks.push(p)
+  }
+  const results: GmAskProbeRow[] = picks.map((p) => {
+    const row: GmAskProbeRow = { name: p.name, pos: p.pos, ovr: p.ovr, age: p.age, yearsLeft: p.contract.years }
+    const r = get().askGmToExtend(p.id)
+    if (r) {
+      row.outcome = r.outcome
+      row.reason = r.reason
+      row.years = r.years
+      row.aav = r.aav
+    }
+    return row
+  })
+  return { teamId: career.teamId, season: world.season, eligible: eligible.length, results }
 }
 
 export interface SkillEffectRow {

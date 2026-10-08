@@ -53,9 +53,9 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 47 | 2026-10-08 | Blitz only shows 4 rushers | Claude: plays record `blitz`; animation sends 1–2 LBs (+ sometimes a S) at the QB | ✅ |
 | 48 | 2026-10-08 | Every O / D / all snap stopped asking after a couple of calls (went automated) | Claude: per-game cap of 2 play calls lifted in every-snap modes (full game: 86 O calls, 47 D calls) | ✅ |
 | 49 | 2026-10-08 | Make playbook learning realistic, in the gameplay sim, tied to player production | NEXT_PHASE_L12_13.md M1–M4 | 🔨 building |
-| 50 | 2026-10-08 | (seen in the screenshot) Dead money looks too large (e.g. $115.5M on a $45.6M cap hit) | L12.14 C3 | 🔨 building |
-| 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | 🔨 building |
-| 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | 🔨 building |
+| 50 | 2026-10-08 | (seen in the screenshot) Dead money looks too large (e.g. $115.5M on a $45.6M cap hit) | L12.14 C3 | ✅ merged |
+| 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | ✅ merged |
+| 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | ✅ merged |
 | 53 | 2026-10-08 | Head coach + GM work together: ask to extend, restructure for a push, go get a trade/FA target, release a player | L12.14 C6 (GM requests desk) | ⏳ after contracts P1 |
 | 54 | 2026-10-08 | Too many franchise players: only a few 90+, more 80s | NEXT_PHASE_L12_15.md S1–S4 (82 at 90+ today → ~25–32) | ⏳ after contracts merges |
 | 55 | 2026-10-08 | How much each rating matters + table; missed tackles in gameplay; realism vs NFL last 5–10 years | Table given in chat (47/48 ratings in the sim, RTE unused); missed tackles → NEXT_PHASE_REALISM.md R5 | ⏳ with the retune |
@@ -69,3 +69,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 63 | 2026-10-08 | Don't worry about press conferences | Push `press` stopped, nothing merged; FUTURES row 20 marked dropped | ✅ |
 | 64 | 2026-10-08 | (Trade desk screenshot) Too easy to get a franchise QB — should be much harder, based on past NFL trades | Claude: position values (QB ×2.2 … RB ×0.7, K/P ×0.3) + starting-QB premium (85+ ×1.7, 78+ ×1.4); deal finder fills gaps with right-sized picks. Starting QBs now ~2.5–4 firsts, Mahomes not available | ✅ |
 | 65 | 2026-10-08 | Trade values seem all wrong (Garrett 99 valued below Ward 90) | Claude: new playerTradeValue — steep at the top (99 ≈ 2× a 90), young players at expected rating, smooth position-specific age decline (no cliff at 30), position value | ✅ |
+| 66 | 2026-10-08 | Don't offer same-position players in trade packages unless significantly lower value | Claude: findPackagesFor skips your players at the target's position unless worth < 60% of him | ✅ |

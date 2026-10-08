@@ -304,8 +304,13 @@ export function findPackagesFor(world: World, userTeamId: string, playerId: stri
 
   const roster = world.roster[userTeamId] ?? []
   // Never strip the user of his last body at a position (same rule as findDeals).
+  // Don't hand back a player at the target's own position unless he's clearly
+  // the lesser player (under 60% of the target's value): nobody swaps one star
+  // edge rusher for another.
+  const targetValue = playerTradeValue(targetPlayer)
   const players = [...roster]
     .filter((p) => roster.filter((x) => x.pos === p.pos).length > 1)
+    .filter((p) => p.pos !== targetPlayer.pos || playerTradeValue(p) < targetValue * 0.6)
     .sort((a, b) => playerTradeValue(a) - playerTradeValue(b) || a.id.localeCompare(b.id))
   const picks = world.draftPicks
     .filter((pk) => pk.ownerTeam === userTeamId && isTradeablePick(world, pk))
