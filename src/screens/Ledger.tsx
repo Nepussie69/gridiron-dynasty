@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { BookOpen, Check, Minus, Target, X } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { ledgerHitRate, myGuys } from '../game/engine/ledger'
+import { COACHING_KINDS, ledgerHitRate, myGuys } from '../game/engine/ledger'
 import { tradeTree, type TradeNode, type TradeVerdict } from '../game/engine/tradeTree'
 import type { LedgerEntry, TradeAssetSnap } from '../game/types'
 import type { World } from '../game/engine/generate'
@@ -15,6 +15,13 @@ const KIND_META: Record<LedgerEntry['kind'], { label: string; tone: 'win' | 'los
   advice: { label: 'Advice', tone: 'warn' },
   develop: { label: 'Develop', tone: 'win' },
   contract: { label: 'Contract', tone: 'info' },
+  // L12.9 L1: the coaching track.
+  fourth: { label: '4th down', tone: 'warn' },
+  two: { label: '2-pt try', tone: 'warn' },
+  playCall: { label: 'Play calls', tone: 'info' },
+  keys: { label: 'Keys', tone: 'info' },
+  film: { label: 'Film', tone: 'neutral' },
+  pitch: { label: 'Pitch', tone: 'gold' },
 }
 
 const VERDICT_TONE: Record<TradeVerdict, 'win' | 'loss' | 'neutral' | 'info'> = {
@@ -83,11 +90,20 @@ export function Ledger() {
   const world = useWorld()
   const career = useGame((s) => s.career)!
   const [tab, setTab] = useState<'calls' | 'guys' | 'trades'>('calls')
+  const [filter, setFilter] = useState<'all' | 'coaching'>('all')
 
   const rate = ledgerHitRate(career)
   const entries = career.ledger ?? []
   const guys = myGuys(world, career)
   const tree = tradeTree(world, career)
+  // L12.9 L1: the coaching track's header and its résumé of graded calls.
+  const isCoach = career.path === 'coach'
+  const coaching = entries.filter((e) => COACHING_KINDS.has(e.kind))
+  const seasonCalls = entries.filter((e) => e.season === career.season)
+  const ranked = [...coaching].filter((e) => e.myGrade != null).sort((a, b) => (b.myGrade ?? 0) - (a.myGrade ?? 0))
+  const bestCall = ranked.find((e) => e.hit === true) ?? ranked[0]
+  const worstCall = [...ranked].reverse().find((e) => e.hit === false) ?? ranked[ranked.length - 1]
+  const shown = filter === 'coaching' ? coaching : entries
 
   return (
     <div>
@@ -114,26 +130,52 @@ export function Ledger() {
       />
 
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card>
-          <Stat label="Success Rate" value={rate.calls ? `${rate.pct}%` : '—'} sub={`${rate.hits} / ${rate.calls} graded`} tone={rate.pct >= 60 ? 'win' : rate.pct >= 45 ? undefined : 'loss'} />
-        </Card>
-        <Card><Stat label="Total Calls" value={entries.length} sub="logged to your résumé" /></Card>
-        <Card><Stat label="My Guys" value={guys.length} sub="picks & blue-chip calls" /></Card>
-        <Card><Stat label="Awaiting Grade" value={entries.filter((e) => e.hit === undefined).length} sub="too early to judge" /></Card>
+        {isCoach ? (
+          <>
+            <Card><Stat label="Calls This Season" value={seasonCalls.length} sub={`${coaching.length} on the coaching résumé`} /></Card>
+            <Card>
+              <Stat label="Success Rate" value={rate.calls ? `${rate.pct}%` : '—'} sub={`${rate.hits} / ${rate.calls} graded`} tone={rate.pct >= 60 ? 'win' : rate.pct >= 45 ? undefined : 'loss'} />
+            </Card>
+            <Card><Stat label="Best Call" value={bestCall?.name ?? '—'} sub={bestCall?.note ?? 'No graded calls yet'} tone={bestCall ? 'win' : undefined} /></Card>
+            <Card><Stat label="Worst Call" value={worstCall?.name ?? '—'} sub={worstCall?.note ?? 'No graded calls yet'} tone={worstCall ? 'loss' : undefined} /></Card>
+          </>
+        ) : (
+          <>
+            <Card>
+              <Stat label="Success Rate" value={rate.calls ? `${rate.pct}%` : '—'} sub={`${rate.hits} / ${rate.calls} graded`} tone={rate.pct >= 60 ? 'win' : rate.pct >= 45 ? undefined : 'loss'} />
+            </Card>
+            <Card><Stat label="Total Calls" value={entries.length} sub="logged to your résumé" /></Card>
+            <Card><Stat label="My Guys" value={guys.length} sub="picks & blue-chip calls" /></Card>
+            <Card><Stat label="Awaiting Grade" value={entries.filter((e) => e.hit === undefined).length} sub="too early to judge" /></Card>
+          </>
+        )}
       </div>
 
       {tab === 'calls' ? (
         <Card pad={false}>
-          <div className="border-b border-line px-4 py-2">
+          <div className="flex items-center gap-2 border-b border-line px-4 py-2">
             <span className="label">Career Ledger</span>
+            <div className="ml-auto flex rounded-lg bg-surface-2 p-0.5">
+              {(['all', 'coaching'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={cn('rounded-md px-3 py-1 font-cond text-[11px] font-700 uppercase', filter === f ? 'bg-white text-ink shadow-sm' : 'text-muted')}
+                >
+                  {f === 'all' ? 'All' : `Coaching (${coaching.length})`}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="max-h-[640px] divide-y divide-line/60 overflow-y-auto">
-            {entries.length === 0 && (
+            {shown.length === 0 && (
               <div className="px-4 py-10 text-center text-sm text-muted">
-                No calls yet. Scout a prospect, file a recommendation, and make a pick — it all lands here.
+                {isCoach || filter === 'coaching'
+                  ? 'No calls yet. Your 4th-down and 2-point decisions, play calls, keys to the game, film grades and starter pitches land here, graded.'
+                  : 'No calls yet. Scout a prospect, file a recommendation, and make a pick — it all lands here.'}
               </div>
             )}
-            {entries.map((e) => {
+            {shown.map((e) => {
               const meta = KIND_META[e.kind]
               return (
                 <div key={e.id} className="flex items-start gap-3 px-4 py-2.5">
@@ -148,7 +190,9 @@ export function Ledger() {
                       {e.redFlag && <Badge tone="warn">Red flag</Badge>}
                       {e.redFlag && e.hit === true && <Badge tone="win">Red flag held</Badge>}
                       <span className="truncate font-600 text-ink">{e.name}</span>
-                      <span className="font-cond text-[11px] font-700 uppercase text-muted">{e.pos} · {e.college}</span>
+                      {(e.pos || e.college) && (
+                        <span className="font-cond text-[11px] font-700 uppercase text-muted">{[e.pos, e.college].filter(Boolean).join(' · ')}</span>
+                      )}
                     </div>
                     <div className="mt-0.5 text-xs text-muted">
                       {e.season} · {e.role ?? '—'} · {e.note}

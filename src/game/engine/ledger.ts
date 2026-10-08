@@ -9,9 +9,17 @@
 // you championed. This is what makes the one-living-universe hook felt.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CareerState, LedgerEntry, Player, Recommendation } from '../types'
+import type { CareerState, LedgerEntry, LedgerKind, Player, Recommendation } from '../types'
 import type { World } from './generate'
 import { tierFor } from './career'
+import type { GameSim } from './playsim'
+import { fourthDownEV, twoPointChoice, type Situation } from './decisions'
+import { kickPowerFor, playIndexOf, type FilmGrade } from './film'
+import type { KeyGrade } from './keys'
+import { clamp } from './rng'
+
+/** L12.9 L1: the coaching-track call kinds (the "Coaching" Ledger filter). */
+export const COACHING_KINDS: ReadonlySet<LedgerKind> = new Set(['fourth', 'two', 'playCall', 'keys', 'film', 'pitch'])
 
 /** How many seasons a drafted player needs before we grade the pick. */
 const PICK_EVAL_SEASONS = 2
@@ -70,6 +78,15 @@ function gradeEntry(world: World, e: LedgerEntry): boolean | undefined {
     if (e.redFlag) return p.ovr < RED_FLAG_BUST_OVR
     return p.ovr >= PICK_HIT_OVR
   }
+  if (e.kind === 'pitch') {
+    // L12.9 L1: an accepted starter pitch is graded at season end by whether the
+    // promoted player actually held the job (games played, a snaps proxy).
+    if (world.season <= e.season) return undefined
+    const p = e.playerId ? world.players.find((x) => x.id === e.playerId) : undefined
+    if (!p) return false
+    const s = (p.stats ?? []).find((x) => x.season === e.season && x.level === 'NFL')
+    return (s?.games ?? 0) >= 8
+  }
   if (e.kind === 'contract') {
     if (world.season - e.season < 2) return undefined
     const p = e.playerId ? world.players.find((x) => x.id === e.playerId) : undefined
@@ -102,8 +119,15 @@ export function gradeLedger(world: World, career: CareerState): { graded: number
           ? `Extension aged badly: ${e.name} down to ${ovr}.`
           : `Extension aged badly: ${e.name} is out of the league.`
     }
+    // L12.9 L1: an accepted pitch gets a bespoke season-end outcome.
+    if (e.kind === 'pitch' && result !== undefined) {
+      const games = p ? ((p.stats ?? []).find((x) => x.season === e.season && x.level === 'NFL')?.games ?? 0) : 0
+      e.outcome = result
+        ? `Your pitch held: ${e.name} started ${games} games.`
+        : `Your pitch went nowhere: ${e.name} managed only ${games} games.`
+    }
     // For picks, refresh the outcome text as the player develops.
-    if (p && !e.vindication && e.kind !== 'contract') {
+    if (p && !e.vindication && (e.kind === 'pick' || e.kind === 'advice' || e.kind === 'recommendation')) {
       if (e.redFlag) {
         if (result === true) e.outcome = `Red flag held: ${p.name} stalled at ${p.ovr}.`
         else if (result === false) e.outcome = `Red flag missed: ${p.name} became a ${p.ovr}.`
@@ -138,4 +162,138 @@ export function myGuys(world: World, career: CareerState): MyGuy[] {
     const player = entry.playerId ? world.players.find((x) => x.id === entry.playerId) : undefined
     return { entry, player, ovr: player?.ovr }
   })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// L12.9 L1: the coaching Ledger.
+//
+// After each game the coach's calls are dated and graded — the résumé a coach
+// actually builds. At most six entries per game (film, the play-call count and
+// the keys first, then the 4th-down and 2-point calls), grouped by week in the UI.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Did a 4th-down call convert (a first down or touchdown)? */
+function fourthConverted(sim: GameSim, index: number, choiceId: string, distance: number): boolean {
+  const p = sim.plays[index]
+  if (!p) return false
+  if (choiceId === 'punt') return false
+  if (choiceId === 'fg') return /is good/i.test(p.result)
+  return !p.turnover && (p.endYard >= 100 || p.yards >= distance)
+}
+
+/** Did a 2-point try / PAT convert? */
+function twoConverted(sim: GameSim, index: number): boolean {
+  const p = sim.plays[index]
+  if (!p) return false
+  return /good/i.test(p.result) && !/failed/i.test(p.result)
+}
+
+/**
+ * Append one game's coaching calls to the Ledger. `film` and `keyGrades` are the
+ * grades already computed in the store; the 4th-down and 2-point calls are read
+ * back from the sim's decision log. Returns the number of entries written.
+ */
+export function logCoachCalls(
+  career: CareerState,
+  world: World,
+  sim: GameSim,
+  userTeamId: string,
+  keyGrades: KeyGrade[],
+  film: FilmGrade | null,
+): number {
+  const oppId = sim.homeId === userTeamId ? sim.awayId : sim.homeId
+  const opp = world.byId[oppId]
+  const oppTag = opp?.abbr ?? oppId
+  const decisions = sim.decisions ?? []
+  const pending: Omit<LedgerEntry, 'id' | 'season' | 'week'>[] = []
+
+  // 1. Film grade (≥ B hit, ≤ D miss, a C is left ungraded).
+  if (film) {
+    pending.push({
+      kind: 'film',
+      name: `Game film vs ${oppTag}`,
+      pos: '—',
+      college: '—',
+      myGrade: film.grade,
+      hit: film.grade >= 83 ? true : film.grade < 70 ? false : undefined,
+      note: `Film grade ${film.letter} (${film.grade})`,
+      outcome: film.lines[0],
+    })
+  }
+
+  // 2. The call-matrix count: won/lost/push across the game's play calls.
+  const calls = decisions.filter((d) => (d.kind === 'call' || d.kind === 'defCall') && d.outcome)
+  if (calls.length) {
+    const won = calls.filter((d) => d.outcome === 'won').length
+    const lost = calls.filter((d) => d.outcome === 'lost').length
+    const push = calls.length - won - lost
+    pending.push({
+      kind: 'playCall',
+      name: `Play calls vs ${oppTag}`,
+      pos: '—',
+      college: '—',
+      myGrade: clamp(70 + (won - lost) * 5, 0, 100),
+      hit: won >= lost,
+      note: `${won} won · ${lost} lost · ${push} push`,
+    })
+  }
+
+  // 3. Keys to the game: both hit / none hit are graded; a split is left out.
+  if (keyGrades.length) {
+    const hits = keyGrades.filter((g) => g.hit).length
+    if (hits === keyGrades.length || hits === 0) {
+      pending.push({
+        kind: 'keys',
+        name: `Keys vs ${oppTag}`,
+        pos: '—',
+        college: '—',
+        myGrade: hits === keyGrades.length ? 88 : 48,
+        hit: hits === keyGrades.length,
+        note: keyGrades.map((g) => `${g.label} ${g.hit ? '✓' : '✗'}`).join(' · '),
+      })
+    }
+  }
+
+  // 4. 4th-down and 2-point calls: hit if the EP model agreed or the play converted.
+  const kickPower = kickPowerFor(world, userTeamId)
+  for (const d of decisions) {
+    if (d.kind === 'fourth') {
+      const realCall = (d.yard >= 35 && (d.distance ?? 99) <= 5) || d.yard >= 52
+      if (d.source !== 'user' && !realCall) continue
+      const sit: Situation = { yard: d.yard, down: 4, distance: d.distance ?? 0, qtr: d.qtr, clockSec: 0, margin: d.margin }
+      const ev = fourthDownEV(sit, kickPower)
+      const allowed: ('go' | 'fg' | 'punt')[] = ev.fg == null ? ['go', 'punt'] : ['go', 'fg', 'punt']
+      const evOf = (id: string) => (id === 'go' ? ev.go : id === 'fg' ? (ev.fg as number) : ev.punt)
+      const best = allowed.reduce((a, b) => (evOf(b) > evOf(a) ? b : a), allowed[0])
+      const agreed = d.choiceId === best
+      const converted = fourthConverted(sim, playIndexOf(d.momentId), d.choiceId, d.distance ?? 0)
+      const verb = d.choiceId === 'go' ? 'Went for it' : d.choiceId === 'fg' ? 'Kicked the FG' : 'Punted'
+      pending.push({
+        kind: 'fourth',
+        name: `4th & ${d.distance} at ${d.yard >= 50 ? `their ${100 - d.yard}` : `your ${d.yard}`}`,
+        pos: '—',
+        college: '—',
+        myGrade: agreed ? 90 : converted ? 76 : 45,
+        hit: agreed || converted,
+        note: `${verb} — staff EV said ${best}${converted && !agreed ? ' · converted' : ''}`,
+      })
+    } else if (d.kind === 'two' && d.source === 'user') {
+      const best = twoPointChoice('chart', d.margin, d.qtr)
+      const agreed = d.choiceId === best
+      const converted = twoConverted(sim, playIndexOf(d.momentId))
+      pending.push({
+        kind: 'two',
+        name: 'Two-point try',
+        pos: '—',
+        college: '—',
+        myGrade: agreed ? 88 : converted ? 74 : 48,
+        hit: agreed || converted,
+        note: `${d.choiceId === 'go2' ? 'Went for two' : 'Kicked the PAT'} — chart said ${best}${converted && !agreed ? ' · converted' : ''}`,
+      })
+    }
+  }
+
+  // 5. Keep it readable: at most six entries a game.
+  for (const e of pending.slice(0, 6)) pushLedger(career, e)
+  return Math.min(6, pending.length)
 }

@@ -456,7 +456,20 @@ export interface JobOffer {
   note: string
 }
 
-export type LedgerKind = 'grade' | 'recommendation' | 'pick' | 'advice' | 'develop' | 'contract'
+export type LedgerKind =
+  | 'grade'
+  | 'recommendation'
+  | 'pick'
+  | 'advice'
+  | 'develop'
+  | 'contract'
+  // L12.9 L1: the coaching track's calls.
+  | 'fourth'
+  | 'two'
+  | 'playCall'
+  | 'keys'
+  | 'film'
+  | 'pitch'
 export interface LedgerEntry {
   id: string
   season: number
@@ -577,8 +590,10 @@ export interface CareerState {
   combine?: { season: number; hoursLeft: number; seen: string[] }
   /** The region you're assigned to scout (drives information scope). */
   scoutRegion?: string
-  /** Weekly time budget (#5). Reset each week. */
+  /** Weekly time budget (#5). Legacy save field — ignored since L12.9 H1. */
   hoursLeft?: number
+  /** L12.9 H1: fractional passive-gain accumulator, keyed by action. */
+  passiveBank?: Record<string, number>
   /** Season in which the annual set piece was resolved (#6). */
   setPieceDone?: number
   /** Current stretch assignment / interim job (#8). */
