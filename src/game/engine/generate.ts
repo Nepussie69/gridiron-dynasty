@@ -55,6 +55,8 @@ export interface World {
   phase: 'regular' | 'offseason'
   /** L12.7: set once real-data rookies are on the NFL rookie scale (old saves are rescaled on load). */
   rookieScaleV2?: boolean
+  /** L12.13 M1: set once starting mastery has been seeded (old saves are reseeded on load). */
+  masterySeedV2?: boolean
   teams: Team[]
   byId: Record<string, Team>
   players: Player[]

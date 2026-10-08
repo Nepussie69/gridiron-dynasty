@@ -6,8 +6,8 @@ import { ATTRIBUTE_SCHEMA, playerAttrs } from '../game/data/ratings'
 import { COMPOSITES, ratingTitle, groupForPosition, type Composite } from '../game/data/ratingInfo'
 import { capSavings, deadMoney } from '../game/engine/cap'
 import { fitLabel, schemeFit } from '../game/engine/style'
-import { masteryLabel, masteryProgress } from '../game/engine/playbook'
-import { useGame } from '../store/gameStore'
+import { leagueMasteryMeans, masteryEffectText, masteryGroup, masteryLabel, masteryProgress, type MasteryMeans } from '../game/engine/playbook'
+import { useGame, useWorld } from '../store/gameStore'
 import { Badge, DevBadge, OvrBadge, RatingBar } from '../ui/kit'
 import { PlayerName } from './PlayerHoverCard'
 
@@ -141,6 +141,8 @@ export function PlayerTable({
   emptyText = 'No players to show.',
 }: Props) {
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const world = useWorld()
+  const masteryMeans = leagueMasteryMeans(world)
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [dir, setDir] = useState<SortDir>('asc')
 
@@ -291,7 +293,7 @@ export function PlayerTable({
                 )
               })}
               <Td>
-                <PlaybookCell player={p} />
+                <PlaybookCell player={p} means={masteryMeans} />
               </Td>
               {showMorale && (
                 <Td>
@@ -318,13 +320,25 @@ export function PlayerTable({
 
 /**
  * Playbook mastery: the % of the system this player has learned, plus a bar.
- * Grows only through game reps, training, and loyalty.
+ * L12.13 M4: the tooltip explains the season's growth and how mastery shows up
+ * in games (relative to the league mean for his position group).
  */
-export function PlaybookCell({ player }: { player: Player }) {
+export function PlaybookCell({ player, means }: { player: Player; means?: MasteryMeans }) {
   const pct = masteryProgress(player)
   const { label, tone } = masteryLabel(pct)
+  const group = masteryGroup(player.pos)
+  const mean = means && group ? means[group] : 50
+  const gain = player.playbook?.seasonGain ?? 0
+  const games = player.stats?.length ? (player.stats[player.stats.length - 1].games ?? 0) : 0
+  const role = games >= 10 ? 'starter' : games >= 4 ? 'rotation' : 'backup'
+  const coach = group === 'QB' ? 'QB' : group === 'REC' ? 'WR' : (group ?? 'position')
+  const effect = group ? masteryEffectText(player, mean) : ''
+  const tooltip =
+    `${pct}% · ${gain >= 0 ? '+' : ''}${gain.toFixed(1)} this season (${role}, ${games} games) · ` +
+    `grows with snaps, good games, AWR, your ${coach} coach, Install weeks` +
+    (effect ? ` · in games: ${effect}` : '')
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" title={tooltip}>
       <span className="w-8 font-cond text-xs font-700 tnum text-ink-2">{pct}%</span>
       <div className="w-12">
         <RatingBar

@@ -16,7 +16,7 @@ import { clamp, makeRng, type Rng } from './rng'
 import { currentSeason, recordGameStats } from './stats'
 import type { GameSim, Play } from './playsim'
 
-import { masteryMultiplier } from './playbook'
+import { leagueMasteryMeans, masteryGroup, type MasteryMeans } from './playbook'
 import { styleProfile } from './style'
 
 const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
@@ -34,10 +34,13 @@ function tenureOf(p: Player): number {
 }
 
 /** Weight a player by talent, role usage, and system familiarity. */
-function weight(p: Player, role: 'pass' | 'rush' | 'rec' | 'def', scheme: string): number {
+function weight(p: Player, role: 'pass' | 'rush' | 'rec' | 'def', scheme: string, means: MasteryMeans): number {
   const a = mkAttrs(p)
   void scheme
-  const fam = masteryMultiplier(p)
+  // L12.13 M3: system familiarity is relative to the league mean for the group,
+  // so an average club's share is unchanged (same slope as the old absolute fam).
+  const g = masteryGroup(p.pos)
+  const fam = g ? 1 + ((p.playbook?.pct ?? 0) - means[g]) * 0.0028 : 1
   void tenureOf
   let base = p.ovr
   if (role === 'pass') base = (a.THP ?? p.ovr) * 0.5 + p.ovr * 0.5
@@ -48,9 +51,9 @@ function weight(p: Player, role: 'pass' | 'rush' | 'rec' | 'def', scheme: string
 }
 
 /** Top N by position group, with weights. */
-function group(world: World, teamId: string, positions: string[], n: number, role: 'pass' | 'rush' | 'rec' | 'def', scheme: string) {
+function group(world: World, teamId: string, positions: string[], n: number, role: 'pass' | 'rush' | 'rec' | 'def', scheme: string, means: MasteryMeans) {
   const list = depthGroup(world, teamId, positions as Position[], n)
-  return { items: list, weights: list.map((p) => weight(p, role, scheme)) }
+  return { items: list, weights: list.map((p) => weight(p, role, scheme, means)) }
 }
 
 /** Split a total into n shares, weighted, returning integers that sum to total. */
@@ -77,6 +80,7 @@ export function allocateTeamGame(
 ): { playerId: string; line: GameStatLine }[] {
   const scheme = (world.staff[teamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme ?? ''
   const eff = coachEffect(world, teamId)
+  const means = leagueMasteryMeans(world)
   const out: { playerId: string; line: GameStatLine }[] = []
   const addLine = (playerId: string, line: GameStatLine) => out.push({ playerId, line })
 
@@ -91,7 +95,7 @@ export function allocateTeamGame(
   const rushYds = Math.round(baseRush * variance * (2 - schemePassBias) * pace)
 
   // ── Passing ──
-  const qbs = group(world, teamId, ['QB'], 1, 'pass', scheme)
+  const qbs = group(world, teamId, ['QB'], 1, 'pass', scheme, means)
   const qb = qbs.items[0]
   if (qb) {
     const att = Math.round(passYds / (isNFL ? 7.1 : 7.9))
@@ -105,7 +109,7 @@ export function allocateTeamGame(
   }
 
   // ── Rushing ──
-  const rbs = group(world, teamId, ['RB'], 3, 'rush', scheme)
+  const rbs = group(world, teamId, ['RB'], 3, 'rush', scheme, means)
   if (rbs.items.length) {
     const carries = Math.round(rushYds / (isNFL ? 4.35 : 4.5))
     const shares = rbs.weights.map((w, i) => (i === 0 ? w * 2.4 : w))
@@ -146,7 +150,7 @@ export function allocateTeamGame(
   }
 
   // ── Receiving ──
-  const recvs = group(world, teamId, ['WR', 'TE', 'RB'], 6, 'rec', scheme)
+  const recvs = group(world, teamId, ['WR', 'TE', 'RB'], 6, 'rec', scheme, means)
   if (recvs.items.length && qb) {
     const completions = Math.round(passYds / (isNFL ? 9.6 : 10.5))
     const shares = recvs.weights
@@ -170,14 +174,14 @@ export function allocateTeamGame(
   if (defenders.length) {
     // Team tackles scale with opponent plays faced; sacks and INTs are rare events.
     const teamTackles = Math.round(58 + rng() * 26)
-    const w = defenders.map((p) => weight(p, 'def', scheme))
+    const w = defenders.map((p) => weight(p, 'def', scheme, means))
     const tSplit = split(rng, teamTackles, w)
     const sacks = rng() < 0.68 ? (rng() < 0.6 ? 2 : rng() < 0.8 ? 3 : 4) : (rng() < 0.6 ? 1 : 0)
     const ints = rng() < 0.3 ? 1 : rng() < 0.12 ? 2 : 0
     const rushers = defenders.filter((p) => ['DE', 'DT', 'LB'].includes(p.pos))
     const dbGroup = defenders.filter((p) => ['CB', 'S'].includes(p.pos))
-    const sSplit = rushers.length ? split(rng, sacks, rushers.map((p) => weight(p, 'def', scheme))) : []
-    const iSplit = dbGroup.length ? split(rng, ints, dbGroup.map((p) => weight(p, 'def', scheme))) : []
+    const sSplit = rushers.length ? split(rng, sacks, rushers.map((p) => weight(p, 'def', scheme, means))) : []
+    const iSplit = dbGroup.length ? split(rng, ints, dbGroup.map((p) => weight(p, 'def', scheme, means))) : []
     defenders.forEach((p) => {
       const ri = rushers.indexOf(p)
       const di = dbGroup.indexOf(p)

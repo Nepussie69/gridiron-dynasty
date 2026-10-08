@@ -14,12 +14,16 @@ import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecove
 import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
-import { NO_USER_BONUS, userBonusFromSkills } from '../game/engine/coaching'
+import { NO_USER_BONUS, coachEffect, userBonusFromSkills } from '../game/engine/coaching'
 import {
   gainGameReps,
   gainSeasonTraining,
+  gameProduction,
   initPlaybook,
+  masteryGroup,
   refreshCohesion,
+  seedWorldMastery,
+  snapShare,
   teamCohesion,
 } from '../game/engine/playbook'
 import { applyHire, attemptHire, focusOptions, openCandidates, frontOfficeProfile, isFrontOfficeRole } from '../game/engine/hiring'
@@ -178,7 +182,7 @@ import {
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
-import type { CapMemo, CareerPath, CareerState, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet } from '../game/types'
+import type { CapMemo, CareerPath, CareerState, GameStatLine, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet } from '../game/types'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
@@ -262,18 +266,10 @@ function schemeFor(teamId: string, side: 'off' | 'def'): string {
 
 /** Give every player a playbook state matching his team + scheme + cohesion. */
 function initAllPlaybooks() {
-  for (const [teamId, players] of Object.entries(world.roster)) {
-    for (const side of ['off', 'def'] as const) {
-      const unit = players.filter((p) => (p.side === 'DEF' ? 'def' : 'off') === side)
-      if (!unit.length) continue
-      const avgYears = unit.reduce((s, p) => s + (p.playbook?.teamYears ?? 0), 0) / unit.length
-      const tenure = world.staffTenure[`${teamId}:${side}`] ?? 1
-      for (const p of unit) {
-        const scheme = schemeFor(teamId, side)
-        p.playbook = initPlaybook(p, teamId, scheme, p.playbook, tenure, Math.max(1, avgYears))
-      }
-    }
-  }
+  // L12.13 M1: a new world starts with realistic mastery — long-tenured vets
+  // know the system, rookies and new-coordinator clubs start near zero.
+  seedWorldMastery(world)
+  world.masterySeedV2 = true
 }
 
 /** Recompute every player's cohesion cap after roster or staff changes. */
@@ -294,12 +290,25 @@ function refreshAllCohesion() {
 
 /** Grow mastery for players who appeared in a completed game. */
 function growPlaybookFromGame(world: World, sim: GameSim, gainMult = 1, bonusTeamId?: string) {
-  const playedIds = new Set<string>()
-  for (const line of sim.box ?? []) playedIds.add(line.playerId)
+  const lines = new Map<string, GameStatLine>()
+  for (const b of sim.box ?? []) lines.set(b.playerId, b.line)
   for (const teamId of [sim.homeId, sim.awayId]) {
-    const mult = bonusTeamId && teamId === bonusTeamId ? gainMult : 1
+    // Install practice only multiplies the user's own club.
+    const installMult = bonusTeamId && teamId === bonusTeamId ? gainMult : 1
+    const development = coachEffect(world, teamId).development
     for (const p of world.roster[teamId] ?? []) {
-      const next = gainGameReps(p, playedIds.has(p.id), mult)
+      const line = lines.get(p.id)
+      if (!line) continue
+      // L12.13 M2: gain scales with snaps played and this game's production.
+      const rank = depthAt(world, teamId, p.pos).findIndex((x) => x.id === p.id)
+      const next = gainGameReps(
+        p,
+        true,
+        snapShare(rank < 0 ? 99 : rank, p.pos),
+        gameProduction(p.pos, line),
+        installMult,
+        development,
+      )
       if (next) p.playbook = next
     }
   }
@@ -2836,6 +2845,15 @@ function migrateWorld(w: World): World {
   }
   for (const team of Object.keys(w.staff)) for (const m of w.staff[team]) applyFrontOffice(m)
   for (const m of w.staffPool) applyFrontOffice(m)
+  // L12.13 M1: one-time reseed for saves made before starting mastery existed.
+  // If nearly every rostered player still reads "New to system" in the opening
+  // season, give them the same realistic starting mastery a new career gets.
+  if (!w.masterySeedV2 && w.season <= 2026) {
+    const rostered = Object.values(w.roster).flat()
+    const fresh = rostered.filter((p) => (p.playbook?.pct ?? 0) < 5).length
+    if (rostered.length && fresh / rostered.length >= 0.9) seedWorldMastery(w)
+  }
+  w.masterySeedV2 = true
   repairCrushedContracts(w)
   return w
 }
@@ -4567,6 +4585,82 @@ export function cohesionProbe(games = 60) {
     churnPenaltiesPerGame: +(churnPen / n).toFixed(2),
     tightPoints: +(tightPts / n).toFixed(1),
     churnPoints: +(churnPts / n).toFixed(1),
+  }
+}
+
+/**
+ * L12.13 M1/M2 dev probe: seed a throwaway world, then run three seasons with
+ * snap-share learning, printing the league mastery distribution by position
+ * group in season 1 and after, plus starters' vs backups' growth.
+ */
+export function masteryProbe(seasons = 3, seed = 20261004) {
+  const w = buildWorld(seed, getRealData())
+  seedWorldMastery(w)
+  const startPct = new Map<string, number>()
+  for (const p of w.players) if (p.playbook) startPct.set(p.id, p.playbook.pct)
+  const dist = (world: World) => {
+    const groups: Record<string, number[]> = {}
+    for (const p of world.players) {
+      if (!p.playbook || p.teamId == null) continue
+      const g = masteryGroup(p.pos)
+      if (g) (groups[g] ??= []).push(p.playbook.pct)
+    }
+    const r1 = (x: number) => Math.round(x * 10) / 10
+    return Object.fromEntries(
+      Object.entries(groups).map(([g, a]) => {
+        const s = [...a].sort((x, y) => x - y)
+        return [g, {
+          n: s.length,
+          mean: r1(a.reduce((x, y) => x + y, 0) / (a.length || 1)),
+          p25: r1(s[Math.floor(s.length * 0.25)] ?? 0),
+          med: r1(s[s.length >> 1] ?? 0),
+          p75: r1(s[Math.floor(s.length * 0.75)] ?? 0),
+        }]
+      }),
+    )
+  }
+  const season1 = dist(w)
+  for (let s = 1; s < seasons; s++) {
+    for (let week = 1; week <= 18; week++) {
+      simWeek(w, week)
+      // L12.13 M2: every club's players learn from the week's snaps, starters fastest.
+      for (const [teamId, players] of Object.entries(w.roster)) {
+        const development = coachEffect(w, teamId).development
+        for (const p of players) {
+          const rank = depthAt(w, teamId, p.pos).findIndex((x) => x.id === p.id)
+          const next = gainGameReps(p, true, snapShare(rank < 0 ? 99 : rank, p.pos), 0.5, 1, development)
+          if (next) p.playbook = next
+        }
+      }
+    }
+    developPlayers(w)
+    for (const key of Object.keys(w.staffTenure)) w.staffTenure[key] = (w.staffTenure[key] ?? 1) + 1
+    for (const teamId of Object.keys(w.roster)) {
+      for (const p of w.roster[teamId]) {
+        const next = gainSeasonTraining(p)
+        if (next) p.playbook = next
+      }
+    }
+    w.season += 1
+    w.week = 1
+    w.phase = 'regular'
+    regenerateSchedule(w)
+  }
+  let sStart = 0, sEnd = 0, sN = 0, bStart = 0, bEnd = 0, bN = 0
+  for (const [teamId, players] of Object.entries(w.roster)) {
+    players.forEach((p) => {
+      const s0 = startPct.get(p.id)
+      if (s0 == null || !p.playbook) return
+      const rank = depthAt(w, teamId, p.pos).findIndex((x) => x.id === p.id)
+      if (rank < (STARTERS[p.pos] ?? 1)) { sStart += s0; sEnd += p.playbook.pct; sN++ } else { bStart += s0; bEnd += p.playbook.pct; bN++ }
+    })
+  }
+  const r1 = (x: number) => Math.round(x * 10) / 10
+  return {
+    seeded: season1,
+    [seasons + 'seasons']: dist(w),
+    starters: { n: sN, start: r1(sStart / (sN || 1)), end: r1(sEnd / (sN || 1)), gain: r1((sEnd - sStart) / (sN || 1)) },
+    backups: { n: bN, start: r1(bStart / (bN || 1)), end: r1(bEnd / (bN || 1)), gain: r1((bEnd - bStart) / (bN || 1)) },
   }
 }
 

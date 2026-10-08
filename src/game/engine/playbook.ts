@@ -11,8 +11,12 @@
 //   • Keep a core and a staff together and the whole unit plays above its rating.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Player, PlaybookState } from '../types'
+import type { GameStatLine, Player, PlaybookState } from '../types'
 import type { StaffMember } from '../types'
+import { attributesFor } from '../data/ratings'
+import { STARTERS } from './depth'
+import { hash32 } from './rng'
+import { coverageGrade, passerRating } from './stats'
 import { schemeFit } from './style'
 
 /** Per-game learning from live snaps (raw experience). */
@@ -108,14 +112,145 @@ function applyCap(s: PlaybookState, fit: number): PlaybookState {
   return { ...s, pct: Math.max(0, Math.min(100, pct)) }
 }
 
-/** Advance raw experience after a game in which the player saw the field. */
-export function gainGameReps(p: Player, played: boolean, gainMult = 1): PlaybookState | undefined {
+// ── L12.13 M1: realistic starting mastery ────────────────────────────────────
+/**
+ * The seasons a player is estimated to have been in his current system. Rookies
+ * are new (0); everyone else is deterministic from his id (1..min(age−22, 7)),
+ * and no one can predate the coordinator who installed the system.
+ */
+export function systemYears(p: Player, staffTenure: number): number {
+  const byAge = Math.min(p.age - 22, 7)
+  if (byAge <= 0) return 0
+  const est = 1 + (hash32(p.id) % byAge)
+  return Math.min(est, Math.max(1, staffTenure))
+}
+
+/** Raw experience for a player who has been in the system `years` (≈12–16/yr). */
+function seededExperience(id: string, years: number): number {
+  if (years <= 0) return 0
+  return Math.min(100, years * (12 + (hash32(`${id}:seed`) % 5)))
+}
+
+/** A fresh-world playbook seeded from a player's estimated years in the system. */
+export function seedStartingPlaybook(p: Player, teamId: string, scheme: string, staffTenure: number): PlaybookState {
+  const years = systemYears(p, staffTenure)
+  return applyCap(
+    {
+      pct: 0,
+      experience: seededExperience(p.id, years),
+      reps: years * 15,
+      teamYears: 0,
+      staffYears: staffTenure,
+      cohesion: cohesion(staffTenure, Math.max(1, years)),
+      scheme,
+      teamId,
+    },
+    schemeFit(p, scheme, sideOf(p)),
+  )
+}
+
+/**
+ * Seed a brand-new world's playbooks: long-tenured vets know the system, rookies
+ * and clubs with a new coordinator start near zero. Experience is seeded per
+ * player; the cohesion cap is the unit's, so it starts fresh and then grows
+ * through the season-end refresh.
+ */
+export function seedWorldMastery(world: {
+  roster: Record<string, Player[]>
+  staff: Record<string, StaffMember[]>
+  staffTenure: Record<string, number>
+}): void {
+  for (const [teamId, players] of Object.entries(world.roster)) {
+    for (const side of ['off', 'def'] as const) {
+      const unit = players.filter((p) => (p.side === 'DEF' ? 'def' : 'off') === side)
+      if (!unit.length) continue
+      const role = side === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
+      const scheme = (world.staff[teamId] ?? []).find((s) => s.role === role)?.scheme ?? ''
+      const tenure = world.staffTenure[`${teamId}:${side}`] ?? 1
+      const seeded = unit.map((p) => seedStartingPlaybook(p, teamId, scheme, tenure))
+      const avgYears = Math.max(1, seeded.reduce((a, s) => a + s.teamYears, 0) / seeded.length)
+      const coh = cohesion(tenure, avgYears)
+      unit.forEach((p, i) => {
+        p.playbook = applyCap({ ...seeded[i], cohesion: coh, staffYears: tenure }, schemeFit(p, scheme, sideOf(p)))
+      })
+    }
+  }
+}
+
+// ── L12.13 M2: learning from snaps and production ────────────────────────────
+/** Snap share a depth rank implies: starter 1.0, rotation 0.5, scraps 0.15. */
+export function snapShare(rank: number, pos: Player['pos']): number {
+  const starters = STARTERS[pos] ?? 1
+  if (rank < starters) return 1
+  if (rank < starters + 2) return 0.5
+  return 0.15
+}
+
+/**
+ * A 0–1 grade for one game's production, relative to what is normal at the
+ * position, so a good day learns the system faster than a quiet one.
+ */
+export function gameProduction(pos: Player['pos'], line: GameStatLine): number {
+  const unit = (x: number) => Math.max(0, Math.min(1, x))
+  switch (pos) {
+    case 'QB':
+      return unit(passerRating(line) / 110)
+    case 'RB': {
+      const att = line.rushAtt ?? 0
+      const ypc = att > 0 ? (line.rushYds ?? 0) / att : 0
+      return unit((ypc / 5) * 0.6 + ((line.rushYds ?? 0) / 70) * 0.4)
+    }
+    case 'WR':
+    case 'TE': {
+      const tgt = line.targets ?? 0
+      const ypt = tgt > 0 ? (line.recYds ?? 0) / tgt : 0
+      return unit((ypt / 9) * 0.6 + ((line.recYds ?? 0) / 70) * 0.4)
+    }
+    case 'OT':
+    case 'OG':
+    case 'C':
+      return 0.5
+    case 'DE':
+    case 'DT':
+      return unit(((line.tackles ?? 0) / 4) * 0.5 + (line.defSacks ?? 0) * 0.4 + (line.tfl ?? 0) * 0.1)
+    case 'LB':
+      return unit(((line.tackles ?? 0) / 7) * 0.6 + (line.defSacks ?? 0) * 0.2 + (line.defInts ?? 0) * 0.2)
+    case 'CB':
+    case 'S': {
+      const cov = coverageGrade(line)
+      return unit(((cov ?? 50) / 100) * 0.7 + (line.defInts ?? 0) * 0.3)
+    }
+    default:
+      return 0.5
+  }
+}
+
+/**
+ * L12.13 M2: advance mastery after a game. The gain scales with how much the
+ * player was on the field (snap share), how well he played (position-relative
+ * production), his awareness, and his position coach; Install's ×1.25 folds in
+ * through `gainMult`. No rng is drawn here.
+ */
+export function gainGameReps(
+  p: Player,
+  played: boolean,
+  snapShare = 1,
+  production = 0.5,
+  gainMult = 1,
+  development = 1,
+): PlaybookState | undefined {
   if (!p.playbook) return undefined
   if (!played) return p.playbook
   const fit = schemeFit(p, p.playbook.scheme, sideOf(p))
-  const gain = REP_GAIN_PER_GAME * ageFactor(p.age) * devFactor(p.dev) * gainMult
+  const attrs = { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+  const awr = attrs.AWR ?? 70
+  const gain =
+    REP_GAIN_PER_GAME * ageFactor(p.age) * devFactor(p.dev) * snapShare *
+    (0.9 + 0.2 * production) * (1 + (awr - 70) / 200) * development * gainMult
+  const before = p.playbook.pct
   const experience = Math.min(100, p.playbook.experience + gain)
-  return applyCap({ ...p.playbook, reps: p.playbook.reps + 1, experience }, fit)
+  const next = applyCap({ ...p.playbook, reps: p.playbook.reps + 1, experience }, fit)
+  return { ...next, seasonGain: (p.playbook.seasonGain ?? 0) + Math.max(0, next.pct - before) }
 }
 
 /** Advance raw experience between seasons (training, OTAs, camp) and add a team year. */
@@ -124,7 +259,7 @@ export function gainSeasonTraining(p: Player): PlaybookState | undefined {
   const fit = schemeFit(p, p.playbook.scheme, sideOf(p))
   const gain = TRAINING_GAIN_PER_SEASON * ageFactor(p.age) * devFactor(p.dev)
   const experience = Math.min(100, p.playbook.experience + gain)
-  return applyCap({ ...p.playbook, teamYears: p.playbook.teamYears + 1, experience }, fit)
+  return applyCap({ ...p.playbook, teamYears: p.playbook.teamYears + 1, experience, seasonGain: 0 }, fit)
 }
 
 /** Update the cohesion cap and re-clamp mastery (called whenever a unit changes). */
@@ -146,6 +281,80 @@ export function onTeamChange(p: Player, newTeamId: string, newScheme: string, st
 export function masteryMultiplier(p: Player): number {
   const pct = p.playbook?.pct ?? 0
   return 0.9 + (pct / 100) * 0.28
+}
+
+// ── L12.13 M3: mastery relative to the league mean ───────────────────────────
+export type MasteryGroup = 'QB' | 'RB' | 'REC' | 'OL' | 'DL' | 'LB' | 'DB'
+export interface MasteryMeans {
+  QB: number
+  RB: number
+  REC: number
+  OL: number
+  DL: number
+  LB: number
+  DB: number
+}
+
+/** The position group a mastery effect belongs to (ST and specialists: none). */
+export function masteryGroup(pos: string): MasteryGroup | null {
+  switch (pos) {
+    case 'QB': return 'QB'
+    case 'RB': return 'RB'
+    case 'WR': case 'TE': return 'REC'
+    case 'OT': case 'OG': case 'C': return 'OL'
+    case 'DE': case 'DT': return 'DL'
+    case 'LB': return 'LB'
+    case 'CB': case 'S': return 'DB'
+    default: return null
+  }
+}
+
+/**
+ * League mean mastery per position group, so an average club's edge is 0.
+ * Centered on the players who actually take the field (starters): a bench
+ * player's offset is negative, an above-average starter's is positive.
+ */
+export function leagueMasteryMeans(world: { players: Player[]; roster?: Record<string, Player[]> }): MasteryMeans {
+  const sum: Record<string, number> = {}
+  const count: Record<string, number> = {}
+  const add = (p: Player) => {
+    if (!p.playbook) return
+    const g = masteryGroup(p.pos)
+    if (!g) return
+    sum[g] = (sum[g] ?? 0) + p.playbook.pct
+    count[g] = (count[g] ?? 0) + 1
+  }
+  const roster = world.roster
+  if (roster && Object.keys(roster).length) {
+    for (const players of Object.values(roster)) {
+      const byPos: Partial<Record<Player['pos'], Player[]>> = {}
+      for (const p of players) (byPos[p.pos] ??= []).push(p)
+      for (const [pos, list] of Object.entries(byPos)) {
+        if (!list) continue
+        const n = STARTERS[pos as Player['pos']] ?? 1
+        list.sort((a, b) => b.ovr - a.ovr).slice(0, n).forEach(add)
+      }
+    }
+  } else {
+    for (const p of world.players) add(p)
+  }
+  const m = (g: MasteryGroup) => (count[g] ? sum[g] / count[g] : 0)
+  return { QB: m('QB'), RB: m('RB'), REC: m('REC'), OL: m('OL'), DL: m('DL'), LB: m('LB'), DB: m('DB') }
+}
+
+/** L12.13 M4: a one-line "how mastery shows up in games" read for the tooltip. */
+export function masteryEffectText(p: Player, mean: number): string {
+  const rel = (p.playbook?.pct ?? 0) - mean
+  const f = (x: number) => `${x >= 0 ? '+' : ''}${x.toFixed(1)}`
+  switch (masteryGroup(p.pos)) {
+    case 'QB': return `reads ${f(rel * 0.04)}, accuracy ${f(rel * 0.025)}`
+    case 'REC': return `separation ${f(rel * 0.03)}, hands ${f(rel * 0.02)}`
+    case 'OL': return `pass pro ${f(rel * 0.03)}, run block ${f(rel * 0.03)}`
+    case 'DL': return `run fits ${f(rel * 0.03)}, rush ${f(rel * 0.025)}`
+    case 'LB': return `run fits ${f(rel * 0.03)}, coverage ${f(rel * 0.02)}`
+    case 'DB': return `coverage ${f(rel * 0.03)}, run fits ${f(rel * 0.02)}`
+    default: return ''
+  }
 }
 
 /** 0-100 mastery for the UI. */
