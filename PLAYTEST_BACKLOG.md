@@ -56,3 +56,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 50 | 2026-10-08 | (seen in the screenshot) Dead money looks too large (e.g. $115.5M on a $45.6M cap hit) | L12.14 C3 | 🔨 building |
 | 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | 🔨 building |
 | 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | 🔨 building |
+| 53 | 2026-10-08 | Head coach + GM work together: ask to extend, restructure for a push, go get a trade/FA target, release a player | L12.14 C6 (GM requests desk) | ⏳ after contracts P1 |
