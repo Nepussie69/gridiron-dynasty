@@ -24,6 +24,15 @@ export interface WP {
   t: number
   x: number
   y: number
+  /**
+   * Ease into this waypoint: leave the previous one from rest and reach full
+   * speed (used only on an actor's first moving segment).
+   */
+  easeIn?: boolean
+  /** Ease out of the previous waypoint, settling to rest here (last moving segment). */
+  easeOut?: boolean
+  /** Opt out of automatic easing on this waypoint (used for long, even-speed runs). */
+  lock?: boolean
 }
 
 export interface Actor {
@@ -65,9 +74,18 @@ function hash(n: number): number {
 }
 const clampY = (y: number) => Math.max(1.2, Math.min(FIELD_H - 1.2, y))
 const clampX = (x: number) => Math.max(1, Math.min(FIELD_W - 1, x))
-const smooth = (u: number) => u * u * (3 - 2 * u)
+// Speed-continuous easing: constant speed in between waypoints, easing only on an
+// actor's first (accelerate) and last (decelerate) moving segment. Ease-in ends at
+// slope 1 so it flows into a constant-speed segment (no stop at the waypoint).
+const easeInU = (u: number) => u * u * (2 - u)
+const easeOutU = (u: number) => u + u * u - u * u * u
+const smoothU = (u: number) => u * u * (3 - 2 * u)
 
-/** Position along a keyframed path at time t (0..1), smoothed per segment. */
+/**
+ * Position along a keyframed path at time t (0..1). Between waypoints the actor
+ * moves at constant speed; the first and last moving segments ease from / to
+ * rest (flagged per waypoint so a shadowed ball inherits exactly the same warp).
+ */
 export function posAt(path: WP[], t: number): { x: number; y: number } {
   if (!path.length) return { x: 0, y: 0 }
   if (t <= path[0].t) return { x: path[0].x, y: path[0].y }
@@ -75,7 +93,11 @@ export function posAt(path: WP[], t: number): { x: number; y: number } {
     const b = path[i]
     if (t <= b.t) {
       const a = path[i - 1]
-      const u = b.t === a.t ? 1 : smooth((t - a.t) / (b.t - a.t))
+      const span = b.t - a.t
+      let u = span <= 0 ? 1 : (t - a.t) / span
+      if (b.easeIn && b.easeOut) u = smoothU(u)
+      else if (b.easeIn) u = easeInU(u)
+      else if (b.easeOut) u = easeOutU(u)
       return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }
     }
   }
@@ -101,8 +123,57 @@ export function holderAt(anim: PlayAnim, t: number): string | null {
 function shadow(path: WP[], from: number, to = 1): WP[] {
   const out: WP[] = [{ t: from, ...posAt(path, from) }]
   for (const w of path) if (w.t > from && w.t < to) out.push({ ...w })
-  out.push({ t: to, ...posAt(path, to) })
+  // Copy the source's easing flags at the end knot too, so the ball reproduces
+  // the carrier's motion exactly (including its ease-out).
+  const end = path.find((w) => w.t === to)
+  out.push({ t: to, ...posAt(path, to), ...(end ? { easeIn: end.easeIn, easeOut: end.easeOut, lock: end.lock } : {}) })
   return out
+}
+
+/**
+ * Flag the first / last moving segment of a path for ease-in / ease-out. A path
+ * with a single moving segment gets both (a smoothstep). Called on the actor
+ * paths before a carried ball is shadowed, so the ball matches exactly.
+ */
+function markEase(path: WP[]): void {
+  if (path.length < 2) return
+  let first = -1
+  for (let i = 1; i < path.length; i++) {
+    if (path[i].x !== path[i - 1].x || path[i].y !== path[i - 1].y) {
+      first = i
+      break
+    }
+  }
+  let last = -1
+  for (let i = path.length - 1; i >= 1; i--) {
+    if (path[i].x !== path[i - 1].x || path[i].y !== path[i - 1].y) {
+      last = i
+      break
+    }
+  }
+  if (first >= 0 && !path[first].lock) path[first].easeIn = true
+  if (last >= 0 && !path[last].lock) path[last].easeOut = true
+}
+
+/**
+ * Keep one waypoint per time (the last one pushed wins — e.g. a defender
+ * breaking on the ball overrides his trailing sample), then sort. Prevents
+ * zero-span jumps in posAt.
+ */
+function compact(path: WP[]): void {
+  const seen = new Map<number, WP>()
+  for (const w of path) seen.set(Math.round(w.t * 1e6), w)
+  const keep = [...seen.values()].sort((a, b) => a.t - b.t)
+  path.length = 0
+  for (const w of keep) path.push(w)
+}
+
+/** Sort and ease every actor path (do this before shadowing the ball). */
+function markEaseAll(paths: Record<string, WP[]>): void {
+  for (const k of Object.keys(paths)) {
+    compact(paths[k])
+    markEase(paths[k])
+  }
 }
 
 /** Spot (offense frame) where the next possession started, if it was the other club's ball. */
@@ -152,13 +223,33 @@ function pursue(paths: Record<string, WP[]>, keys: string[], from: number, spot:
   const ranked = keys
     .map((k) => ({ k, p: posAt(paths[k], from) }))
     .sort((a, b) => Math.hypot(a.p.x - spot.x, a.p.y - spot.y) - Math.hypot(b.p.x - spot.x, b.p.y - spot.y))
-  ranked.forEach(({ k, p }, i) => {
+  ranked.forEach(({ k }, i) => {
     const share = i === 0 ? 1 : i === 1 ? 0.93 : i < 4 ? 0.75 : 0.45
     const ang = hash(seed + i * 3.1) * Math.PI * 2
     const r = i === 0 ? 0.9 : 1.6 + i * 0.25
     const tx = spot.x + Math.cos(ang) * r * (1 - share + (i === 0 ? 1 : 0.3))
     const ty = spot.y + Math.sin(ang) * r
-    paths[k].push({ t: arrive, x: clampX(p.x + (tx - p.x) * share), y: clampY(p.y + (ty - p.y) * share) })
+    const t0 = Math.max(from, paths[k].reduce((m, w) => Math.max(m, w.t), 0))
+    const s = posAt(paths[k], t0)
+    let gx = clampX(s.x + (tx - s.x) * share)
+    let gy = clampY(s.y + (ty - s.y) * share)
+    if (arrive - t0 < 0.04) {
+      paths[k].push({ t: arrive, x: gx, y: gy, lock: true })
+      return
+    }
+    // Even, un-eased steps, and capped to the clock so a long chase never sprints.
+    const capD = 1.28 * (arrive - t0) * 100
+    const gd = Math.hypot(gx - s.x, gy - s.y)
+    if (gd > capD) {
+      const kk = capD / gd
+      gx = clampX(s.x + (gx - s.x) * kk)
+      gy = clampY(s.y + (gy - s.y) * kk)
+    }
+    const steps = Math.max(1, Math.min(6, Math.ceil(Math.hypot(gx - s.x, gy - s.y) / 12)))
+    for (let st = 1; st <= steps; st++) {
+      const f = st / steps
+      paths[k].push({ t: t0 + (arrive - t0) * f, x: clampX(s.x + (gx - s.x) * f), y: clampY(s.y + (gy - s.y) * f), lock: true })
+    }
   })
 }
 
@@ -170,10 +261,13 @@ function startPaths(f: Formation, t0 = 0.08): Record<string, WP[]> {
 
 function finish(f: Formation, paths: Record<string, WP[]>, rest: Omit<PlayAnim, 'actors'>): PlayAnim {
   const actors: Actor[] = [...OFF_KEYS, ...DEF_KEYS].map((k) => {
-    const p = paths[k].slice().sort((a, b) => a.t - b.t)
+    const p = paths[k].slice()
+    compact(p)
     return { key: k, side: f[k].side, role: f[k].role, path: p }
   })
-  return { ...rest, actors }
+  const ball = rest.ball.slice()
+  compact(ball)
+  return { ...rest, ball, actors }
 }
 
 // ── plays ────────────────────────────────────────────────────────────────────
@@ -223,16 +317,28 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     p.qb.push({ t: 0.18, x: f.qb.x - 1, y: MID_Y })
     p.rb.push({ t: 0.3, x: los - 1, y: MID_Y - side * 5 })
   } else {
-    // Mesh point: QB turns, the back takes the handoff.
-    p.qb.push({ t: handT, x: f.qb.x + 0.6, y: MID_Y + side * 1.2 })
-    p.rb.push({ t: handT, x: f.qb.x + 0.8, y: MID_Y + side * 1.6 })
+    // Mesh point: QB turns, the back takes the handoff (they meet exactly).
+    p.qb.push({ t: handT, x: f.qb.x + 0.7, y: MID_Y + side * 1.4 })
+    p.rb.push({ t: handT, x: f.qb.x + 0.7, y: MID_Y + side * 1.4 })
     p.qb.push({ t: 0.4, x: f.qb.x - 1.5, y: MID_Y - side * 4 }) // carries out the fake
   }
-  // Hit the hole, make the cut, run to the spot.
-  const cutX = Math.min(endX, los + 3 + hash(seed + 3) * 3)
-  p[carrier].push({ t: holeT, x: los - (play.yards < 0 ? 0.5 : -0.4), y: holeY })
-  if (play.yards >= 4) p[carrier].push({ t: 0.6, x: cutX, y: clampY(holeY + side * (hash(seed + 4) * 4 - 1)) })
-  p[carrier].push({ t: 1, x: endX, y: endY })
+  // Hit the hole, make the cut, run to the spot. The run is spread into even,
+  // un-eased steps and capped to the clock so a long gain never teleports.
+  const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
+  p[carrier].push({ t: holeT, x: holeX, y: holeY })
+  const bow = side * (0.5 + hash(seed + 4) * 2.5)
+  const span = Math.max(0.12, 1 - holeT)
+  const dx0 = endX - holeX
+  const dy0 = endY - holeY
+  const dist = Math.hypot(dx0, dy0)
+  const k = dist > 1.25 * span * 100 ? (1.25 * span * 100) / dist : 1
+  const finX = clampX(holeX + dx0 * k)
+  const finY = clampY(holeY + dy0 * k)
+  const steps = Math.max(2, Math.min(8, Math.ceil(Math.hypot(finX - holeX, finY - holeY) / 12)))
+  for (let i = 1; i <= steps; i++) {
+    const fr = i / steps
+    p[carrier].push({ t: holeT + span * fr, x: clampX(holeX + (finX - holeX) * fr), y: clampY(holeY + (finY - holeY) * fr + Math.sin(Math.PI * fr) * bow), lock: true })
+  }
 
   // Linebackers fill, safeties come down; then everyone pursues to the tackle.
   for (let i = 0; i < 3; i++) p[`lb${i}`].push({ t: holeT, x: los + 3, y: f[`lb${i}`].y + (holeY - f[`lb${i}`].y) * 0.6 })
@@ -246,23 +352,29 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   if (fumble) {
     // The ball pops out at the end of the run; a defender falls on it.
     const popT = 0.82
-    pursue(p, DEF_KEYS, holeT, { x: endX, y: endY }, popT, seed)
-    const spotX = changeSpot(play, ctx.next) ?? endX + 1
+    pursue(p, DEF_KEYS, holeT, { x: finX, y: finY }, popT, seed)
+    const spotX = changeSpot(play, ctx.next) ?? finX + 1
     const loose = { x: clampX(posAt(p[carrier], popT).x + 2), y: clampY(posAt(p[carrier], popT).y + (hash(seed + 5) - 0.5) * 6) }
     const recover = DEF_KEYS.map((k) => ({ k, d: Math.hypot(posAt(p[k], popT).x - loose.x, posAt(p[k], popT).y - loose.y) })).sort((a, b) => a.d - b.d)[0].k
     p[recover].push({ t: 0.9, x: loose.x, y: loose.y }, { t: 1, x: clampX(spotX), y: loose.y })
+    markEaseAll(p)
     const carried = shadow(p[carrier], handT, popT)
+    const ball: WP[] = [...ballPath, ...shadow(p.qb, 0.06, handT).slice(1), ...carried, { t: 0.9, ...loose }, ...shadow(p[recover], 0.9)]
+    markEase(ball)
     return finish(f, p, {
       duration: 2700,
-      ball: [...ballPath, ...carried, { t: 0.9, ...loose }, ...shadow(p[recover], 0.9)],
+      ball,
       holders: [...holders, { t: popT, key: null }, { t: 0.9, key: recover }],
       flights: [{ t0: popT, t1: 0.9, height: 0.4 }],
     })
   }
-  pursue(p, DEF_KEYS, holeT, { x: endX + 0.8, y: endY }, 1, seed)
+  pursue(p, DEF_KEYS, holeT, { x: finX + 0.8, y: finY }, 1, seed)
+  markEaseAll(p)
+  const ball: WP[] = [...ballPath, ...shadow(p.qb, 0.06, handT).slice(1), ...shadow(p[carrier], handT)]
+  markEase(ball)
   return finish(f, p, {
     duration: play.yards >= 20 ? 2900 : 2300,
-    ball: [...ballPath, ...shadow(p[carrier], handT)],
+    ball,
     holders,
     flights: [],
   })
@@ -276,6 +388,92 @@ export function targetKey(play: Play, ctx: AnimContext): string {
   return ['wr0', 'wr1', 'wr2'][Math.floor(hash(play.n * 13 + play.startYard) * 3)]
 }
 
+// ── route tree ───────────────────────────────────────────────────────────────
+/**
+ * A route shape in the offense frame. `depth` is its characteristic air depth
+ * (used to pick which route the target should run). `wps` builds waypoints up to
+ * time T: inw is +1 toward the middle of the field, out is the opposite, side is
+ * a seeded lateral direction for flats / crossers.
+ */
+interface RouteDef {
+  depth: number
+  wps: (y: number, L: number, T: number, inw: number, out: number, side: number) => WP[]
+}
+
+const ROUTES: Record<string, RouteDef> = {
+  // short / quick game
+  slant: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.12, x: L + 1.5, y }, { t: T, x: L + 5, y: y + inw * 4.5 }] },
+  quickOut: { depth: 4, wps: (y, L, T, _inw, out) => [{ t: 0.16, x: L + 3, y }, { t: T, x: L + 4.5, y: y + out * 4 }] },
+  stick: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 5, y }, { t: T, x: L + 5.5, y: y + inw * 1.5 }] },
+  flat: { depth: 1, wps: (y, L, T, _inw, _out, side) => [{ t: 0.14, x: L - 5, y }, { t: 0.3, x: L - 1, y: y + side * 4 }, { t: T, x: L + 2, y: y + side * 7 }] },
+  check: { depth: 3, wps: (y, L, T, inw) => [{ t: 0.14, x: L - 5, y }, { t: 0.32, x: L - 2, y }, { t: T, x: L + 3, y: y + inw * 2 }] },
+  bubble: { depth: 2, wps: (y, L, T, _inw, out) => [{ t: 0.11, x: L + 0.5, y }, { t: 0.26, x: L + 0.4, y: y + out * 3.5 }, { t: T, x: L + 2.5, y: y + out * 5 }] },
+  // intermediate
+  hitch: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 2, y }, { t: 0.34, x: L + 6, y }, { t: T, x: L + 5.5, y: y + inw * 1.5 }] },
+  curl: { depth: 12, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.4, x: L + 12, y }, { t: T, x: L + 11, y: y + inw * 1.5 }] },
+  dig: { depth: 12, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.38, x: L + 12, y }, { t: T, x: L + 15, y: y + inw * 9 }] },
+  corner: { depth: 18, wps: (y, L, T, _inw, out) => [{ t: 0.14, x: L + 3, y }, { t: 0.4, x: L + 12, y }, { t: T, x: L + 24, y: y + out * 9 }] },
+  comeback: { depth: 13, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.42, x: L + 14, y }, { t: T, x: L + 11, y: y + inw * 2 }] },
+  glance: { depth: 8, wps: (y, L, T, inw) => [{ t: 0.13, x: L + 2, y }, { t: 0.34, x: L + 5, y }, { t: T, x: L + 9, y: y + inw * 4 }] },
+  cross: { depth: 14, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 2, y }, { t: 0.34, x: L + 9, y }, { t: T, x: L + 15, y: y - inw * 17 }] },
+  drag: { depth: 6, wps: (y, L, T, _inw, _out, side) => [{ t: 0.14, x: L + 1, y }, { t: 0.34, x: L + 4, y }, { t: T, x: L + 6, y: y + side * 12 }] },
+  meshIn: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.13, x: L + 2, y }, { t: T, x: L + 5, y: y - inw * 9 }] },
+  // deep
+  seam: { depth: 22, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 4, y }, { t: 0.42, x: L + 16, y: y + inw * 1.5 }, { t: T, x: L + 25, y: y + inw * 2.5 }] },
+  post: { depth: 25, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.4, x: L + 14, y }, { t: T, x: L + 30, y: y + inw * 9 }] },
+  over: { depth: 28, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.42, x: L + 17, y }, { t: T, x: L + 31, y: y + inw * 10 }] },
+  go: { depth: 30, wps: (y, L, T, _inw, out) => [{ t: 0.14, x: L + 4, y }, { t: 0.42, x: L + 18, y: y + out * 1.5 }, { t: T, x: L + 34, y: y + out * 3 }] },
+  // backfield / blocking
+  swing: { depth: 1, wps: (y, L, T, _inw, _out, side) => [{ t: 0.12, x: L - 7, y }, { t: 0.3, x: L - 6, y: y + side * 6 }, { t: T, x: L - 3, y: y + side * 8 }] },
+  stalk: { depth: 0, wps: (y, L, T, _inw, out) => [{ t: 0.16, x: L + 2, y }, { t: T, x: L + 6, y: y + out * 0.5 }] },
+  runFake: { depth: 0, wps: (y, L, T, _inw, _out, side) => [{ t: 0.14, x: L - 4, y: y + side * 3 }, { t: 0.3, x: L + 0.5, y: y + side * 5 }, { t: T, x: L + 0.5, y: y + side * 5 }] },
+  block: { depth: 0, wps: (y, L, T, inw) => [{ t: 0.14, x: L - 4, y }, { t: T, x: L - 0.5, y: y + inw * 2 }] },
+}
+
+/** Route per receiver key for a concept. Every concept defines all five keys. */
+function conceptTree(concept: string, rollSide: number): Record<string, string> {
+  switch (concept) {
+    case 'Quick Slant':
+    case 'Slant':
+      return { wr0: 'slant', wr1: 'slant', wr2: 'quickOut', te: 'stick', rb: 'flat' }
+    case 'Mesh':
+      return { wr0: 'curl', wr1: 'curl', wr2: 'meshIn', te: 'meshIn', rb: 'flat' }
+    case 'Smash':
+      return { wr0: 'hitch', wr1: 'hitch', wr2: 'corner', te: 'dig', rb: 'check' }
+    case 'Four Verts':
+    case 'Four Verticals':
+      return { wr0: 'go', wr1: 'go', wr2: 'seam', te: 'seam', rb: 'check' }
+    case 'Y-Cross':
+      return { wr0: 'post', wr1: 'go', wr2: 'dig', te: 'cross', rb: 'check' }
+    case 'PA Cross':
+      return { wr0: 'post', wr1: 'go', wr2: 'dig', te: 'cross', rb: 'runFake' }
+    case 'Play Action Deep':
+      return { wr0: 'post', wr1: 'go', wr2: 'seam', te: 'seam', rb: 'runFake' }
+    case 'Bootleg': {
+      const roll = rollSide < 0 ? 'wr0' : 'wr1'
+      const back = rollSide < 0 ? 'wr1' : 'wr0'
+      return { [roll]: 'comeback', [back]: 'over', wr2: 'stick', te: 'drag', rb: 'block' }
+    }
+    case 'RB Screen':
+      return { wr0: 'stalk', wr1: 'stalk', wr2: 'stalk', te: 'block', rb: 'swing' }
+    case 'RPO Bubble':
+      return { wr0: 'stalk', wr1: 'stalk', wr2: 'bubble', te: 'block', rb: 'runFake' }
+    case 'RPO Pass':
+      return { wr0: 'go', wr1: 'stalk', wr2: 'glance', te: 'block', rb: 'runFake' }
+    default:
+      return { wr0: 'slant', wr1: 'go', wr2: 'quickOut', te: 'dig', rb: 'check' }
+  }
+}
+
+/** A defender trailing a receiver: sample his path at several times, offset off him. */
+function trailTo(p: Record<string, WP[]>, def: string, recv: WP[], from: number, to: number, offX: number, offY: number, steps = 5, lag = 0) {
+  for (let i = 1; i <= steps; i++) {
+    const t = from + (to - from) * (i / steps)
+    const rp = posAt(recv, Math.max(0, t - lag))
+    p[def].push({ t, x: clampX(rp.x + offX), y: clampY(rp.y + offY) })
+  }
+}
+
 function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const los = 10 + play.startYard
   const f = formation(los)
@@ -287,6 +485,13 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const rollSide = hash(seed + 9) < 0.5 ? -1 : 1
   const inc = play.result === 'Incomplete'
   const int = play.result.startsWith('Interception')
+  const concept = play.concept
+  const boot = concept === 'Bootleg'
+  const quick = depth <= 8
+  const throwT = boot ? 0.45 : quick ? 0.35 : depth <= 15 ? 0.45 : 0.55
+  const catchT = Math.min(0.88, throwT + 0.05 + Math.max(0, depth) * 0.004)
+  const side = hash(seed + 3) < 0.5 ? -1 : 1
+  const pa = /Play Action|PA Cross|RPO/.test(concept)
 
   // Pocket: OL sets back, DL rush; on pressure the pocket breaks.
   for (let i = 0; i < 5; i++) p[`ol${i}`].push({ t: 0.32, x: los - 1.8, y: f[`ol${i}`].y + (i - 2) * 0.5 })
@@ -295,80 +500,172 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     p[`dl${i}`].push({ t: 0.42, x: tx, y: f[`dl${i}`].y + (MID_Y - f[`dl${i}`].y) * 0.3 })
   }
 
-  // Dropback and, under pressure, a scramble out of the pocket.
+  // Run fake (play-action / RPO / bootleg): QB and back mesh before the drop.
+  if (pa) p.qb.push({ t: 0.15, x: f.qb.x + 0.5, y: MID_Y + side * 1.2 })
+  if (concept === 'Bootleg') p.qb.push({ t: 0.17, x: f.qb.x - 1.2, y: MID_Y - rollSide * 1.2 })
+
+  // Dropback, rollout or (under pressure) a scramble out of the pocket.
   const drop = depth >= 15 ? 4 : 2.2
+  const rollMag = boot ? 9 : quick ? 3 : 6 + hash(seed + 2) * 3
+  const rollY = clampY(MID_Y + (boot ? -rollSide : rollSide) * rollMag)
   p.qb.push({ t: 0.26, x: f.qb.x - drop, y: MID_Y })
-  const throwT = 0.5
   let throwFrom = { x: f.qb.x - drop, y: MID_Y }
-  if (scramble) {
-    throwFrom = { x: f.qb.x - drop + 1.5, y: clampY(MID_Y + rollSide * (7 + hash(seed + 2) * 4)) }
-    p.qb.push({ t: 0.36, x: f.qb.x - drop - 0.5, y: MID_Y + rollSide * 2 }, { t: throwT, ...throwFrom })
+  if (scramble || boot) {
+    throwFrom = { x: f.qb.x - drop + 1.5, y: rollY }
+    const escT = 0.26 + (throwT - 0.26) * 0.5
+    p.qb.push({ t: escT, x: f.qb.x - drop - 0.5, y: MID_Y + (rollY - MID_Y) * 0.15 }, { t: throwT, ...throwFrom })
   } else {
     p.qb.push({ t: throwT, ...throwFrom })
   }
-
-  // Routes: a stem upfield, then a break in or out. The target's route ends at the catch point.
-  const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb']
-  const catchT = throwT + 0.08 + Math.max(0, depth) * 0.004
-  let catchPt = { x: los + depth, y: MID_Y }
-  receivers.forEach((k, i) => {
-    const r = f[k]
-    const isT = k === tgt
-    const d = isT ? depth : k === 'rb' ? 2 : 5 + Math.round(hash(seed + i * 5) * 14)
-    const inward = r.y < MID_Y ? 1 : -1
-    const brk = (hash(seed + i * 7) < 0.6 ? inward : -inward) * (3 + hash(seed + i) * 5)
-    if (k === 'rb') {
-      p.rb.push({ t: 0.25, x: los - 3, y: r.y + 3 }, { t: catchT, x: los + d, y: clampY(r.y + 7) })
-    } else {
-      p[k].push({ t: 0.32, x: los + Math.max(1, d - 2), y: r.y }, { t: catchT, x: los + d, y: clampY(r.y + brk) })
+  if (concept === 'RB Screen') {
+    // Linemen release out to the screen side after a short pass set.
+    for (let i = 0; i < 5; i++) {
+      p[`ol${i}`].push({ t: 0.5, x: los + 1, y: clampY(f[`ol${i}`].y + side * 8) })
+      p[`ol${i}`].push({ t: 0.72, x: los + 2, y: clampY(f[`ol${i}`].y + side * 13) })
     }
-    if (isT) catchPt = posAt(p[k], catchT)
-  })
+  }
 
-  // Coverage: corners trail the outside receivers, linebackers and safeties drop.
-  p.cb0.push({ t: 0.32, x: los + 6, y: f.wr0.y + 1 }, { t: catchT, ...nudge(posAt(p.wr0, catchT), 1.4, 0.8) })
-  p.cb1.push({ t: 0.32, x: los + 6, y: f.wr1.y - 1 }, { t: catchT, ...nudge(posAt(p.wr1, catchT), 1.4, -0.8) })
-  for (let i = 0; i < 3; i++) p[`lb${i}`].push({ t: 0.42, x: los + 7, y: f[`lb${i}`].y + (i - 1) * 2 })
-  p.s0.push({ t: 0.42, x: los + Math.max(14, depth + 3), y: 15 })
-  p.s1.push({ t: 0.42, x: los + Math.max(14, depth + 3), y: 38 })
-  // The nearest defender breaks on the ball.
+  // Route tree; the target runs the route whose depth best matches the throw.
+  const routeMap = conceptTree(concept, rollSide)
+  const inwOf = (k: string) => (f[k].y < MID_Y ? 1 : -1)
+  let pick = tgt
+  let best = Math.abs((ROUTES[routeMap[tgt]]?.depth ?? 0) - depth)
+  for (const k of Object.keys(routeMap)) {
+    const d = Math.abs((ROUTES[routeMap[k]]?.depth ?? 0) - depth)
+    if (d < best) {
+      best = d
+      pick = k
+    }
+  }
+  if (pick !== tgt) {
+    const tmp = routeMap[tgt]
+    routeMap[tgt] = routeMap[pick]
+    routeMap[pick] = tmp
+  }
+
+  const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb']
+  for (const k of receivers) {
+    const def = ROUTES[routeMap[k]] ?? ROUTES.check
+    const T = k === tgt ? catchT : 0.62
+    const startX = f[k].x
+    const wps = def.wps(f[k].y, los, T, inwOf(k), -inwOf(k), side).map((w) => ({ ...w, x: clampX(w.x), y: clampY(w.y) }))
+    // A receiver who lines up well behind his route's first point (the back)
+    // gets a release: delay the first waypoint so no opening burst is needed.
+    if (wps.length && Math.abs(wps[0].x - startX) > 5.0) {
+      const nextT = wps.length > 1 ? wps[1].t : T
+      wps[0].t = Math.max(0.12, Math.min(wps[0].t + 0.14, nextT - 0.08))
+    }
+    p[k].push(...wps)
+    // Non-targets keep working after the break (never freeze on their last dot).
+    if (k !== tgt && T < 0.95) {
+      const a = p[k][p[k].length - 2]
+      const b = p[k][p[k].length - 1]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const len = Math.hypot(dx, dy) || 1
+      p[k].push({ t: 1, x: clampX(b.x + (dx / len) * 2.5), y: clampY(b.y + (dy / len) * 2.5) })
+    }
+  }
+  const catchPt = posAt(p[tgt], catchT)
+
+  // Coverage: corners trail the outside receivers, linebackers drop and jump
+  // crossers, safeties drift with the deepest route.
+  const trailEnd = Math.max(0.3, catchT - 0.16)
+  trailTo(p, 'cb0', p.wr0, 0.14, trailEnd, -1.6, inwOf('wr0') * 1.0, 6, 0.02)
+  trailTo(p, 'cb1', p.wr1, 0.14, trailEnd, -1.6, inwOf('wr1') * 1.0, 6, 0.02)
+  const crossers = ['wr2', 'te', 'rb'].filter((k) => /meshIn|cross|drag/.test(routeMap[k]))
+  for (let i = 0; i < 3; i++) {
+    const k = crossers[i]
+    if (k) trailTo(p, `lb${i}`, p[k], 0.2, trailEnd, 0.6, -inwOf(k), 4, 0.05)
+    else p[`lb${i}`].push({ t: 0.42, x: los + 6 + i, y: clampY(MID_Y + (i - 1) * 6) })
+  }
+  const deepKey = receivers.reduce((a, k) => ((ROUTES[routeMap[k]]?.depth ?? 0) > (ROUTES[routeMap[a]]?.depth ?? 0) ? k : a), receivers[0])
+  const deepPos = posAt(p[deepKey], catchT)
+  const sX = los + Math.max(15, (ROUTES[routeMap[deepKey]]?.depth ?? 10) + 4)
+  p.s0.push({ t: 0.45, x: clampX(sX), y: clampY(15 + (deepPos.y - 15) * 0.35) })
+  p.s1.push({ t: 0.45, x: clampX(sX), y: clampY(38 + (deepPos.y - 38) * 0.35) })
+  // The nearest defender breaks on the ball — over a beat, not teleporting.
   const near = DEF_KEYS.map((k) => ({ k, d: Math.hypot(posAt(p[k], catchT).x - catchPt.x, posAt(p[k], catchT).y - catchPt.y) })).sort((a, b) => a.d - b.d)[0].k
-  p[near].push({ t: catchT, ...nudge(catchPt, int ? 0 : 1.1, 0.5) })
+  const nearLast = p[near].reduce((m, w) => Math.max(m, w.t), 0)
+  if (int) {
+    // The interceptor gets to the catch point exactly.
+    const preT = Math.max(0.2, catchT - 0.09)
+    const np = posAt(p[near], preT)
+    p[near] = p[near].filter((w) => w.t <= preT)
+    p[near].push({ t: preT + (catchT - preT) * 0.5, x: clampX(np.x + (catchPt.x - np.x) * 0.5), y: clampY(np.y + (catchPt.y - np.y) * 0.5) })
+    p[near].push({ t: catchT, x: clampX(catchPt.x), y: clampY(catchPt.y) })
+  } else if (nearLast <= catchT - 0.02) {
+    const brkX = catchPt.x + 1.1
+    const brkY = catchPt.y + 0.5
+    const preT = Math.min(catchT - 0.02, Math.max(nearLast, catchT - 0.2))
+    const np = posAt(p[near], preT)
+    const span = catchT - preT
+    const steps = Math.max(2, Math.min(4, Math.ceil(Math.hypot(brkX - np.x, brkY - np.y) / (1.2 * span * 100))))
+    for (let st = 1; st <= steps; st++) {
+      const f = st / steps
+      p[near].push({ t: preT + span * f, x: clampX(np.x + (brkX - np.x) * f), y: clampY(np.y + (brkY - np.y) * f), lock: true })
+    }
+  }
 
-  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.06, ...posAt(p.qb, 0.06) }, ...shadow(p.qb, 0.06, throwT).slice(1), { t: catchT, ...catchPt }]
   const holders: PlayAnim['holders'] = [{ t: 0, key: null }, { t: 0.06, key: 'qb' }, { t: throwT, key: null }]
   const flights = [{ t0: throwT, t1: catchT, height: Math.min(1, 0.35 + depth / 40) }]
+  const ballHead = (): WP[] => [{ t: 0, x: los, y: MID_Y }, { t: 0.06, ...posAt(p.qb, 0.06) }, ...shadow(p.qb, 0.06, throwT).slice(1), { t: catchT, ...catchPt }]
 
   if (inc) {
-    // Off the fingertips: the ball falls past the target.
-    ball.push({ t: catchT + 0.08, x: catchPt.x + 2, y: clampY(catchPt.y + (hash(seed) - 0.5) * 3) })
     for (const k of [...OFF_KEYS, ...DEF_KEYS]) if (!p[k].some((w) => w.t > catchT)) p[k].push({ t: catchT + 0.12, ...posAt(p[k], catchT) })
+    markEaseAll(p)
+    const ball: WP[] = [...ballHead(), { t: catchT + 0.1, x: clampX(catchPt.x + 2), y: clampY(catchPt.y + (hash(seed) - 0.5) * 3) }]
+    markEase(ball)
     return finish(f, p, { duration: 2400, ball, holders, flights })
   }
   if (int) {
-    // Picked off and returned toward the other end.
     const spotX = changeSpot(play, ctx.next) ?? catchPt.x - 8
-    p[near].push({ t: 1, x: clampX(Math.min(spotX, catchPt.x)), y: clampY(catchPt.y + (MID_Y - catchPt.y) * 0.4) })
+    const span = Math.max(0.12, 1 - catchT)
+    let rx = clampX(Math.min(spotX, catchPt.x))
+    let ry = clampY(catchPt.y + (MID_Y - catchPt.y) * 0.4)
+    const capD = 1.28 * span * 100
+    const rd = Math.hypot(rx - catchPt.x, ry - catchPt.y)
+    if (rd > capD) {
+      const kk = capD / rd
+      rx = clampX(catchPt.x + (rx - catchPt.x) * kk)
+      ry = clampY(catchPt.y + (ry - catchPt.y) * kk)
+    }
+    const steps = Math.max(1, Math.min(6, Math.ceil(Math.hypot(rx - catchPt.x, ry - catchPt.y) / 12)))
+    for (let st = 1; st <= steps; st++) {
+      const f = st / steps
+      p[near].push({ t: catchT + span * f, x: clampX(catchPt.x + (rx - catchPt.x) * f), y: clampY(catchPt.y + (ry - catchPt.y) * f), lock: true })
+    }
     pursue(p, OFF_KEYS, catchT, posAt(p[near], 1), 1, seed)
-    return finish(f, p, {
-      duration: 3000,
-      ball: [...ball, ...shadow(p[near], catchT).slice(1)],
-      holders: [...holders, { t: catchT, key: near }],
-      flights,
-    })
+    markEaseAll(p)
+    const ball: WP[] = [...ballHead(), ...shadow(p[near], catchT).slice(1)]
+    markEase(ball)
+    return finish(f, p, { duration: 3000, ball, holders: [...holders, { t: catchT, key: near }], flights })
   }
-  // Complete: the catch, then the run after it, turning upfield.
-  const endX = clampX(Math.max(catchPt.x, 10 + play.endYard))
+  // Complete: the catch, then the run after it, turning upfield. Long runs are
+  // capped to the clock and spread into even, un-eased steps.
+  const runSpan = Math.max(0.12, 1 - catchT)
+  const maxYac = 1.28 * runSpan * 100
+  const endX = clampX(Math.min(Math.max(catchPt.x, 10 + play.endYard), catchPt.x + maxYac))
   const yac = endX - catchPt.x
   const endY = clampY(catchPt.y + (MID_Y - catchPt.y) * (yac > 8 ? 0.35 : 0.12) + (hash(seed + 8) - 0.5) * 4)
-  if (yac > 6) p[tgt].push({ t: catchT + (1 - catchT) * 0.4, x: catchPt.x + yac * 0.35, y: clampY(catchPt.y + (endY - catchPt.y) * 0.2) })
-  p[tgt].push({ t: 1, x: endX, y: endY })
-  // Defenders' break was a near miss; everyone pursues the catch-and-run.
+  if (yac > 6) {
+    const steps = Math.max(2, Math.ceil(yac / 12))
+    for (let i = 1; i <= steps; i++) {
+      const f = i / steps
+      p[tgt].push({ t: catchT + runSpan * f, x: clampX(catchPt.x + yac * f), y: clampY(catchPt.y + (endY - catchPt.y) * f), lock: true })
+    }
+  } else {
+    p[tgt].push({ t: 1, x: endX, y: endY })
+  }
+  // The defender's break on the ball was a near miss; everyone pursues.
   if (p[near].length && p[near][p[near].length - 1].t === catchT) p[near][p[near].length - 1] = { t: catchT, ...nudge(catchPt, 1.6, 0.6) }
   pursue(p, DEF_KEYS, catchT, { x: endX + 0.8, y: endY }, 1, seed)
+  markEaseAll(p)
+  const ball: WP[] = [...ballHead(), ...shadow(p[tgt], catchT).slice(1)]
+  markEase(ball)
   return finish(f, p, {
     duration: yac > 15 ? 3300 : 2800,
-    ball: [...ball, ...shadow(p[tgt], catchT).slice(1)],
+    ball,
     holders: [...holders, { t: catchT, key: tgt }],
     flights,
   })
@@ -393,9 +690,12 @@ function buildSack(play: Play): PlayAnim {
   ;['wr0', 'wr1', 'wr2', 'te'].forEach((k, i) => p[k].push({ t: 0.6, x: los + 6 + i * 2, y: f[k].y }))
   p.rb.push({ t: 0.35, x: los - 4, y: MID_Y - dodge * 3 })
   ;['cb0', 'cb1', 's0', 's1', 'lb0', 'lb1', 'lb2'].forEach((k) => p[k].push({ t: 0.6, x: posAt(p[k], 0).x + 3, y: posAt(p[k], 0).y }))
+  markEaseAll(p)
+  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.06, ...posAt(p.qb, 0.06) }, ...shadow(p.qb, 0.06, 1).slice(1)]
+  markEase(ball)
   return finish(f, p, {
     duration: 2200,
-    ball: [{ t: 0, x: los, y: MID_Y }, { t: 0.06, ...posAt(p.qb, 0.06) }, ...shadow(p.qb, 0.06, 1).slice(1)],
+    ball,
     holders: [{ t: 0, key: null }, { t: 0.06, key: 'qb' }],
     flights: [],
   })
@@ -421,9 +721,12 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   // Coverage sprints downfield; the returner's team sets up blocks.
   ;['wr0', 'wr1', 'te', 'ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'wr2'].forEach((k, i) => p[k].push({ t: 0.95, x: clampX(finalX + 1 + (i % 3)), y: clampY(f[k].y + (posAt(p.s0, 1).y - f[k].y) * 0.7) }))
   DEF_KEYS.filter((k) => k !== 's0').forEach((k, i) => p[k].push({ t: 0.9, x: clampX(los + 12 + i * 2), y: f[k].y }))
+  markEaseAll(p)
+  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.08, x: f.qb.x, y: MID_Y }, { t: kickT, x: f.qb.x + 1, y: MID_Y }, { t: landT, x: landX, y: landY }, ...shadow(p.s0, landT).slice(1)]
+  markEase(ball)
   return finish(f, p, {
     duration: 3000,
-    ball: [{ t: 0, x: los, y: MID_Y }, { t: 0.08, x: f.qb.x, y: MID_Y }, { t: kickT, x: f.qb.x + 1, y: MID_Y }, { t: landT, x: landX, y: landY }, ...shadow(p.s0, landT).slice(1)],
+    ball,
     holders: [{ t: 0, key: null }, { t: 0.08, key: 'qb' }, { t: kickT, key: null }, { t: landT, key: 's0' }],
     flights: [{ t0: kickT, t1: landT, height: 1 }],
   })
@@ -440,9 +743,12 @@ function buildKick(play: Play): PlayAnim {
   const missY = MID_Y + (hash(seed) < 0.5 ? -1 : 1) * (4 + hash(seed + 1) * 3)
   p.rb.push({ t: 0.18, x: los - 7.5, y: MID_Y - 0.5 })
   for (let i = 0; i < 4; i++) p[`dl${i}`].push({ t: 0.3, x: los, y: f[`dl${i}`].y })
+  markEaseAll(p)
+  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.1, x: los - 7, y: MID_Y }, { t: 0.2, x: los - 7, y: MID_Y }, { t: 0.85, x: 116, y: good ? MID_Y : missY }]
+  markEase(ball)
   return finish(f, p, {
     duration: 2000,
-    ball: [{ t: 0, x: los, y: MID_Y }, { t: 0.1, x: los - 7, y: MID_Y }, { t: 0.2, x: los - 7, y: MID_Y }, { t: 0.85, x: 116, y: good ? MID_Y : missY }],
+    ball,
     holders: [{ t: 0, key: null }, { t: 0.1, key: 'qb' }, { t: 0.2, key: null }],
     flights: [{ t0: 0.2, t1: 0.85, height: 1 }],
     posts: true,
@@ -465,9 +771,12 @@ function buildKickoff(play: Play): PlayAnim {
   OFF_KEYS.filter((k) => k !== 'rb').forEach((k, i) => {
     p[k] = [{ t: 0, x: 30 + (i % 3) * 6, y: 4 + i * 4.6 }, { t: 0.7, x: 28 + (i % 3) * 4, y: 4 + i * 4.6 + (MID_Y - (4 + i * 4.6)) * 0.3 }]
   })
+  markEaseAll(p)
+  const ball: WP[] = [{ t: 0, x: kickX, y: MID_Y }, { t: 0.12, x: kickX, y: MID_Y }, { t: 0.55, x: catchX, y: MID_Y }, ...shadow(p.rb, 0.55).slice(1)]
+  markEase(ball)
   return finish(f, p, {
     duration: 2400,
-    ball: [{ t: 0, x: kickX, y: MID_Y }, { t: 0.12, x: kickX, y: MID_Y }, { t: 0.55, x: catchX, y: MID_Y }, ...shadow(p.rb, 0.55).slice(1)],
+    ball,
     holders: [{ t: 0, key: null }, { t: 0.55, key: 'rb' }],
     flights: [{ t0: 0.12, t1: 0.55, height: 1 }],
   })
@@ -479,9 +788,12 @@ function buildPenalty(play: Play): PlayAnim {
   const p = startPaths(f)
   for (const k of OFF_KEYS) p[k].push({ t: 0.3, x: f[k].x + 0.6, y: f[k].y })
   for (const k of DEF_KEYS) p[k].push({ t: 0.3, x: f[k].x - 0.4, y: f[k].y })
+  markEaseAll(p)
+  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.45, x: los, y: MID_Y }, { t: 1, x: 10 + play.endYard, y: MID_Y }]
+  markEase(ball)
   return finish(f, p, {
     duration: 1600,
-    ball: [{ t: 0, x: los, y: MID_Y }, { t: 0.45, x: los, y: MID_Y }, { t: 1, x: 10 + play.endYard, y: MID_Y }],
+    ball,
     holders: [{ t: 0, key: null }],
     flights: [],
     flag: { t: 0.25, x: los + (play.yards > 0 ? 2 : -2), y: MID_Y + 3 },
@@ -491,5 +803,8 @@ function buildPenalty(play: Play): PlayAnim {
 function buildStatic(play: Play): PlayAnim {
   const los = 10 + play.startYard
   const f = formation(los)
-  return finish(f, startPaths(f, 1), { duration: 400, ball: [{ t: 0, x: los, y: MID_Y }], holders: [{ t: 0, key: null }], flights: [] })
+  const p = startPaths(f, 1)
+  markEaseAll(p)
+  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }]
+  return finish(f, p, { duration: 400, ball, holders: [{ t: 0, key: null }], flights: [] })
 }
