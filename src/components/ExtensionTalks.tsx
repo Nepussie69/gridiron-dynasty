@@ -42,7 +42,7 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
   if (!p) return null
 
   const style = agentStyle(p.id)
-  const ask = marketAsk(p, league.season)
+  const ask = marketAsk(p, league.season, career.skills.negotiation)
   const aav = Math.round((ask * pct) / 100)
   const talk = career.talks?.[playerId]
   const active = talk && talk.season === league.season

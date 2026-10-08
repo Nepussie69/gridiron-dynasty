@@ -10,6 +10,7 @@ import type { DraftPick, Player, Position } from '../types'
 import type { World } from './generate'
 import { hash32 } from './rng'
 import { onTeamChange } from './playbook'
+import { negotiationTradeMargin } from './skills'
 
 export interface TradeAsset {
   kind: 'player' | 'pick'
@@ -131,6 +132,7 @@ export function evaluateTrade(
   userTeamId: string,
   give: TradeAsset[],
   get: TradeAsset[],
+  userNegotiation?: number,
 ): TradeVerdict {
   const rebuild = isRebuilding(partnerId)
   const theyReceive = give.reduce((s, a) => s + partnerValue(world, partnerId, a, rebuild), 0)
@@ -139,10 +141,12 @@ export function evaluateTrade(
   // A touch of front-office personality, deterministic per pairing.
   const bias = ((hash32(partnerId + userTeamId, 5) % 9) - 4) / 100
   const ratio = rawRatio - bias
+  // L12.11: the user's own Negotiation skill buys a little leeway (up to +2%).
+  const margin = userNegotiation == null ? 0 : negotiationTradeMargin(userNegotiation)
 
   let verdict: TradeVerdict['verdict'] = 'reject'
-  if (ratio >= 1.0) verdict = 'accept'
-  else if (ratio >= 0.9) verdict = 'close'
+  if (ratio >= 1.0 - margin) verdict = 'accept'
+  else if (ratio >= 0.9 - margin) verdict = 'close'
 
   const style = rebuild ? 'building for the future' : 'in win-now mode'
   let reason: string
@@ -187,7 +191,7 @@ function dealSummary(world: World, partnerId: string, get: TradeAsset[]): string
  * each club, best first (max 6). Deterministic. Every offer is a deal
  * `evaluateTrade` already accepts by hand — this only searches.
  */
-export function findDeals(world: World, userTeamId: string, playerId: string): DealOffer[] {
+export function findDeals(world: World, userTeamId: string, playerId: string, userNegotiation?: number): DealOffer[] {
   const give: TradeAsset[] = [{ kind: 'player', id: playerId }]
   const shoppedValue = assetValue(world, give[0])
   const offers: DealOffer[] = []
@@ -214,14 +218,14 @@ export function findDeals(world: World, userTeamId: string, playerId: string): D
         if (p && partnerRoster.filter((x) => x.pos === p.pos).length <= 1) continue
       }
       const tentative = [...get, a]
-      if (evaluateTrade(world, partner, userTeamId, give, tentative).accepted) get.push(a)
+      if (evaluateTrade(world, partner, userTeamId, give, tentative, userNegotiation).accepted) get.push(a)
     }
     if (!get.length) continue
 
     const userValue = get.reduce((s, a) => s + assetValue(world, a), 0)
     if (userValue < shoppedValue * 0.5) continue
 
-    const verdict = evaluateTrade(world, partner, userTeamId, give, get)
+    const verdict = evaluateTrade(world, partner, userTeamId, give, get, userNegotiation)
     offers.push({
       partnerId: partner,
       get,

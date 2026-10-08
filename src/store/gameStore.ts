@@ -70,6 +70,7 @@ import {
 } from '../game/engine/progress'
 import {
   canSignFreeAgents,
+  earnSkillPoints,
   generateJobOffers,
   gradeObjectives,
   ladderFor,
@@ -87,6 +88,7 @@ import {
   ZERO_SKILLS,
   type Objective,
   type Reputation,
+  type SkillPointAward,
   type Skills,
 } from '../game/engine/career'
 import { snapshotDevBaseline } from '../game/engine/objectives'
@@ -145,6 +147,14 @@ import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/
 import { MAX_SHADOW, canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../game/engine/negotiation'
 import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
+import {
+  SKILL_KEYS,
+  SKILL_LABELS,
+  developmentGrowthMult,
+  leadershipMoraleBonus,
+  negotiationAskMultiplier,
+  skillEffectText,
+} from '../game/engine/skills'
 import { applyCombine, combineOpen, type CombineKind } from '../game/engine/combine'
 import {
   weeklyActions,
@@ -337,6 +347,8 @@ export interface SeasonSummary {
   ambitions?: { label: string; done: boolean }[]
   /** L9 Z2: this season's front-office/staff award winners. */
   staffAwards?: StaffAward[]
+  /** L12.11: skill points earned this season, with reasons and the unspent total. */
+  skillPoints?: { earned: number; reasons: string[]; unspent: number }
 }
 
 /** The persisted payload. Kept independent of store internals for migration. */
@@ -498,6 +510,8 @@ interface GameStore {
   extendPlayer: (id: string) => void
   /** G2: negotiate an extension with a player's agent (negotiate rungs). */
   offerExtension: (playerId: string, offer: ExtensionOffer) => void
+  /** L12.11: spend one unspent skill point for +2 in a skill (max 99). */
+  spendSkillPoint: (skill: keyof Skills) => void
   /** G1: add/remove a non-own player from the shadow board (proScout rungs). */
   toggleShadowBoard: (playerId: string) => void
   /** G3: file this offseason's cap memo (manageCap rungs). */
@@ -1840,7 +1854,7 @@ export const useGame = create<GameStore>((set, get) => ({
     const p = world.freeAgents[idx]
     // W1: a released player carries a zeroed contract, so price the signing
     // here (one year at market, pro-rated for the weeks left in season).
-    const contract = freeAgentContract(p, world.season, world.week, world.phase)
+    const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, negotiationAskMultiplier(career.skills.negotiation))
     const cap = summarizeCap(world.roster[career.teamId] ?? [], world.deadMoney[career.teamId] ?? 0, world.season)
     if (cap.space < contract.capHit) {
       get().showToast('Not enough cap space to sign this player.')
@@ -1988,7 +2002,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('His camp has stopped taking calls this season.')
       return
     }
-    const verdict = judgeOffer(p, world.season, offer)
+    const verdict = judgeOffer(p, world.season, offer, career.skills.negotiation)
     if (!verdict.accepted) {
       const nextTries = tries + 1
       talks[playerId] = { season: world.season, tries: nextTries, closed: nextTries >= 3 }
@@ -2027,6 +2041,25 @@ export const useGame = create<GameStore>((set, get) => ({
     set({ career: { ...career, talks } })
     bump(set, get)
     get().showToast(`${p.name} extended: ${offer.years} yrs, ${money(offer.aav)}/yr.`)
+    get().save()
+  },
+
+  spendSkillPoint: (skill) => {
+    const career = get().career
+    if (!career) return
+    if ((career.skillPoints ?? 0) <= 0) {
+      get().showToast('No skill points to spend — earn them by hitting your goals.')
+      return
+    }
+    const current = career.skills[skill]
+    if (current >= 99) {
+      get().showToast(`${SKILL_LABELS[skill]} is already maxed.`)
+      return
+    }
+    const skills: Skills = { ...career.skills, [skill]: clamp(current + 2, 0, 99) }
+    set({ career: { ...career, skills, skillPoints: (career.skillPoints ?? 0) - 1 } })
+    bump(set, get)
+    get().showToast(`${SKILL_LABELS[skill]} → ${skills[skill]}.`)
     get().save()
   },
 
@@ -2182,7 +2215,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('You do not have trade authority yet — keep climbing.')
       return { accepted: false, message: 'No trade authority.' }
     }
-    const verdict = evaluateTrade(world, partnerId, career.teamId, give, get2)
+    const verdict = evaluateTrade(world, partnerId, career.teamId, give, get2, career.skills.negotiation)
     if (!verdict.accepted) {
       get().showToast(verdict.reason)
       return { accepted: false, message: verdict.reason }
@@ -2825,7 +2858,17 @@ function runEndOfRegularSeason(
   const mvp = computeMVP()
   world.awards = { mvp: mvp ?? undefined }
 
-  const retired = developPlayers(world)
+  const retired = developPlayers(
+    world,
+    career ? { teamId: career.teamId, growth: developmentGrowthMult(career.skills.recruiting) } : undefined,
+  )
+  // L12.11: a respected leader gets his players back on board over the offseason.
+  if (career) {
+    const morale = leadershipMoraleBonus(career.skills.leadership)
+    if (morale > 0) {
+      for (const p of world.roster[career.teamId] ?? []) p.morale = clamp(p.morale + morale, 1, 100)
+    }
+  }
   // G3: your room's banked reps turn into OVR gains at season end.
   let roomGains: RoomGain[] = []
   if (career && hasRoom(career)) {
@@ -2914,6 +2957,11 @@ function runEndOfRegularSeason(
   let careerNext = career
   let objs: Objective[] = []
   let graded: { repDelta: Partial<Reputation>; doneCount: number } = { repDelta: {}, doneCount: 0 }
+  // L12.11: inputs for the season's skill-point award.
+  let ambitionsMet = 0
+  let userAwardsCount = 0
+  let ledgerSeasonCalls = 0
+  let ledgerSeasonHits = 0
   if (career) {
     scout = evaluateScouting(world, career)
     const rec = world.standings[career.teamId]
@@ -3010,6 +3058,7 @@ function runEndOfRegularSeason(
         madePlayoffs,
         wonTitle,
       })
+      ambitionsMet = grade.met
       const rep2: Reputation = { ...careerNext.reputation }
       for (const [k, v] of Object.entries(grade.repDelta)) {
         ;(rep2 as unknown as Record<string, number>)[k] = clamp(
@@ -3155,6 +3204,9 @@ function runEndOfRegularSeason(
   if (careerNext) {
     // G2: conviction calls that matured this season pay out evaluation/profile.
     const newly = gradeLedger(world, careerNext).newly
+    // L12.11: the season's graded-call sample, for the skill-point award.
+    ledgerSeasonCalls = newly.length
+    ledgerSeasonHits = newly.filter((e) => e.hit).length
     const payout = convictionPayout(newly, world)
     if (Object.keys(payout.rep).length) {
       const repC: Reputation = { ...careerNext.reputation }
@@ -3258,6 +3310,7 @@ function runEndOfRegularSeason(
     world.lastWins = Object.fromEntries(world.teams.map((t) => [t.id, world.standings[t.id]?.wins ?? 0]))
 
     const userAwards = seasonAwards.filter((a) => a.isUser)
+    userAwardsCount = userAwards.length
     if (userAwards.length) {
       // +2 profile per honour, +1 more for Exec/Coach of the Year; the whole
       // feature is capped at +3 profile in a season (reputation guardrail).
@@ -3358,6 +3411,32 @@ function runEndOfRegularSeason(
     : undefined
   if (careerNext && question) careerNext = { ...careerNext, seasonQuestion: question }
 
+  // L12.11: the season pays out skill points from goals and accomplishments.
+  // They carry over between seasons until the player spends them.
+  let skillAward: SkillPointAward | null = null
+  if (careerNext && career) {
+    skillAward = earnSkillPoints({
+      objectivesMet: graded.doneCount,
+      ambitionsMet,
+      wins,
+      losses,
+      madePlayoffs,
+      wonTitle,
+      awards: userAwardsCount,
+      questionGood: !!question?.good,
+      ledgerGraded: ledgerSeasonCalls,
+      ledgerHits: ledgerSeasonHits,
+    })
+    careerNext = {
+      ...careerNext,
+      skillPoints: (careerNext.skillPoints ?? 0) + skillAward.earned,
+      skillLog: [
+        ...(careerNext.skillLog ?? []),
+        { season: world.season, earned: skillAward.earned, reasons: skillAward.reasons },
+      ].slice(-30),
+    }
+  }
+
   const summary: SeasonSummary = {
     season: world.season,
     champion: playoffs.champion,
@@ -3380,6 +3459,9 @@ function runEndOfRegularSeason(
     ghost: ghost ? { actualWins: ghost.actualWins, ghostWins: ghost.ghostWins, delta: ghost.delta } : undefined,
     ambitions: (careerNext?.ambitions ?? []).map((a) => ({ label: a.label, done: !!a.done })),
     staffAwards: (world.staffAwards ?? []).filter((a) => a.season === world.season),
+    skillPoints: skillAward
+      ? { earned: skillAward.earned, reasons: skillAward.reasons, unspent: careerNext?.skillPoints ?? 0 }
+      : undefined,
   }
 
   set({
@@ -3913,6 +3995,62 @@ export function adviceProbe() {
 /** Dev-only balance probe: run whole seasons headlessly and report the long arc. */
 export function balanceProbe(seasons = 10, path: 'coach' | 'personnel' = 'personnel') {
   return runBalance({ seasons, path, seed: world.seed, data: getRealData() })
+}
+
+export interface SkillEffectRow {
+  skill: string
+  key: string
+  at40: string
+  at70: string
+  at99: string
+}
+
+export interface SkillPacingRow {
+  seed: number
+  path: 'coach' | 'personnel'
+  baseline: number | null
+  withSkills: number | null
+  delta: number | null
+  promotions: number
+  demotions: number
+}
+
+/**
+ * Dev-only probe (L12.11 P4): prove the skill-point system is paced and bounded.
+ * Runs balanceProbe(10) on a fixed set of seeds, once with the spend-evenly
+ * policy and once without, and prints each skill's effect at 40/70/99.
+ */
+export function skillProbe() {
+  const data = getRealData()
+  const seeds = [20261004, 2222, 33333, 5150, 777]
+  const effects: SkillEffectRow[] = SKILL_KEYS.map((key) => ({
+    skill: SKILL_LABELS[key],
+    key,
+    at40: skillEffectText(key, 40),
+    at70: skillEffectText(key, 70),
+    at99: skillEffectText(key, 99),
+  }))
+  const pacing: SkillPacingRow[] = []
+  for (const seed of seeds) {
+    for (const path of ['personnel', 'coach'] as const) {
+      const baseline = runBalance({ seasons: 10, seed, path, data, skillPolicy: false })
+      const withSkills = runBalance({ seasons: 10, seed, path, data, skillPolicy: true })
+      pacing.push({
+        seed,
+        path,
+        baseline: baseline.seasonsToTop,
+        withSkills: withSkills.seasonsToTop,
+        delta:
+          baseline.seasonsToTop != null && withSkills.seasonsToTop != null
+            ? withSkills.seasonsToTop - baseline.seasonsToTop
+            : null,
+        promotions: withSkills.promotions,
+        demotions: withSkills.demotions,
+      })
+    }
+  }
+  const withinTolerance = pacing.every((r) => r.delta == null || Math.abs(r.delta) <= 1)
+  return { effects, pacing, withinTolerance }
 }
 
 /**

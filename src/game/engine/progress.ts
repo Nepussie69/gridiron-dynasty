@@ -73,7 +73,7 @@ export function experienceLabel(experience: number): 'starter' | 'rotation' | 'b
   return experience >= 0.55 ? 'starter' : experience >= 0.3 ? 'rotation' : 'barely played'
 }
 
-export function developPlayers(world: World) {
+export function developPlayers(world: World, user?: { teamId: string; growth: number }) {
   const rng = makeRng(world.seed + world.season * 31337)
   const retired: Player[] = []
   // Practice-squad players get no snaps and no starts, by rule (D2).
@@ -90,10 +90,12 @@ export function developPlayers(world: World) {
     const growth = Math.max(0, p.pot - p.ovr)
     // D2: growth for young players is earned on the field, not handed out by age.
     const experience = p.age <= 26 ? experienceScore(world, p, psIds) : 0
+    // L12.11: Player Development skill speeds up the young players on your club.
+    const clubGrowth = user && p.teamId === user.teamId ? user.growth : 1
     if (p.age <= 24) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.1 + 0.4 * experience + rng() * 0.12) * dev)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.1 + 0.4 * experience + rng() * 0.12) * dev * clubGrowth)), 40, 99)
     } else if (p.age <= 26) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.06 + 0.26 * experience + rng() * 0.08) * dev)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.06 + 0.26 * experience + rng() * 0.08) * dev * clubGrowth)), 40, 99)
     } else if (p.age <= 29) {
       p.ovr = clamp(p.ovr + (rng() < 0.45 ? 1 : 0) - (rng() < 0.25 ? 1 : 0), 40, p.pot)
     } else {
@@ -437,8 +439,11 @@ export function freeAgentContract(
   week: number,
   phase: 'regular' | 'offseason' | string,
   annualOverride?: number,
+  askMult = 1,
 ): Contract {
-  const annual = annualOverride ?? marketPrice(p, season)
+  const market = annualOverride ?? marketPrice(p, season)
+  // L12.11: the user's Negotiation skill shaves the ask (AI callers use 1).
+  const annual = annualOverride != null ? market : Math.round((market * askMult) / 1e5) * 1e5
   const capHit =
     phase === 'regular'
       ? Math.round((annual * (18 - week + 1)) / 18)

@@ -7,7 +7,8 @@ import {
   type UnitCohesion,
 } from '../game/engine/playbook'
 import { cultureLabel, cultureScore } from '../game/engine/culture'
-import { useWorld } from '../store/gameStore'
+import { leadershipCultureBonus } from '../game/engine/skills'
+import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, RatingBar } from '../ui/kit'
 
 /**
@@ -17,6 +18,7 @@ import { Badge, Card, RatingBar } from '../ui/kit'
  */
 export function CulturePanel({ teamId, className }: { teamId: string; className?: string }) {
   const world = useWorld()
+  const career = useGame((s) => s.career)
   const roster = world.roster[teamId] ?? []
   const staff = world.staff[teamId] ?? []
   const ocScheme = staff.find((s) => s.role === 'Offensive Coordinator')?.scheme ?? ''
@@ -24,7 +26,9 @@ export function CulturePanel({ teamId, className }: { teamId: string; className?
   const off = unitCohesion(roster, 'off', ocScheme, world.staffTenure?.[`${teamId}:off`] ?? 1)
   const def = unitCohesion(roster, 'def', dcScheme, world.staffTenure?.[`${teamId}:def`] ?? 1)
   const avg = (off.cohesion + def.cohesion) / 2
-  const culture = cultureScore(world, teamId)
+  // L12.11: the user's Leadership skill lifts his own club's culture.
+  const bonus = career && career.teamId === teamId ? leadershipCultureBonus(career.skills.leadership) : 0
+  const culture = cultureScore(world, teamId, bonus)
   const cl = cultureLabel(culture)
 
   return (

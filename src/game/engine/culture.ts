@@ -10,7 +10,7 @@ import type { World } from './generate'
 import { clamp } from './rng'
 import { teamCohesion } from './playbook'
 
-export function cultureScore(world: World, teamId: string): number {
+export function cultureScore(world: World, teamId: string, bonus = 0): number {
   const staff = world.staff[teamId] ?? []
   const leadership = staff.length ? staff.reduce((s, m) => s + m.rating, 0) / staff.length : 60
   const roster = world.roster[teamId] ?? []
@@ -23,7 +23,8 @@ export function cultureScore(world: World, teamId: string): number {
       }, 0) / core.length
     : 60
   const cohesion = teamCohesion(roster, world.staffTenure, teamId).avg * 100
-  return Math.round(clamp(leadership * 0.35 + char * 0.4 + cohesion * 0.25, 0, 100))
+  // L12.11: the user's own Leadership skill lifts his club's culture (0..4).
+  return Math.round(clamp(leadership * 0.35 + char * 0.4 + cohesion * 0.25 + bonus, 0, 100))
 }
 
 export function cultureLabel(v: number): { label: string; tone: 'loss' | 'warn' | 'info' | 'win' } {

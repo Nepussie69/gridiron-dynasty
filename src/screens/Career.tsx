@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUp, Briefcase, CheckCircle2, Circle, Copy, Repeat2, Star, Target, TrendingUp } from 'lucide-react'
+import { ArrowUp, Briefcase, CheckCircle2, Circle, Copy, Plus, Repeat2, Sparkles, Star, Target, TrendingUp } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import {
@@ -17,6 +17,14 @@ import {
 } from '../game/engine/career'
 import { ALL_CAPABILITIES, capabilities } from '../game/engine/capabilities'
 import { ghostVerdict } from '../game/engine/ghost'
+import {
+  SKILL_BLURBS,
+  SKILL_KEYS,
+  SKILL_LABELS,
+  skillActive,
+  skillEffectText,
+  skillUsedFrom,
+} from '../game/engine/skills'
 const CAP_LABELS: Record<string, string> = {
   grade: 'Grade prospects',
   rankBoard: 'Rank the board',
@@ -69,6 +77,7 @@ export function Career() {
   const acceptOffer = useGame((s) => s.acceptOffer)
   const acceptCounter = useGame((s) => s.acceptCounter)
   const declineOffers = useGame((s) => s.declineOffers)
+  const spendSkillPoint = useGame((s) => s.spendSkillPoint)
   const setScreen = useGame((s) => s.setScreen)
   const showToast = useGame((s) => s.showToast)
   const [prep, setPrep] = useState<JobOffer | null>(null)
@@ -98,6 +107,7 @@ export function Career() {
   const prog = progressToNext(career.reputation, career.path, career.level)
   const caps = capabilities(career)
   const thisMastery = getRoleMastery(career)
+  const skillPoints = career.skillPoints ?? 0
   const objectives = roleObjectives(
     league,
     career,
@@ -355,17 +365,50 @@ export function Career() {
                 </div>
               </Card>
               <Card>
-                <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Skills</h3>
-                <div className="space-y-3">
-                  {Object.entries(career.skills ?? {}) .map(([k, v]) => (
-                    <div key={k}>
-                      <div className="mb-1 flex items-center justify-between">
-                        <span className="font-cond text-xs font-600 uppercase text-ink-2">{k}</span>
-                        <span className="font-cond text-xs font-700 tnum text-ink">{v}</span>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h3 className="font-display text-lg font-700 uppercase tracking-wide">Skills</h3>
+                  <Badge tone={skillPoints > 0 ? 'gold' : 'neutral'}>
+                    <span className="inline-flex items-center gap-1">
+                      <Sparkles size={11} /> {skillPoints} point{skillPoints === 1 ? '' : 's'} to spend
+                    </span>
+                  </Badge>
+                </div>
+                <div className="space-y-2.5">
+                  {SKILL_KEYS.map((key) => {
+                    const value = career.skills[key]
+                    const next = Math.min(99, value + 2)
+                    const active = skillActive(key, career.path, career.level)
+                    const from = skillUsedFrom(key, career.path)
+                    return (
+                      <div key={key} className={cn('rounded-lg border border-line p-2.5', !active && 'opacity-60')}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-cond text-xs font-600 uppercase text-ink-2">{SKILL_LABELS[key]}</span>
+                          <span className="ml-auto font-cond text-sm font-700 tnum text-ink">{value}</span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="!px-1.5"
+                            disabled={skillPoints <= 0 || value >= 99}
+                            title="Spend 1 point for +2"
+                            onClick={() => spendSkillPoint(key)}
+                          >
+                            <Plus size={14} />
+                          </Button>
+                        </div>
+                        <div className="mt-1.5">
+                          <RatingBar value={value} color={active ? '#c99a2e' : '#9aa0a6'} height={6} />
+                        </div>
+                        <p className="mt-1 text-[10px] text-muted">{SKILL_BLURBS[key]}</p>
+                        <p className="mt-0.5 text-[10px] text-faint">
+                          {value}: {skillEffectText(key, value)}
+                          {value < 99 ? ` → ${next}: ${skillEffectText(key, next)}` : ' · maxed'}
+                        </p>
+                        {!active && from && (
+                          <p className="mt-0.5 text-[10px] text-warn">Used from {from} — points still count, just not yet.</p>
+                        )}
                       </div>
-                      <RatingBar value={v} color="#c99a2e" height={7} />
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </Card>
             </div>
