@@ -28,3 +28,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 22 | 2026-10-08 | Is Culture linked to the actual game? (cohesion/culture are display-only today) | L12.9 K1–K2 | ⏳ queued (K2 contract discount needs user OK) |
 | 23 | 2026-10-08 | Doesn't like the weekly hours card → remove it | L12.9 H1 | ✅ merged |
 | 24 | 2026-10-08 | (found in QA) AI QBs show 0 rushing in the Stats Hub — fast-sim stat allocation gives QBs no carries | statAlloc follow-up | ✅ merged |
+| 25 | 2026-10-08 | Routes should look like real routes and move more smoothly | DeepSeek push 'routes' (playAnim.ts: speed-continuous motion, route trees per concept, coverage follows) | 🔨 building |
