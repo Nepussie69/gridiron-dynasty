@@ -21,7 +21,6 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 | Name / branch | Worktree | Spec / task | Prompt | Notes |
 |---|---|---|---|---|
 | `p5` / `wt-p5` | scratchpad/wt-p5 | NEXT_PHASE_L12.md P5 (E2 defense/K/general ratings, E3 recalibrate, `__ratingSpread`) | /private/tmp/gridiron-l12p5.txt | Sim change: verify all 3 seeds in bands, statShape all ✅, equivalence 20/20, spread table. Appends L12 section to HANDOFF.md |
-| `l12_5` / `l12_5-trade` | scratchpad/trade-wt | NEXT_PHASE_L12_5.md T1–T5 trade desk | /private/tmp/gridiron-l12_5.txt | Launched by `/private/tmp/ds-push-wt`. Slow start |
 | `reads` / `wt-reads` | scratchpad/wt-reads | NEXT_PHASE_L12_7.md D5 (Now/Ceiling ranges on scouting reads) | /private/tmp/gridiron-l12_7p2.txt | Display only |
 | `routes` / `wt-routes` | scratchpad/wt-routes | Backlog #25: real route trees per concept + smooth motion in `playAnim.ts` | /private/tmp/gridiron-routes.txt | Visual only; check in the browser |
 | `skills` / `wt-skills` | scratchpad/wt-skills | NEXT_PHASE_L12_11.md P1–P4 skill points from goals; negotiation/development wired (user-only, small) | /private/tmp/gridiron-skills.txt | Pacing ±1 season |
