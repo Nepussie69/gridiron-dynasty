@@ -16,7 +16,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 10 | 2026-10-08 | Find deals for opposing players | L12.5 T3 | 🔨 building |
 | 11 | 2026-10-08 | Trade for a position | L12.5 T4 | 🔨 building |
 | 12 | 2026-10-08 | Trade block tab | L12.5 T5 | 🔨 building |
-| 13 | 2026-10-08 | Stats not updated live; offense/defense stats, sort by position — redo the stats screen | L12.6 S1 | 🔨 building |
+| 13 | 2026-10-08 | Stats not updated live; offense/defense stats, sort by position — redo the stats screen | L12.6 S1 | ✅ 1726392 |
 | 14 | 2026-10-08 | Draft in April, not during the season; same with true free agency | L12.6 C1–C2 | 🔨 building |
 | 15 | 2026-10-08 | In-season FA is fine, but released players must properly sign and play for another team | L12.6 C3 + `__faFlowProbe` | 🔨 building |
 | 16 | 2026-10-08 | Rookies too highly rated; rely on ceiling, grow with stats/experience | L12.7 D1–D4 | 🔨 building |
@@ -27,3 +27,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 21 | 2026-10-08 | What is the Ledger? Make it work for the coaching track (coach calls graded) | L12.9 L1 | 🔨 building |
 | 22 | 2026-10-08 | Is Culture linked to the actual game? (cohesion/culture are display-only today) | L12.9 K1–K2 | ⏳ queued (K2 contract discount needs user OK) |
 | 23 | 2026-10-08 | Doesn't like the weekly hours card → remove it | L12.9 H1 (pacing kept identical) | 🔨 building |
+| 24 | 2026-10-08 | (found in QA) AI QBs show 0 rushing in the Stats Hub — fast-sim stat allocation gives QBs no carries | statAlloc follow-up | ⏳ queued |
