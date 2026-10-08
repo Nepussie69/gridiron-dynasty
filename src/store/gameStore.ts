@@ -56,6 +56,7 @@ import { gradeGame } from '../game/engine/film'
 import {
   developPlayers,
   evaluateScouting,
+  experienceLabel,
   freeAgentContract,
   refreshProspectClass,
   runAIFreeAgency,
@@ -169,7 +170,7 @@ import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import { loadCalibration } from '../game/data/calibration'
-import { runBalance } from '../game/engine/balance'
+import { runBalance, runRookieProbe } from '../game/engine/balance'
 
 export type ScreenId =
   | 'career' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
@@ -2752,6 +2753,24 @@ function runEndOfRegularSeason(
       })
     }
   }
+  // L12.7 D3: a season-end development report on your young players, using the
+  // lastGrowth stamp each player earned in developPlayers.
+  if (career) {
+    const young = (world.roster[career.teamId] ?? [])
+      .filter((p) => p.age <= 26 && p.lastGrowth?.season === world.season)
+      .sort((a, b) => (b.lastGrowth!.to - b.lastGrowth!.from) - (a.lastGrowth!.to - a.lastGrowth!.from))
+    if (young.length) {
+      const lines = young.map((p) => {
+        const g = p.lastGrowth!
+        return `${p.name} (${p.pos}) ${g.from} → ${g.to} — ${experienceLabel(g.experience)}`
+      })
+      pushCareerNews(world, career, {
+        category: 'Roster',
+        headline: 'Development report',
+        body: lines.join(' · '),
+      })
+    }
+  }
   // A GM/owner who owns contracts negotiates his own re-signings; only an NPC
   // front office (scout, coach) has the AI handle them.
   const ownsContracts = career
@@ -3711,6 +3730,15 @@ export function adviceProbe() {
 /** Dev-only balance probe: run whole seasons headlessly and report the long arc. */
 export function balanceProbe(seasons = 10, path: 'coach' | 'personnel' = 'personnel') {
   return runBalance({ seasons, path, seed: world.seed, data: getRealData() })
+}
+
+/**
+ * Dev-only probe (L12.7 D4): run whole seasons headlessly and report rookie OVR
+ * by round, league starter-talent drift, and how often rookies reach their
+ * ceiling — starters vs. bench. Offline-safe (own throwaway world).
+ */
+export function rookieProbe(seasons = 8) {
+  return runRookieProbe({ seasons, seed: world.seed, data: getRealData() })
 }
 
 /** One caught failure from the career smoke probe (Z1). */

@@ -1,7 +1,7 @@
 import { CalendarClock, FastForward, Timer, Trophy } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { gradeColor, inkOn } from '../lib/format'
-import { DRAFT_ROUNDS, currentRound, currentTeamId, overallPick } from '../game/engine/draft'
+import { DRAFT_ROUNDS, currentRound, currentTeamId, overallPick, rookieProjection } from '../game/engine/draft'
 import { accessFor } from '../game/engine/access'
 import { readProspect, rangeText } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
@@ -97,11 +97,13 @@ export function Draft() {
                 {board.map((id, i) => {
                   const p = league.draft.find((x) => x.id === id)
                   if (!p) return null
+                  const proj = rookieProjection(league.draft, p)
                   return (
                     <div key={id} className="flex items-center gap-2 text-sm">
                       <span className="w-5 font-display font-700 tnum text-muted">{i + 1}</span>
                       <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
                       <span className="min-w-0 flex-1 truncate font-600 text-ink">{p.name}</span>
+                      <span className="font-cond text-[10px] tnum text-muted">Now ~{proj.now} · Ceiling {proj.ceiling}</span>
                       <button onClick={() => toggleUserBoard(id)} className="font-cond text-[10px] font-700 uppercase text-loss hover:underline">Remove</button>
                     </div>
                   )
@@ -115,18 +117,22 @@ export function Draft() {
               <span className="label">Your Selections</span>
             </div>
             <div className="max-h-[280px] divide-y divide-line/60 overflow-y-auto">
-              {myPicks.map((p) => (
-                <div key={p.id} className="flex items-center gap-3 px-4 py-2">
-                  <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-3 font-display text-xs font-700 text-ink-2">
-                    {p.draftPick}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-cond text-sm font-600 text-ink">{p.name}</div>
-                    <div className="text-xs text-muted">{p.pos} · {p.college}</div>
+              {myPicks.map((p) => {
+                const proj = rookieProjection(league.draft, p)
+                return (
+                  <div key={p.id} className="flex items-center gap-3 px-4 py-2">
+                    <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-3 font-display text-xs font-700 text-ink-2">
+                      {p.draftPick}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-cond text-sm font-600 text-ink">{p.name}</div>
+                      <div className="text-xs text-muted">{p.pos} · {p.college}</div>
+                      <div className="font-cond text-[10px] tnum text-muted">Now ~{proj.now} · Ceiling {proj.ceiling}</div>
+                    </div>
+                    <Badge tone="neutral">{p.grade}</Badge>
                   </div>
-                  <Badge tone="neutral">{p.grade}</Badge>
-                </div>
-              ))}
+                )
+              })}
               {!myPicks.length && <div className="px-4 py-6 text-center text-sm text-muted">No picks yet.</div>}
             </div>
           </Card>
@@ -151,14 +157,18 @@ export function Draft() {
               {available.map((p) => {
                 const read = readProspect(career, p)
                 const rank = board.indexOf(p.id)
+                const proj = rookieProjection(league.draft, p)
                 return (
                   <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
-                    <span
-                      className="grid h-9 w-16 shrink-0 place-items-center rounded-md font-display text-sm font-700 tnum"
-                      style={{ background: gradeColor(read.center), color: inkOn(gradeColor(read.center)) }}
-                    >
-                      {rangeText(read)}
-                    </span>
+                    <div className="flex w-16 shrink-0 flex-col items-center gap-0.5">
+                      <span
+                        className="grid h-9 w-16 place-items-center rounded-md font-display text-sm font-700 tnum"
+                        style={{ background: gradeColor(read.center), color: inkOn(gradeColor(read.center)) }}
+                      >
+                        {rangeText(read)}
+                      </span>
+                      <span className="font-cond text-[8px] font-700 uppercase tracking-wide text-muted">Prospect grade</span>
+                    </div>
                     <span className="w-9 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
@@ -166,6 +176,7 @@ export function Draft() {
                         {rank >= 0 && <Badge tone="warn">#{rank + 1} your board</Badge>}
                       </span>
                       <span className="block truncate text-xs text-muted">{p.college} · {read.bandLabel}</span>
+                      <span className="block font-cond text-[10px] tnum text-muted">Now ~{proj.now} · Ceiling {proj.ceiling}</span>
                     </span>
                     <div className="hidden w-24 md:block">
                       <RatingBar value={read.center} height={5} color={gradeColor(read.center)} />

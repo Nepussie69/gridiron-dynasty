@@ -16,7 +16,7 @@
 // `__balanceProbe(seasons)`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CareerState, Recommendation } from '../types'
+import type { CareerState, Player, Position, Recommendation } from '../types'
 import { summarizeCap } from './cap'
 import { NFL_TEAMS } from '../data/nflTeams'
 import {
@@ -31,6 +31,7 @@ import { gainSeasonTraining, refreshCohesion, teamCohesion } from './playbook'
 import { awardCompensatoryPicks, initDraft, runUDFAs, simulateRestOfDraft } from './draft'
 import { ensureDraftWindow } from './picks'
 import { simulatePlayoffs, simWeek } from './sim'
+import { depthAt, STARTERS } from './depth'
 import {
   canDraft,
   demote,
@@ -406,3 +407,179 @@ function summarizeReport(
 
 /** Exported for tests/typing convenience. */
 export { teamStrength }
+
+// ── L12.7 D4: rookie probe ────────────────────────────────────────────────────
+export interface RookieRoundStat {
+  round: number
+  count: number
+  median: number
+  p10: number
+  p90: number
+}
+
+export interface RookieProbeReport {
+  seasons: number
+  /** (a) opening OVR distribution by draft round for the first draft. */
+  draftByRound: RookieRoundStat[]
+  maxRookieOvr: number
+  noRookieOver80: boolean
+  /** (b) league-average starter OVR per season, and its drift from season 1. */
+  starterAvgBySeason: number[]
+  maxDrift: number
+  withinDrift: boolean
+  /** (c) rookies who reached POT − 3 within 4 seasons, by first-two-year role. */
+  reachedByRole: {
+    starters: { n: number; reached: number; pct: number }
+    bench: { n: number; reached: number; pct: number }
+  }
+}
+
+function quantile(sorted: number[], q: number): number {
+  if (!sorted.length) return 0
+  const i = (sorted.length - 1) * q
+  const lo = Math.floor(i)
+  const hi = Math.ceil(i)
+  return Math.round(sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo))
+}
+
+function leagueStarterAvg(world: World): number {
+  let sum = 0
+  let n = 0
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL') continue
+    for (const pos of Object.keys(STARTERS) as Position[]) {
+      for (const p of depthAt(world, t.id, pos).slice(0, STARTERS[pos] ?? 1)) {
+        sum += p.ovr
+        n++
+      }
+    }
+  }
+  return n ? sum / n : 0
+}
+
+function onDepthAsStarter(world: World, p: Player): boolean {
+  if (!p.teamId) return false
+  const idx = depthAt(world, p.teamId, p.pos).findIndex((x) => x.id === p.id)
+  return idx >= 0 && idx < (STARTERS[p.pos] ?? 1)
+}
+
+interface TrackedRookie {
+  pot: number
+  seasonsPlayed: number
+  starterFirstTwo: boolean
+  reached: boolean
+}
+
+/**
+ * D4 (L12.7): run whole seasons headlessly and prove rookies enter low and grow
+ * into their ceilings only with playing time — without draining league talent.
+ * Reports (a) the first draft's opening OVR by round, (b) the league-average
+ * starter OVR each season (talent must stay within ±1.5 of season 1), and (c)
+ * the share of rookies who reach POT − 3 within 4 seasons, starters vs. bench.
+ */
+export function runRookieProbe(opts: { seasons?: number; seed?: number; data?: RealData | null } = {}): RookieProbeReport {
+  const seasons = opts.seasons ?? 8
+  const seed = opts.seed ?? 987654
+  const world = buildWorld(seed, opts.data ?? null)
+  const tracked = new Map<string, TrackedRookie>()
+  let firstDraft: { ovr: number; round: number }[] = []
+  const starterAvgBySeason: number[] = []
+
+  for (let s = 0; s < seasons; s++) {
+    for (let w = 1; w <= 18; w++) simWeek(world, w)
+    simulatePlayoffs(world)
+
+    // (b) starter talent at this season's end, before development and churn.
+    starterAvgBySeason.push(leagueStarterAvg(world))
+
+    // (c) starter status in a rookie's first two playing seasons.
+    for (const [id, t] of tracked) {
+      if (t.seasonsPlayed >= 2) continue
+      const p = world.players.find((x) => x.id === id)
+      if (p && onDepthAsStarter(world, p)) t.starterFirstTwo = true
+    }
+
+    // Season transition, mirroring runBalance.
+    developPlayers(world)
+    for (const [id, t] of tracked) {
+      t.seasonsPlayed += 1
+      const p = world.players.find((x) => x.id === id)
+      if (p && p.ovr >= t.pot - 3) t.reached = true
+    }
+
+    runAIResign(world)
+    tickAllContracts(world)
+    advanceTenure(world)
+    for (const teamId of Object.keys(world.roster)) {
+      for (const p of world.roster[teamId]) {
+        const next = gainSeasonTraining(p)
+        if (next) p.playbook = next
+      }
+    }
+    refreshAllCohesion(world)
+    awardCompensatoryPicks(world)
+    initDraft(world)
+
+    const before = new Set(world.players.map((p) => p.id))
+    simulateRestOfDraft(world, null)
+    runUDFAs(world)
+    const drafted = world.players.filter((p) => !before.has(p.id) && p.origin?.kind === 'draft')
+    if (!firstDraft.length && drafted.length) {
+      // (a) bucket by the prospect's talent round — his true-grade rank ÷ 32 —
+      // which is the round the D1 curve is defined against (a steal keeps the
+      // OVR his talent earns even if he fell in the actual draft).
+      const ranked = [...world.draft].sort((a, b) => b.trueGrade - a.trueGrade || (a.id < b.id ? -1 : 1))
+      const roundByProspect = new Map(ranked.map((x, i) => [x.id, Math.ceil((i + 1) / 32)]))
+      firstDraft = drafted.map((p) => ({ ovr: p.ovr, round: roundByProspect.get(p.id.slice(3)) ?? p.origin?.round ?? 0 }))
+    }
+    for (const p of drafted) {
+      tracked.set(p.id, { pot: p.pot, seasonsPlayed: 0, starterFirstTwo: false, reached: false })
+    }
+
+    runAIFreeAgency(world)
+    runAITrades(world)
+    enforceCapCompliance(world)
+
+    if (s < seasons - 1) {
+      world.season += 1
+      world.week = 1
+      world.phase = 'regular'
+      world.draftPicks = world.draftPicks.filter((p) => p.season > world.season)
+      ensureDraftWindow(world, world.season + 1)
+      resetSeason(world)
+    }
+  }
+
+  // (a) opening OVR distribution by round for the first draft.
+  const draftByRound: RookieRoundStat[] = []
+  for (let r = 1; r <= 7; r++) {
+    const ovrs = firstDraft.filter((x) => x.round === r).map((x) => x.ovr).sort((a, b) => a - b)
+    if (!ovrs.length) continue
+    draftByRound.push({ round: r, count: ovrs.length, median: quantile(ovrs, 0.5), p10: quantile(ovrs, 0.1), p90: quantile(ovrs, 0.9) })
+  }
+  const maxRookieOvr = firstDraft.reduce((m, x) => Math.max(m, x.ovr), 0)
+
+  // (b) drift of starter talent vs. season 1.
+  const base = starterAvgBySeason[0] ?? 0
+  const maxDrift = starterAvgBySeason.reduce((m, v) => Math.max(m, Math.abs(v - base)), 0)
+
+  // (c) rookies with a full 4-season look, split by early starter status.
+  const complete = [...tracked.values()].filter((t) => t.seasonsPlayed >= 4)
+  const starters = complete.filter((t) => t.starterFirstTwo)
+  const bench = complete.filter((t) => !t.starterFirstTwo)
+  const share = (list: TrackedRookie[]) => (list.length ? Math.round((list.filter((t) => t.reached).length / list.length) * 100) : 0)
+
+  return {
+    seasons,
+    draftByRound,
+    maxRookieOvr,
+    noRookieOver80: maxRookieOvr <= 80,
+    starterAvgBySeason: starterAvgBySeason.map((v) => +v.toFixed(2)),
+    maxDrift: +maxDrift.toFixed(2),
+    withinDrift: maxDrift <= 1.5,
+    reachedByRole: {
+      starters: { n: starters.length, reached: starters.filter((t) => t.reached).length, pct: share(starters) },
+      bench: { n: bench.length, reached: bench.filter((t) => t.reached).length, pct: share(bench) },
+    },
+  }
+}

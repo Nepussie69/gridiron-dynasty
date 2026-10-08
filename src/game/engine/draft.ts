@@ -132,8 +132,12 @@ export function bestAvailableFor(
 }
 
 export function prospectToPlayer(world: World, prospect: DraftProspect, teamId: string, pick: number, season: number, origin?: PlayerOrigin): Player {
-  void world
   const contract = makeRookieContract(pick, season)
+  // D1 (L12.7): the NFL rookie opens on the true-grade class curve, not at his
+  // college OVR. Real-data prospects get a compressed pro ceiling; generated
+  // ones keep theirs. See `rookieRatings`.
+  const { rank, size } = trueGradeRank(world, prospect)
+  const ratings = rookieRatings(prospect, rank, size)
   return {
     id: `pl_${prospect.id}`,
     name: prospect.name,
@@ -143,9 +147,9 @@ export function prospectToPlayer(world: World, prospect: DraftProspect, teamId: 
     height: heightFor(prospect),
     weight: weightFor(prospect),
     college: prospect.college,
-    ovr: Math.min(prospect.pot, Math.round(prospect.ovr + 3)),
-    pot: prospect.pot,
-    dev: devFor(prospect.pot),
+    ovr: ratings.ovr,
+    pot: ratings.pot,
+    dev: devFor(ratings.pot),
     traits: prospect.traits,
     contract,
     teamId,
@@ -154,6 +158,81 @@ export function prospectToPlayer(world: World, prospect: DraftProspect, teamId: 
     generated: prospect.generated ?? true,
     origin: origin ?? { kind: 'draft', season, round: prospect.projectedRound, by: null },
   }
+}
+
+/** The interpolation anchors for a rookie's opening OVR by true-grade class rank. */
+const ROOKIE_RANK_CURVE: [number, number][] = [
+  [1, 79],
+  [5, 76],
+  [32, 71],
+  [64, 67],
+  [100, 64],
+  [160, 60],
+  [224, 55],
+]
+
+/** Piecewise-linear OVR for a true-grade rank in the class (floors at 55). */
+function rookieOvrCurve(rank: number): number {
+  if (rank <= 1) return ROOKIE_RANK_CURVE[0][1]
+  for (let i = 1; i < ROOKIE_RANK_CURVE.length; i++) {
+    const [r0, v0] = ROOKIE_RANK_CURVE[i - 1]
+    const [r1, v1] = ROOKIE_RANK_CURVE[i]
+    if (rank <= r1) return v0 + ((v1 - v0) * (rank - r0)) / (r1 - r0)
+  }
+  return ROOKIE_RANK_CURVE[ROOKIE_RANK_CURVE.length - 1][1]
+}
+
+/** A prospect's 1-based true-grade rank (id breaks ties) and the class size. */
+function trueGradeRank(world: World, prospect: DraftProspect): { rank: number; size: number } {
+  let rank = 1
+  for (const p of world.draft) {
+    if (p.id === prospect.id) continue
+    if (p.trueGrade > prospect.trueGrade || (p.trueGrade === prospect.trueGrade && p.id < prospect.id)) rank++
+  }
+  return { rank, size: world.draft.length }
+}
+
+/**
+ * D1 (L12.7): an NFL rookie's opening OVR and ceiling, as pure a function as the
+ * prospect allows. Real-data prospects enter on the curve by their hidden
+ * true-grade class rank (so a steal stays a steal) with a compressed pro
+ * ceiling; generated prospects keep their ceiling and take the lower of their
+ * old and curve OVR. Deterministic apart from ±1 from the prospect id.
+ */
+export function rookieRatings(
+  prospect: DraftProspect,
+  classRank: number,
+  classSize: number,
+): { ovr: number; pot: number } {
+  void classSize
+  const real = !prospect.generated
+  const pot = real ? clamp(Math.round(58 + (prospect.pot - 60) * 0.95), 60, 97) : prospect.pot
+  const jitter = (hash32(prospect.id, 13) % 3) - 1
+  const curve = Math.round(rookieOvrCurve(classRank) + jitter)
+  const today = Math.min(prospect.pot, Math.round(prospect.ovr + 3))
+  const base = real ? curve : Math.min(today, curve)
+  return { ovr: Math.max(50, Math.min(base, pot - 3)), pot }
+}
+
+/**
+ * D3 (L12.7): the "Now / Ceiling" a scout can see, ranking the class by your own
+ * grade (`myGrade ?? grade`) so the hidden true grade never leaks. `Now` is the
+ * opening OVR the prospect would sign at; `ceiling` is his pro potential.
+ */
+export function rookieProjection(
+  prospects: DraftProspect[],
+  prospect: DraftProspect,
+): { now: number; ceiling: number } {
+  const key = (p: DraftProspect) => p.myGrade ?? p.grade
+  let rank = 1
+  for (const p of prospects) {
+    if (p.id === prospect.id) continue
+    const a = key(p)
+    const b = key(prospect)
+    if (a > b || (a === b && p.id < prospect.id)) rank++
+  }
+  const r = rookieRatings(prospect, rank, prospects.length)
+  return { now: r.ovr, ceiling: r.pot }
 }
 
 function posSide(pos: Position): Player['side'] {
