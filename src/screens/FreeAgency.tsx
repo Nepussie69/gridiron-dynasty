@@ -4,12 +4,13 @@ import { money } from '../lib/format'
 import { canSignFreeAgents } from '../game/engine/career'
 import { stageOf } from '../game/engine/draft'
 import { freeAgentContract } from '../game/engine/progress'
+import { cultureDiscountFor } from '../game/engine/culture'
 import { negotiationAskMultiplier } from '../game/engine/skills'
 import { waiverBlockedReason, waiverPriority } from '../game/engine/waivers'
 import { canShadow } from '../game/engine/shadow'
 import { accessFor } from '../game/engine/access'
 import { capSummary } from '../game/selectors'
-import { useGame, useWorld } from '../store/gameStore'
+import { getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { PlayerTable } from '../components/PlayerTable'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
 import { Badge, Button, Card, PageHeader, Stat } from '../ui/kit'
@@ -205,6 +206,8 @@ export function FreeAgency() {
             right={(p) => {
               // W1: a released player's stored contract is zeroed; the real cost
               // is the priced one-year deal (pro-rated during the season).
+              // L12.9 K2: a winning-culture club gets a small discount on the ask.
+              const disc = cultureDiscountFor(league, getStatsDb(), career.teamId, p)
               const deal = freeAgentContract(
                 p,
                 league.season,
@@ -212,20 +215,28 @@ export function FreeAgency() {
                 league.phase,
                 undefined,
                 negotiationAskMultiplier(career.skills.negotiation),
+                disc.pct,
               )
               const noRoom = cap.space < deal.capHit
               return (
-                <div className="flex items-center justify-end gap-1.5">
-                  <ShadowStar playerId={p.id} />
-                  <Button
-                    size="sm"
-                    variant="team"
-                    disabled={!canSign || noRoom || faClosed}
-                    title={faClosed ? 'Free agency opens in March' : undefined}
-                    onClick={() => signFreeAgent(p.id)}
-                  >
-                    {!canSign ? 'GM decides' : faClosed ? 'Opens in March' : noRoom ? 'No cap room' : `Sign · ${money(deal.capHit)}`}
-                  </Button>
+                <div className="flex flex-col items-end justify-end gap-1">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <ShadowStar playerId={p.id} />
+                    <Button
+                      size="sm"
+                      variant="team"
+                      disabled={!canSign || noRoom || faClosed}
+                      title={faClosed ? 'Free agency opens in March' : undefined}
+                      onClick={() => signFreeAgent(p.id)}
+                    >
+                      {!canSign ? 'GM decides' : faClosed ? 'Opens in March' : noRoom ? 'No cap room' : `Sign · ${money(deal.capHit)}`}
+                    </Button>
+                  </div>
+                  {disc.pct > 0 && (
+                    <span className="text-[10px] font-600 text-win">
+                      Winning-culture discount −{disc.pct}% · {disc.reasons.join(', ')}
+                    </span>
+                  )}
                 </div>
               )
             }}

@@ -8,6 +8,8 @@ import { ledgerFreeAgent } from './picks'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
+import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
+import type { CareerDatabase } from './statsDb'
 
 // ── Player development ───────────────────────────────────────────────────────
 /**
@@ -285,7 +287,7 @@ export function ensureProspectPools(world: World) {
  * Before free agency opens, AI clubs re-sign their own best expiring players
  * (within the cap) instead of letting the whole roster walk.
  */
-export function runAIResign(world: World, skipTeamId?: string) {
+export function runAIResign(world: World, skipTeamId?: string, db?: CareerDatabase) {
   const rng = makeRng(world.seed + world.season * 5051)
   const capLimit = capForSeason(world.season)
   for (const t of world.teams) {
@@ -297,7 +299,10 @@ export function runAIResign(world: World, skipTeamId?: string) {
     let resigned = 0
     for (const p of expiring) {
       if (resigned >= 4) break
-      const annual = marketPrice(p, world.season, world.era?.positionBias?.[p.pos] ?? 1)
+      // L12.9 K2: a qualifying club re-signs at a discounted asking price.
+      const base = marketPrice(p, world.season, world.era?.positionBias?.[p.pos] ?? 1)
+      const pct = db ? cultureDiscountFor(world, db, t.id, p).pct : 0
+      const annual = pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
       if (used() + annual > capLimit * 0.98) continue
       const years = 3
       p.contract = {
@@ -440,10 +445,12 @@ export function freeAgentContract(
   phase: 'regular' | 'offseason' | string,
   annualOverride?: number,
   askMult = 1,
+  discountPct = 0,
 ): Contract {
   const market = annualOverride ?? marketPrice(p, season)
   // L12.11: the user's Negotiation skill shaves the ask (AI callers use 1).
-  const annual = annualOverride != null ? market : Math.round((market * askMult) / 1e5) * 1e5
+  // L12.9 K2: a winning-culture discount also comes off the asking price.
+  const annual = annualOverride != null ? market : Math.round((market * askMult * (1 - discountPct / 100)) / 1e5) * 1e5
   const capHit =
     phase === 'regular'
       ? Math.round((annual * (18 - week + 1)) / 18)
@@ -462,15 +469,26 @@ export function freeAgentContract(
   }
 }
 
-export function runAIFreeAgency(world: World, skipTeamId?: string) {
+export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDatabase) {
   trimNflRosters(world)
   const rng = makeRng(world.seed + world.season * 90001)
   const needed: Record<string, number> = { QB: 3, RB: 3, WR: 6, TE: 3, OT: 4, OG: 4, C: 2, DE: 4, DT: 4, LB: 6, CB: 6, S: 4, K: 1, P: 1 }
   const freeCopy = [...world.freeAgents].sort((a, b) => b.ovr - a.ovr)
   const taken = new Set<string>()
   const capLimit = capForSeason(world.season)
+  // L12.9 K2: the asking price a qualifying club pays; and FA interest tilts to
+  // those clubs, so they get first crack at the market's best bodies.
+  const price = (teamId: string, p: Player, bias: number) => {
+    const base = marketPrice(p, world.season, bias)
+    const pct = db ? cultureDiscountFor(world, db, teamId, p).pct : 0
+    return pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
+  }
+  const qualifying = db ? cultureQualifiedClubs(world, db) : null
+  const teamOrder = qualifying
+    ? [...world.teams].sort((a, b) => Number(qualifying.has(b.id)) - Number(qualifying.has(a.id)))
+    : world.teams
 
-  for (const t of world.teams) {
+  for (const t of teamOrder) {
     if (t.tier !== 'NFL') continue
     const roster = world.roster[t.id] ?? []
     const counts: Record<string, number> = {}
@@ -482,16 +500,16 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
         const used0 = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
         let cand = freeCopy.find((p) => {
           if (taken.has(p.id) || p.pos !== pos) return false
-          return used0() + marketPrice(p, world.season, eraBias) <= capLimit
+          return used0() + price(t.id, p, eraBias) <= capLimit
         })
         // Over the cap: fill remaining slots with the cheapest body, not a star.
         if (!cand) {
           cand = [...freeCopy]
             .filter((p) => !taken.has(p.id) && p.pos === pos)
-            .sort((a, b) => marketPrice(a, world.season, eraBias) - marketPrice(b, world.season, eraBias))[0]
+            .sort((a, b) => price(t.id, a, eraBias) - price(t.id, b, eraBias))[0]
         }
         if (!cand) break
-        const annual = marketPrice(cand, world.season, eraBias)
+        const annual = price(t.id, cand, eraBias)
         taken.add(cand.id)
         cand.teamId = t.id
         cand.contract = { ...cand.contract, annual, years: 2, base: [annual, annual], capHit: annual }
@@ -510,7 +528,7 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
         const cand = freeCopy.find((p) => {
           if (taken.has(p.id) || p.pos === 'K' || p.pos === 'P') return false
           const bias = world.era?.positionBias?.[p.pos as import('../types').Position] ?? 1
-          return usedCap() + marketPrice(p, world.season, bias) <= capLimit * 0.95
+          return usedCap() + price(t.id, p, bias) <= capLimit * 0.95
         })
         if (!cand) break
         // A full roster swaps cheap depth for the better free agent instead of
@@ -535,7 +553,7 @@ export function runAIFreeAgency(world: World, skipTeamId?: string) {
           world.freeAgents.push(release)
         }
         const bias = world.era?.positionBias?.[cand.pos] ?? 1
-        const annual = marketPrice(cand, world.season, bias)
+        const annual = price(t.id, cand, bias)
         taken.add(cand.id)
         cand.teamId = t.id
         cand.contract = { ...cand.contract, annual, years: 2, base: [annual, annual], capHit: annual }

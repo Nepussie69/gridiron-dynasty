@@ -3,7 +3,8 @@ import { X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { agentStyle, buildExtension, marketAsk, type AgentStyle, type ExtensionOffer } from '../game/engine/negotiation'
-import { useGame, useWorld } from '../store/gameStore'
+import { cultureDiscountFor } from '../game/engine/culture'
+import { getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, OvrBadge } from '../ui/kit'
 
 const STYLE_LABEL: Record<AgentStyle, string> = { hardball: 'Hardball', market: 'Market', loyal: 'Loyal' }
@@ -42,7 +43,8 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
   if (!p) return null
 
   const style = agentStyle(p.id)
-  const ask = marketAsk(p, league.season, career.skills.negotiation)
+  const disc = cultureDiscountFor(league, getStatsDb(), career.teamId, p)
+  const ask = marketAsk(p, league.season, career.skills.negotiation, disc.pct)
   const aav = Math.round((ask * pct) / 100)
   const talk = career.talks?.[playerId]
   const active = talk && talk.season === league.season
@@ -95,6 +97,11 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
             <div className="font-display text-xl font-700 tnum text-ink">
               {money(ask)}<span className="text-sm text-muted">/yr</span>
             </div>
+            {disc.pct > 0 && (
+              <div className="mt-1 text-[11px] font-600 text-win">
+                Winning-culture discount −{disc.pct}% · {disc.reasons.join(', ')}
+              </div>
+            )}
           </div>
           <div className="rounded-lg border border-line bg-surface-2 p-3">
             <div className="label">Tries left</div>

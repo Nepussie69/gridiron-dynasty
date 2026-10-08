@@ -89,9 +89,9 @@ function Mini({ label, value }: { label: string; value: string }) {
 }
 
 function cultureRead(c: number): string {
-  if (c >= 0.85) return 'A tight-knit room: the staff and core have stayed together, the system is second nature, and this group plays above its paper rating.'
-  if (c >= 0.65) return 'A settled program. Continuity is paying off in fewer mistakes and faster, more confident play on both sides.'
-  if (c >= 0.45) return 'Still building. Keep this staff and core together and the familiarity — and the production — will keep climbing.'
-  if (c >= 0.3) return 'Noticeable turnover. New faces and/or a new coordinator mean a learning curve and more self-inflicted mistakes.'
-  return 'Constant churn. With this much roster and staff change, nobody ever masters the system — expect flags and stalled drives until it stabilizes.'
+  if (c >= 0.85) return 'A veteran group in a stable system. Cohesion is cutting pre-snap flags and fumbles, and it sharpens execution on money downs and in the red zone.'
+  if (c >= 0.65) return 'Settled. Continuity is showing up as fewer penalties and fumbles, plus better execution on third down and in the red zone.'
+  if (c >= 0.45) return 'Still building. Keep this staff and core together and the penalty and fumble rates should keep falling.'
+  if (c >= 0.3) return 'Noticeable turnover. New faces and/or a new coordinator mean more pre-snap flags and fumbles until the group gels.'
+  return 'Constant churn. With this much roster and staff change, expect more penalties and fumbles — and a lower ceiling on what the unit can master.'
 }

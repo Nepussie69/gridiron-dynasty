@@ -14,7 +14,7 @@ import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
-import { masteryMultiplier } from './playbook'
+import { masteryMultiplier, teamCohesion } from './playbook'
 import { mod, schemeFit, styleProfile } from './style'
 
 // The user's own coaching skill, set once per game by the store when they hold a
@@ -42,6 +42,17 @@ function ocEffect(world: World, teamId: string) {
 function clutchFor(world: World, offId: string, down: number, yard: number): number {
   if (down < 3 && yard < 80) return 0
   return ocEffect(world, offId).situational
+}
+
+/**
+ * L12.9 K1: a unit's cohesion relative to the league mean. A unit newer than the
+ * league average commits slightly more penalties/fumbles; a settled one commits
+ * fewer. Factor is 0.6 for pre-snap flags, 0.4 for ball security; clamped ±25%.
+ * Thresholds only — no rng draw is added or removed.
+ */
+function cohesionMult(mean: number | undefined, coh: number | undefined, factor: number): number {
+  if (mean === undefined || coh === undefined) return 1
+  return clamp(1 + (mean - coh) * factor, 0.75, 1.25)
 }
 
 import type { World } from './generate'
@@ -732,6 +743,9 @@ interface SimEnv {
   userTeamId?: string
   matchups?: MatchupSet
   usage?: UsageSet
+  /** L12.9 K1: the offense's unit cohesion and the league mean (0-1). */
+  cohesionOff?: number
+  cohesionMeanOff?: number
 }
 
 function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
@@ -1162,7 +1176,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // L12 E2: pursuit (DL/LB PUR + SPD) caps the long-run tail.
   if (gain > 20) gain = 20 + Math.round((gain - 20) * clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4))
   const isBig = gain >= 20
-  const fumble = rng() < 0.011 * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA)
+  const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
+  const fumble = rng() < 0.011 * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
   const tackler = fumble ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
   const tackleIds = tackler ? [tackler] : []
@@ -1331,6 +1346,10 @@ export interface GameState {
   qbChangeChecked: boolean
   /** Probe counter: possessions that ran a two-minute mode. */
   twoMinDrives: number
+  /** L12.9 K1: per-side unit cohesion for the two clubs in this game (0-1). */
+  cohesion?: Record<string, { off: number; def: number }>
+  /** L12.9 K1: league mean cohesion per side, computed once at kickoff. */
+  cohesionMean?: { off: number; def: number }
 }
 
 const MAX_PLAYS = 210
@@ -1642,7 +1661,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off }
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */
@@ -1781,6 +1800,25 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     twoMinDrives: 0,
   }
   s.defId = s.offId === homeId ? awayId : homeId
+  // L12.9 K1: unit cohesion (relative to the league mean) nudges pre-snap penalty
+  // and fumble thresholds. Computed once here — pure arithmetic, no rng draw.
+  {
+    const sameTier = world.teams.filter((t) => (t.tier === 'NFL') === !isCollege)
+    let offSum = 0
+    let defSum = 0
+    for (const t of sameTier) {
+      const c = teamCohesion(world.roster[t.id] ?? [], world.staffTenure, t.id)
+      offSum += c.off
+      defSum += c.def
+    }
+    const n = sameTier.length || 1
+    s.cohesionMean = { off: offSum / n, def: defSum / n }
+    s.cohesion = {}
+    for (const id of [homeId, awayId]) {
+      const c = teamCohesion(world.roster[id] ?? [], world.staffTenure, id)
+      s.cohesion[id] = { off: c.off, def: c.def }
+    }
+  }
   // G10: if the user receives the opening kick, this is their first drive.
   if (ctx && s.offId === ctx.userTeamId) s.userDrive = 1
   // opening kickoff
@@ -2043,7 +2081,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   // Defensive penalty (~3.5%) — 5 yards and an automatic first down.
-  const defDisc = ocEffect(world, defId).discipline
+  const defDisc = ocEffect(world, defId).discipline * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
   if (s.rng() < 0.035 * defDisc) {
     const penS = statFor(s, offId)
     const startY = s.yard
@@ -2060,7 +2098,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   // Offensive penalty (~2.5%, ×1.3 in the G7 hurry-up) — 5 yards, replay the down.
-  const offDisc = ocEffect(world, offId).discipline
+  const offDisc = ocEffect(world, offId).discipline * cohesionMult(s.cohesionMean?.off, s.cohesion?.[offId]?.off, 0.6)
   const hurryPen = s.twoMinMode === 'hurry' ? 1.3 : 1
   if (s.rng() < 0.025 * offDisc * hurryPen) {
     const penS = statFor(s, offId)
