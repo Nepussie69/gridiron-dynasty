@@ -33,11 +33,14 @@ _Updated 2026-10-08 ~21:40 AEDT by Claude Opus 5.5 (5-hour usage 83%) for ChatGP
 ## Running at handoff (check `pgrep -fl ds-push`; logs `/private/tmp/gridiron-<name>.log`)
 | Name / branch | Spec | Prompt | Notes |
 |---|---|---|---|
-| `gmdesk` / `wt-gmdesk` | `NEXT_PHASE_L12_14.md` C6 GM requests desk | /private/tmp/gridiron-gmdesk.txt | gameStore + new UI |
+| `gmdesk2` (in `wt-gmdesk`, uncommitted) | `NEXT_PHASE_L12_14.md` C6 GM requests desk — mostly done; continuation finishes Cap.tsx GmCapRowActions/GmRestructureCard + verify | /private/tmp/gridiron-gmdesk2.txt (log gridiron-gmdesk2.log) | Cap.tsx will conflict with the sortable ledger on main: keep both |
 | `stars2` (in `wt-stars`, uncommitted) | `NEXT_PHASE_L12_15.md` S1–S4 implemented + verified (calib in band, 20/20, 0/0, season-1 bands exact). Continuation fixes drift: 90+ falls 28 → 11–15 by season 6 | /private/tmp/gridiron-stars2.txt (log gridiron-stars2.log) | re-run `/private/tmp/stars-verify.mjs` (prints DIST) before merging |
 | `realism` / `wt-realism` | `NEXT_PHASE_REALISM.md` R1–R3 + R5 NFL 2015–2024 retune + missed tackles | /private/tmp/gridiron-realism.txt | sim constants; calibration bands change — re-baseline after merge |
-`stars` and `realism` both affect results: merge one, re-run the other's checks in its worktree after merging main into it (or resolve on merge and re-verify).
 | `qbpay` / `wt-qbpay` | queue item 1 + 3 (QB pay to 2025 money; dead-money double count) | /private/tmp/gridiron-qbpay.txt | cap.ts fit step + deadMoney; conflicts possible with `stars` in cap.ts |
+
+**When each finishes** (`[push] <name> … finished` in its log, then Flash's report): if the report says it ran out of steps or left items, send a continuation prompt in the SAME worktree with `nohup /private/tmp/ds-push-<name> <new-prompt> <name>N > /private/tmp/gridiron-<name>N.log 2>&1 &` listing exactly what's done/left (see /private/tmp/gridiron-stars2.txt for the pattern). Otherwise: build + lint 4 in the worktree, `git add -A src && git commit` there, `git merge --no-edit wt-<name>` in main, resolve conflicts keeping both sides (import-list conflicts: `python3 /private/tmp/merge-imports.py wt-<name> <files>` unions the names), then on main: build, lint 4, `~/.local/node/bin/node --import /private/tmp/gridiron-loader.mjs /private/tmp/gridiron-calib.mjs 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4` (takes ~10 min — run it in the background), update the spec progress table + verification log + `PLAYTEST_BACKLOG.md` + `FUTURES.md`, commit, rebuild 4173, tell the user the hash.
+**Suggested merge order:** gmdesk2 → qbpay → stars2 → realism (realism retunes the sim; re-baseline the calibration numbers in this file after it merges). `stars` and `realism` both affect results: after merging one, merge main into the other's worktree and re-run its checks before merging it.
+
 DeepSeek connections drop (ECONNRESET) with 5+ pushes at once; ds-push retries 3× automatically.
 
 ## Queue — next, in order
