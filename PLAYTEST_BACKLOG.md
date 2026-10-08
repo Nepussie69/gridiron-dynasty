@@ -56,7 +56,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 50 | 2026-10-08 | (seen in the screenshot) Dead money looks too large (e.g. $115.5M on a $45.6M cap hit) | L12.14 C3 | ✅ merged |
 | 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | ✅ merged |
 | 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | ✅ merged |
-| 53 | 2026-10-08 | Head coach + GM work together: ask to extend, restructure for a push, go get a trade/FA target, release a player | L12.14 C6 (GM requests desk) | ⏳ after contracts P1 |
+| 53 | 2026-10-08 | Head coach + GM work together: ask to extend, restructure for a push, go get a trade/FA target, release a player | L12.14 C6 (GM requests desk) | ✅ merged 52d1df7 |
 | 54 | 2026-10-08 | Too many franchise players: only a few 90+, more 80s | NEXT_PHASE_L12_15.md S1–S4 (82 at 90+ today → ~25–32) | ⏳ after contracts merges |
 | 55 | 2026-10-08 | How much each rating matters + table; missed tackles in gameplay; realism vs NFL last 5–10 years | Table given in chat (47/48 ratings in the sim, RTE unused); missed tackles → NEXT_PHASE_REALISM.md R5 | ⏳ with the retune |
 | 56 | 2026-10-08 | (new chat) Keep going through the pushes, DeepSeek in parallel, log requests, report every stable-build update | Orchestration continued; 4th parallel push `hof` (FUTURES 23, NEXT_PHASE_L12_16.md) — also fixes history/awards not being saved | ✅ (hof merged) |
@@ -73,4 +73,5 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 67 | 2026-10-08 | Pay QBs closer to real 2025 money (~$55–60M top-5) | Push `qbpay`: top-5 QB AAV $43.2M → $58.2M, cap use 0.80–0.83, dead money fixed (no double count) | ✅ merged 8a8b6cd |
 | 68 | 2026-10-08 | Make the Cap screen contract ledger sortable | Claude: every column header sorts (▲/▼), click again to flip | ✅ |
 | 69 | 2026-10-08 | Write a ChatGPT handover before 95% usage | Claude: OPENCODE_CONTINUE.md + AGENTS.md (08a896e) | ✅ |
-| 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: monitor gmdesk2 → qbpay → stars2 → realism; verify, merge, rebuild 4173 and report | 🔨 in progress |
+| 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: sole ownership; GM desk merged, QB pay independently verified; stars4/realism ongoing | 🔨 continuing |
+| 71 | 2026-10-08 | Push the current progress to the stable build | Codex: GM desk verified/merged52d1df7; stable rebuild | ✅ publishing |

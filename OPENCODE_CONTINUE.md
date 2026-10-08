@@ -2,6 +2,8 @@
 
 _Updated 2026-10-08 ~22:05 AEDT by Claude Opus 5.5 (stopped at 5-hour usage ~93%; resets ~00:10 AEDT) for ChatGPT/Codex or a fresh Claude chat. Re-check processes and git before acting. Longer background: `ORCHESTRATION_HANDOVER.md`. Every user request: `PLAYTEST_BACKLOG.md` (55 rows). Long-term build order: `FUTURES.md`._
 
+_Codex takeover: sole orchestration ownership confirmed by Claude in `ORCHESTRATION_COORDINATION.md`. GM desk C6 is verified and merged `52d1df7`; stable publication is being rebuilt from main. Stars3 stopped at its tool limit with unfinished edits; `stars4` continues `/private/tmp/gridiron-stars4.txt` (exec session10147). Realism is on automatic try2 after its45-minute timeout. Pending user preference: define long-term OVR population as active NFL rosters versus adding unsigned-player retirement; no target relaxation or retirement has been applied._
+
 ## Your role and the user's standing instructions
 - You are the **orchestrator**: spec → send to DeepSeek Flash → verify → merge → rebuild the stable build → tell the user. Small UI fixes you do yourself.
 - "Keep going through all the pushes." "Get DeepSeek doing updates in the background so we can move fast" → run **several pushes in parallel, one git worktree each**.
@@ -12,7 +14,7 @@ _Updated 2026-10-08 ~22:05 AEDT by Claude Opus 5.5 (stopped at 5-hour usage ~93%
 - At 95% plan usage: stop and update this file (memory rule).
 
 ## Repo state
-- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 serves `8a8b6cd`** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
+- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 is being rebuilt from main (GM desk code `52d1df7`)** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
 - Stable build worktree: `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap`, served by `vite preview --port 4173` from the user's terminal. Rebuild after every merge:
   `SNAP=<that path>; git -C $SNAP checkout -q --detach main && (cd $SNAP && PATH="$HOME/.local/node/bin:$PATH" npx vite build --outDir $SNAP/dist)` — then tell the user "stable build updated: 4173 serves <hash>" and what's new.
 
@@ -33,12 +35,11 @@ _Updated 2026-10-08 ~22:05 AEDT by Claude Opus 5.5 (stopped at 5-hour usage ~93%
 ## Running at handoff (check `pgrep -fl ds-push`; logs `/private/tmp/gridiron-<name>.log`)
 | Name / branch | Spec | Prompt | Notes |
 |---|---|---|---|
-| `gmdesk2` (in `wt-gmdesk`, uncommitted) — **FINISHED 22:05, ready to verify + merge (read the end of /private/tmp/gridiron-gmdesk2.log)** | `NEXT_PHASE_L12_14.md` C6 GM requests desk — continuation finished Cap.tsx GmCapRowActions/GmRestructureCard + verify | /private/tmp/gridiron-gmdesk2.txt (log gridiron-gmdesk2.log) | Cap.tsx will conflict with the sortable ledger on main: keep both |
-| `stars2` (in `wt-stars`, uncommitted) | `NEXT_PHASE_L12_15.md` S1–S4 implemented + verified (calib in band, 20/20, 0/0, season-1 bands exact). Continuation fixes drift: 90+ falls 28 → 11–15 by season 6 | /private/tmp/gridiron-stars2.txt (log gridiron-stars2.log) | re-run `/private/tmp/stars-verify.mjs` (prints DIST) before merging |
+| `stars4` (in `wt-stars`, uncommitted) — running review fixes | `NEXT_PHASE_L12_15.md` S1–S4: stars2 kept 90+ totals near target but every six-season DIST result was `within:false`; calibration seed 2222 also outside tolerance | /private/tmp/gridiron-stars4.txt (event log `$TMPDIR/ds-push/stars4.try1.jsonl`) | Fix population drift, rating fallback consistency, QB-pay preservation and save migration; require full fresh verification |
 | `realism` / `wt-realism` | `NEXT_PHASE_REALISM.md` R1–R3 + R5 NFL 2015–2024 retune + missed tackles | /private/tmp/gridiron-realism.txt | sim constants; calibration bands change — re-baseline after merge |
 
 **When each finishes** (`[push] <name> … finished` in its log, then Flash's report): if the report says it ran out of steps or left items, send a continuation prompt in the SAME worktree with `nohup /private/tmp/ds-push-<name> <new-prompt> <name>N > /private/tmp/gridiron-<name>N.log 2>&1 &` listing exactly what's done/left (see /private/tmp/gridiron-stars2.txt for the pattern). Otherwise: build + lint 4 in the worktree, `git add -A src && git commit` there, `git merge --no-edit wt-<name>` in main, resolve conflicts keeping both sides (import-list conflicts: `python3 /private/tmp/merge-imports.py wt-<name> <files>` unions the names), then on main: build, lint 4, `~/.local/node/bin/node --import /private/tmp/gridiron-loader.mjs /private/tmp/gridiron-calib.mjs 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4` (takes ~10 min — run it in the background), update the spec progress table + verification log + `PLAYTEST_BACKLOG.md` + `FUTURES.md`, commit, rebuild 4173, tell the user the hash.
-**Suggested merge order:** gmdesk2 → stars2 → realism (qbpay merged) (realism retunes the sim; re-baseline the calibration numbers in this file after it merges). `stars` and `realism` both affect results: after merging one, merge main into the other's worktree and re-run its checks before merging it.
+**Suggested merge order:** stars4 → realism (GM desk merged) (qbpay merged) (realism retunes the sim; re-baseline the calibration numbers in this file after it merges). `stars` and `realism` both affect results: after merging one, merge main into the other's worktree and re-run its checks before merging it.
 
 DeepSeek connections drop (ECONNRESET) with 5+ pushes at once; ds-push retries 3× automatically.
 
@@ -54,3 +55,6 @@ DeepSeek connections drop (ECONNRESET) with 5+ pushes at once; ds-push retries 3
 ## Done on 2026-10-08 (all on `main` and the stable build)
 L12 P2 practice/keys · P4 + P5 every rating counts (`E1_W` 1.1, `E2_W` 1.0) + `__ratingSpread` + glossary · game day: jersey numbers, Space freezes mid-play, Play after a moment, extra-point spot, live box score, past-only play log, call every play (switch rebuilds to the play on screen; every-snap modes ask every snap), blitz rushers · real route trees + smooth motion · Stats Hub · Find a Player · History · Playoff picture (NFL seeding) · team pages + Scout a club · trade desk (hover cards, find deals for their players, by position, trade block with rare stars, column filters) · rookies on the NFL scale + old-save rescale · scouting Now/Ceiling ranges · calendar (FA March, draft April) · weekly hours removed · coach Ledger + "Success Rate" · AI QB rushing · skill points · Staff & Hiring redesign · Unit Grades by position · potential bubble · player hover cards · culture (cohesion → penalties/fumbles; winning-culture discount).
 The user's rating-impact table (47/48 ratings used; RTE unused) can be regenerated from `RATING_INFO` in `src/game/data/ratingInfo.ts`.
+
+## Codex verification (2026-10-08)
+GM desk merged52d1df7: build/lint4; SIM baseline exact on3 seeds500 games; eq20/20; six-season coach/personnel0/0; request guardrails allpass; UI card/history/inbox and sortable Cap checked. Main probe `/private/tmp/codex-gmdesk-main.log`. QB-pay independently verified before this merge: market/dead-money/cap/simulation/equivalence/smokes allpass (`/private/tmp/codex-qbpay-main.log`).
