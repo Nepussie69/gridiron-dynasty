@@ -53,4 +53,6 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 47 | 2026-10-08 | Blitz only shows 4 rushers | Claude: plays record `blitz`; animation sends 1–2 LBs (+ sometimes a S) at the QB | ✅ |
 | 48 | 2026-10-08 | Every O / D / all snap stopped asking after a couple of calls (went automated) | Claude: per-game cap of 2 play calls lifted in every-snap modes (full game: 86 O calls, 47 D calls) | ✅ |
 | 49 | 2026-10-08 | Make playbook learning realistic, in the gameplay sim, tied to player production | NEXT_PHASE_L12_13.md M1–M4 | 🔨 building |
-| 50 | 2026-10-08 | (seen in the screenshot) Dead money looks too large (e.g. $115.5M on a $45.6M cap hit) | investigate `deadMoney` (known drift: dead ≈ whole contract for guaranteed deals) | ⏳ queued |
+| 50 | 2026-10-08 | (seen in the screenshot) Dead money looks too large (e.g. $115.5M on a $45.6M cap hit) | L12.14 C3 | 🔨 building |
+| 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | 🔨 building |
+| 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | 🔨 building |
