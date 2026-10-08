@@ -47,4 +47,15 @@ User: "make sure missed tackles are involved in the gameplay … toughness → m
 - Re-check the rating table claims with the probe: TGH injury rate (NFL ~6–8 injuries per club per month of season, TGH 60 vs 95 ~1.5× difference), SPD on long runs (20+ yd runs share), TAK on missed tackles, CTH on drops (NFL drop rate ~3–5% of targets).
 - `__ratingSpread` re-run after R1–R5; report each rating's effect.
 
+## Progress
+| Task | Current state |
+|---|---|
+| R1 | Implemented; corrected true pass-attempt and sack denominators; verification pending final retune |
+| R2 | In progress; points, completion percentage and other rows remain outside bands |
+| R3 | Pending final calibration, player shape and six-season checks |
+| R4 | Glossary changes drafted; final anchors pending |
+| R5 | Tackle accounting/formula reviewed; toughness, drops and speed evidence in realism3 |
+
 ## Verification log
+- Codex review of realism2: build passes, lint exactly4, equivalence20/20. Three seeds500 games in `/private/tmp/realism2-verify.out`: points21.2–21.6 and true completion69.6–70.1% fail specified targets. Miss rates12.34–12.79%, elite3.31–4.70%, poor21.07–21.52%; audit400games found no phantom miss/finisher double credit. TGH ratio~1.25 versus1.5 and explicit drops absent; not accepted or merged. Integrated main ab988b1, preserving rating-timed animation and R5 stumble; build/lint4 pass. realism3 addresses remaining R5 requirements before final R2 retune.
+
