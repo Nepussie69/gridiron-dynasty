@@ -17,8 +17,8 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 11 | 2026-10-08 | Trade for a position | L12.5 T4 | 🔨 building |
 | 12 | 2026-10-08 | Trade block tab | L12.5 T5 | 🔨 building |
 | 13 | 2026-10-08 | Stats not updated live; offense/defense stats, sort by position — redo the stats screen | L12.6 S1 | ✅ 1726392 |
-| 14 | 2026-10-08 | Draft in April, not during the season; same with true free agency | L12.6 C1–C2 | 🔨 building |
-| 15 | 2026-10-08 | In-season FA is fine, but released players must properly sign and play for another team | L12.6 C3 + `__faFlowProbe` | 🔨 building |
+| 14 | 2026-10-08 | Draft in April, not during the season; same with true free agency | L12.6 C1–C2 | ✅ merged |
+| 15 | 2026-10-08 | In-season FA is fine, but released players must properly sign and play for another team | L12.6 C3 + `__faFlowProbe` | ✅ merged |
 | 16 | 2026-10-08 | Rookies too highly rated; rely on ceiling, grow with stats/experience | L12.7 D1–D4 | ✅ 2097501 |
 | 17 | 2026-10-08 | Click teams to see/scout their players; top O/D players with hover ratings (also on Up next card) | L12.8 V1–V3 | ⏳ after L12.5 merge |
 | 18 | 2026-10-08 | Potential/ceiling in a colour bubble by how good it is | Claude, kit.tsx OvrBadge | ✅ (this commit) |

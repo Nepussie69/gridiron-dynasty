@@ -9,9 +9,9 @@ User's words: "no stats are updated to live weeks and just have offensive stats 
 | Task | What | Push | Status |
 |---|---|---|---|
 | S1 | Stats Hub rebuilt: live season stats (updated every week), Offense / Defense / Kicking tabs, position filter, sortable columns, team filter, qualifier | P1 | ✅ done — verified (P1) |
-| C1 | Offseason calendar: Re-sign (Feb) → Free agency (Mar) → Draft (Apr) → Camp (Aug) → season | P2 | not started |
-| C2 | The draft only happens in April (stage `draft`); in season the Draft screen is a read-only scouting board | P2 | not started |
-| C3 | Free agency: the market of expiring contracts opens in March; in season only the street / waiver pool (L11) | P2 | not started |
+| C1 | Offseason calendar: Re-sign (Feb) → Free agency (Mar) → Draft (Apr) → Camp (Aug) → season | P2 | ✅ done — verified (P2) |
+| C2 | The draft only happens in April (stage `draft`); in season the Draft screen is a read-only scouting board | P2 | ✅ done — verified (P2) |
+| C3 | Free agency: the market of expiring contracts opens in March; in season only the street / waiver pool (L11) | P2 | ✅ done — verified (P2) |
 
 ---
 
@@ -77,3 +77,4 @@ stepping the offseason with Advance goes Feb → Mar → Apr → Aug → week 1,
 
 ## Verification log
 - **P1** (Flash 11 min, worktree; verified by Claude). Build + lint 4. Browser: week 4, Offense QB list live (Mahomes 98/150 1069), Qualified only, team filter, Past seasons select. Columns moved to `statsColumns.ts` (lint rule). Kicking tab omitted (no FG fields). Found: AI QBs show 0 rushing (fast-sim `statAlloc` gives QBs no carries) → backlog #24.
+- **P2** (Flash 17 min, worktree; verified by Claude, merged with the rookies push). Stages resign→freeAgency→draft→camp→2027 each AI step once; draft actions gated by `draftOpen`; FA closed in `resign`. `__faFlowProbe`: Njoku released by CLE → waivers → claimed by CIN → depth 1 → played 1 game; Josh Allen released by BUF → claimed by TEN (bye week). Equivalence 20/20, smokes 0/0, calibration unchanged. Note: fast-sim `statAlloc` picks defenders by roster order, so a newly signed defender may not show in AI box scores right away.
