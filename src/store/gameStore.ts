@@ -126,7 +126,8 @@ import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
-import { STARTERS, depthAt, moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
+import { STARTERS, depthAt, depthGroup, moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
+import { attributesFor } from '../game/data/ratings'
 import {
   advanceContacts,
   advanceRivals,
@@ -4799,4 +4800,75 @@ export function statShape(games = 200) {
     ['INTs CB / S / LB', `${it.CB} / ${it.S} / ${it.LB}`, '0.40–0.55 / 0.30–0.45 / 0.08–0.18', within(it.CB, 0.4, 0.55) === '✅' && within(it.S, 0.3, 0.47) === '✅' ? '✅' : '❌'],
   ]
   return rows.map(([measure, value, band, ok]) => ({ measure, value, band, ok }))
+}
+
+/**
+ * Dev-only probe (L12 E3): how much does one rating actually move the scoreboard?
+ *
+ * For each key rating, take one starter on the user's club and temporarily give
+ * him a +15 and a −15 version of that single rating — the canonical player object
+ * is mutated in `attrs` and restored exactly afterwards (an absent key is removed,
+ * never left behind). Every case plays the same `games` paired games (identical
+ * opponents and seeds) so the only difference is the rating. Reports the average
+ * point-margin change vs the unmodified baseline and the half-gap
+ * `(plus − minus) / 2`. Effect sizes are small and noisy by design.
+ */
+export function ratingSpread(games = 300, teamId?: string) {
+  const team = teamId ?? useGame.getState().career?.teamId ?? 'BUF'
+  const opponents = world.teams.filter((t) => t.tier === 'NFL' && t.id !== team).slice(0, 8).map((t) => t.id)
+  if (!opponents.length) return { error: 'no opponents' }
+  const cases: { pos: Position; key: string }[] = [
+    { pos: 'QB', key: 'SAC' },
+    { pos: 'QB', key: 'MAC' },
+    { pos: 'QB', key: 'DAC' },
+    { pos: 'QB', key: 'THP' },
+    { pos: 'WR', key: 'SPD' },
+    { pos: 'WR', key: 'RLS' },
+    { pos: 'WR', key: 'CTH' },
+    { pos: 'OT', key: 'PBK' },
+    { pos: 'DE', key: 'PMV' },
+    { pos: 'CB', key: 'MCV' },
+    { pos: 'S', key: 'ZCV' },
+    { pos: 'RB', key: 'BCV' },
+  ]
+  const seedFor = (i: number) => world.seed + 400000 + i * 7919 + 101
+  const oppFor = (i: number) => opponents[i % opponents.length]
+  const marginSum = () => {
+    let total = 0
+    for (let i = 0; i < games; i++) {
+      const sim = simulatePlayByPlay(world, team, oppFor(i), seedFor(i))
+      total += sim.homeScore - sim.awayScore
+    }
+    return total
+  }
+  setLivePlan(null)
+  setUserCoaching(null)
+  const baseSum = marginSum()
+  const rows = cases.map(({ pos, key }) => {
+    const p = depthGroup(world, team, [pos], 1)[0]
+    if (!p) return { pos, key, name: '–', base: 0, plus: 0, minus: 0, halfGap: 0 }
+    const created = p.attrs === undefined
+    const attrs = p.attrs ?? (p.attrs = {})
+    const had = Object.prototype.hasOwnProperty.call(attrs, key)
+    const orig = attrs[key]
+    const base = orig ?? attributesFor(p.id, p.pos, p.ovr)[key] ?? 70
+    attrs[key] = Math.min(99, base + 15)
+    const plusSum = marginSum()
+    attrs[key] = Math.max(1, base - 15)
+    const minusSum = marginSum()
+    // Restore exactly: same value if the key existed, otherwise remove it.
+    if (had && orig !== undefined) attrs[key] = orig
+    else delete attrs[key]
+    if (created) delete p.attrs
+    return {
+      pos,
+      key,
+      name: p.name,
+      base,
+      plus: +((plusSum - baseSum) / games).toFixed(2),
+      minus: +((minusSum - baseSum) / games).toFixed(2),
+      halfGap: +((plusSum - minusSum) / (2 * games)).toFixed(2),
+    }
+  })
+  return { team, games, opponents: opponents.length, baselineMargin: +(baseSum / games).toFixed(2), rows }
 }
