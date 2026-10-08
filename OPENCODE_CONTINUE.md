@@ -25,7 +25,7 @@ _Written 2026-10-08 ~20:30 AEDT by Claude Opus 5.5 for a fresh chat. Re-check pr
 ## Running at handoff (check `pgrep -fl ds-push`)
 | Name / branch | Spec | Prompt | Notes |
 |---|---|---|---|
-| `playbook` / `wt-playbook` | `NEXT_PHASE_L12_10.md` P1 B0–B4: fullback, route tree, formations × concepts playbook, sim draws from it, data-driven animation | /private/tmp/gridiron-playbook.txt | Big; calibration must hold. Since it branched I added `blitzRush` + `play.blitz` (playAnim/playsim) and the every-snap cap lift (playsim `canAsk`) — keep both on merge |
+| `playbook` / `wt-playbook` — **FINISHED 2026-10-08 ~20:35, not yet merged: verify + merge first** | `NEXT_PHASE_L12_10.md` P1 B0–B4: fullback, route tree, formations × concepts playbook, sim draws from it, data-driven animation | /private/tmp/gridiron-playbook.txt | Big; calibration must hold. Since it branched I added `blitzRush` + `play.blitz` (playAnim/playsim) and the every-snap cap lift (playsim `canAsk`) — keep both on merge |
 | `mastery` / `wt-mastery` | `NEXT_PHASE_L12_13.md` M1–M4: realistic starting mastery, learning from snaps + production, relative effects for every unit | /private/tmp/gridiron-mastery.txt | playsim.ts + playbook.ts |
 | `contracts` / `wt-contracts` | `NEXT_PHASE_L12_14.md` C1–C5: **fixed 2025 cap $279.2M every season** (user: "keep it at 2025"), market sanity, dead-money fix, "Ask the GM to extend", how-it-works panel | /private/tmp/gridiron-contracts.txt | Pricing approved; culture's discount already in negotiation.ts |
 If a push ran out of steps, finish leftovers yourself or send a continuation prompt listing exactly what's done/left.
