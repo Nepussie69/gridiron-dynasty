@@ -210,6 +210,33 @@ function rookieOvrCurve(rank: number): number {
   return ROOKIE_RANK_CURVE[ROOKIE_RANK_CURVE.length - 1][1]
 }
 
+/**
+ * L12.7 (user-approved, 2026-10-08): one-time fix for saves whose real-data
+ * rookies were drafted under the old rule (college OVR + 3, college POT). Rebuild
+ * each one on the NFL rookie scale from his class rank (the prospect id is
+ * `d<season>_<rank-1>`, ranked by college OVR) and keep a little credit for
+ * seasons already played. Generated players and veterans are untouched.
+ */
+export function rescaleLegacyRookies(world: World): number {
+  if (world.rookieScaleV2) return 0
+  let n = 0
+  for (const p of world.players) {
+    const m = /^pl_d(\d+)_(\d+)$/.exec(p.id)
+    if (!m || p.generated || p.origin?.kind !== 'draft') continue
+    const rank = Number(m[2]) + 1
+    const pot = clamp(Math.round(58 + (p.pot - 60) * 0.95), 60, 97)
+    const seasons = Math.max(0, world.season - (p.origin.season ?? world.season) - 1)
+    const jitter = (hash32(`d${m[1]}_${m[2]}`, 13) % 3) - 1
+    const start = Math.round(rookieOvrCurve(rank) + jitter)
+    p.pot = pot
+    p.ovr = Math.max(50, Math.min(pot, Math.min(start, pot - 3) + seasons * 3))
+    p.dev = devFor(pot)
+    n += 1
+  }
+  world.rookieScaleV2 = true
+  return n
+}
+
 /** A prospect's 1-based true-grade rank (id breaks ties) and the class size. */
 function trueGradeRank(world: World, prospect: DraftProspect): { rank: number; size: number } {
   let rank = 1

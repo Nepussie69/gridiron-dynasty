@@ -106,6 +106,7 @@ import {
   awardCompensatoryPicks,
   stageOf,
   draftOpen,
+  rescaleLegacyRookies,
 } from '../game/engine/draft'
 import { ensureDraftWindow, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
@@ -2625,6 +2626,8 @@ function relinkPlayers(w: World): void {
 /** Bring a legacy save up to the current world shape (new fields + pick ownership). */
 function migrateWorld(w: World): World {
   relinkPlayers(w)
+  // L12.7: rookies drafted under the old college-scale rule get the NFL rookie scale, once.
+  rescaleLegacyRookies(w)
   // Z1b: legacy saves can hold roster/PS/IR/free-agent players with no canonical
   // `players` entry; adopt them so development and lookups can see everyone.
   indexPlayers(w)

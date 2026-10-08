@@ -53,6 +53,8 @@ export interface World {
   /** Consecutive seasons each coordinator has held his job, keyed `${teamId}:${side}`. */
   staffTenure: Record<string, number>
   phase: 'regular' | 'offseason'
+  /** L12.7: set once real-data rookies are on the NFL rookie scale (old saves are rescaled on load). */
+  rookieScaleV2?: boolean
   teams: Team[]
   byId: Record<string, Team>
   players: Player[]
@@ -636,6 +638,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     season,
     week: 1,
     phase: 'regular',
+    rookieScaleV2: true,
     teams,
     byId,
     players: allPlayers,
