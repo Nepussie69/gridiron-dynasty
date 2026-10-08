@@ -46,3 +46,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 40 | 2026-10-08 | Call-mode buttons seemed to do nothing / make it apply straight away | Claude: switching rebuilds the game to the play on screen (deterministic replay of your answers, verified identical) and applies the mode to the very next snap; call card pops up | ✅ |
 | 41 | 2026-10-08 | Redesign Staff & Hiring: easier to navigate/hire, readable skills and stats | DeepSeek push 'staff' (org chart + table, market filters + compare vs current holder, plain effects, hover) | 🔨 building |
 | 42 | 2026-10-08 | Space pauses the play/animation exactly where it is (in game) | Claude: freeze/resume mid-play in MatchView | ✅ |
+| 43 | 2026-10-08 | Culture discount only for clubs that won heaps in the last 3 years or have top offense/defense, by the player's side of the ball | L12.9 K2 (approved rule) | 🔨 building with K1 |

@@ -8,7 +8,7 @@ _Planned by Claude Opus 5.5. Implemented by DeepSeek Flash 4.1. Lint baseline: e
 | H1 | Remove the weekly-hours "This Week" card; its effects become passive or move to where they belong | P1 | ✅ done — verified (P1) |
 | L1 | Ledger for the coaching track: coaching calls dated and graded; "Success Rate" | P1 | ✅ done — verified (P1) |
 | K1 | Unit cohesion in the sim: a newer unit commits slightly more penalties/fumbles (relative to league mean) | P2 (after L12 P5) | not started |
-| K2 | Culture discount on contracts + FA interest | — | **blocked: needs the user's OK (contract pricing)** |
+| K2 | Winning-culture discount on contracts + FA interest (user-approved rule, 2026-10-08) | P2 | not started |
 
 ## H1 — Remove the hours system (user: "I don't like this part of the game" → chose "Remove it")
 Today: `weeklyActions(career)` (`src/game/engine/weekly.ts`) lists 8–10 actions costing hours from `WEEK_HOURS` (40); `spendHours(id)` in the store applies: film/road +1 Evaluation skill, phones = a prospect's
@@ -38,6 +38,13 @@ agent +1 Roster rep, owner +2 job security. The card lives in `src/components/Ca
   pre-snap penalty chance × (1 + (mean − cohesion) × 0.6) and fumble chance × (1 + (mean − cohesion) × 0.4), clamped ±25%. No new rng draws (thresholds only). AI clubs too.
 - Re-run calibration (3 seeds, 500 games): inside the L12 E3 bands. Equivalence 20/20.
 - Fix the Culture card text so every line describes a real effect.
+
+## K2 — Winning-culture discount (user rule, 2026-10-08)
+User: "culture discount should only be for teams that have won heaps in the past 3 years, or have top offenses or defenses, and depending on what side of the ball the player is on."
+- `cultureDiscountFor(world, teamId, player)` (pure; replaces the unused `cultureDiscount`): a club qualifies by **winning** — ≥ 33 wins over the last 3 seasons (from `statsDb.teams` + this season's record), or 2+ playoff trips with a title/conference title in that span — and/or by **unit excellence** — top-5 scoring/yards offense (for offensive players) or top-5 defense (for defensive players) over the last 2 seasons (use L12.12's per-season team stats and ranks; fall back to points for/against).
+- Discount on the player's **asking price** when he signs or extends with that club: winning club −4%, top unit on **his side of the ball** −3%, both −6% max; special teams use the winning rule only; a player on the other side of the ball than the top unit gets only the winning part. Never applies to a club that doesn't qualify.
+- Applies to every club (AI too) so the market stays fair; the user sees it in FA / extension talks as "Winning-culture discount −4%" with the reason. Also: FA interest (who a free agent picks among equal offers) tilts to qualifying clubs.
+- Probe: list the qualifying clubs and the average discount; league cap use (`__balanceProbe` cap use 0.76–0.90) must stay in band.
 
 ## DO NOT
 - No changes to gates, objectives, capabilities, `evaluateTrade`, contract pricing (K2 is blocked), draft AI. No rng draws added or removed. Optional save fields only. Canonical player objects. No new deps. No temp files in the repo.
