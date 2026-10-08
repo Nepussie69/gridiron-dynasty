@@ -9,6 +9,7 @@ import { fitLabel, schemeFit } from '../game/engine/style'
 import { masteryLabel, masteryProgress } from '../game/engine/playbook'
 import { useGame } from '../store/gameStore'
 import { Badge, DevBadge, OvrBadge, RatingBar } from '../ui/kit'
+import { PlayerName } from './PlayerHoverCard'
 
 type SortKey =
   | 'name' | 'age' | 'ovr' | 'pot' | 'dev' | 'pbk' | 'cap' | 'dead' | 'yrs' | 'fit'
@@ -252,7 +253,7 @@ export function PlayerTable({
               <Td className="sticky left-10 bg-surface">
                 <div className="flex items-center gap-2">
                   <span className="font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
-                  <span className="font-600 text-ink">{p.name}</span>
+                  <PlayerName player={p} className="font-600 text-ink" />
                   {p.injured && <Badge tone="loss">{p.injured.note}</Badge>}
                 </div>
               </Td>

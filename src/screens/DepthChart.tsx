@@ -8,6 +8,7 @@ import type { World } from '../game/engine/generate'
 import type { Position } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, OvrBadge, PageHeader } from '../ui/kit'
+import { PlayerName } from '../components/PlayerHoverCard'
 
 // One card per position, so `depthAt` drives each card directly.
 type CardDef = { label: string; pos: Position }
@@ -202,7 +203,7 @@ function Unit({
                           </span>
                           <OvrBadge value={p.ovr} pot={p.pot} size={26} />
                           <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
-                          <span className="flex-1 truncate text-sm font-600 text-ink">{p.name}</span>
+                          <span className="min-w-0 flex-1 truncate"><PlayerName player={p} className="text-sm font-600 text-ink" /></span>
                           {p.injured && <Badge tone="loss">OUT</Badge>}
                         </button>
                         {editable && (

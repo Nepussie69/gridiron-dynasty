@@ -167,7 +167,7 @@ export function HoverCard({
             data-hovercard-panel=""
             onMouseEnter={openNow}
             onMouseLeave={scheduleClose}
-            className="fixed z-[70] max-h-[70vh] w-[360px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-line bg-surface p-3 text-ink shadow-xl"
+            className="fixed z-[70] max-h-[60vh] w-[264px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg border border-line/70 bg-surface/80 p-2 text-ink shadow-lg backdrop-blur-[2px]"
             style={{ left: -9999, top: -9999, visibility: 'hidden' }}
           >
             {content}

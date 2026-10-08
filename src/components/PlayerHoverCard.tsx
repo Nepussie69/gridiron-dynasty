@@ -21,7 +21,7 @@ function valueClass(v: number): string {
  * the Trade Center. Shows bio, contract, injury, scheme fit for YOUR club, then
  * the position group's composites and rating columns from `playerAttrs`.
  */
-export function PlayerHoverCard({ player, className }: { player: Player; className?: string }) {
+export function PlayerHoverCard({ player, className, info = true }: { player: Player; className?: string; info?: boolean }) {
   const league = useWorld()
   const career = useGame((s) => s.career)
   const activeTeamId = useGame((s) => s.activeTeamId)
@@ -44,20 +44,31 @@ export function PlayerHoverCard({ player, className }: { player: Player; classNa
   return (
     <HoverCard
       className={className}
+      info={info}
       label={`Details for ${player.name}`}
       content={
-        <div className="space-y-2.5">
-          <div className="flex items-center gap-2.5">
-            <OvrBadge value={player.ovr} pot={player.pot} size={36} />
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <OvrBadge value={player.ovr} pot={player.pot} size={28} />
             <div className="min-w-0">
-              <div className="truncate font-display text-base font-700 uppercase leading-none text-ink">
+              <div className="truncate font-display text-sm font-700 uppercase leading-none text-ink">
                 {player.name}
               </div>
-              <div className="mt-0.5 text-[11px] tnum text-muted">
+              <div className="mt-0.5 text-[10px] tnum text-muted">
                 {player.pos} · age {player.age} · {money(capHit)} · {years} yr{years === 1 ? '' : 's'} left
               </div>
             </div>
           </div>
+
+          <div className="text-[10px] tnum text-muted">
+            Contract: {money(player.contract.capHit)} cap hit · {years} yr{years === 1 ? '' : 's'} · {money(player.contract.guaranteed ?? 0)} guaranteed · {player.dev} dev
+          </div>
+
+          {player.traits.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {player.traits.map((t) => <Badge key={t} tone="neutral">{t}</Badge>)}
+            </div>
+          )}
 
           {player.injured && (
             <Badge tone="loss">
@@ -66,22 +77,22 @@ export function PlayerHoverCard({ player, className }: { player: Player; classNa
           )}
 
           {scheme && fit && (
-            <div className="flex items-center justify-between rounded-lg border border-line bg-surface-2 px-2 py-1.5">
-              <span className="truncate text-[11px] text-muted">Scheme fit · {scheme}</span>
+            <div className="flex items-center justify-between rounded-md border border-line/60 px-1.5 py-0.5">
+              <span className="truncate text-[10px] text-muted">Scheme fit · {scheme}</span>
               <Badge tone={fit === 'Ideal' ? 'win' : fit === 'Good' ? 'info' : 'loss'}>{fit}</Badge>
             </div>
           )}
 
           {composites.length > 0 && (
             <div>
-              <div className="label mb-1">Composites</div>
-              <div className="grid grid-cols-3 gap-1">
+              <div className="label mb-0.5 !text-[9px]">Composites</div>
+              <div className="grid grid-cols-5 gap-0.5">
                 {composites.map((c) => {
                   const v = Math.round(c.compute(attrs))
                   return (
-                    <div key={c.id} title={c.title} className={cn('rounded-md border border-line/60 px-1.5 py-1 text-center', valueClass(v))}>
-                      <div className="font-cond text-[9px] font-700 uppercase tracking-wide opacity-80">{c.label}</div>
-                      <div className="font-display text-sm font-700 tnum">{v}</div>
+                    <div key={c.id} title={c.title} className={cn('rounded border border-line/50 px-0.5 py-px text-center', valueClass(v))}>
+                      <div className="truncate font-cond text-[8px] font-700 uppercase leading-tight opacity-80">{c.label}</div>
+                      <div className="font-display text-xs font-700 leading-tight tnum">{v}</div>
                     </div>
                   )
                 })}
@@ -91,14 +102,14 @@ export function PlayerHoverCard({ player, className }: { player: Player; classNa
 
           {ratings.length > 0 && (
             <div>
-              <div className="label mb-1">Ratings</div>
-              <div className="grid grid-cols-4 gap-1">
+              <div className="label mb-0.5 !text-[9px]">Ratings</div>
+              <div className="grid grid-cols-6 gap-0.5">
                 {ratings.map((k) => {
                   const v = attrs[k]
                   return (
-                    <div key={k} className={cn('rounded-md border border-line/60 px-1 py-1 text-center', valueClass(v))}>
-                      <div className="font-cond text-[9px] font-700 uppercase tracking-wide opacity-80">{k}</div>
-                      <div className="font-display text-sm font-700 tnum">{Math.round(v)}</div>
+                    <div key={k} className={cn('rounded border border-line/50 px-0.5 py-px text-center', valueClass(v))}>
+                      <div className="truncate font-cond text-[8px] font-700 uppercase leading-tight opacity-80">{k}</div>
+                      <div className="font-display text-xs font-700 leading-tight tnum">{Math.round(v)}</div>
                     </div>
                   )
                 })}
@@ -111,4 +122,9 @@ export function PlayerHoverCard({ player, className }: { player: Player; classNa
       <span className={cn('truncate', className)}>{player.name}</span>
     </HoverCard>
   )
+}
+
+/** A player's name that shows his full card on hover (ratings, traits, contract) — no click needed. */
+export function PlayerName({ player, className }: { player: Player; className?: string }) {
+  return <PlayerHoverCard player={player} className={className} info={false} />
 }
