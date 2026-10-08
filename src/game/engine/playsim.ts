@@ -83,6 +83,8 @@ export interface Play {
   intId?: string
   /** L11.5 Q7: the defender in coverage on the target (derived, never an rng draw). */
   coverId?: string
+  /** L12 E2: the defender who forced a fumble on a catch (bookkeeping only). */
+  fumbleId?: string
 }
 
 export interface GameSim {
@@ -173,7 +175,7 @@ function avg(list: number[]) {
 // Each new term is (rating − POS_MEAN[pos][key]) × weight, so an average starter
 // adds 0 and league averages hold. None of these adds or removes an rng() draw.
 // E1_W scales ONLY the new terms; no existing constant is touched.
-const E1_W = 1.0
+const E1_W = 1.1
 /** E1: relative rating value vs the average starter at that position (0 when average). */
 function rmean(pos: string | undefined, key: string, val: number): number {
   const m = pos ? POS_MEAN[pos]?.[key] : undefined
@@ -188,12 +190,13 @@ function qbDeepThp(qbA: Record<string, number>, depth: number): number {
 function qbPressureRelief(qbA: Record<string, number>): number {
   return clamp((rmean('QB', 'TUP', qbA.TUP ?? 70) * 0.004 + rmean('QB', 'TOR', qbA.TOR ?? 70) * 0.003) * E1_W, 0, 0.4)
 }
-/** E1: QB mobility (SPD/ACC/BTK) shrinks sack chance. */
+/** E1: QB mobility (SPD/ACC/BTK/STR) shrinks sack chance. */
 function qbSackEscape(qbA: Record<string, number>): number {
   return clamp(
     (rmean('QB', 'SPD', qbA.SPD ?? 70) * 0.0012 +
       rmean('QB', 'ACC', qbA.ACC ?? 70) * 0.0008 +
-      rmean('QB', 'BTK', qbA.BTK ?? 70) * 0.0006) * E1_W,
+      rmean('QB', 'BTK', qbA.BTK ?? 70) * 0.0006 +
+      rmean('QB', 'STR', qbA.STR ?? 70) * 0.0004) * E1_W,
     -0.15, 0.18,
   )
 }
@@ -211,7 +214,10 @@ function qbIntMult(qbA: Record<string, number>, depth: number): number {
 function targetCatchProb(target: Player | undefined, tA: Record<string, number>, depth: number, tight: boolean): number {
   if (!target) return 0
   let p = rmean(target.pos, 'CTH', tA.CTH ?? 70) * 0.0006
-  if ((target.pos === 'WR' || target.pos === 'TE') && tight) p += rmean(target.pos, 'CIT', tA.CIT ?? 70) * 0.0005
+  if ((target.pos === 'WR' || target.pos === 'TE') && tight) {
+    p += rmean(target.pos, 'CIT', tA.CIT ?? 70) * 0.0005
+    p += rmean(target.pos, 'STR', tA.STR ?? 70) * 0.0002
+  }
   if ((target.pos === 'WR' || target.pos === 'TE') && depth >= 15) {
     p += rmean(target.pos, 'SPC', tA.SPC ?? 70) * 0.0005 + rmean(target.pos, 'JMP', tA.JMP ?? 70) * 0.0005
   }
@@ -250,7 +256,8 @@ function rbElusivenessExtras(pos: string | undefined, a: Record<string, number>)
     (rmean('RB', 'SPM', a.SPM ?? 70) * 0.03 +
       rmean('RB', 'SFA', a.SFA ?? 70) * 0.03 +
       rmean('RB', 'COD', a.COD ?? 70) * 0.03 +
-      rmean('RB', 'ACC', a.ACC ?? 70) * 0.03) * E1_W,
+      rmean('RB', 'ACC', a.ACC ?? 70) * 0.03 +
+      rmean('RB', 'STR', a.STR ?? 70) * 0.02) * E1_W,
     -8, 8,
   )
 }
@@ -262,6 +269,87 @@ function rbAfterContact(pos: string | undefined, a: Record<string, number>, gain
 /** E1: ball security — CAR moves fumble chance around the existing style factor. */
 function rbCarrySecurity(pos: string | undefined, a: Record<string, number>): number {
   return clamp(1 - (rmean(pos, 'CAR', a.CAR ?? 70) / 100) * E1_W, 0.7, 1.3)
+}
+
+// ── L12 E2: defense, kicking and general ratings ─────────────────────────────
+// Same shape as E1: every term is (rating − POS_MEAN) × weight, so an average
+// starter adds 0 and league averages hold. No rng() draw is added or removed.
+const E2_W = 1.0
+/** E2: average relative value of one rating across a group, per player's position. */
+function relAvg(key: string, list: Array<Player | undefined>): number {
+  const ps = list.filter((p): p is Player => !!p)
+  if (!ps.length) return 0
+  return avg(ps.map((p) => rmean(p.pos, key, mkAttrs(p)[key] ?? 70)))
+}
+/** E2: DL quickness (SPD/ACC/AGI) joins the rush; STR vs the OL joins every rusher. */
+function dlRushExtras(dl: Player[], olStrRel: number): number {
+  if (!dl.length) return 0
+  return avg(dl.map((p) => {
+    const a = mkAttrs(p)
+    const quick = rmean(p.pos, 'SPD', a.SPD ?? 70) * 0.12 +
+      rmean(p.pos, 'ACC', a.ACC ?? 70) * 0.12 +
+      rmean(p.pos, 'AGI', a.AGI ?? 70) * 0.06
+    const str = (rmean(p.pos, 'STR', a.STR ?? 70) - olStrRel) * 0.05
+    return quick + str
+  }))
+}
+/** E2: on a blitz the second-level rush (max PMV/FMV) joins the pressure. */
+function lbBlitzRush(lbs: Player[]): number {
+  if (!lbs.length) return 0
+  return avg(lbs.map((p) => {
+    const a = mkAttrs(p)
+    return Math.max(rmean(p.pos, 'PMV', a.PMV ?? 70), rmean(p.pos, 'FMV', a.FMV ?? 70))
+  }))
+}
+/** E2: pursuit (DL/LB PUR + SPD) shrinks the run's big-play tail. */
+function runPursuit(dl: Player[], lbs: Player[]): number {
+  const all = [...dl, ...lbs]
+  return relAvg('PUR', all) * 0.7 + relAvg('SPD', all) * 0.4
+}
+/** E2: LB recognition, block shedding and athleticism join the second level. */
+function lbRunExtras(lbs: Player[]): number {
+  return relAvg('PRC', lbs) * 0.16 + relAvg('BSH', lbs) * 0.16 +
+    relAvg('STR', lbs) * 0.08 + relAvg('ACC', lbs) * 0.08 + relAvg('AGI', lbs) * 0.08
+}
+/** E2: secondary quickness (ACC/AGI/STR) joins coverage. */
+function dbCoverageExtras(cbs: Player[], saf: Player[]): number {
+  const all = [...cbs, ...saf]
+  return relAvg('ACC', all) * 0.05 + relAvg('AGI', all) * 0.05 + relAvg('STR', all) * 0.03
+}
+/** E2: defensive play recognition (DL/LB/S PRC) shrinks play-action and screens. */
+function recognition(dl: Player[], lbs: Player[], saf: Player[]): number {
+  return (relAvg('PRC', dl) + relAvg('PRC', lbs) + relAvg('PRC', saf)) / 3
+}
+/** E2: a tackler's TAK squeezes yards after the catch. */
+function tacklerYacShrink(id: string | undefined, groups: Player[][]): number {
+  if (!id) return 0
+  for (const g of groups) {
+    const p = g.find((x) => x.id === id)
+    if (p) return Math.round(rmean(p.pos, 'TAK', mkAttrs(p).TAK ?? 70) * 0.05 * E2_W)
+  }
+  return 0
+}
+/** E2: a big hitter's HPW adds a small forced-fumble chance on a catch. */
+function tacklerHitPower(id: string | undefined, groups: Player[][]): number {
+  if (!id) return 0
+  for (const g of groups) {
+    const p = g.find((x) => x.id === id)
+    if (p) return clamp(rmean(p.pos, 'HPW', mkAttrs(p).HPW ?? 70) * 0.0004 * E2_W, 0, 0.004)
+  }
+  return 0
+}
+/** E2: deterministic weighted pick by a hash key (no rng draw). */
+function hashPick<T>(list: T[], weight: (t: T) => number, key: number): T | undefined {
+  if (!list.length) return undefined
+  const total = list.reduce((s, t) => s + Math.max(0, weight(t)), 0)
+  if (total <= 0) return list[key % list.length]
+  let roll = (key / 4294967296) * total
+  for (const t of list) {
+    const w = Math.max(0, weight(t))
+    if (roll < w) return t
+    roll -= w
+  }
+  return list[list.length - 1]
 }
 
 function topGroup(world: World, teamId: string, positions: Position[], n: number, qbOverride?: Record<string, string>): Player[] {
@@ -428,6 +516,8 @@ interface PlayOutcome {
   intId?: string
   /** L11.5 Q7: coverage defender on the target. */
   coverId?: string
+  /** L12 E2: the defender who forced a fumble on a catch (bookkeeping only). */
+  fumbleId?: string
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -729,6 +819,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
 
+  // ── L12 E2: unit-level relative ratings (centered; no rng) ──────────────────
+  const isQ4 = (env?.qtr ?? 0) >= 4
+  const olStrRel = avg(ol.map((p) => rmean(p.pos, 'STR', mkAttrs(p).STR ?? 70)))
+  const recog = recognition(dl, lbs, saf)
+
   const qbA = qb ? mkAttrs(qb) : {}
   const qbStyle = qb ? styleProfile(qb) : styleProfile({ traits: [''] } as Player)
   const qbFit = qb ? schemeFit(qb, ocScheme, 'OFF') : 0.5
@@ -740,6 +835,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     pressureVals[best] *= 0.5
   }
   let pressure = avg(pressureVals)
+  // L12 E2: DL quickness/power joins the rush; a tired front loses push in Q4.
+  pressure += dlRushExtras(dl, olStrRel) * E2_W
+  if (isQ4) pressure += relAvg('STA', dl) * 0.12 * E2_W
   // G11 spyQB spends a rusher (−4); G12 DL rotation trades pressure by quarter.
   if (defMove === 'spyQB') pressure -= 4
   if (usage && userDef) {
@@ -750,12 +848,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       pressure += q4 ? 1.5 : -1.5
     }
   }
-  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70))
+  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70)) - (isQ4 ? relAvg('STA', [...ol, qb]) * 0.08 * E2_W : 0)
   const defPlan = planFor(defId, 'def')
   // G6 third-down heat: extra blitz on the opponent's 3rd downs.
   const heat = hasFix(env, defId, 'thirdDownHeat') && env?.down === 3 ? 0.15 : 0
   const blitzRoll = rng()
   const blitz = blitzRoll < clamp(dStyle.blitz + (defPlan ? planEffects(defPlan, true).blitz : 0) + heat, 0, 0.8)
+  // L12 E2: a blitz brings the linebackers' rush into the pressure.
+  if (blitz) pressure += lbBlitzRush(lbs) * 0.3 * E2_W
   // A pass-heavy plan is predictable: the defense pins its ears back and sits
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
@@ -843,6 +943,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     weakCb = rng() < 0.35
     if (weakCb) manCov = Math.min(...cbMcv)
   }
+  // L12 E2: RB/TE targets are covered by linebackers, so their MCV joins man.
+  if (target && (target.pos === 'TE' || target.pos === 'RB')) manCov += relAvg('MCV', lbs) * 0.35 * E2_W
   let coverSkill = dStyle.manCoverage * manCov + (1 - dStyle.manCoverage) * zoneCov
   // G11 shadowWR1: your CB1 trails their WR1; help over the top on everyone else.
   if (defMove === 'shadowWR1') {
@@ -854,14 +956,24 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // G6 fixes: load-the-box loosens coverage; two-deep gives up the underneath but
   // caps explosives; third-down heat concedes more explosives on 3rd down.
   const compMult = planOverrides.compMult * (hasFix(env, defId, 'twoDeep') ? 1.04 : 1)
-  const bigPlayRisk = planOverrides.bigPlayRisk * (hasFix(env, defId, 'twoDeep') ? 0.85 : 1) * (heat ? 1.1 : 1)
-  const coverage = coverSkill * dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
+  let bigPlayRisk = planOverrides.bigPlayRisk * (hasFix(env, defId, 'twoDeep') ? 0.85 : 1) * (heat ? 1.1 : 1)
+  // L12 E2: press coverage risks a deep shot if the receiver wins; a fast safety caps it.
+  if (concept.depth >= 15) {
+    bigPlayRisk *= clamp(1 + (relAvg('PRS', cbs) * 0.004 - relAvg('SPD', saf) * 0.003) * E2_W, 0.6, 1.5)
+  }
+  let coverage = coverSkill * dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
+  // L12 E2: secondary athleticism joins coverage; good recognition covers screens;
+  // a tired defense loses a step in Q4.
+  coverage += dbCoverageExtras(cbs, saf) * E2_W
+  if (concept.depth <= 2 && concept.yac >= 0.8) coverage += recog * 0.4 * E2_W
+  if (isQ4) coverage += relAvg('STA', [...cbs, ...saf, ...lbs, ...dl]) * 0.12 * E2_W
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
   const offPassBias = planFor(offId, 'off')?.passBias ?? 0
-  // E1: QB play-action rating scales the existing bonus.
+  // E1: QB play-action rating scales the existing bonus; E2: good recognition beats it.
   const pacMult = qbPacMult(qbA)
-  const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) * pacMult : 0
+  const recogMult = clamp(1 - recog * 0.004 * E2_W, 0.6, 1.4)
+  const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) * pacMult * recogMult : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
   const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5 - spyPenalty
@@ -869,7 +981,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Completion probability based on real league rate vs. this matchup. Coordinator
   // quality shifts it: a great OC helps, a great DC hurts.
   const coachShift = (ocEff.offEdge - dcEff.defEdge) * 0.003
-  const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) * pacMult : 0
+  const playActionComp = offPassBias < 0 ? Math.min(0.02, -offPassBias * 0.01) * pacMult * recogMult : 0
   // E1: a receiver's hands (CTH/CIT/SPC/JMP) move the completion a little; tight coverage is when
   // the defense's coverage edge beats the route.
   const tightCoverage = coverage * 1.15 > qAccuracy + separation
@@ -883,17 +995,28 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   if (hasFix(env, offId, 'quickGame') && concept.depth <= 8) compProb = clamp(compProb + 0.03, 0.42, 0.74)
   if (hasFix(env, offId, 'maxProtect') && concept.depth >= 12) compProb = clamp(compProb - 0.03, 0.42, 0.74)
   // G7 hurry: a faster offense forces riskier throws.
-  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth), 0.005, 0.06)
+  // L12 E2: JMP/PRC replace part of the trait-only ball-hawk in the pick rate.
+  const ratingHawk = avg([...cbs, ...saf].map((p) => {
+    const a = mkAttrs(p)
+    return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
+  }))
+  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth), 0.005, 0.06)
 
   if (rng() < intProb) {
-    const ballHawk = [...cbs, ...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
-    const bestSaf = [...saf].sort((a, b) => styleProfile(b).ballHawk - styleProfile(a).ballHawk)[0]
-    // L12 S3: the coverage defender gets the pick 60% of the time, otherwise a
-    // ball-hawk (mostly a safety). Deterministic (no rng).
+    // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
+    // best ball-hawk by JMP/PRC plus the trait bonus. Deterministic (no rng).
+    const dbPool = [...cbs, ...saf]
+    const hawkWeight = (p: Player) => {
+      const a = mkAttrs(p)
+      return Math.max(1, (a.JMP ?? 70) * 0.4 + (a.PRC ?? 70) * 0.6 + styleProfile(p).ballHawk * 30) * (p.pos === 'S' ? 2 : 1)
+    }
     const ir = hash32(`${n}:${defId}:int`) % 100
-    // A linebacker in coverage holds on to fewer picks than a defensive back.
+    // A linebacker in coverage holds on to fewer picks; a deep safety holds more.
     const coverIsLb = !!coverId && lbs.some((p) => p.id === coverId)
-    const intId = coverId && ir < (coverIsLb ? 25 : 60) ? coverId : bestSaf && (ir < 85 || !ballHawk) ? bestSaf.id : ballHawk?.id
+    const coverIsS = !!coverId && saf.some((p) => p.id === coverId)
+    const fallback = hashPick(dbPool, hawkWeight, hash32(`${n}:${defId}:inthawk`))?.id
+    const takeCover = !!coverId && (coverIsLb ? ir < 32 : coverIsS ? ir < 80 : ir < 42)
+    const intId = takeCover ? coverId : fallback
     return {
       type: 'pass', concept: concept.name, yards: 0, result: 'Interception!', turnover: true,
       timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId, coverId,
@@ -916,16 +1039,25 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if (target?.pos === 'RB' && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
     else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
     gain = clamp(gain, -8, 85)
-    const big = gain >= 25
     // L12 S3: a completion is stopped by one defender — the coverage defender most
     // often, support otherwise. No credit on a score or a late sideline catch.
     const late = (env?.qtr ?? 0) >= 4 && (env?.clock ?? 9999) <= 120
     const outOfBounds = late && hash32(`${n}:${offId}:oob`) % 100 < 35
     const stopped = yard + gain < 100 && !outOfBounds ? passTackler(n, defId, coverId, saf, lbs) : undefined
+    const tacklerGroups = [cbs, saf, lbs]
+    // L12 E2: a strong tackler cuts the YAC short.
+    if (stopped && gain > 0) gain = Math.max(-4, gain - tacklerYacShrink(stopped, tacklerGroups))
+    const big = gain >= 25
+    // L12 E2: a big hitter can jar the ball loose on the stop. Reuses this play's
+    // time draw (no new rng) and only fires on a tackle, never on a score.
+    const tu = rng()
+    const forceFumble = !!stopped && gain > 0 && yard + gain < 100 && tu < tacklerHitPower(stopped, tacklerGroups)
     return {
-      type: 'pass', concept: concept.name, yards: gain, result: big ? 'Explosive play!' : 'Complete',
-      turnover: false, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: big,
-      timeUsed: 24 + Math.floor(rng() * 16), qbId: qb?.id, coverId, tackleIds: stopped ? [stopped] : undefined,
+      type: 'pass', concept: concept.name, yards: gain,
+      result: forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete',
+      turnover: forceFumble, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !forceFumble && big,
+      fumbleId: forceFumble ? stopped : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopped ? [stopped] : undefined,
     }
   }
   return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
@@ -951,6 +1083,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const cbs = topGroup(world, defId, ['CB'], 3)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
+  // L12 E2: Q4 fatigue uses each unit's relative STA (centered; no rng).
+  const isQ4 = (env?.qtr ?? 0) >= 4
   // L12 S2: split carries RB1 / RB2 / QB from deterministic role weights, shifted
   // by the user's usage, a mobile QB, and short yardage. The pick is a hash of
   // (play.n, offId) — never an rng draw. QB runs use his own legs for elusiveness.
@@ -997,12 +1131,12 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const dp = planFor(defId, 'def')
   // G6 load the box: an extra 8% run defense, paid for by looser coverage.
   const boxMult = hasFix(env, defId, 'loadTheBox') ? 1.08 : 1
-  const runDef = (dp
+  const runDef = ((dp
     ? runDefBase * (1 + (dp.aggression - 0.5) * 0.06 - (dp.coverage <= 0 ? 0.03 : 0))
-    : runDefBase) * boxMult
-  const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4))
+    : runDefBase) * boxMult) + relAvg('STR', dl) * 0.05 * E2_W
+  const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + lbRunExtras(lbs) * E2_W
   const elusiveness = carrier?.pos === 'QB'
-    ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1
+    ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1 + rmean('QB', 'RUN', cA.RUN ?? 70) * 0.4 * E2_W
     : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
 
   // Real NFL run distribution, tilted by line + back vs. front seven, plus back style.
@@ -1015,6 +1149,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
   const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + (call?.edge ?? 0) * 1.6
+    + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0)
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -1024,6 +1159,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (yard >= 95) gain += 4
   else if (yard >= 88) gain += 2
   gain = clamp(gain, -10, 90)
+  // L12 E2: pursuit (DL/LB PUR + SPD) caps the long-run tail.
+  if (gain > 20) gain = 20 + Math.round((gain - 20) * clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4))
   const isBig = gain >= 20
   const fumble = rng() < 0.011 * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA)
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
@@ -1036,12 +1173,14 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   }
 }
 
-function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'fg', yard: number): PlayOutcome {
+function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'fg', yard: number, env?: SimEnv, margin = 0): PlayOutcome {
   if (type === 'fg') {
     const k = topGroup(world, offId, ['K'], 1)[0]
     const kA = k ? mkAttrs(k) : {}
     const dist = 100 - yard + 17
-    const power = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5
+    // L12 E2: an aware kicker is steadier in a one-score fourth quarter.
+    const late = (env?.qtr ?? 0) >= 4 && Math.abs(margin) <= 3
+    const power = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
     const good = rng() < fgProb(yard, power)
     return {
       type: 'fg', concept: `${dist}-yard field goal`, yards: 0,
@@ -1051,7 +1190,7 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
   }
   const p = topGroup(world, offId, ['P'], 1)[0]
   const pA = p ? mkAttrs(p) : {}
-  const net = 38 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rng() * 14)
+  const net = 38 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14)
   return { type: 'punt', concept: 'Punt', yards: net, result: `${net}-yard punt`, turnover: true, timeUsed: 6 }
 }
 
@@ -1783,7 +1922,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   // G7 fgRange: as soon as it's a long FG, kick it (≤0:30 left or on 3rd down).
   if (s.twoMinMode === 'fgRange' && s.down !== 4 && s.yard >= 62 && (s.clock <= 30 || s.down === 3)) {
-    const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard)
+    const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
     s.clock -= out.timeUsed * s.pace
     const good = !out.turnover
     const fgS = statFor(s, offId)
@@ -1939,7 +2078,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // 4th-down resolution (the choice was made before any rng draw this step).
   if (isFourth && fourthChoice !== 'go') {
     if (fourthChoice === 'fg') {
-      const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard)
+      const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
       s.clock -= out.timeUsed * s.pace
       const good = !out.turnover
       const fgS = statFor(s, offId)
@@ -1957,7 +2096,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       s.distance = 10
       return 'continue'
     }
-    const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard)
+    const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
     s.clock -= out.timeUsed * s.pace
     const newYard = clamp(s.yard + out.yards, 1, 99)
     pushPlay(s, { ...out, startYard: s.yard, endYard: newYard, down: 4, distance: s.distance })
@@ -1985,6 +2124,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (isPass) {
     offS.passAtt += 1
     if (isSack(out)) { offS.sacksTaken += 1; defS.sacks += 1 }
+    else if (out.fumbleId) { offS.passComp += 1; offS.passYds += out.yards; offS.fumbles += 1 }
     else if (out.turnover) { offS.ints += 1; defS.ints += 1 }
     else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += out.yards }
   } else {
