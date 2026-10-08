@@ -24,6 +24,43 @@ export interface TeamSeasonRecord {
   playoffs: boolean
   champion: boolean
   confChampion?: boolean
+  // ── L12.12 Y2: team offense and defense, summed at year end ────────────────
+  /** Offense: passing / rushing / total yards and touchdowns, from the club's player lines. */
+  passYds?: number
+  rushYds?: number
+  totalYds?: number
+  passTD?: number
+  rushTD?: number
+  /** Offense: turnovers lost (interceptions thrown; fumbles are not tracked). */
+  giveaways?: number
+  /** Offense: sacks the club's passers took (from the opponents' defenders). */
+  sacksTaken?: number
+  /** Defense: yards/TDs allowed and takeaways/sacks, from the club's defenders + opponents. */
+  ydsAllowed?: number
+  passYdsAllowed?: number
+  rushYdsAllowed?: number
+  takeaways?: number
+  sacks?: number
+  defTD?: number
+  /** L12.12 Y2: league ranks within the tier (1 = best of 32). */
+  ranks?: { pf: number; pa: number; offYds: number; defYds: number }
+}
+
+/** L12.12 Y2: a club's computed season offense, defense and league ranks. */
+export interface TeamSeasonStats {
+  passYds: number
+  rushYds: number
+  totalYds: number
+  passTD: number
+  rushTD: number
+  giveaways: number
+  sacksTaken: number
+  ydsAllowed: number
+  passYdsAllowed: number
+  rushYdsAllowed: number
+  takeaways: number
+  sacks: number
+  ranks: { pf: number; pa: number; offYds: number; defYds: number }
 }
 
 export interface CareerDatabase {
@@ -36,16 +73,99 @@ export function newDatabase(): CareerDatabase {
   return { teams: [], players: {} }
 }
 
+/**
+ * L12.12 Y2: every NFL club's season offense and defense, aggregated from the
+ * players themselves and the season's matchups, with league ranks (1 = best).
+ *
+ * Offense is summed from the club's player season lines. Defense uses the club's
+ * defenders' lines (sacks, takeaways) plus the opponents' production in each
+ * meeting (yards allowed, sacks taken). Deterministic — no rng, no sim changes.
+ * Used at year end by `recordTeamSeasons` and live by the History screen for the
+ * season still in progress (which is never written to the database).
+ */
+export function teamSeasonStats(world: World, season: number): Record<string, TeamSeasonStats> {
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const out: Record<string, TeamSeasonStats> = {}
+  for (const t of nfl) {
+    out[t.id] = {
+      passYds: 0, rushYds: 0, totalYds: 0, passTD: 0, rushTD: 0, giveaways: 0, sacksTaken: 0,
+      ydsAllowed: 0, passYdsAllowed: 0, rushYdsAllowed: 0, takeaways: 0, sacks: 0,
+      ranks: { pf: 0, pa: 0, offYds: 0, defYds: 0 },
+    }
+  }
+
+  // Offense + defenders' sacks/takeaways, summed from every player's line.
+  for (const p of world.players) {
+    const line = p.stats?.find((s) => s.season === season && s.level === 'NFL')
+    if (!line) continue
+    const agg = out[line.teamId]
+    if (!agg) continue
+    agg.passYds += line.passYds
+    agg.rushYds += line.rushYds
+    agg.passTD += line.passTD
+    agg.rushTD += line.rushTD
+    agg.giveaways += line.ints
+    agg.sacks += line.defSacks
+    agg.takeaways += line.defInts
+  }
+
+  // Yards allowed: attribute each opponent's per-game production to the meeting.
+  const gamesPlayed = (teamId: string) => {
+    const r = world.standings[teamId]
+    return Math.max(1, (r?.wins ?? 0) + (r?.losses ?? 0) + (r?.ties ?? 0))
+  }
+  for (const g of world.schedule) {
+    if (!g.played || g.tier !== 'NFL') continue
+    for (const [a, b] of [[g.homeId, g.awayId], [g.awayId, g.homeId]] as const) {
+      const mine = out[a]
+      const theirs = out[b]
+      if (!mine || !theirs) continue
+      const gp = gamesPlayed(b)
+      mine.passYdsAllowed += theirs.passYds / gp
+      mine.rushYdsAllowed += theirs.rushYds / gp
+      mine.sacksTaken += theirs.sacks / gp
+    }
+  }
+
+  for (const t of nfl) {
+    const s = out[t.id]
+    s.passYds = Math.round(s.passYds)
+    s.rushYds = Math.round(s.rushYds)
+    s.totalYds = s.passYds + s.rushYds
+    s.passYdsAllowed = Math.round(s.passYdsAllowed)
+    s.rushYdsAllowed = Math.round(s.rushYdsAllowed)
+    s.ydsAllowed = s.passYdsAllowed + s.rushYdsAllowed
+    s.sacksTaken = Math.round(s.sacksTaken)
+  }
+
+  // Ranks within the tier (1 = best). PF / offense = high is best; PA / defense = low.
+  const order = (fn: (id: string) => number, best: 'high' | 'low') => {
+    const ids = nfl.map((t) => t.id).sort((a, b) => (best === 'high' ? fn(b) - fn(a) : fn(a) - fn(b)))
+    const pos = new Map(ids.map((id, i) => [id, i + 1]))
+    return (id: string) => pos.get(id) ?? 0
+  }
+  const pfRank = order((id) => world.standings[id]?.pointsFor ?? 0, 'high')
+  const paRank = order((id) => world.standings[id]?.pointsAgainst ?? 0, 'low')
+  const offRank = order((id) => out[id].totalYds, 'high')
+  const defRank = order((id) => out[id].ydsAllowed, 'low')
+  for (const t of nfl) {
+    out[t.id].ranks = { pf: pfRank(t.id), pa: paRank(t.id), offYds: offRank(t.id), defYds: defRank(t.id) }
+  }
+  return out
+}
+
 /** Snapshot every team's season into the database at year end. */
 export function recordTeamSeasons(
   world: World,
   db: CareerDatabase,
   opts: { playoffSeeds?: string[]; champion?: string } = {},
 ) {
+  const stats = teamSeasonStats(world, world.season)
   for (const t of world.teams) {
     if (t.tier !== 'NFL') continue
     const rec = world.standings[t.id]
     if (!rec) continue
+    const s = stats[t.id]
     db.teams.push({
       season: world.season,
       level: 'NFL',
@@ -58,6 +178,23 @@ export function recordTeamSeasons(
       teamOvr: Math.round(teamAvgOvr(world.roster[t.id] ?? [])),
       playoffs: opts.playoffSeeds?.includes(t.id) ?? false,
       champion: opts.champion === t.id,
+      ...(s
+        ? {
+            passYds: s.passYds,
+            rushYds: s.rushYds,
+            totalYds: s.totalYds,
+            passTD: s.passTD,
+            rushTD: s.rushTD,
+            giveaways: s.giveaways,
+            sacksTaken: s.sacksTaken,
+            ydsAllowed: s.ydsAllowed,
+            passYdsAllowed: s.passYdsAllowed,
+            rushYdsAllowed: s.rushYdsAllowed,
+            takeaways: s.takeaways,
+            sacks: s.sacks,
+            ranks: { ...s.ranks },
+          }
+        : {}),
     })
   }
 }

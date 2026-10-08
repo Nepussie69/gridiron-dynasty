@@ -660,7 +660,21 @@ export interface CareerState {
   usage?: UsageSet
   /** OVR at season start by playerId, for young players on your side (F5). */
   devBaseline?: Record<string, number>
-  history: { season: number; team: string; role: string; record: string; outcome: string }[]
+  history: {
+    season: number
+    team: string
+    role: string
+    record: string
+    outcome: string
+    /** L12.12 Y1: net reputation change across the season (optional, newer saves). */
+    repDelta?: number
+    /** L12.12 Y1: job objectives met out of the season's total. */
+    objectivesMet?: number
+    objectivesTotal?: number
+    /** L12.12 Y1: self-chosen ambitions met out of the season's total. */
+    ambitionsMet?: number
+    ambitionsTotal?: number
+  }[]
 }
 
 /** One choice on the week's big decision card (#2). */

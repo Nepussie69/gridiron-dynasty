@@ -8,6 +8,7 @@ import {
   ClipboardList,
   DollarSign,
   Globe,
+  History as HistoryIcon,
   Inbox,
   LayoutDashboard,
   ListOrdered,
@@ -34,6 +35,7 @@ type IconType = ComponentType<{ size?: number | string; className?: string; stro
 
 const ICONS: Record<ScreenId, IconType> = {
   career: UserRound,
+  history: HistoryIcon,
   dashboard: LayoutDashboard,
   ledger: BookOpen,
   roster: Users,
