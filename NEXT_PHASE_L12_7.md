@@ -12,6 +12,7 @@ Screenshot: a 5th-round CB (pick 169) at 87 OVR, a 2nd-round DE at 92.
 | D2 | Young players grow toward POT with playing time and production, not just age | P1 | not started |
 | D3 | Show it: Draft board "Now / Ceiling", profile development line, season-end growth report | P1 | not started |
 | D4 | Probe: league talent stays level over 8 seasons; rookie OVR distribution by round | P1 | not started |
+| D5 | Scouting reads on the NFL scale: **Now** and **Ceiling** ranges side by side, fuzzy by scouting confidence | P2 | not started |
 
 ## Found in code
 - `realProspectClass` (`generate.ts` ~515) sets prospect `ovr: p.ovr` straight from **CFB 26** (college scale: top players 85–95) and `pot: ovr + 0..9`; `prospectToPlayer` (`draft.ts` ~134) then makes the
@@ -50,6 +51,18 @@ In `developPlayers`, for players **≤ 26** replace the age-only fraction with a
 (b) league average OVR of each club's starters (by `STARTERS`) per season over `seasons` seasons — must stay within ±1.5 of season 1 (talent doesn't drain or inflate); (c) the share of rookies who reach POT − 3 within
 4 seasons, split by starters vs bench in their first two years (starters should get there clearly more often).
 If (b) drifts, tune only the D2 fractions (not retirements, not D1).
+
+## D5 — Scouting reads on the NFL scale (user follow-up, 2026-10-08)
+User: "rookies definitely need a much lower rating; also show potential and current rating next to each other but don't give it away too much" (screenshot: Scouting "Class board · by your read" showing 96–99, 95–97 …).
+- Today `readProspect` (`evaluation.ts`) returns a range around `myGrade ?? grade` on the **college** scale. Keep `grade`/`myGrade`/`trueGrade` and all the logic that uses them (sorting, the Ledger, conviction,
+  department, red flags) unchanged — this is display only.
+- New `readRookieRanges(career, p): { now: [lo, hi]; ceiling: [lo, hi] }` in `evaluation.ts`: map the read's centre through D1's `rookieRatings` (rank the prospect by the read centre within the class) to get an
+  NFL **Now** midpoint and **Ceiling** midpoint; half-widths = `read width × 0.8` for Now and `read width × 1.4` for Ceiling (ceilings are harder to call), at least ±1 / ±2; clamp 45–97. Never reveal the exact
+  `trueGrade`-based numbers unless `read.truth` is already visible (Director / ≥ 92% confidence) — then show the exact pair.
+- UI: everywhere a prospect's read badge shows today (Scouting class board, prospect panel "Your Range", Draft board rows, Your selections, Combine card): replace the single college range with two small bubbles side by side,
+  **NOW 64–69** and **CEIL 80–88**, each coloured by its midpoint with `gradeColor` (same colours as `OvrBadge`); tooltip explains "Rookie rating range / ceiling range — tighter as you scout him".
+  The column header becomes "Now · Ceiling"; sorting by it sorts by the read centre (unchanged order).
+- Drafted players (D1) land inside (or near) the shown ranges for a well-scouted prospect — verify on 10 picks in the probe.
 
 ## Acceptance
 build + lint 4; `__rookieProbe(8)` inside its targets; `careerSmoke(6,'personnel')` and `(4,'coach')` 0/0; `__simTest` season-1 calibration unchanged (no sim change; rookies only enter after the first draft);
