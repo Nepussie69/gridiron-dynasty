@@ -183,6 +183,47 @@ export function OvrBadge({ value, pot, size = 34 }: { value: number; pot?: numbe
   )
 }
 
+// L12.7 D5: a prospect's read on the NFL rookie scale — "NOW 64–69" and
+// "CEIL 80–88" side by side, each coloured by its midpoint like `OvrBadge`.
+// `compact` shrinks the bubbles (not the labels) for tight rows.
+export function RookieRangeBadges({
+  now,
+  ceiling,
+  compact = false,
+  className,
+}: {
+  now: [number, number]
+  ceiling: [number, number]
+  compact?: boolean
+  className?: string
+}) {
+  return (
+    <span className={cn('inline-flex shrink-0 items-center gap-1', className)}>
+      <RangeBubble kind="NOW" lo={now[0]} hi={now[1]} compact={compact} />
+      <RangeBubble kind="CEIL" lo={ceiling[0]} hi={ceiling[1]} compact={compact} />
+    </span>
+  )
+}
+
+function RangeBubble({ kind, lo, hi, compact }: { kind: 'NOW' | 'CEIL'; lo: number; hi: number; compact: boolean }) {
+  const mid = Math.round((lo + hi) / 2)
+  const c = gradeColor(mid)
+  const range = lo === hi ? `${lo}` : `${lo}–${hi}`
+  return (
+    <span
+      title={`${kind === 'NOW' ? 'Rookie rating range' : 'Ceiling range'} ${range} — tighter as you scout him`}
+      className={cn(
+        'inline-flex shrink-0 items-center gap-0.5 rounded-[5px] font-display font-700 tnum leading-none',
+        compact ? 'px-1 py-0.5 text-[9px]' : 'px-1.5 py-1 text-[11px]',
+      )}
+      style={{ background: c, color: inkOn(c), opacity: kind === 'CEIL' ? 0.9 : 1 }}
+    >
+      <span className={cn('font-cond font-700 uppercase tracking-wide opacity-80', compact ? 'text-[7px]' : 'text-[8px]')}>{kind}</span>
+      {range}
+    </span>
+  )
+}
+
 export function RatingBar({
   value,
   max = 100,

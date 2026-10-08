@@ -4,7 +4,7 @@ import { cn } from '../lib/cn'
 import { gradeColor } from '../lib/format'
 import type { DraftProspect, Recommendation } from '../game/types'
 import { ensureProspectPools } from '../game/engine/progress'
-import { readProspect, rangeText, scoutRegion, inProspectScope } from '../game/engine/evaluation'
+import { readProspect, readRookieRanges, scoutRegion, inProspectScope } from '../game/engine/evaluation'
 import { accessFor } from '../game/engine/access'
 import { CHARACTER_FACETS, FACET_LABEL } from '../game/engine/character'
 import { isEvaluator, learnedBias, scoutReport } from '../game/engine/scoutBias'
@@ -16,7 +16,7 @@ import { overallRep } from '../game/engine/career'
 import { AccessBadge } from '../components/AccessBadge'
 import { CombineCard } from '../components/CombineCard'
 import { DataTable, type Column } from '../components/DataTable'
-import { Badge, Button, Card, PageHeader, Stat } from '../ui/kit'
+import { Badge, Button, Card, PageHeader, RookieRangeBadges, Stat } from '../ui/kit'
 
 const POS_FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
 const RECS: { id: Recommendation; label: string; tone: 'win' | 'info' | 'warn' | 'loss' }[] = [
@@ -49,6 +49,10 @@ export function Scouting() {
   }, [pool, career, pos, showAll])
 
   const reads = useMemo(() => new Map(scoped.map((p) => [p.id, readProspect(career, p)])), [scoped, career])
+  const ranges = useMemo(
+    () => new Map(scoped.map((p) => [p.id, readRookieRanges(career, p, pool)])),
+    [scoped, career, pool],
+  )
   const sorted = useMemo(
     () => [...scoped].sort((a, b) => (reads.get(b.id)?.center ?? 0) - (reads.get(a.id)?.center ?? 0)),
     [scoped, reads],
@@ -67,19 +71,16 @@ export function Scouting() {
   const columns: Column<DraftProspect>[] = [
     {
       key: 'range',
-      label: 'Read',
-      className: 'w-20',
+      label: 'Now · Ceiling',
+      className: 'w-[128px]',
       sortValue: (p) => reads.get(p.id)?.center ?? 0,
       render: (p) => {
         const r = reads.get(p.id)!
         if (!r.visible) {
           return <span className="grid h-7 w-14 place-items-center rounded-md bg-surface-3 font-cond text-[11px] font-700 text-muted">OUT</span>
         }
-        return (
-          <span className="grid h-7 w-16 place-items-center rounded-md font-display text-xs font-700 tnum" style={{ background: gradeColor(r.center), color: '#fff' }}>
-            {rangeText(r)}
-          </span>
-        )
+        const rr = ranges.get(p.id)!
+        return <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} />
       },
     },
     { key: 'pos', label: 'Pos', className: 'w-12', sortValue: (p) => p.pos, render: (p) => <span className="font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span> },
@@ -287,6 +288,7 @@ export function Scouting() {
 
 /** The full scouting report, rendered inline beneath the clicked row. */
 function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
+  const league = useWorld()
   const career = useGame((s) => s.career)!
   const points = useGame((s) => s.scoutingPoints)
   const scoutProspect = useGame((s) => s.scoutProspect)
@@ -295,6 +297,7 @@ function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
   const selectProspect = useGame((s) => s.selectProspect)
 
   const read = readProspect(career, open)
+  const rr = readRookieRanges(career, open, league.draft)
   const level = accessFor(career, 'scouting')
   const canGrade = level !== 'locked'
   const showStaff = level === 'decide' || career.level >= 4
@@ -302,12 +305,7 @@ function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
   return (
     <div className="border-l-4 border-[var(--team)] bg-surface p-4">
       <div className="flex items-start gap-3">
-        <div
-          className="grid h-16 w-16 shrink-0 place-items-center rounded-md font-display text-lg font-700 tnum"
-          style={{ background: gradeColor(read.center), color: '#fff' }}
-        >
-          {rangeText(read)}
-        </div>
+        <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} className="mt-1" />
         <div className="min-w-0 flex-1">
           <div className="label mb-0.5">Your Read · {read.bandLabel}</div>
           <h3 className="truncate font-display text-2xl font-700 uppercase leading-none text-ink">{open.name}</h3>
@@ -326,8 +324,7 @@ function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr]">
         <div>
-          <div className="grid grid-cols-3 gap-2">
-            <MiniStat label="Your Range" value={rangeText(read)} />
+          <div className="grid grid-cols-2 gap-2">
             <MiniStat label="Consensus" value={read.consensus ?? '—'} />
             <MiniStat label="Confidence" value={`${read.confidence}%`} />
           </div>

@@ -12,6 +12,7 @@
 import type { CareerState, DraftProspect } from '../types'
 import { clamp, hash32 } from './rng'
 import { traitRangeFactor } from './earnedTraits'
+import { rookieProjection, rookieRatings } from './draft'
 
 export const REGIONS = ['Northeast', 'Southeast', 'Midwest', 'West'] as const
 export type Region = (typeof REGIONS)[number]
@@ -47,6 +48,8 @@ export interface ProspectRead {
   /** Fuzzy grade range [lo, hi]. */
   range: [number, number]
   center: number
+  /** Half-width of the fuzzy range (college scale) — the read's uncertainty. */
+  width: number
   confidence: number
   /** Public consensus grade — only if you're senior enough to see it. */
   consensus: number | null
@@ -104,6 +107,7 @@ export function readProspect(career: CareerState, p: DraftProspect): ProspectRea
     region: prospectRegion(p),
     range: [lo, hi],
     center,
+    width,
     confidence: Math.round(p.confidence),
     consensus,
     truth,
@@ -121,4 +125,58 @@ export function rangeText(read: ProspectRead): string {
 /** Color a read by its midpoint, for badges/bars. */
 export function readColor(read: ProspectRead): number {
   return read.center
+}
+
+// ── D5 (L12.7): the read on the NFL rookie scale ──────────────────────────────
+/** A prospect's read translated to the NFL scale — a Now range and a Ceiling range. */
+export interface RookieRanges {
+  /** Rookie rating range [lo, hi] — where he opens. */
+  now: [number, number]
+  /** Ceiling range [lo, hi] — how high he can climb. */
+  ceiling: [number, number]
+}
+
+/** Widen a midpoint into a clamped [lo, hi] span. */
+function span(mid: number, half: number): [number, number] {
+  const lo = clamp(Math.round(mid - half), 45, 97)
+  const hi = clamp(Math.round(mid + half), 45, 97)
+  return lo <= hi ? [lo, hi] : [hi, lo]
+}
+
+/**
+ * D5 (L12.7): translate the scouting read onto the NFL rookie scale. The read's
+ * centre (`myGrade ?? grade`) is ranked within the class and pushed through D1's
+ * `rookieRatings` to get a Now midpoint and a Ceiling midpoint. Each is then
+ * widened by the read's own uncertainty — `read width × 0.8` for Now and
+ * `× 1.4` for Ceiling, since ceilings are harder to call — at least ±1 / ±2 and
+ * clamped 45–97. A scout who has earned the truth (a director, or ≥ 92%
+ * confidence) sees the exact pair instead; every other rung only sees a range.
+ * Display only: `grade`/`myGrade`/`trueGrade` and every decision built on them
+ * are untouched.
+ */
+export function readRookieRanges(
+  career: CareerState,
+  p: DraftProspect,
+  prospects: DraftProspect[],
+): RookieRanges {
+  const read = readProspect(career, p)
+
+  // The exact numbers: only once the truth is already visible (director or a
+  // near-total read). Rank by the hidden true grade, exactly as D1 does.
+  if (read.truth != null) {
+    let rank = 1
+    for (const q of prospects) {
+      if (q.id === p.id) continue
+      if (q.trueGrade > p.trueGrade || (q.trueGrade === p.trueGrade && q.id < p.id)) rank++
+    }
+    const exact = rookieRatings(p, rank, prospects.length)
+    return { now: [exact.ovr, exact.ovr], ceiling: [exact.pot, exact.pot] }
+  }
+
+  // The fuzzy estimate: rank by the read centre, then widen by the read width.
+  const mid = rookieProjection(prospects, p)
+  return {
+    now: span(mid.now, Math.max(1, read.width * 0.8)),
+    ceiling: span(mid.ceiling, Math.max(2, read.width * 1.4)),
+  }
 }
