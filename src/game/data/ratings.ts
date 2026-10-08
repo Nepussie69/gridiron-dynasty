@@ -25,6 +25,7 @@ import type { Position } from '../types'
 export const ATTRIBUTE_SCHEMA: Record<string, string[]> = {
   QB: ['SPD', 'STR', 'AGI', 'AWR', 'THP', 'SAC', 'MAC', 'DAC', 'RUN', 'PAC', 'ACC', 'TOR', 'TUP', 'BTK', 'STA', 'TGH'],
   RB: ['SPD', 'STR', 'AGI', 'AWR', 'CAR', 'BCV', 'JKM', 'TRK', 'SRR', 'CIT', 'ACC', 'COD', 'CTH', 'SPM', 'SFA', 'BTK', 'STA', 'TGH'],
+  FB: ['RBK', 'IBL', 'PBK', 'CAR', 'BTK', 'TRK', 'CTH', 'SPD', 'STR', 'AWR', 'STA', 'TGH'],
   WR: ['SPD', 'STR', 'AGI', 'AWR', 'CIT', 'SRR', 'MRR', 'DRR', 'RTE', 'JMP', 'ACC', 'COD', 'CTH', 'SPC', 'RLS', 'BTK', 'STA', 'TGH'],
   TE: ['SPD', 'STR', 'AGI', 'AWR', 'CIT', 'SRR', 'RBK', 'IBL', 'ACC', 'CTH', 'SPC', 'PBK', 'BTK', 'STA', 'TGH'],
   OT: ['STR', 'AGI', 'AWR', 'PBK', 'RBK', 'IMP', 'IBL', 'STA', 'TGH'],

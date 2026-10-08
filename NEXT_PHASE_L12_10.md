@@ -9,11 +9,11 @@ User's words: "include all routes and all plays from Madden 26"; "make sure all 
 ## Progress
 | Task | What | Push | Status |
 |---|---|---|---|
-| B0 | **Fullback position (user request 2026-10-08)**: new `Position` 'FB'. Real data has no FB: map Madden RBs with archetype 'Utility' or 'Blocking' (Juszczyk, Ricard, Ingold … 13) to FB in `realData`/`generate`; generated rosters carry 1–2 FB; `ATTRIBUTE_SCHEMA` FB (RBK, IBL, PBK, CAR, BTK, TRK, CTH, SPD, STR, AWR, STA, TGH); depth chart FB slot (STARTERS 1, used in 21/22 personnel and I-form); sim: FB lead block adds to run blocking on I-form/21 runs and occasional FB dive/flat target; stats/statShape/RatingsTable groups/position chips everywhere (roster, Find a Player, trade block, stats) include FB; save migration maps existing Utility/Blocking RBs to FB once | P1 | not started |
-| B1 | Route tree: every standard route as data (flat, slant, quick out, hitch, curl, comeback, out, dig/in, corner, post, go/fade, seam, wheel, drag, shallow cross, whip, angle, sit, stick, swing, bubble, screen, post-corner, out-and-up, sluggo, chair) | P1 | not started |
-| B2 | Playbook data: formations (Gun Trips, Gun Doubles, Gun Bunch, Gun Empty, Singleback Ace/Doubles, I-Form Pro/Twins, Pistol, Strong/Weak I, Goal line) × concepts, each play = personnel + an assignment (route / block / run path) per position | P1 | not started |
-| B3 | Sim uses the playbook: every scheme draws its plays from the playbook with scheme weights; each play's depth / yac / class come from its routes, so calibration and the L10 call matrix stay valid | P1 | not started |
-| B4 | Animation is data-driven: any play animates from its assignments (generalising the `routes` push's hand-built trees) | P1 | not started |
+| B0 | **Fullback position (user request 2026-10-08)**: new `Position` 'FB'. Real data has no FB: map Madden RBs with archetype 'Utility' or 'Blocking' (Juszczyk, Ricard, Ingold … 13) to FB in `realData`/`generate`; generated rosters carry 1–2 FB; `ATTRIBUTE_SCHEMA` FB (RBK, IBL, PBK, CAR, BTK, TRK, CTH, SPD, STR, AWR, STA, TGH); depth chart FB slot (STARTERS 1, used in 21/22 personnel and I-form); sim: FB lead block adds to run blocking on I-form/21 runs and occasional FB dive/flat target; stats/statShape/RatingsTable groups/position chips everywhere (roster, Find a Player, trade block, stats) include FB; save migration maps existing Utility/Blocking RBs to FB once | P1 | ✅ merged (463f8a5) |
+| B1 | Route tree: every standard route as data (flat, slant, quick out, hitch, curl, comeback, out, dig/in, corner, post, go/fade, seam, wheel, drag, shallow cross, whip, angle, sit, stick, swing, bubble, screen, post-corner, out-and-up, sluggo, chair) | P1 | ✅ merged (463f8a5) |
+| B2 | Playbook data: formations (Gun Trips, Gun Doubles, Gun Bunch, Gun Empty, Singleback Ace/Doubles, I-Form Pro/Twins, Pistol, Strong/Weak I, Goal line) × concepts, each play = personnel + an assignment (route / block / run path) per position | P1 | ✅ merged (463f8a5) |
+| B3 | Sim uses the playbook: every scheme draws its plays from the playbook with scheme weights; each play's depth / yac / class come from its routes, so calibration and the L10 call matrix stay valid | P1 | ✅ merged (463f8a5) |
+| B4 | Animation is data-driven: any play animates from its assignments (generalising the `routes` push's hand-built trees) | P1 | ✅ merged (463f8a5) |
 | B5 | Ratings in the animation: speed/acceleration scale how fast each player moves; route running sharpens breaks; separation in the sim shows as cushion on the field; pass rush wins show as pressure; the ball carrier's moves (juke/spin/truck) show on long runs | P2 | not started |
 | B6 | Play-calling UI: on a call moment (and the game plan's script), pick formation → play from the playbook, with the route diagram drawn | P2 | not started |
 
@@ -29,3 +29,7 @@ No changes to gates, objectives, capabilities, `evaluateTrade`, contract pricing
 Do not edit `ORCHESTRATION_HANDOVER.md`, `OPENCODE_CONTINUE.md`, any `NEXT_PHASE*.md`, `ROADMAP_*.md`, `IDEAS_*.md`, `HANDOFF.md`, `PLAYTEST_BACKLOG.md`. No git commands.
 
 ## Verification log
+
+
+## Verification log
+- 2026-10-08 P1 (B0–B4) merged: build ok, lint 4; real-data calibration 500 games 33333/2222/5150 = 23.6/24.6/24.6 pts, comp 67.9/67.7/68.5%, ypc 4.86/4.82/4.87; equivalence 20/20; smokes 0/0. Blitz rushers and every-snap `canAsk` kept.

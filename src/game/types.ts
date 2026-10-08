@@ -6,6 +6,7 @@ export type LeagueTier = 'NFL' | 'FBS' | 'FCS'
 export type Position =
   | 'QB'
   | 'RB'
+  | 'FB'
   | 'WR'
   | 'TE'
   | 'OT'

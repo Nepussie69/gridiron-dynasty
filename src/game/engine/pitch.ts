@@ -15,7 +15,7 @@ import { STARTERS, depthAt, setStarterInDepth } from './depth'
 import { clamp, hash32, makeRng } from './rng'
 
 /** Positions that line up on offense. */
-export const OFF_POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C']
+export const OFF_POSITIONS: Position[] = ['QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C']
 /** Positions that line up on defense. */
 export const DEF_POSITIONS: Position[] = ['DE', 'DT', 'LB', 'CB', 'S']
 

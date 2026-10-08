@@ -19,7 +19,7 @@ import { Badge, Card, PageHeader } from '../ui/kit'
 
 type View = 'ratings' | 'stats'
 
-const POS_CHIPS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K/P'] as const
+const POS_CHIPS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K/P'] as const
 type PosChip = (typeof POS_CHIPS)[number]
 
 type AgeBand = 'any' | 'young' | 'prime' | 'vet'

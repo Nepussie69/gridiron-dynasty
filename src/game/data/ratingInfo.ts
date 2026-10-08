@@ -87,6 +87,7 @@ export function ratingTitle(key: string): string {
 export const RATING_GROUPS: { id: string; positions: Position[] }[] = [
   { id: 'QB', positions: ['QB'] },
   { id: 'RB', positions: ['RB'] },
+  { id: 'FB', positions: ['FB'] },
   { id: 'WR', positions: ['WR'] },
   { id: 'TE', positions: ['TE'] },
   { id: 'OL', positions: ['OT', 'OG', 'C'] },
@@ -106,6 +107,7 @@ export const RATING_GROUPS: { id: string; positions: Position[] }[] = [
 const GROUP_SCHEMA: Record<string, string[]> = {
   QB: ATTRIBUTE_SCHEMA.QB,
   RB: ATTRIBUTE_SCHEMA.RB,
+  FB: ATTRIBUTE_SCHEMA.FB,
   WR: ATTRIBUTE_SCHEMA.WR,
   TE: ATTRIBUTE_SCHEMA.TE,
   OL: ATTRIBUTE_SCHEMA.OT,
@@ -120,6 +122,7 @@ const GROUP_SCHEMA: Record<string, string[]> = {
 const GROUP_EXTRAS: Record<string, string[]> = {
   QB: ['ACC', 'TOR', 'TUP', 'SFA'],
   RB: ['CTH', 'BTK', 'CAR', 'ACC', 'COD'],
+  FB: ['ACC', 'COD', 'BCV', 'JKM'],
   WR: ['CTH', 'SPC', 'BTK', 'RLS', 'ACC', 'COD'],
   TE: ['CTH', 'SPC', 'BTK', 'RLS', 'ACC', 'COD'],
   OL: [],
@@ -269,6 +272,7 @@ export const COMPOSITES: Record<string, Composite[]> = {
   ALL: [],
   QB: [QB_ACCURACY],
   RB: [sep('SRR', 'short'), sep('MRR', 'mid'), sep('DRR', 'deep'), HANDS, ELUSIVE],
+  FB: [RUN_BLOCK, HANDS],
   WR: [sep('SRR', 'short'), sep('MRR', 'mid'), sep('DRR', 'deep'), HANDS],
   TE: [sep('SRR', 'short'), sep('MRR', 'mid'), sep('DRR', 'deep'), HANDS],
   OL: [PASS_PRO, RUN_BLOCK],

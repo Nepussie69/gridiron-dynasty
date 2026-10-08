@@ -46,7 +46,7 @@ import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
 
 const NFL: StatLevel = 'NFL'
 
-type PosGroup = 'QB' | 'RB' | 'WR' | 'TE' | 'DL' | 'LB' | 'CB' | 'S'
+type PosGroup = 'QB' | 'RB' | 'FB' | 'WR' | 'TE' | 'DL' | 'LB' | 'CB' | 'S'
 type Tab = 'offense' | 'defense' | 'kicking'
 type Scope = { kind: 'live' } | { kind: 'season'; season: number } | { kind: 'career' }
 type PosFilter = 'ALL' | PosGroup
@@ -86,6 +86,8 @@ function posGroup(pos: Position): PosGroup | null {
       return 'QB'
     case 'RB':
       return 'RB'
+    case 'FB':
+      return 'FB'
     case 'WR':
       return 'WR'
     case 'TE':
@@ -353,7 +355,7 @@ export function StatsHub() {
   const shown = sorted.slice(0, limit)
   const kickingAvailable = hasKicking(allRows)
   const tabs: Tab[] = kickingAvailable ? ['offense', 'defense', 'kicking'] : ['offense', 'defense']
-  const posOptions: PosFilter[] = tab === 'defense' ? ['ALL', 'DL', 'LB', 'CB', 'S'] : ['ALL', 'QB', 'RB', 'WR', 'TE']
+  const posOptions: PosFilter[] = tab === 'defense' ? ['ALL', 'DL', 'LB', 'CB', 'S'] : ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE']
   const teams = world.teams.filter((t) => t.tier === 'NFL').sort((a, b) => a.name.localeCompare(b.name))
 
   const applyScope = (next: Scope) => {

@@ -11,7 +11,7 @@ import type { World } from './generate'
 
 /** How many starters line up at each position (a base formation). */
 export const STARTERS: Record<Position, number> = {
-  QB: 1, RB: 1, WR: 3, TE: 1, OT: 2, OG: 2, C: 1, DE: 2, DT: 2, LB: 3, CB: 2, S: 2, K: 1, P: 1,
+  QB: 1, RB: 1, FB: 1, WR: 3, TE: 1, OT: 2, OG: 2, C: 1, DE: 2, DT: 2, LB: 3, CB: 2, S: 2, K: 1, P: 1,
 }
 
 /** Positions pooled by rating unless the club set an explicit order (keeps sim calibration). */

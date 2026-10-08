@@ -18,7 +18,7 @@ import { CombineCard } from '../components/CombineCard'
 import { DataTable, type Column } from '../components/DataTable'
 import { Badge, Button, Card, PageHeader, RookieRangeBadges, Stat } from '../ui/kit'
 
-const POS_FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
+const POS_FILTERS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
 const RECS: { id: Recommendation; label: string; tone: 'win' | 'info' | 'warn' | 'loss' }[] = [
   { id: 'Blue Chip', label: 'Blue Chip', tone: 'win' },
   { id: 'Starter', label: 'Starter', tone: 'info' },

@@ -81,7 +81,7 @@ function bestWorstCall(entries: LedgerEntry[], season: number): { best: LedgerEn
   return { best, worst }
 }
 
-const OFF_POS: ReadonlySet<Position> = new Set(['QB', 'RB', 'WR', 'TE'])
+const OFF_POS: ReadonlySet<Position> = new Set(['QB', 'RB', 'FB', 'WR', 'TE'])
 const DEF_POS: ReadonlySet<Position> = new Set(['DE', 'DT', 'LB', 'CB', 'S'])
 
 function mainStat(pos: Position, s: SeasonStats): number {

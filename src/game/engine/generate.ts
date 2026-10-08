@@ -55,6 +55,8 @@ export interface World {
   phase: 'regular' | 'offseason'
   /** L12.7: set once real-data rookies are on the NFL rookie scale (old saves are rescaled on load). */
   rookieScaleV2?: boolean
+  /** L12.10 B0: set once legacy utility/blocking backs have been moved to fullback. */
+  fbMigrated?: boolean
   teams: Team[]
   byId: Record<string, Team>
   players: Player[]
@@ -109,12 +111,12 @@ export interface World {
 export type League = World
 
 const POS_SIDE: Record<Position, Side> = {
-  QB: 'OFF', RB: 'OFF', WR: 'OFF', TE: 'OFF', OT: 'OFF', OG: 'OFF', C: 'OFF',
+  QB: 'OFF', RB: 'OFF', FB: 'OFF', WR: 'OFF', TE: 'OFF', OT: 'OFF', OG: 'OFF', C: 'OFF',
   DE: 'DEF', DT: 'DEF', LB: 'DEF', CB: 'DEF', S: 'DEF', K: 'ST', P: 'ST',
 }
 
 const NFL_SLOTS: Position[] = [
-  'QB', 'QB', 'QB', 'RB', 'RB', 'RB', 'WR', 'WR', 'WR', 'WR', 'WR', 'WR', 'WR',
+  'QB', 'QB', 'QB', 'RB', 'RB', 'RB', 'FB', 'WR', 'WR', 'WR', 'WR', 'WR', 'WR', 'WR',
   'TE', 'TE', 'TE', 'OT', 'OT', 'OT', 'OT', 'OG', 'OG', 'OG', 'OG', 'C', 'C',
   'DE', 'DE', 'DE', 'DE', 'DT', 'DT', 'DT', 'DT', 'LB', 'LB', 'LB', 'LB', 'LB', 'LB',
   'CB', 'CB', 'CB', 'CB', 'CB', 'CB', 'CB', 'S', 'S', 'S', 'S', 'K', 'P',
@@ -123,6 +125,7 @@ const NFL_SLOTS: Position[] = [
 const TRAITS_BY_POS: Record<string, string[]> = {
   QB: ['Cannon Arm', 'Field General', 'Improviser', 'Pocket Passer', 'Dual Threat'],
   RB: ['Elusive', 'Power Back', 'Receiving Back', 'Home Run Hitter'],
+  FB: ['Blocking Back', 'Short-Yardage', 'Utility'],
   WR: ['Deep Threat', 'Route Technician', 'Contested Catch', 'YAC Monster'],
   TE: ['Red Zone Threat', 'Blocking TE', 'Seam Threat'],
   OT: ['Blind Side', 'Mauler', 'Zone Specialist'],
@@ -139,6 +142,7 @@ const TRAITS_BY_POS: Record<string, string[]> = {
 
 const PHYS: Record<string, { ht: [number, number]; wt: [number, number] }> = {
   QB: { ht: [74, 78], wt: [210, 240] }, RB: { ht: [68, 73], wt: [195, 230] },
+  FB: { ht: [70, 75], wt: [235, 265] },
   WR: { ht: [70, 76], wt: [180, 215] }, TE: { ht: [75, 79], wt: [240, 265] },
   OT: { ht: [76, 79], wt: [300, 340] }, OG: { ht: [75, 78], wt: [300, 340] },
   C: { ht: [74, 77], wt: [295, 320] }, DE: { ht: [74, 79], wt: [250, 285] },
@@ -467,16 +471,18 @@ function cfbTeamIdBySchool(school: string): string | undefined {
 }
 
 function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: number): Player {
+  // L12.10 B0: Madden lists fullbacks as RBs; utility/blocking backs become FBs.
+  const pos: Position = p.pos === 'RB' && /Utility|Blocking/i.test(p.archetype) ? 'FB' : p.pos
   const rookie = p.age <= 24 && rchance(rng, 0.5)
   const contract = rookie
     ? makeRookieContract(rint(rng, 1, 224), season)
-    : makeVeteranContract(rng, p.ovr, p.pos, p.age, season)
+    : makeVeteranContract(rng, p.ovr, pos, p.age, season)
   const pot = Math.min(99, p.ovr + (p.age <= 25 ? rint(rng, 0, 8) : rint(rng, 0, 2)))
   return {
     id: nextPid(),
     name: p.name,
-    pos: p.pos,
-    side: POS_SIDE[p.pos],
+    pos,
+    side: POS_SIDE[pos],
     age: p.age + 1, // Madden 26 ages are for the 2025 season; this world starts in 2026
     height: p.height,
     weight: p.weight,
@@ -502,7 +508,7 @@ function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: numbe
 function cutTo53(players: Player[], freeAgents: Player[]) {
   if (players.length <= 53) return
   const FLOOR: Record<string, number> = {
-    QB: 2, RB: 2, WR: 4, TE: 2, OT: 3, OG: 3, C: 1, DE: 3, DT: 3, LB: 4, CB: 4, S: 3, K: 1, P: 1,
+    QB: 2, RB: 2, FB: 1, WR: 4, TE: 2, OT: 3, OG: 3, C: 1, DE: 3, DT: 3, LB: 4, CB: 4, S: 3, K: 1, P: 1,
   }
   const counts: Record<string, number> = {}
   for (const p of players) counts[p.pos] = (counts[p.pos] ?? 0) + 1

@@ -5,7 +5,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 
 | # | Feature | What it is | Depends on | Status |
 |---|---|---|---|---|
-| 1 | **Full playbook + fullback** (`NEXT_PHASE_L12_10.md`) | Route tree (~26 routes), formations × real concepts, FB position, pick formation → play on calls, ratings visible in the animation | P5 ✅, routes ✅ | 🔨 building (P1: B0–B4) |
+| 1 | **Full playbook + fullback** (`NEXT_PHASE_L12_10.md`) | Route tree (~26 routes), formations × real concepts, FB position, pick formation → play on calls, ratings visible in the animation | P5 ✅, routes ✅ | P1 ✅ (B0–B4) · P2 (B5–B6) ⏳ |
 | 1a | **Playbook mastery that's real** (`NEXT_PHASE_L12_13.md`) | Realistic starting mastery, learning from snaps + production, relative effects for every unit in the sim, readable tooltip | culture | ⏳ next after culture |
 | 1a2 | **Stars are rare** (`NEXT_PHASE_L12_15.md`) | ~25–32 players at 90+ (one per club), more 80s; rank order kept | contracts | ⏳ after contracts |
 | 1b | **Real NFL numbers retune** (`NEXT_PHASE_REALISM.md`) | Every team stat to the 2015–2024 NFL averages (passing ~241, comp 64%, sacks 2.4, ypc 4.3, red-zone TD 56% …) | playbook, culture | ⏳ next after them |
@@ -30,7 +30,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 20 | **Press conferences** | Answers move owner trust, player morale and your profile | — | ⏳ |
 | 21 | **Coaching tree** | Your coordinators get hired away as head coaches; their success adds to your legacy; poach them back | History ✅ | ⏳ |
 | 22 | **Owner personalities** | Win-now, patient builder, meddler — different firing lines and mandates | — | ⏳ |
-| 23 | **Hall of Fame & legacy** | Career timeline, records, HOF vote at retirement (yours and your players') | History ✅ | ⏳ |
+| 23 | **Hall of Fame & legacy** (`NEXT_PHASE_L12_16.md`) | Career timeline, records, HOF vote at retirement (yours and your players'); also persists history/awards across reloads | History ✅ | 🔨 building (parallel) |
 | 24 | **Trick plays** | Flea flicker, reverse, halfback pass, fake spike as calls with surprise value | 1 | ⏳ |
 | 25 | **Ask the GM / owner meetings** | Request budget, a star signing or a staff hire; owner reacts by personality | 22 | ⏳ |
 

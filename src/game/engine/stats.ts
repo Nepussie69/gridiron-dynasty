@@ -294,6 +294,7 @@ export function mainStatValue(p: Player, s: SeasonStats | undefined): number | n
       return s.rushYds
     case 'WR':
     case 'TE':
+    case 'FB':
       return s.recYds
     case 'DE':
     case 'DT':

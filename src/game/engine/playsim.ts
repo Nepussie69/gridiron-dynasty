@@ -15,6 +15,7 @@ import { depthGroup } from './depth'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { masteryMultiplier, teamCohesion } from './playbook'
+import { SCHEME_MENUS } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
 
 // The user's own coaching skill, set once per game by the store when they hold a
@@ -262,6 +263,12 @@ function teRunBlock(te: Player | undefined): number {
   const a = mkAttrs(te)
   return (rmean('TE', 'RBK', a.RBK ?? 70) * 0.7 + rmean('TE', 'IBL', a.IBL ?? 70) * 0.3) * 0.15 * E1_W
 }
+/** L12.10 B0: a fullback's lead block joins run blocking on two-back runs (centered; no rng). */
+function fbLeadBlock(fb: Player | undefined): number {
+  if (!fb) return 0
+  const a = mkAttrs(fb)
+  return clamp(rmean('FB', 'RBK', a.RBK ?? 70) * 0.7 + rmean('FB', 'IBL', a.IBL ?? 70) * 0.5, -7, 7)
+}
 /** E1: SPM/SFA/COD/ACC join a running back's elusiveness (small). */
 function rbElusivenessExtras(pos: string | undefined, a: Record<string, number>): number {
   if (pos !== 'RB') return 0
@@ -422,53 +429,23 @@ interface OffenseStyle {
 const OFF_STYLES: Record<string, OffenseStyle> = {
   'Air Raid': {
     passRate: 0.62,
-    concepts: [
-      { name: 'Four Verticals', type: 'pass', depth: 20, yac: 0.4, description: 'Four receivers go deep: a shot at a big play' },
-      { name: 'Y-Cross', type: 'pass', depth: 12, yac: 0.6, description: 'A deep crossing route behind the linebackers' },
-      { name: 'Mesh', type: 'pass', depth: 6, yac: 0.8, description: 'Two receivers cross underneath: quick, safe yards' },
-      { name: 'Smash', type: 'pass', depth: 11, yac: 0.5, description: 'Corner route over a short curl: beats cover 2' },
-      { name: 'RB Screen', type: 'pass', depth: 1, yac: 1.0, description: 'Dump to the back behind blockers: punishes the blitz' },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
-    ],
+    concepts: SCHEME_MENUS['Air Raid'],
   },
   'Pro Style': {
     passRate: 0.5,
-    concepts: [
-      { name: 'Play Action Deep', type: 'pass', depth: 22, yac: 0.3, description: 'Fake the run, then throw deep' },
-      { name: 'PA Cross', type: 'pass', depth: 14, yac: 0.5, description: 'Fake the run, hit a crosser over the middle' },
-      { name: 'Bootleg', type: 'pass', depth: 8, yac: 0.7, description: 'QB rolls out away from the run fake' },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
-      { name: 'Power', type: 'run', depth: 3, yac: 0, description: 'Pulling guard leads a run off tackle' },
-    ],
+    concepts: SCHEME_MENUS['Pro Style'],
   },
   Spread: {
     passRate: 0.55,
-    concepts: [
-      { name: 'Four Verts', type: 'pass', depth: 17, yac: 0.4, description: 'Four receivers go deep: a shot at a big play' },
-      { name: 'Quick Slant', type: 'pass', depth: 5, yac: 0.9, description: 'One-step slant: ball out fast' },
-      { name: 'RPO Bubble', type: 'pass', depth: 2, yac: 1.0, description: 'QB reads the defense: hand off or flip a bubble screen' },
-      { name: 'Outside Zone', type: 'run', depth: 5, yac: 0, description: 'Stretch run to the edge' },
-      { name: 'QB Draw', type: 'run', depth: 4, yac: 0, description: 'Show pass, then the QB runs up the middle' },
-    ],
+    concepts: SCHEME_MENUS.Spread,
   },
   'West Coast': {
     passRate: 0.53,
-    concepts: [
-      { name: 'Mesh', type: 'pass', depth: 6, yac: 0.9, description: 'Two receivers cross underneath: quick, safe yards' },
-      { name: 'Slant', type: 'pass', depth: 5, yac: 0.9, description: 'One-step slant: ball out fast' },
-      { name: 'RB Screen', type: 'pass', depth: 1, yac: 1.0, description: 'Dump to the back behind blockers: punishes the blitz' },
-      { name: 'Bootleg', type: 'pass', depth: 8, yac: 0.7, description: 'QB rolls out away from the run fake' },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
-    ],
+    concepts: SCHEME_MENUS['West Coast'],
   },
   'RPO Heavy': {
     passRate: 0.47,
-    concepts: [
-      { name: 'RPO Pass', type: 'pass', depth: 8, yac: 0.8, description: 'QB reads a linebacker, then throws behind him' },
-      { name: 'Quick Slant', type: 'pass', depth: 5, yac: 0.9, description: 'One-step slant: ball out fast' },
-      { name: 'RPO Run', type: 'run', depth: 4, yac: 0, description: 'QB reads the edge, then hands off or keeps it' },
-      { name: 'Inside Zone', type: 'run', depth: 4, yac: 0, description: 'Downhill run between the tackles' },
-    ],
+    concepts: SCHEME_MENUS['RPO Heavy'],
   },
 }
 
@@ -830,6 +807,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const wrs = topGroup(world, offId, ['WR', 'TE'], offMove === 'doubleRusher' ? 3 : 4)
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const rb = topGroup(world, offId, ['RB'], 1)[0]
+  const fb = topGroup(world, offId, ['FB'], 1)[0]
   const dl = topGroup(world, defId, ['DE', 'DT'], 4)
   const lbs = topGroup(world, defId, ['LB'], 3)
   const cbs = topGroup(world, defId, ['CB'], 3)
@@ -905,6 +883,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const route = longBall ? (a.DRR ?? rb.ovr) : concept.depth >= 7 ? (a.MRR ?? rb.ovr) : (a.SRR ?? rb.ovr)
     scored.push({ w: rb, score: route * 0.6 + (a.SPD ?? rb.ovr) * 0.25 + TARGET_TUNE.rbPrior, r: -1 })
   }
+  // L12.10 B0: a fullback is an occasional flat/checkdown target (handled below).
   scored.sort((a, b) => b.score - a.score)
   const maxScore = scored[0]?.score ?? 0
   const weights = scored.map((s) => Math.exp((s.score - maxScore) / TARGET_TUNE.tau))
@@ -921,6 +900,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     accW += weights[i] / totalW
     if (uniform < accW) { target = scored[i].w; readRank = i; break }
   }
+  // L12.10 B0: an occasional fullback checkdown on a short concept (deterministic; no rng).
+  if (fb && concept.depth <= 4 && hash32(`${n}:${offId}:fbflat`) % 100 < 4) { target = fb; readRank = scored.length }
   const tA = target ? mkAttrs(target) : {}
   const tStyle = target ? styleProfile(target) : styleProfile({ traits: [''] } as Player)
   // Q7: pick the coverage defender now, from the same groups, with no rng draw.
@@ -962,7 +943,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if (weakCb) manCov = Math.min(...cbMcv)
   }
   // L12 E2: RB/TE targets are covered by linebackers, so their MCV joins man.
-  if (target && (target.pos === 'TE' || target.pos === 'RB')) manCov += relAvg('MCV', lbs) * 0.35 * E2_W
+  if (target && (target.pos === 'TE' || target.pos === 'RB' || target.pos === 'FB')) manCov += relAvg('MCV', lbs) * 0.35 * E2_W
   let coverSkill = dStyle.manCoverage * manCov + (1 - dStyle.manCoverage) * zoneCov
   // G11 shadowWR1: your CB1 trails their WR1; help over the top on everyone else.
   if (defMove === 'shadowWR1') {
@@ -1054,7 +1035,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     else if (yard >= 80) gain += 2
     // L12 S1: checkdowns and tight-end throws are underneath targets — scale their
     // yards to NFL yards-per-target (RB ~5.5, TE ~7) instead of the route model's.
-    if (target?.pos === 'RB' && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
+    if ((target?.pos === 'RB' || target?.pos === 'FB') && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
     else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
     gain = clamp(gain, -8, 85)
     // L12 S3: a completion is stopped by one defender — the coverage defender most
@@ -1095,6 +1076,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const qb = topGroup(world, offId, ['QB'], 1)[0]
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const te = topGroup(world, offId, ['TE'], 1)[0]
+  const fb = topGroup(world, offId, ['FB'], 1)[0]
   const dl = topGroup(world, defId, ['DE', 'DT'], 4)
   const lbs = topGroup(world, defId, ['LB'], 3)
   const saf = topGroup(world, defId, ['S'], 2)
@@ -1138,6 +1120,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   else if (roll < (w1 + w2) / wTot && rb[1]) carrier = rb[1]
   else if (qb) carrier = qb
   else if (rb[1]) carrier = rb[1]
+  // L12.10 B0: an occasional fullback dive on short yardage (deterministic; no rng).
+  if (fb && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fb
   const cA = carrier ? mkAttrs(carrier) : {}
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
@@ -1166,7 +1150,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + (call?.edge ?? 0) * 1.6
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (call?.edge ?? 0) * 1.6
     + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0)
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
@@ -1174,6 +1158,11 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   let gain = tier === 'FBS' && runGain < 0 ? Math.round(runGain * 0.7) : runGain
   if (distance <= 2) gain += (rng() < 0.35 ? 2 : 1) + Math.round(cStyle.power * 1.5)
   gain += rbAfterContact(carrier?.pos, cA, gain)
+  // L12.10 B0: a fullback's lead block earns a little extra on the ground (centered; no rng).
+  if (fb) {
+    const fA = mkAttrs(fb)
+    gain += Math.round(rmean('FB', 'RBK', fA.RBK ?? 70) * 0.06 + rmean('FB', 'IBL', fA.IBL ?? 70) * 0.04)
+  }
   if (yard >= 95) gain += 4
   else if (yard >= 88) gain += 2
   gain = clamp(gain, -10, 90)
