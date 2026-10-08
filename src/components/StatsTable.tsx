@@ -2,97 +2,47 @@ import { baseGroup } from '../game/data/ratingInfo'
 import { useMemo, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import type { Player, SeasonStats, StatLevel } from '../game/types'
-import { coverageGrade, mainStatValue, passerRating, seasonLine } from '../game/engine/stats'
+import { seasonLine } from '../game/engine/stats'
+import {
+  COL_COV,
+  COL_COV_TGT,
+  COL_COV_YDS,
+  COL_DEF_INT,
+  COL_GP,
+  COL_MAIN,
+  COL_PASS_ATT,
+  COL_PASS_INT,
+  COL_PASS_TD,
+  COL_PASS_YDS,
+  COL_REC,
+  COL_REC_TD,
+  COL_REC_YDS,
+  COL_RTG,
+  COL_RUSH_ATT,
+  COL_RUSH_AVG,
+  COL_RUSH_TD,
+  COL_RUSH_YDS,
+  COL_SCK,
+  COL_TCK,
+  COL_TFL,
+  COL_TGT,
+  type StatCol,
+} from './statsColumns'
 import { useGame } from '../store/gameStore'
 import { OvrBadge } from '../ui/kit'
 
 type Dir = 'asc' | 'desc'
 type SortKey = 'name' | 'pos' | 'age' | 'ovr' | `col:${string}`
 
-/** One stat column: `get` is the sort value (null = missing / zero-attempt → last). */
-interface StatCol {
-  id: string
-  label: string
-  title?: string
-  get: (s: SeasonStats | undefined, p: Player) => number | null
-  fmt: (s: SeasonStats | undefined, p: Player) => string
-}
+const QB_COLS: StatCol[] = [COL_PASS_ATT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_RTG]
 
-const num = (v: number | null | undefined) => (v == null ? '—' : String(v))
+const RB_COLS: StatCol[] = [COL_RUSH_ATT, COL_RUSH_YDS, COL_RUSH_AVG, COL_RUSH_TD, COL_REC, COL_REC_YDS]
 
-const GP_COL: StatCol = {
-  id: 'gp',
-  label: 'GP',
-  get: (s) => s?.games ?? null,
-  fmt: (s) => num(s?.games),
-}
+const WR_COLS: StatCol[] = [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_TD]
 
-const QB_COLS: StatCol[] = [
-  { id: 'att', label: 'C/ATT', get: (s) => s?.passAtt ?? null, fmt: (s) => (s ? `${s.passComp}/${s.passAtt}` : '—') },
-  { id: 'yds', label: 'YDS', get: (s) => s?.passYds ?? null, fmt: (s) => num(s?.passYds) },
-  { id: 'td', label: 'TD', get: (s) => s?.passTD ?? null, fmt: (s) => num(s?.passTD) },
-  { id: 'int', label: 'INT', get: (s) => s?.ints ?? null, fmt: (s) => num(s?.ints) },
-  {
-    id: 'rtg',
-    label: 'RTG',
-    title: 'Passer rating',
-    get: (s) => (s && s.passAtt > 0 ? passerRating(s) : null),
-    fmt: (s) => (s && s.passAtt > 0 ? passerRating(s).toFixed(1) : '—'),
-  },
-]
+const FRONT_COLS: StatCol[] = [COL_TCK, COL_TFL, COL_SCK]
 
-const RB_COLS: StatCol[] = [
-  { id: 'car', label: 'CAR', get: (s) => s?.rushAtt ?? null, fmt: (s) => num(s?.rushAtt) },
-  { id: 'yds', label: 'YDS', get: (s) => s?.rushYds ?? null, fmt: (s) => num(s?.rushYds) },
-  {
-    id: 'ypc',
-    label: 'YPC',
-    title: 'Yards per carry',
-    get: (s) => (s && s.rushAtt > 0 ? s.rushYds / s.rushAtt : null),
-    fmt: (s) => (s && s.rushAtt > 0 ? (s.rushYds / s.rushAtt).toFixed(1) : '—'),
-  },
-  { id: 'td', label: 'TD', get: (s) => s?.rushTD ?? null, fmt: (s) => num(s?.rushTD) },
-  { id: 'rec', label: 'REC', get: (s) => s?.rec ?? null, fmt: (s) => num(s?.rec) },
-  { id: 'recyds', label: 'REC YDS', get: (s) => s?.recYds ?? null, fmt: (s) => num(s?.recYds) },
-]
-
-const WR_COLS: StatCol[] = [
-  { id: 'tgt', label: 'TGT', get: (s) => s?.targets ?? null, fmt: (s) => num(s?.targets) },
-  { id: 'rec', label: 'REC', get: (s) => s?.rec ?? null, fmt: (s) => num(s?.rec) },
-  { id: 'yds', label: 'YDS', get: (s) => s?.recYds ?? null, fmt: (s) => num(s?.recYds) },
-  { id: 'td', label: 'TD', get: (s) => s?.recTD ?? null, fmt: (s) => num(s?.recTD) },
-]
-
-const FRONT_COLS: StatCol[] = [
-  { id: 'tck', label: 'TCK', get: (s) => s?.tackles ?? null, fmt: (s) => num(s?.tackles) },
-  { id: 'tfl', label: 'TFL', get: (s) => s?.tfl ?? null, fmt: (s) => num(s?.tfl) },
-  { id: 'sck', label: 'SCK', get: (s) => s?.defSacks ?? null, fmt: (s) => num(s?.defSacks) },
-]
-
-const DB_COLS: StatCol[] = [
-  { id: 'tck', label: 'TCK', get: (s) => s?.tackles ?? null, fmt: (s) => num(s?.tackles) },
-  { id: 'int', label: 'INT', get: (s) => s?.defInts ?? null, fmt: (s) => num(s?.defInts) },
-  { id: 'tgt', label: 'TGT', get: (s) => s?.defTargets ?? null, fmt: (s) => num(s?.defTargets) },
-  { id: 'ydsw', label: 'YDS ALW', get: (s) => s?.defYdsAllowed ?? null, fmt: (s) => num(s?.defYdsAllowed) },
-  {
-    id: 'cov',
-    label: 'COV',
-    title: 'Coverage grade 0–100 (passer rating allowed, INT bonus)',
-    get: (s) => (s ? coverageGrade(s) : null),
-    fmt: (s) => {
-      const g = s ? coverageGrade(s) : null
-      return g == null ? '—' : String(g)
-    },
-  },
-]
-
-const MAIN_COL: StatCol = {
-  id: 'main',
-  label: 'Main',
-  title: 'The main stat for each player’s position',
-  get: (s, p) => mainStatValue(p, s),
-  fmt: (s, p) => num(mainStatValue(p, s)),
-}
+const DB_COLS: StatCol[] = [COL_TCK, COL_DEF_INT, COL_COV_TGT, COL_COV_YDS, COL_COV]
 
 /** Columns for a stats-tab group. Empty groups (OL, K/P) fall back to GP. */
 function columnsFor(group: string): StatCol[] {
@@ -111,9 +61,9 @@ function columnsFor(group: string): StatCol[] {
     case 'S':
       return DB_COLS
     case 'ALL':
-      return [GP_COL, MAIN_COL]
+      return [COL_GP, COL_MAIN]
     default:
-      return [GP_COL]
+      return [COL_GP]
   }
 }
 
