@@ -154,7 +154,7 @@ export function DevBadge({ dev }: { dev: string }) {
 }
 
 // ── Ratings ──────────────────────────────────────────────────────────────────
-// L11.5 Q13: `pot` shows the ceiling as a muted "/80" beside the OVR badge.
+// L11.5 Q13 / L12.8: `pot` shows the ceiling as a smaller bubble beside the OVR badge, coloured by its grade.
 export function OvrBadge({ value, pot, size = 34 }: { value: number; pot?: number; size?: number }) {
   const c = gradeColor(value)
   return (
@@ -165,14 +165,20 @@ export function OvrBadge({ value, pot, size = 34 }: { value: number; pot?: numbe
       >
         {value}
       </span>
-      {pot != null && (
-        <span
-          className="font-cond font-700 tnum text-muted"
-          style={{ fontSize: Math.max(9, Math.round(size * 0.32)) }}
-        >
-          /{pot}
-        </span>
-      )}
+      {pot != null && (() => {
+        // The ceiling gets its own smaller bubble, coloured by how good it is.
+        const pc = gradeColor(pot)
+        const ps = Math.max(16, Math.round(size * 0.62))
+        return (
+          <span
+            title={`Potential (ceiling) ${pot}`}
+            className="grid shrink-0 place-items-center rounded-[5px] font-display font-700 tnum"
+            style={{ width: ps, height: ps, background: pc, color: inkOn(pc), fontSize: Math.max(9, Math.round(ps * 0.5)), opacity: 0.9 }}
+          >
+            {pot}
+          </span>
+        )
+      })()}
     </span>
   )
 }
