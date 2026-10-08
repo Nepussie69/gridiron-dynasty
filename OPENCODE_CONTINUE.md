@@ -1,42 +1,45 @@
-# Handoff — start here (any orchestrator: Claude, GPT/Codex, OpenCode)
+# Handoff — start here in a new chat (Claude, GPT/Codex or OpenCode)
 
-_Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything through the calendar + rookies merges) by Claude Opus 5.5, minutes before a usage limit. Live state below; re-check processes and git before acting. Background/workflow: `ORCHESTRATION_HANDOVER.md`._
+_Written 2026-10-08 ~20:30 AEDT by Claude Opus 5.5 for a fresh chat. Re-check processes and git before acting. Longer background: `ORCHESTRATION_HANDOVER.md`. Every user request: `PLAYTEST_BACKLOG.md` (55 rows). Long-term build order: `FUTURES.md`._
 
-## How we work now (user's standing instructions, 2026-10-08)
-- **"Keep going through all the pushes"** and **"get DeepSeek doing updates in the background so we can move fast"**: run several DeepSeek Flash pushes **in parallel, each in its own git worktree**, then verify and merge each into `main`.
-- **"Keep adding my updates into the table for DeepSeek to build on"**: every user request goes into `PLAYTEST_BACKLOG.md` (one row each) → a spec task (`NEXT_PHASE_L12_x.md`) → a push. Update the row's status when merged.
-- After each merge: give the user a **status table**. The user is playtesting on http://127.0.0.1:4173 (preview rebuilt at `aac267f` on 2026-10-08 19:05 — rebuild it when a batch is merged, see below) and sends screenshots with requests.
-- Commit trailer: name your model (Claude: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Never commit `NEXT_PHASE.md`, `.claude/`, `CLAUDE_RESUME.md`. Keep this repo separate from the CRM repo.
+## Your role and the user's standing instructions
+- You are the **orchestrator**: spec → send to DeepSeek Flash → verify → merge → rebuild the stable build → tell the user. Small UI fixes you do yourself.
+- "Keep going through all the pushes." "Get DeepSeek doing updates in the background so we can move fast" → run **several pushes in parallel, one git worktree each**.
+- "Keep adding my updates into the table" → every request becomes a row in `PLAYTEST_BACKLOG.md`, then a spec task; mark ✅ when merged.
+- "Make sure everything done is published to the stable build" / "let me know when you update the stable build" → after **every** merge rebuild 4173 and say so with the commit hash.
+- Status tables after each merge. The user playtests on **http://127.0.0.1:4173** and sends screenshots; their requests jump the `FUTURES.md` queue.
+- Commit trailer: your model (Claude: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Never commit `NEXT_PHASE.md`, `.claude/`, `CLAUDE_RESUME.md`. Keep this repo separate from the user's CRM repo.
+- At 95% plan usage: stop and update this file (memory rule).
 
-## Parallel push tooling
-- `/private/tmp/ds-wt <name> <prompt-file>` — creates worktree `…/scratchpad/wt-<name>` on new branch `wt-<name>` off `main` HEAD (symlinks node_modules), copies `~/.claude/bin/ds-push` with `REPO` pointed at it, and launches it with nohup. Log: `/private/tmp/gridiron-<name>.log` (`[push] … finished|GAVE UP` at the end, then Flash's report). Event stream: `$TMPDIR/ds-push/<name>.tryN.jsonl`.
-  Scratchpad = `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/94a3f1af-f186-4767-8ce0-d8d014f62978/scratchpad`.
-- **Merge a finished push:** read the report (`sed -n '/final report/,$p' /private/tmp/gridiron-<name>.log`), then in the worktree: `npm run build`, `npm run lint` (exactly **4 warnings**), review `git diff`; `git add -A src && git commit` there (trailer); then in main: `git merge --no-edit <branch>`; rebuild + lint + equivalence in main; update the spec progress table + verification log + `PLAYTEST_BACKLOG.md`; commit.
-- **Offline verification with the real Madden data** (jiti does NOT load it):
-  `~/.local/node/bin/node --import /private/tmp/gridiron-loader.mjs /private/tmp/gridiron-calib.mjs 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4` (≈6 s/seed; prints SIM per seed, EQUIVALENCE, SMOKE);
-  `/private/tmp/gridiron-shape.mjs <seed> <games>` prints statShape rows. Both import from the MAIN repo path (copy and change `repo` for a worktree).
-- Calibration anchors (pre-P4, 500 games): 33333 24.1/68.2%/65.2 plays/1.45 sacks/0.92 INT/4.89 ypc · 2222 24.7/67.9/65.7/1.50/1.00/4.82 · 5150 24.9/68.4/66.4/1.25/0.89/4.82. Bands ±0.4 pts, ±0.7 comp, ±1 play, ±0.15 sacks, ±0.12 INT, ±0.15 ypc.
+## Repo state
+- `main` HEAD: see `git log` (last code merge: culture `b8d5051`); stable build **4173 serves `304f68e`** (same code as main — later commits are docs/specs only). Lint baseline **exactly 4 warnings**. Dev server 5173 (user's terminal, HMR).
+- Stable build worktree: `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap`, served by `vite preview --port 4173` from the user's terminal. Rebuild:
+  `SNAP=<that path>; git -C $SNAP checkout -q --detach main && (cd $SNAP && PATH="$HOME/.local/node/bin:$PATH" npx vite build --outDir $SNAP/dist)` — then tell the user to reload. If that worktree is gone, make a new one and ask the user to restart `vite preview --outDir <wt>/dist --port 4173 --strictPort`.
+
+## Tools
+- **Parallel push:** `/private/tmp/ds-wt <name> <prompt-file>` → new worktree `…/94a3f1af-f186-4767-8ce0-d8d014f62978/scratchpad/wt-<name>` on branch `wt-<name>` off `main`, node_modules symlinked, runs a copy of `~/.claude/bin/ds-push` (DeepSeek Flash 4.1 via OpenCode; watchdog + 3 retries) under nohup. Log `/private/tmp/gridiron-<name>.log` (ends `[push] … finished` / `GAVE UP`, then Flash's report). If `/private/tmp` was cleaned: recreate it (git worktree add + `ln -s` node_modules + copy of ds-push with `REPO=` pointed at the worktree).
+- **Merge a push:** read the report; in the worktree `npm run build`, `npm run lint` (4), review `git diff`; `git add -A src && git commit` (trailer); in main `git merge --no-edit wt-<name>`; resolve conflicts keeping both sides (usual spots: `gameStore.ts` ScreenId/imports, `main.tsx` probe imports, `App.tsx`/`AppShell.tsx`, shared table props); rebuild + lint + offline checks in main; update the spec progress/verification log + backlog; commit; rebuild 4173; tell the user.
+- **Offline verification with the real Madden data** (jiti does NOT load it): `~/.local/node/bin/node --import /private/tmp/gridiron-loader.mjs /private/tmp/gridiron-calib.mjs 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4` (~6 s/seed). `/private/tmp/gridiron-shape.mjs <seed> <games>` prints statShape rows. Both import the MAIN repo; copy and change `repo` for a worktree. Browser: built-in browser pane at 5173; dev globals `__game`, `__world()`, `__simTest`, `__statShape`, `__careerSmoke`, `__gameDayEquivalence`, `__ratingSpread`, `__rookieProbe`, `__faFlowProbe`, `__skillProbe`.
+- Current calibration (500 games, 33333 / 2222 / 5150): 23.7 pts/68.2%/65.0 plays/1.39 sacks/0.91 INT/4.84 ypc · 24.5/67.6/65.3/1.49/0.94/4.80 · 24.6/68.5/66.2/1.38/0.86/4.80 (passing ~262–269 yds). Equivalence 20/20; smokes 0/0.
 
 ## Running at handoff (check `pgrep -fl ds-push`)
-| Name / branch | Worktree | Spec / task | Prompt | Notes |
-|---|---|---|---|---|
-| `playbook` / `wt-playbook` | scratchpad/wt-playbook | FUTURES #1: NEXT_PHASE_L12_10.md P1 B0–B4 (FB, route tree, playbook, sim + animation) | /private/tmp/gridiron-playbook.txt | Big; calibration bands |
-| `mastery` / `wt-mastery` | scratchpad/wt-mastery | NEXT_PHASE_L12_13.md M1–M4 playbook mastery | /private/tmp/gridiron-mastery.txt | playsim + playbook.ts; merge after culture |
-| `contracts` / `wt-contracts` | scratchpad/wt-contracts | NEXT_PHASE_L12_14.md C1–C5 fixed 2025 cap, HC asks GM, dead money | /private/tmp/gridiron-contracts.txt | pricing (approved) |
-Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
+| Name / branch | Spec | Prompt | Notes |
+|---|---|---|---|
+| `playbook` / `wt-playbook` | `NEXT_PHASE_L12_10.md` P1 B0–B4: fullback, route tree, formations × concepts playbook, sim draws from it, data-driven animation | /private/tmp/gridiron-playbook.txt | Big; calibration must hold. Since it branched I added `blitzRush` + `play.blitz` (playAnim/playsim) and the every-snap cap lift (playsim `canAsk`) — keep both on merge |
+| `mastery` / `wt-mastery` | `NEXT_PHASE_L12_13.md` M1–M4: realistic starting mastery, learning from snaps + production, relative effects for every unit | /private/tmp/gridiron-mastery.txt | playsim.ts + playbook.ts |
+| `contracts` / `wt-contracts` | `NEXT_PHASE_L12_14.md` C1–C5: **fixed 2025 cap $279.2M every season** (user: "keep it at 2025"), market sanity, dead-money fix, "Ask the GM to extend", how-it-works panel | /private/tmp/gridiron-contracts.txt | Pricing approved; culture's discount already in negotiation.ts |
+If a push ran out of steps, finish leftovers yourself or send a continuation prompt listing exactly what's done/left.
 
-## Queue (after the running pushes)
-- **NEXT: `NEXT_PHASE_REALISM.md`** (user-approved retune of existing sim constants to NFL 2015–2024) as soon as `playbook` and `culture` are merged. The old 'don't retune passing yards' block is lifted.
-**The long-term build order is `FUTURES.md` — take the top unstarted row, spec it, push it, verify, merge, rebuild 4173, tell the user, tick it.** User playtest requests jump the queue.
-- **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`): U1 game-day field (yard numbers, hashes, blue LOS + yellow first-down line, end-zone gradients, bigger dots, trails, auto-zoom, down&distance chip, result toasts) → U2 scorebug/dock → U3 design system (dark mode, depth, motion, ⌘K) → U4 screen passes. Start after the current pushes merge; U1 also after `routes`.
-0. **L12.10 full playbook** (`NEXT_PHASE_L12_10.md`) — after P5 and `routes` merge. Generic football concepts only (no EA data).
-1. **L12.8** team pages / top players / Scout a club (`NEXT_PHASE_L12_8.md`) — **after L12.5 merges** (reuses its HoverCard/PlayerHoverCard).
-2. **L12.9 P2 K1** cohesion → penalties/fumbles in the sim — **after P5 merges**.
-3. Sim record fix: extra points are pushed with `startYard: 2` in `playsim.ts` (~line 1635); should be 85 (the animation already compensates via `snapYard` in `playAnim.ts`). After P5.
-4. Update the frozen 4173 preview: `git -C …/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap checkout --detach main && (cd that dir && npm run build)` — the vite preview on 4173 serves its `dist`; tell the user to reload. (The snap worktree belongs to an older session's scratchpad; if it's gone, create a new worktree and restart `vite preview --port 4173` from the user's terminal.)
-5. After L12: write `NEXT_PHASE_L13.md` per `ROADMAP_L13_L15.md`; the user was shown 20 gameplay ideas (challenges, weather, halftime speech, primetime stakes, holdouts/tags, bye week, cap planner, analytics, press conferences, coaching tree, owner personalities, Hall of Fame + the roadmap ones) and has not picked yet.
-- Nothing blocked on the user right now (culture discount rule and the retune are both approved).
+## Queue — next, in order (user requests first)
+1. `NEXT_PHASE_L12_14.md` **C6 GM requests desk** (HC asks the GM to extend, restructure for a push, get a trade/FA target, release) — after `contracts` merges.
+2. `NEXT_PHASE_L12_15.md` **Stars are rare** (82 at 90+ today → ~25–32; monotonic OVR remap, attrs unchanged, OVR-keyed systems re-mapped, save migration) — after `contracts`.
+3. `NEXT_PHASE_REALISM.md` **NFL 2015–2024 retune (approved) + R5 missed tackles** (explicit tackle attempts, MT/FMT stats, rating realism probes) — after `playbook` + `mastery` merge.
+4. `NEXT_PHASE_L12_10.md` **P2**: B5 ratings in the animation, B6 pick formation → play on calls.
+5. `NEXT_PHASE_UI.md` **UI Broadcast 2.0** (TV field first, then scorebug, dark mode, ⌘K, screen passes).
+6. `FUTURES.md` rows 3 → 25 one by one.
+- Small known items: extra points recorded at `startYard: 2` in playsim (should be 85; animation compensates via `snapYard`); one cosmetic speed spike in the routes animation (cb0, Quick Slant); planMatrix(800) result may be in `/private/tmp/e3-plan800.log`; balance cap use reads ~0.70–0.74 (contracts push re-checks).
+- Nothing is blocked on the user.
 
-## Done today (main)
-L12 P2 `e1497f3` · game-day: jersey numbers, Space/Play, extra-point spot `10c7eb8`, live box `c34772a`, play log `ae568dd`, call every play `86b1c28` · L12 P4 `f129307` · potential bubble `3fc162e` · "Success Rate" `c3e3d00` · Stats Hub `1726392` · rookies D1–D4 `2097501` · calendar C1–C3 `983b153` (merged `7265ebb`).
-Lint baseline **4 warnings**. Guardrails as in `NEXT_PHASE_L12.md` DO NOT + no rng draws added/removed, optional save fields, canonical player objects, no new deps.
+## Done on 2026-10-08 (all on `main` and the stable build)
+L12 P2 practice/keys · P4 + P5 every rating counts (`E1_W` 1.1, `E2_W` 1.0) + `__ratingSpread` + glossary · game day: jersey numbers, Space freezes mid-play, Play after a moment, extra-point spot, live box score, past-only play log, call every play (switch rebuilds to the play on screen; every-snap modes ask every snap), blitz rushers · real route trees + smooth motion · Stats Hub · Find a Player · History · Playoff picture (NFL seeding) · team pages + Scout a club · trade desk (hover cards, find deals for their players, by position, trade block with rare stars, column filters) · rookies on the NFL scale + old-save rescale · scouting Now/Ceiling ranges · calendar (FA March, draft April) · weekly hours removed · coach Ledger + "Success Rate" · AI QB rushing · skill points · Staff & Hiring redesign · Unit Grades by position · potential bubble · player hover cards · culture (cohesion → penalties/fumbles; winning-culture discount).
+The user's rating-impact table (47/48 ratings used; RTE unused) can be regenerated from `RATING_INFO` in `src/game/data/ratingInfo.ts`.
