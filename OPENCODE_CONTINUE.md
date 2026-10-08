@@ -12,7 +12,7 @@ _Updated 2026-10-08 ~21:40 AEDT by Claude Opus 5.5 (5-hour usage 83%) for ChatGP
 - At 95% plan usage: stop and update this file (memory rule).
 
 ## Repo state
-- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 serves `3d48e7b`** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
+- `main` HEAD = `c2f6929`-or-later (see `git log`). **Stable build 4173 serves `7d96c17`** (= all merged code). Lint baseline **exactly 4 warnings**. Dev server 5173 runs in the user's terminal (HMR).
 - Stable build worktree: `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/7e69e49a-fbb2-4ed9-bfd2-53e0300ae15d/scratchpad/snap`, served by `vite preview --port 4173` from the user's terminal. Rebuild after every merge:
   `SNAP=<that path>; git -C $SNAP checkout -q --detach main && (cd $SNAP && PATH="$HOME/.local/node/bin:$PATH" npx vite build --outDir $SNAP/dist)` — then tell the user "stable build updated: 4173 serves <hash>" and what's new.
 
@@ -34,7 +34,7 @@ _Updated 2026-10-08 ~21:40 AEDT by Claude Opus 5.5 (5-hour usage 83%) for ChatGP
 | Name / branch | Spec | Prompt | Notes |
 |---|---|---|---|
 | `gmdesk` / `wt-gmdesk` | `NEXT_PHASE_L12_14.md` C6 GM requests desk | /private/tmp/gridiron-gmdesk.txt | gameStore + new UI |
-| `stars` / `wt-stars` | `NEXT_PHASE_L12_15.md` S1–S4 stars are rare (OVR remap) | /private/tmp/gridiron-stars.txt | must remap trade.ts/cap.ts OVR thresholds by rank |
+| `stars2` (in `wt-stars`, uncommitted) | `NEXT_PHASE_L12_15.md` S1–S4 implemented + verified (calib in band, 20/20, 0/0, season-1 bands exact). Continuation fixes drift: 90+ falls 28 → 11–15 by season 6 | /private/tmp/gridiron-stars2.txt (log gridiron-stars2.log) | re-run `/private/tmp/stars-verify.mjs` (prints DIST) before merging |
 | `realism` / `wt-realism` | `NEXT_PHASE_REALISM.md` R1–R3 + R5 NFL 2015–2024 retune + missed tackles | /private/tmp/gridiron-realism.txt | sim constants; calibration bands change — re-baseline after merge |
 `stars` and `realism` both affect results: merge one, re-run the other's checks in its worktree after merging main into it (or resolve on merge and re-verify).
 | `qbpay` / `wt-qbpay` | queue item 1 + 3 (QB pay to 2025 money; dead-money double count) | /private/tmp/gridiron-qbpay.txt | cap.ts fit step + deadMoney; conflicts possible with `stars` in cap.ts |
