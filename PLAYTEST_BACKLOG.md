@@ -70,6 +70,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 64 | 2026-10-08 | (Trade desk screenshot) Too easy to get a franchise QB — should be much harder, based on past NFL trades | Claude: position values (QB ×2.2 … RB ×0.7, K/P ×0.3) + starting-QB premium (85+ ×1.7, 78+ ×1.4); deal finder fills gaps with right-sized picks. Starting QBs now ~2.5–4 firsts, Mahomes not available | ✅ |
 | 65 | 2026-10-08 | Trade values seem all wrong (Garrett 99 valued below Ward 90) | Claude: new playerTradeValue — steep at the top (99 ≈ 2× a 90), young players at expected rating, smooth position-specific age decline (no cliff at 30), position value | ✅ |
 | 66 | 2026-10-08 | Don't offer same-position players in trade packages unless significantly lower value | Claude: findPackagesFor skips your players at the target's position unless worth < 60% of him | ✅ |
-| 67 | 2026-10-08 | Pay QBs closer to real 2025 money (~$55–60M top-5) | Push `qbpay` (cap fit keeps premium contracts at market; also checks dead-money double count) | 🔨 building |
+| 67 | 2026-10-08 | Pay QBs closer to real 2025 money (~$55–60M top-5) | Push `qbpay`: top-5 QB AAV $43.2M → $58.2M, cap use 0.80–0.83, dead money fixed (no double count) | ✅ merged 8a8b6cd |
 | 68 | 2026-10-08 | Make the Cap screen contract ledger sortable | Claude: every column header sorts (▲/▼), click again to flip | ✅ |
 | 69 | 2026-10-08 | Write a ChatGPT handover before 95% usage | Claude: OPENCODE_CONTINUE.md + AGENTS.md (08a896e) | ✅ |
+| 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: monitor gmdesk2 → qbpay → stars2 → realism; verify, merge, rebuild 4173 and report | 🔨 in progress |
