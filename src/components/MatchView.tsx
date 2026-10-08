@@ -121,6 +121,9 @@ export function MatchView() {
 
   // The box score follows the replay: every play up to and including the one on
   // screen, so it never shows stats from further ahead than you've watched.
+  // The play log, too: the play on screen and everything before it — never a
+  // play that hasn't been shown yet.
+  const shownPlays = useMemo(() => match?.plays.slice(0, idx + 1) ?? [], [match, idx])
   const liveBox = useMemo(() => (match ? boxScore(world, { ...match, plays: match.plays.slice(0, idx + 1) }) : undefined), [world, match, idx])
 
   // Space plays / pauses (not while typing in a field).
@@ -433,7 +436,7 @@ export function MatchView() {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {activeTab === 'plays' && (
-              <PlayLog plays={match.plays} idx={idx} world={world} onJump={jump} downText={downText} />
+              <PlayLog plays={shownPlays} idx={idx} world={world} onJump={jump} downText={downText} />
             )}
             {activeTab === 'box' && (
               <div className="p-2">
@@ -592,7 +595,6 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
                   className={cn(
                     'flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs',
                     isActive ? 'bg-white/15' : 'hover:bg-white/5',
-                    i > idx && 'opacity-45',
                   )}
                 >
                   <span className="w-14 shrink-0 pt-px font-cond text-[11px] tnum text-white/45">{downText(p) || p.type.toUpperCase()}</span>
