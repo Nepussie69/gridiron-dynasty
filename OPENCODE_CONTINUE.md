@@ -31,6 +31,7 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
 
 ## Queue (after the running pushes)
+- **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`): U1 game-day field (yard numbers, hashes, blue LOS + yellow first-down line, end-zone gradients, bigger dots, trails, auto-zoom, down&distance chip, result toasts) → U2 scorebug/dock → U3 design system (dark mode, depth, motion, ⌘K) → U4 screen passes. Start after the current pushes merge; U1 also after `routes`.
 0. **L12.10 full playbook** (`NEXT_PHASE_L12_10.md`) — after P5 and `routes` merge. Generic football concepts only (no EA data).
 1. **L12.8** team pages / top players / Scout a club (`NEXT_PHASE_L12_8.md`) — **after L12.5 merges** (reuses its HoverCard/PlayerHoverCard).
 2. **L12.9 P2 K1** cohesion → penalties/fumbles in the sim — **after P5 merges**.
