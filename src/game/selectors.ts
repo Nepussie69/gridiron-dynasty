@@ -93,14 +93,14 @@ export function recordStr(r: TeamRecord) {
 }
 
 export function sortedByPosition(players: Player[]) {
-  const order = ['QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
+  const order = ['QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
   return [...players].sort((a, b) => order.indexOf(a.pos) - order.indexOf(b.pos) || b.ovr - a.ovr)
 }
 
 export function positionNeeds(league: World, teamId: string, teams: Team[]) {
   const mine = league.roster[teamId] ?? []
   const needs: { pos: string; mine: number; league: number; gap: number }[] = []
-  const positions = ['QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
+  const positions = ['QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
   for (const pos of positions) {
     const mineAvg = avgAt(mine, pos)
     const others = teams

@@ -284,7 +284,7 @@ export function Trades() {
 
 // ── T4: find by position ─────────────────────────────────────────────────────
 
-const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
+const POSITIONS: Position[] = ['QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
 const POSITION_FILTERS: (Position | 'ALL')[] = ['ALL', ...POSITIONS]
 const MIN_OVR_OPTIONS = [60, 65, 70, 75, 80, 85, 90, 95]
 const MAX_AGE_OPTIONS: (number | 'any')[] = ['any', 26, 29, 32]

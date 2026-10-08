@@ -369,6 +369,7 @@ export function Dashboard() {
 const POSITION_GROUPS: { label: string; positions: Position[]; n: number }[] = [
   { label: 'QB', positions: ['QB'], n: 1 },
   { label: 'RB', positions: ['RB'], n: 1 },
+  { label: 'FB', positions: ['FB'], n: 1 },
   { label: 'WR', positions: ['WR'], n: 3 },
   { label: 'TE', positions: ['TE'], n: 1 },
   { label: 'OL', positions: ['OT', 'OG', 'C'], n: 5 },

@@ -19,7 +19,7 @@ const SIDES = [
   { id: 'ST', label: 'Special' },
 ] as const
 
-const POSITIONS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
+const POSITIONS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
 
 const TABS = [
   { id: 'overview', label: 'Overview' },

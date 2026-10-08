@@ -20,7 +20,7 @@ import { masteryMultiplier } from './playbook'
 import { styleProfile } from './style'
 
 const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
-  QB: 'OFF', RB: 'OFF', WR: 'OFF', TE: 'OFF', OT: 'OFF', OG: 'OFF', C: 'OFF',
+  QB: 'OFF', RB: 'OFF', FB: 'OFF', WR: 'OFF', TE: 'OFF', OT: 'OFF', OG: 'OFF', C: 'OFF',
   DE: 'DEF', DT: 'DEF', LB: 'DEF', CB: 'DEF', S: 'DEF', K: 'ST', P: 'ST',
 }
 
@@ -146,7 +146,7 @@ export function allocateTeamGame(
   }
 
   // ── Receiving ──
-  const recvs = group(world, teamId, ['WR', 'TE', 'RB'], 6, 'rec', scheme)
+  const recvs = group(world, teamId, ['WR', 'TE', 'RB', 'FB'], 6, 'rec', scheme)
   if (recvs.items.length && qb) {
     const completions = Math.round(passYds / (isNFL ? 9.6 : 10.5))
     const shares = recvs.weights

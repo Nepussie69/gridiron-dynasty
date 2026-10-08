@@ -291,7 +291,7 @@ export function rookieProjection(
 }
 
 function posSide(pos: Position): Player['side'] {
-  if (['QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C'].includes(pos)) return 'OFF'
+  if (['QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C'].includes(pos)) return 'OFF'
   if (['K', 'P'].includes(pos)) return 'ST'
   return 'DEF'
 }

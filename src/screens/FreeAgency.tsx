@@ -14,7 +14,7 @@ import { PlayerTable } from '../components/PlayerTable'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
 import { Badge, Button, Card, PageHeader, Stat } from '../ui/kit'
 
-const POS_FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
+const POS_FILTERS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
 
 /** 14 -> "14th", 1 -> "1st", &c. */
 function ordinal(n: number): string {

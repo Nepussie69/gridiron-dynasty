@@ -2733,6 +2733,16 @@ function migrateWorld(w: World): World {
   // Z1b: legacy saves can hold roster/PS/IR/free-agent players with no canonical
   // `players` entry; adopt them so development and lookups can see everyone.
   indexPlayers(w)
+  // L12.10 B0: a legacy save's utility/blocking backs become fullbacks, once.
+  if (!w.fbMigrated) {
+    for (const p of w.players) {
+      if (p.pos === 'RB' && (p.traits ?? []).some((t) => /Utility|Blocking/i.test(t))) {
+        p.pos = 'FB'
+        p.side = 'OFF'
+      }
+    }
+    w.fbMigrated = true
+  }
   w.staffTenure ??= {}
   w.draft ??= []
   w.draftPicks ??= []
@@ -3930,7 +3940,7 @@ export function faFlowProbe() {
   const aiTeamId = clone.teams.find((t) => t.tier === 'NFL' && t.id !== userTeamId)?.id ?? userTeamId
   // Prefer an offensive starter: the weekly allocator builds offensive box lines
   // from the depth chart, so the signed player's snaps are visible immediately.
-  const OFF_SKILL: Position[] = ['QB', 'RB', 'WR', 'TE']
+  const OFF_SKILL: Position[] = ['QB', 'RB', 'FB', 'WR', 'TE']
   const releaseStarter = (teamId: string): { p: Player; from: string } | null => {
     const roster = clone.roster[teamId] ?? []
     const skill = roster.filter((p) => OFF_SKILL.includes(p.pos))

@@ -17,6 +17,7 @@ import type { Position } from '../game/types'
 const POSITION_GROUPS: { label: string; positions: Position[] }[] = [
   { label: 'QB', positions: ['QB'] },
   { label: 'RB', positions: ['RB'] },
+  { label: 'FB', positions: ['FB'] },
   { label: 'WR', positions: ['WR'] },
   { label: 'TE', positions: ['TE'] },
   { label: 'OL', positions: ['OT', 'OG', 'C'] },

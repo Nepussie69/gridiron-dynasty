@@ -15,25 +15,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Play } from '../game/engine/playsim'
+import { ROUTES, type RouteDef, type WP } from '../game/data/routes'
+import { formationForConcept, formationHasFullback, playbookPlay, treeFor } from '../game/data/playbookData'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
 export const MID_Y = 26.65
 
-export interface WP {
-  t: number
-  x: number
-  y: number
-  /**
-   * Ease into this waypoint: leave the previous one from rest and reach full
-   * speed (used only on an actor's first moving segment).
-   */
-  easeIn?: boolean
-  /** Ease out of the previous waypoint, settling to rest here (last moving segment). */
-  easeOut?: boolean
-  /** Opt out of automatic easing on this waypoint (used for long, even-speed runs). */
-  lock?: boolean
-}
+export type { WP, RouteDef }
 
 export interface Actor {
   key: string
@@ -197,11 +186,12 @@ interface Formation {
   [key: string]: { x: number; y: number; side: 'off' | 'def'; role: string }
 }
 
-function formation(los: number): Formation {
+function formation(los: number, fb = false): Formation {
   const f: Formation = {}
   ;[-2.6, -1.3, 0, 1.3, 2.6].forEach((d, i) => (f[`ol${i}`] = { x: los - 0.6, y: MID_Y + d, side: 'off', role: 'OL' }))
   f.qb = { x: los - 5, y: MID_Y, side: 'off', role: 'QB' }
   f.rb = { x: los - 7, y: MID_Y + 2.5, side: 'off', role: 'RB' }
+  if (fb) f.fb = { x: los - 8.5, y: MID_Y + 0.8, side: 'off', role: 'FB' }
   f.wr0 = { x: los - 0.6, y: 5, side: 'off', role: 'WR' }
   f.wr1 = { x: los - 0.6, y: 48.3, side: 'off', role: 'WR' }
   f.wr2 = { x: los - 1.2, y: 13, side: 'off', role: 'SLOT' }
@@ -260,7 +250,8 @@ function startPaths(f: Formation, t0 = 0.08): Record<string, WP[]> {
 }
 
 function finish(f: Formation, paths: Record<string, WP[]>, rest: Omit<PlayAnim, 'actors'>): PlayAnim {
-  const actors: Actor[] = [...OFF_KEYS, ...DEF_KEYS].map((k) => {
+  const keys = [...OFF_KEYS, ...(f.fb ? ['fb'] : []), ...DEF_KEYS]
+  const actors: Actor[] = keys.map((k) => {
     const p = paths[k].slice()
     compact(p)
     return { key: k, side: f[k].side, role: f[k].role, path: p }
@@ -293,7 +284,7 @@ export function buildPlayAnim(play: Play, ctx: AnimContext = {}): PlayAnim {
 
 function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const los = 10 + play.startYard
-  const f = formation(los)
+  const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
   const p = startPaths(f)
   const seed = play.n * 7 + play.startYard
   const qbRun = !!ctx.carrierIsQB || /QB Draw|Scramble|Sneak/.test(play.concept)
@@ -310,6 +301,8 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   for (let i = 0; i < 4; i++) p[`dl${i}`].push({ t: 0.35, x: los + 0.6, y: f[`dl${i}`].y + side * 0.6 })
   // Receivers block downfield.
   ;['wr0', 'wr1', 'wr2', 'te'].forEach((k, i) => p[k].push({ t: 0.45, x: f[k].x + 4 + i, y: f[k].y + (MID_Y - f[k].y) * 0.15 }))
+  // A fullback leads into the hole on a two-back run.
+  if (p.fb) p.fb.push({ t: 0.3, x: los - 1, y: MID_Y + (holeY - MID_Y) * 0.6 }, { t: 0.5, x: los + 1.5, y: holeY + side * 1.2 })
 
   const handT = qbRun ? 0.1 : 0.2
   const holeT = 0.42
@@ -389,80 +382,21 @@ export function targetKey(play: Play, ctx: AnimContext): string {
 }
 
 // ── route tree ───────────────────────────────────────────────────────────────
-/**
- * A route shape in the offense frame. `depth` is its characteristic air depth
- * (used to pick which route the target should run). `wps` builds waypoints up to
- * time T: inw is +1 toward the middle of the field, out is the opposite, side is
- * a seeded lateral direction for flats / crossers.
- */
-interface RouteDef {
-  depth: number
-  wps: (y: number, L: number, T: number, inw: number, out: number, side: number) => WP[]
-}
-
-const ROUTES: Record<string, RouteDef> = {
-  // short / quick game
-  slant: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.12, x: L + 1.5, y }, { t: T, x: L + 5, y: y + inw * 4.5 }] },
-  quickOut: { depth: 4, wps: (y, L, T, _inw, out) => [{ t: 0.16, x: L + 3, y }, { t: T, x: L + 4.5, y: y + out * 4 }] },
-  stick: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 5, y }, { t: T, x: L + 5.5, y: y + inw * 1.5 }] },
-  flat: { depth: 1, wps: (y, L, T, _inw, _out, side) => [{ t: 0.14, x: L - 5, y }, { t: 0.3, x: L - 1, y: y + side * 4 }, { t: T, x: L + 2, y: y + side * 7 }] },
-  check: { depth: 3, wps: (y, L, T, inw) => [{ t: 0.14, x: L - 5, y }, { t: 0.32, x: L - 2, y }, { t: T, x: L + 3, y: y + inw * 2 }] },
-  bubble: { depth: 2, wps: (y, L, T, _inw, out) => [{ t: 0.11, x: L + 0.5, y }, { t: 0.26, x: L + 0.4, y: y + out * 3.5 }, { t: T, x: L + 2.5, y: y + out * 5 }] },
-  // intermediate
-  hitch: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 2, y }, { t: 0.34, x: L + 6, y }, { t: T, x: L + 5.5, y: y + inw * 1.5 }] },
-  curl: { depth: 12, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.4, x: L + 12, y }, { t: T, x: L + 11, y: y + inw * 1.5 }] },
-  dig: { depth: 12, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.38, x: L + 12, y }, { t: T, x: L + 15, y: y + inw * 9 }] },
-  corner: { depth: 18, wps: (y, L, T, _inw, out) => [{ t: 0.14, x: L + 3, y }, { t: 0.4, x: L + 12, y }, { t: T, x: L + 24, y: y + out * 9 }] },
-  comeback: { depth: 13, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.42, x: L + 14, y }, { t: T, x: L + 11, y: y + inw * 2 }] },
-  glance: { depth: 8, wps: (y, L, T, inw) => [{ t: 0.13, x: L + 2, y }, { t: 0.34, x: L + 5, y }, { t: T, x: L + 9, y: y + inw * 4 }] },
-  cross: { depth: 14, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 2, y }, { t: 0.34, x: L + 9, y }, { t: T, x: L + 15, y: y - inw * 17 }] },
-  drag: { depth: 6, wps: (y, L, T, _inw, _out, side) => [{ t: 0.14, x: L + 1, y }, { t: 0.34, x: L + 4, y }, { t: T, x: L + 6, y: y + side * 12 }] },
-  meshIn: { depth: 5, wps: (y, L, T, inw) => [{ t: 0.13, x: L + 2, y }, { t: T, x: L + 5, y: y - inw * 9 }] },
-  // deep
-  seam: { depth: 22, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 4, y }, { t: 0.42, x: L + 16, y: y + inw * 1.5 }, { t: T, x: L + 25, y: y + inw * 2.5 }] },
-  post: { depth: 25, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.4, x: L + 14, y }, { t: T, x: L + 30, y: y + inw * 9 }] },
-  over: { depth: 28, wps: (y, L, T, inw) => [{ t: 0.14, x: L + 3, y }, { t: 0.42, x: L + 17, y }, { t: T, x: L + 31, y: y + inw * 10 }] },
-  go: { depth: 30, wps: (y, L, T, _inw, out) => [{ t: 0.14, x: L + 4, y }, { t: 0.42, x: L + 18, y: y + out * 1.5 }, { t: T, x: L + 34, y: y + out * 3 }] },
-  // backfield / blocking
-  swing: { depth: 1, wps: (y, L, T, _inw, _out, side) => [{ t: 0.12, x: L - 7, y }, { t: 0.3, x: L - 6, y: y + side * 6 }, { t: T, x: L - 3, y: y + side * 8 }] },
-  stalk: { depth: 0, wps: (y, L, T, _inw, out) => [{ t: 0.16, x: L + 2, y }, { t: T, x: L + 6, y: y + out * 0.5 }] },
-  runFake: { depth: 0, wps: (y, L, T, _inw, _out, side) => [{ t: 0.14, x: L - 4, y: y + side * 3 }, { t: 0.3, x: L + 0.5, y: y + side * 5 }, { t: T, x: L + 0.5, y: y + side * 5 }] },
-  block: { depth: 0, wps: (y, L, T, inw) => [{ t: 0.14, x: L - 4, y }, { t: T, x: L - 0.5, y: y + inw * 2 }] },
-}
+// The route shapes live in `src/game/data/routes.ts` and the per-concept
+// assignments in `src/game/data/playbookData.ts`. Any play in the book animates
+// from its own assignments; an unknown concept falls back to a standard tree.
 
 /** Route per receiver key for a concept. Every concept defines all five keys. */
 function conceptTree(concept: string, rollSide: number): Record<string, string> {
-  switch (concept) {
-    case 'Quick Slant':
-    case 'Slant':
-      return { wr0: 'slant', wr1: 'slant', wr2: 'quickOut', te: 'stick', rb: 'flat' }
-    case 'Mesh':
-      return { wr0: 'curl', wr1: 'curl', wr2: 'meshIn', te: 'meshIn', rb: 'flat' }
-    case 'Smash':
-      return { wr0: 'hitch', wr1: 'hitch', wr2: 'corner', te: 'dig', rb: 'check' }
-    case 'Four Verts':
-    case 'Four Verticals':
-      return { wr0: 'go', wr1: 'go', wr2: 'seam', te: 'seam', rb: 'check' }
-    case 'Y-Cross':
-      return { wr0: 'post', wr1: 'go', wr2: 'dig', te: 'cross', rb: 'check' }
-    case 'PA Cross':
-      return { wr0: 'post', wr1: 'go', wr2: 'dig', te: 'cross', rb: 'runFake' }
-    case 'Play Action Deep':
-      return { wr0: 'post', wr1: 'go', wr2: 'seam', te: 'seam', rb: 'runFake' }
-    case 'Bootleg': {
-      const roll = rollSide < 0 ? 'wr0' : 'wr1'
-      const back = rollSide < 0 ? 'wr1' : 'wr0'
-      return { [roll]: 'comeback', [back]: 'over', wr2: 'stick', te: 'drag', rb: 'block' }
-    }
-    case 'RB Screen':
-      return { wr0: 'stalk', wr1: 'stalk', wr2: 'stalk', te: 'block', rb: 'swing' }
-    case 'RPO Bubble':
-      return { wr0: 'stalk', wr1: 'stalk', wr2: 'bubble', te: 'block', rb: 'runFake' }
-    case 'RPO Pass':
-      return { wr0: 'go', wr1: 'stalk', wr2: 'glance', te: 'block', rb: 'runFake' }
-    default:
-      return { wr0: 'slant', wr1: 'go', wr2: 'quickOut', te: 'dig', rb: 'check' }
+  const play = playbookPlay(concept)
+  const tree = play ? treeFor(play) : {}
+  if (concept === 'Bootleg') {
+    const roll = rollSide < 0 ? 'wr0' : 'wr1'
+    const back = rollSide < 0 ? 'wr1' : 'wr0'
+    return { [roll]: tree.wr0 ?? 'comeback', [back]: tree.wr1 ?? 'over', wr2: tree.wr2 ?? 'stick', te: tree.te ?? 'drag', rb: tree.rb ?? 'block' }
   }
+  const fallback = { wr0: 'slant', wr1: 'go', wr2: 'quickOut', te: 'dig', rb: 'check' }
+  return Object.keys(tree).length ? { ...fallback, ...tree } : fallback
 }
 
 /** A defender trailing a receiver: sample his path at several times, offset off him. */
@@ -476,7 +410,7 @@ function trailTo(p: Record<string, WP[]>, def: string, recv: WP[], from: number,
 
 function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const los = 10 + play.startYard
-  const f = formation(los)
+  const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
   const p = startPaths(f)
   const seed = play.n * 11 + play.startYard
   const depth = Math.max(-2, Math.min(45, play.passDepth ?? 8))
@@ -566,6 +500,8 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       p[k].push({ t: 1, x: clampX(b.x + (dx / len) * 2.5), y: clampY(b.y + (dy / len) * 2.5) })
     }
   }
+  // A fullback stays in to protect, then leaks to the flat.
+  if (p.fb) p.fb.push({ t: 0.3, x: los - 3, y: MID_Y + 1 }, { t: Math.min(0.7, catchT), x: los - 1, y: MID_Y + side * 4 })
   const catchPt = posAt(p[tgt], catchT)
 
   // Coverage: corners trail the outside receivers, linebackers drop and jump
