@@ -52,6 +52,7 @@ import type { JobOffer } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { CareerRhythm } from '../components/CareerRhythm'
 import { CareerPeople } from '../components/CareerPeople'
+import { GmRequestsDesk } from '../components/GmRequestsDesk'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { AmbitionsCard } from '../components/AmbitionsCard'
 import { LegacyCard } from '../components/LegacyCard'
@@ -261,6 +262,7 @@ export function Career() {
           </div>
           <div className="space-y-4">
             <WeeklyChecklist />
+            <GmRequestsDesk />
             <Card>
               <div className="label mb-1">Your job this week</div>
               <p className="text-sm font-600 text-ink">

@@ -6,6 +6,7 @@ import { fitLabel, schemeFit } from '../game/engine/style'
 import { careerTotals, coverageGrade, seasonLine } from '../game/engine/stats'
 import { experienceLabel } from '../game/engine/progress'
 import { canAskGm, gmAskCovers } from '../game/engine/gmAsk'
+import { gmTargetNeed, monthKeyOf } from '../game/engine/gmDesk'
 import { useGame, useWorld } from '../store/gameStore'
 import { ContractExplainer } from './ContractExplainer'
 import { Badge, Button, DevBadge, MiniBars, OvrBadge, RatingBar, TeamCrest } from '../ui/kit'
@@ -198,7 +199,7 @@ export function PlayerProfile() {
             </div>
           </div>
 
-          <GmExtensionPanel player={player} />
+          <GmRequestPanel player={player} />
 
           <div className="flex gap-2">
             <Button className="flex-1">Trade Block</Button>
@@ -210,45 +211,97 @@ export function PlayerProfile() {
 }
 
 /**
- * L12.14 C4: a play-caller can ask the AI GM to extend one of his own players
- * (once per season). The panel shows the button for eligible rungs and the C5
- * explainer with the player's live contract numbers.
+ * L12.14 C4 + C6: the coach cannot sign, trade, cut or restructure — he asks
+ * the GM. One panel covers the three contexts a player profile can be in:
+ * one of your own (extend / release / protect), another club's (go get him),
+ * or a free agent (sign him). The C5 explainer closes it out.
  */
-function GmExtensionPanel({ player }: { player: Player }) {
+function GmRequestPanel({ player }: { player: Player }) {
   const career = useGame((s) => s.career)!
   const league = useWorld()
   const askGmToExtend = useGame((s) => s.askGmToExtend)
-  if (player.teamId !== career.teamId) return null
+  const requestGmTrade = useGame((s) => s.requestGmTrade)
+  const requestGmSignFreeAgent = useGame((s) => s.requestGmSignFreeAgent)
+  const requestGmRelease = useGame((s) => s.requestGmRelease)
+  const requestGmRestructure = useGame((s) => s.requestGmRestructure)
+  const toggleGmUntouchable = useGame((s) => s.toggleGmUntouchable)
 
-  const canAsk = canAskGm(career)
-  const covers = canAsk && gmAskCovers(career, player.pos)
-  const asked = career.gmAsks?.[player.id] === league.season
-  const eligible = player.contract.years <= 2
+  if (!canAskGm(career)) return null
+
+  const mine = player.teamId === career.teamId
+  const freeAgent = !player.teamId
+  const covers = gmAskCovers(career, player.pos)
+  const asked = career.gmRequestLog?.[player.id] === monthKeyOf(league.season, league.week)
+  const untouchables = career.gmUntouchables ?? []
+  const untouchable = untouchables.includes(player.id)
+  const eligibleExt = mine && player.contract.years <= 2
 
   return (
     <div className="rounded-xl border border-line bg-surface p-4">
-      {canAsk && <div className="label mb-2">Ask the GM to extend</div>}
-      {covers ? (
+      <div className="label mb-2">Ask the GM</div>
+      {!covers ? (
+        <p className="text-xs leading-relaxed text-muted">Coordinators only get a say on their side of the ball.</p>
+      ) : (
         <>
           <p className="mb-3 text-xs leading-relaxed text-muted">
-            {eligible
-              ? "Send a recommendation to the front office. The GM decides from the player's value, the cap room the deal leaves, your standing and the owner's mandate — and negotiates at market."
-              : `${player.name} has ${player.contract.years} years left. The GM only extends players with two or fewer.`}
+            {mine
+              ? 'Send the front office a recommendation. The GM decides from value, the room the deal leaves, your standing and the owner\u2019s mandate.'
+              : freeAgent
+                ? 'The GM bids at market when the space after the bid clears his reserve.'
+                : 'The GM shops a package, protecting your untouchables and your side\u2019s starters.'}
           </p>
-          <Button
-            variant="team"
-            className="w-full"
-            disabled={asked || !eligible}
-            onClick={() => askGmToExtend(player.id)}
-          >
-            {asked ? 'Asked this season' : 'Ask the GM to extend'}
-          </Button>
+          <div className="flex flex-wrap gap-1.5">
+            {mine && (
+              <Button
+                variant="team"
+                size="sm"
+                disabled={asked || !eligibleExt}
+                title={eligibleExt ? undefined : `${player.contract.years} years left — the GM only extends players with two or fewer.`}
+                onClick={() => askGmToExtend(player.id)}
+              >
+                {eligibleExt ? 'Extend' : 'No extension'}
+              </Button>
+            )}
+            {mine && (
+              <Button variant="danger" size="sm" disabled={asked} onClick={() => requestGmRelease(player.id)}>
+                Release
+              </Button>
+            )}
+            {mine && (
+              <Button
+                variant={untouchable ? 'primary' : 'ghost'}
+                size="sm"
+                disabled={!untouchable && untouchables.length >= 3}
+                title={untouchable ? 'Remove trade protection' : 'Never offer him in a trade (max 3)'}
+                onClick={() => toggleGmUntouchable(player.id)}
+              >
+                {untouchable ? 'Untouchable \u2713' : 'Untouchable'}
+              </Button>
+            )}
+            {!mine && !freeAgent && (
+              <Button variant="team" size="sm" disabled={asked} onClick={() => requestGmTrade(player.id)}>
+                Go get him
+              </Button>
+            )}
+            {freeAgent && (
+              <Button variant="team" size="sm" disabled={asked} onClick={() => requestGmSignFreeAgent(player.id)}>
+                Sign him
+              </Button>
+            )}
+            {!mine && (gmTargetNeed(league, career, player.id) ?? 0) > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Ask the GM to restructure to clear room for him"
+                onClick={() => requestGmRestructure(player.id)}
+              >
+                Clear cap for him
+              </Button>
+            )}
+          </div>
+          {asked && <p className="mt-2 text-[11px] text-faint">Already asked the GM about him this month.</p>}
         </>
-      ) : canAsk ? (
-        <p className="mb-3 text-xs leading-relaxed text-muted">
-          Coordinators only get a say on their side of the ball.
-        </p>
-      ) : null}
+      )}
       <ContractExplainer player={player} className="mt-3 border-t border-line pt-3" />
     </div>
   )

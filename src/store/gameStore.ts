@@ -115,18 +115,18 @@ import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
 import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
-import { canInstall, installBonus } from '../game/engine/install'
+import { canInstall, installBonus, installSides } from '../game/engine/install'
 import { canPractice, practiceEdge, practiceInjuryMult, practiceIsRest, practiceMasteryMult, PRACTICE_OPTIONS, type PracticePlan } from '../game/engine/practice'
 import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId, type KeyGrade } from '../game/engine/keys'
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
-import { evaluateTrade, executeTrade, findDeals, type TradeAsset } from '../game/engine/trade'
+import { evaluateTrade, executeTrade, findDeals, findPackagesFor, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
-import { STARTERS, depthAt, depthGroup, moveInDepth, resetDepth, setStarterInDepth } from '../game/engine/depth'
+import { STARTERS, depthAt, depthGroup, moveInDepth, resetDepth, setStarterInDepth, topPlayers } from '../game/engine/depth'
 import { attributesFor } from '../game/data/ratings'
 import {
   advanceContacts,
@@ -150,6 +150,21 @@ import { MAX_SHADOW, canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBo
 import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../game/engine/negotiation'
 import { cultureDiscountFor } from '../game/engine/culture'
 import { canAskGm, gmAskCovers, gmExtendDecision, gmOffer, type GmAskResult } from '../game/engine/gmAsk'
+import {
+  gmDeskView,
+  contendView,
+  gmReleaseDecision,
+  gmRestructureDecision,
+  gmRestructureTargets,
+  gmSignDecision,
+  gmTargetPos,
+  gmTradeDecision,
+  monthKeyOf,
+  protectedPlayers,
+  GM_REQUEST_LABEL,
+  type GmRequestOutcome,
+  type GmRequestResult,
+} from '../game/engine/gmDesk'
 import { canFileMemo, gradeCapMemo } from '../game/engine/capMemo'
 import {
   SKILL_KEYS,
@@ -532,6 +547,16 @@ interface GameStore {
   offerExtension: (playerId: string, offer: ExtensionOffer) => void
   /** L12.14 C4: a coach asks the AI GM to extend a player (once per season). */
   askGmToExtend: (playerId: string) => GmAskResult | null
+  /** L12.14 C6: ask the AI GM to restructure 1–3 big deals to clear cap for a named target. */
+  requestGmRestructure: (targetId?: string) => GmRequestResult | null
+  /** L12.14 C6: ask the GM to trade for another club's player. */
+  requestGmTrade: (playerId: string) => GmRequestResult | null
+  /** L12.14 C6: ask the GM to sign a free agent at market. */
+  requestGmSignFreeAgent: (playerId: string) => GmRequestResult | null
+  /** L12.14 C6: ask the GM to release one of your players. */
+  requestGmRelease: (playerId: string) => GmRequestResult | null
+  /** L12.14 C6: protect a player from being offered in GM trade talks (max 3). */
+  toggleGmUntouchable: (playerId: string) => void
   /** L12.11: spend one unspent skill point for +2 in a skill (max 99). */
   spendSkillPoint: (skill: keyof Skills) => void
   /** G1: add/remove a non-own player from the shadow board (proScout rungs). */
@@ -625,6 +650,56 @@ function applyPassiveGains(career: CareerState, world: World): CareerState {
     room = { ...base, reps: Math.min(17, (base.reps ?? 0) + 1) }
   }
   return { ...career, reputation: rep, skills, jobSecurity, passiveBank: bank, ...(room ? { room } : {}) }
+}
+
+// ── L12.14 C6: the GM requests desk helpers ──────────────────────────────────
+
+/** Why a request can't be filed right now, or null when it's allowed. */
+function gmRequestGate(career: CareerState, pos: Position | null, playerId: string | null): string | null {
+  if (!canAskGm(career)) return 'Only the head coach or a play-caller can ask the GM.'
+  if (pos && !gmAskCovers(career, pos)) return 'Coordinators can only ask about their side of the ball.'
+  const key = monthKeyOf(world.season, world.week)
+  if (playerId && career.gmRequestLog?.[playerId] === key) {
+    return 'You already asked the GM about him this month.'
+  }
+  const open = (career.gmRequests ?? []).filter((r) => monthKeyOf(r.season, r.week) === key).length
+  if (open >= 3) return 'You already have three requests on the GM\u2019s desk this month.'
+  return null
+}
+
+/** Record an answered request on the career, the coaching Ledger and the inbox. */
+function recordGmRequest(career: CareerState, result: GmRequestResult, player?: Player): CareerState {
+  const key = monthKeyOf(world.season, world.week)
+  const name = result.playerName ?? player?.name ?? 'the club'
+  const requests = [
+    ...(career.gmRequests ?? []),
+    {
+      season: world.season,
+      week: world.week,
+      kind: result.kind,
+      playerId: result.playerId ?? player?.id,
+      name,
+      outcome: result.outcome,
+      message: result.message,
+    },
+  ].slice(-40)
+  const log = player ? { ...(career.gmRequestLog ?? {}), [player.id]: key } : career.gmRequestLog
+  const next: CareerState = { ...career, gmRequests: requests, gmRequestLog: log }
+  const label = result.outcome === 'done' ? 'Agreed' : result.outcome === 'notNow' ? 'Not now' : 'Declined'
+  pushLedger(next, {
+    kind: 'gmRequest',
+    playerId: result.playerId ?? player?.id,
+    name,
+    pos: player?.pos ?? '—',
+    college: '—',
+    ovrAtSign: player?.ovr,
+    requestKind: result.kind,
+    requestDone: result.outcome === 'done',
+    teamId: career.teamId,
+    note: `${GM_REQUEST_LABEL[result.kind]} — ${label}: ${result.message}`,
+  })
+  pushCareerNews(world, next, { category: 'Roster', headline: result.headline ?? `GM: ${label} — ${name}`, body: result.message })
+  return next
 }
 
 export const useGame = create<GameStore>((set, get) => ({
@@ -2167,11 +2242,27 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('The GM only extends players with two years or fewer left.')
       return null
     }
+    // C4 keeps its once-per-season rule; C6's gate then enforces the monthly
+    // slot and the one-request-per-player-per-month cap.
     if (career.gmAsks?.[playerId] === world.season) {
       get().showToast(`You already asked the GM about ${p.name} this season.`)
       return null
     }
+    const blocked = gmRequestGate(career, p.pos, playerId)
+    if (blocked) {
+      get().showToast(blocked)
+      return null
+    }
     const result = gmExtendDecision(world, career, p)
+    const outcome: GmRequestOutcome = result.outcome === 'extends' ? 'done' : result.outcome === 'declined' ? 'declined' : 'notNow'
+    const gmResult: GmRequestResult = {
+      kind: 'extend',
+      outcome,
+      reason: result.reason,
+      message: result.message,
+      playerId: p.id,
+      playerName: p.name,
+    }
     const asks = { ...(career.gmAsks ?? {}), [playerId]: world.season }
     let nextCareer: CareerState = { ...career, gmAsks: asks }
     if (result.outcome === 'extends') {
@@ -2180,31 +2271,169 @@ export const useGame = create<GameStore>((set, get) => ({
         ...nextCareer,
         gmExtensions: [...(nextCareer.gmExtensions ?? []), { playerId: p.id, season: world.season, name: p.name }],
       }
-      pushLedger(career, {
-        kind: 'contract',
-        playerId: p.id,
-        name: p.name,
-        pos: p.pos,
-        college: '—',
-        aav: result.aav,
-        ovrAtSign: p.ovr,
-        note: `Asked the GM: extended ${p.name}: ${result.years} yrs, ${money(result.aav)}/yr`,
-      })
-      pushCareerNews(world, nextCareer, {
-        category: 'Roster',
-        headline: `GM extended ${p.name}: ${result.years} yrs / ${money(result.total)}`,
-        body: `Your push got it done. ${p.name} (${p.pos}, age ${p.age}) signs for ${result.years} years, ${money(result.aav)}/yr.`,
-      })
+      gmResult.message = `The GM extended ${p.name}: ${result.years} yrs / ${money(result.total)} (${money(result.aav)}/yr).`
+      gmResult.headline = `GM extended ${p.name}: ${result.years} yrs / ${money(result.total)}`
       get().showToast(`GM extended ${p.name}: ${result.years} yrs / ${money(result.total)}.`)
     } else {
-      const label = result.outcome === 'declined' ? 'GM declined' : 'GM: not now'
-      pushCareerNews(world, nextCareer, { category: 'Roster', headline: `${label} — ${p.name}`, body: result.message })
       get().showToast(result.message)
     }
+    // One common mechanism records every outcome: gmRequests, the inbox and the
+    // coaching Ledger. No bespoke duplicate ledger/news entry here.
+    nextCareer = recordGmRequest(nextCareer, gmResult, p)
     set({ career: nextCareer })
     bump(set, get)
     get().save()
     return result
+  },
+
+  requestGmRestructure: (targetId) => {
+    const career = get().career
+    if (!career) return null
+    // C6 needs a named target: don't burn a monthly slot on an empty ask. The
+    // coordinator side check uses the named target's position, so a coordinator
+    // can't clear space for a player on the other side of the ball.
+    if (!targetId) {
+      get().showToast("Pick a target first — the GM only restructures for a named move.")
+      return null
+    }
+    const blocked = gmRequestGate(career, gmTargetPos(world, career, targetId), null)
+    if (blocked) {
+      get().showToast(blocked)
+      return null
+    }
+    const result = gmRestructureDecision(world, career, targetId)
+    if (result.outcome === 'done' && result.plan) {
+      for (const id of result.plan.restructureIds) {
+        const p = (world.roster[career.teamId] ?? []).find((x) => x.id === id)
+        if (p) p.contract = restructure(p.contract)
+      }
+    }
+    let next = recordGmRequest(career, result)
+    if (result.outcome === 'done') next = { ...next, gmRestructureSeason: world.season }
+    set({ career: next })
+    bump(set, get)
+    get().showToast(result.message)
+    get().save()
+    return result
+  },
+
+  requestGmTrade: (playerId) => {
+    const career = get().career
+    if (!career) return null
+    const target = world.players.find((p) => p.id === playerId)
+    const blocked = gmRequestGate(career, target?.pos ?? null, playerId)
+    if (blocked) {
+      get().showToast(blocked)
+      return null
+    }
+    const result = gmTradeDecision(world, career, playerId)
+    let nextCareer = career
+    if (result.outcome === 'done' && result.offer) {
+      const { partnerId, give, get: get2 } = result.offer
+      const rec = recordTrade(world, career, partnerId, give, get2)
+      const log = executeTrade(world, career.teamId, partnerId, give, get2)
+      result.moved = log
+      for (const a of get2) {
+        if (a.kind !== 'player') continue
+        const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
+        if (!p) continue
+        p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
+        if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
+      }
+      nextCareer = { ...career, trades: [...(career.trades ?? []), rec].slice(-60) }
+    }
+    const saved = recordGmRequest(nextCareer, result, target)
+    set({ career: saved })
+    bump(set, get)
+    get().showToast(result.message)
+    get().save()
+    return result
+  },
+
+  requestGmSignFreeAgent: (playerId) => {
+    const career = get().career
+    if (!career) return null
+    const p = world.freeAgents.find((x) => x.id === playerId)
+    const blocked = gmRequestGate(career, p?.pos ?? null, playerId)
+    if (blocked) {
+      get().showToast(blocked)
+      return null
+    }
+    const disc = p ? cultureDiscountFor(world, statDb, career.teamId, p).pct : 0
+    const result = gmSignDecision(world, career, playerId, disc)
+    if (result.outcome === 'done' && p) {
+      if (result.plan) {
+        for (const id of result.plan.restructureIds) {
+          const q = (world.roster[career.teamId] ?? []).find((x) => x.id === id)
+          if (q) q.contract = restructure(q.contract)
+        }
+      }
+      const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, 1, disc)
+      world.freeAgents.splice(world.freeAgents.indexOf(p), 1)
+      p.teamId = career.teamId
+      p.contract = contract
+      p.origin = { kind: 'freeAgent', season: world.season, by: career.gmName, fromTeamId: null }
+      if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
+      ;(world.roster[career.teamId] ??= []).push(p)
+      ledgerFreeAgent(world, career.teamId, 'gained', p.ovr)
+    }
+    const saved = recordGmRequest(career, result, p)
+    set({ career: saved })
+    bump(set, get)
+    get().showToast(result.message)
+    get().save()
+    return result
+  },
+
+  requestGmRelease: (playerId) => {
+    const career = get().career
+    if (!career) return null
+    const roster = world.roster[career.teamId] ?? []
+    const p = roster.find((x) => x.id === playerId)
+    const blocked = gmRequestGate(career, p?.pos ?? null, playerId)
+    if (blocked) {
+      get().showToast(blocked)
+      return null
+    }
+    const result = gmReleaseDecision(world, career, playerId)
+    if (result.outcome === 'done' && p) {
+      const idx = roster.findIndex((x) => x.id === playerId)
+      const dead = deadMoney(p.contract)
+      world.deadMoney[career.teamId] = (world.deadMoney[career.teamId] ?? 0) + dead
+      roster.splice(idx, 1)
+      p.teamId = null
+      const original = { ...p.contract }
+      p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+      if (world.phase === 'regular') placeOnWaivers(world, p, career.teamId, original, dead)
+      else world.freeAgents.push(p)
+    }
+    const saved = recordGmRequest(career, result, p)
+    set({ career: saved })
+    bump(set, get)
+    get().showToast(result.message)
+    get().save()
+    return result
+  },
+
+  toggleGmUntouchable: (playerId) => {
+    const career = get().career
+    if (!career || !canAskGm(career)) return
+    const rosterIds = new Set((world.roster[career.teamId] ?? []).map((p) => p.id))
+    const current = (career.gmUntouchables ?? []).filter((id) => rosterIds.has(id))
+    let next: string[]
+    if (current.includes(playerId)) {
+      next = current.filter((id) => id !== playerId)
+    } else if (rosterIds.has(playerId)) {
+      if (current.length >= 3) {
+        get().showToast('You can only protect three players.')
+        return
+      }
+      next = [...current, playerId]
+    } else {
+      return
+    }
+    set({ career: { ...career, gmUntouchables: next }, tick: get().tick + 1 })
+    get().save()
   },
 
   spendSkillPoint: (skill) => {
@@ -4406,6 +4635,296 @@ export function askGmProbe(seed = 33333) {
     return row
   })
   return { teamId: career.teamId, season: world.season, eligible: eligible.length, results }
+}
+
+export interface GmDeskProbeResult {
+  seed: number
+  teamId: string
+  season: number
+  trust: number
+  contenders: { rank: number; contending: boolean }
+  /** Independent examples: the desk's monthly counters are reset between them. */
+  deskResetBetweenExamples: true
+  monthlyLimit: number
+  restructure: { outcome: string; reason?: string; target?: string; capFreed?: number; deadRisk?: number; message: string } | null
+  release: { player: string; outcome: string; reason?: string; dead?: number; capSaved?: number; message: string } | null
+  releaseNegative: { player: string; outcome: string; reason?: string; dead?: number; capSaved?: number; message: string } | null
+  extend: { player: string; outcome: string; reason?: string } | null
+  trade: { player: string; outcome: string; reason?: string; moved?: string[] } | null
+  sign: { player: string; outcome: string; reason?: string; message: string } | null
+  checks: {
+    monthlyGate: { requestsFiled: number; fourthBlocked: boolean; requestsThisMonth: number }
+    perPlayerMonthCap: { firstRecorded: boolean; secondBlocked: boolean }
+    starterProtection: {
+      sides: string[]
+      untouchables: number
+      offStarters: number
+      defStarters: number
+      offMissing: number
+      defMissing: number
+      allFieldedStartersProtected: boolean
+    }
+    extendRecorded: { inRequests: boolean; inLog: boolean; consumedSlot: boolean }
+    restructureNeedsTarget: boolean
+    /** A named target with no room to clear is refused (no unnecessary restructure). */
+    restructureUnneeded: boolean
+    /** A restructure request never occupies the named target's per-player slot. */
+    restructureTargetNotLogged: boolean
+    /** Coordinators are confined to their side of the ball on restructures. */
+    sidePermission: {
+      hcEitherSide: boolean
+      ocDefTargetRefused: boolean
+      dcOffTargetRefused: boolean
+      ocStoreCallRefused: boolean
+      dcStoreCallRefused: boolean
+      selectorFiltered: boolean
+    }
+    signReserve: { outcome: string; reserve: number; spaceAfter: number; held: boolean }
+    releaseRule: { positiveEnforced: boolean; negativeEnforced: boolean }
+  }
+}
+
+/**
+ * Dev-only probe (L12.14 C6): run the GM requests desk at the club that reads
+ * as the league's strongest contender, report one example of each request type
+ * and run focused checks on the monthly gate, per-player cap, starter
+ * protection, the sign reserve and the release dead/savings rule. The five
+ * request examples are INDEPENDENT: the desk's monthly counters are reset
+ * between them (clearly labelled) so every kind is exercised in one pass.
+ * Deterministic (no rng).
+ */
+export function gmDeskProbe(seed = 33333): GmDeskProbeResult {
+  const get = () => useGame.getState()
+  const resetDesk = () => {
+    const c = get().career
+    if (c) useGame.setState({ career: { ...c, gmRequests: [], gmRequestLog: {} } })
+  }
+  get().startCareer({ name: 'GM Desk', path: 'coach', archetype: 'off', teamId: 'CLE', seed, startLevel: 7 })
+  let teamId = get().career!.teamId
+  let bestRank = 99
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL') continue
+    const v = contendView(world, t.id)
+    if (v.rank < bestRank) {
+      bestRank = v.rank
+      teamId = t.id
+    }
+  }
+  if (teamId !== get().career!.teamId) {
+    get().startCareer({ name: 'GM Desk', path: 'coach', archetype: 'off', teamId, seed, startLevel: 7 })
+  }
+  const career = get().career!
+  const roster = () => world.roster[career.teamId] ?? []
+  const monthKey = monthKeyOf(world.season, world.week)
+  const view = gmDeskView(world, career, monthKey)
+  const out: GmDeskProbeResult = {
+    seed,
+    teamId: career.teamId,
+    season: world.season,
+    trust: view.trust,
+    contenders: { rank: view.contenders.rank, contending: view.contenders.contending },
+    deskResetBetweenExamples: true,
+    monthlyLimit: view.maxRequests,
+    restructure: null,
+    release: null,
+    releaseNegative: null,
+    extend: null,
+    trade: null,
+    sign: null,
+    checks: {
+      monthlyGate: { requestsFiled: 0, fourthBlocked: false, requestsThisMonth: 0 },
+      perPlayerMonthCap: { firstRecorded: false, secondBlocked: false },
+      starterProtection: { sides: [], untouchables: 0, offStarters: 0, defStarters: 0, offMissing: 0, defMissing: 0, allFieldedStartersProtected: false },
+      extendRecorded: { inRequests: false, inLog: false, consumedSlot: false },
+      restructureNeedsTarget: false,
+      restructureUnneeded: false,
+      restructureTargetNotLogged: false,
+      sidePermission: {
+        hcEitherSide: false,
+        ocDefTargetRefused: false,
+        dcOffTargetRefused: false,
+        ocStoreCallRefused: false,
+        dcStoreCallRefused: false,
+        selectorFiltered: false,
+      },
+      signReserve: { outcome: 'none', reserve: Math.max(3_000_000, Math.round(0.02 * 279_200_000)), spaceAfter: 0, held: true },
+      releaseRule: { positiveEnforced: true, negativeEnforced: true },
+    },
+  }
+
+  // ── Check A: the synchronous monthly limit (3 answered per month). ──────────
+  resetDesk()
+  const byOvr = [...roster()].sort((a, b) => a.ovr - b.ovr || a.id.localeCompare(b.id))
+  let filed = 0
+  for (let i = 0; i < 3 && i < byOvr.length; i++) {
+    if (get().requestGmRelease(byOvr[i].id)) filed++
+  }
+  const fourthBlocked = byOvr.length > 3 ? get().requestGmRelease(byOvr[3].id) === null : false
+  out.checks.monthlyGate = {
+    requestsFiled: filed,
+    fourthBlocked,
+    requestsThisMonth: (get().career?.gmRequests ?? []).filter((r) => monthKeyOf(r.season, r.week) === monthKey).length,
+  }
+
+  // ── Check B: one request per player per month, whatever the kind. ──────────
+  resetDesk()
+  const pp = roster()[0]
+  if (pp) {
+    const first = get().requestGmRelease(pp.id)
+    const second = get().requestGmRelease(pp.id)
+    out.checks.perPlayerMonthCap = { firstRecorded: first !== null, secondBlocked: second === null }
+  }
+
+  // ── Check C: every fielded starter is protected, on the coach's sides. ─────
+  const prot = protectedPlayers(world, career)
+  const offStarters = topPlayers(world, career.teamId, 'off', 99)
+  const defStarters = topPlayers(world, career.teamId, 'def', 99)
+  const offMissing = offStarters.filter((p) => !prot.has(p.id)).length
+  const defMissing = defStarters.filter((p) => !prot.has(p.id)).length
+  out.checks.starterProtection = {
+    sides: installSides(career),
+    untouchables: (career.gmUntouchables ?? []).length,
+    offStarters: offStarters.length,
+    defStarters: defStarters.length,
+    offMissing,
+    defMissing,
+    allFieldedStartersProtected: offMissing === 0 && defMissing === 0,
+  }
+
+  // ── Example 1: restructure to clear cap for a named target. ────────────────
+  resetDesk()
+  const targets = gmRestructureTargets(world, career)
+  // Prefer the smallest real need, so a positive restructure has the best chance.
+  const target =
+    targets.filter((t) => t.need > 0).sort((a, b) => a.need - b.need)[0] ??
+    targets.find((t) => t.need <= 0)
+  if (target) {
+    const r = get().requestGmRestructure(target.id)
+    if (r) out.restructure = { outcome: r.outcome, reason: r.reason, target: target.name, capFreed: r.capFreed, deadRisk: r.deadRisk, message: r.message }
+    // The named target must stay free for the trade/sign he was cleared for.
+    out.checks.restructureTargetNotLogged = get().career?.gmRequestLog?.[target.id] === undefined
+  }
+
+  // ── Example 1b (negative): restructuring with no named target is refused. ──
+  resetDesk()
+  out.checks.restructureNeedsTarget = get().requestGmRestructure() === null
+
+  // ── Example 1c (negative): a target we already fit needs no restructure. ────
+  const fits = targets.find((t) => t.need <= 0)
+  out.checks.restructureUnneeded = fits
+    ? gmRestructureDecision(world, career, fits.id).reason === 'need'
+    : gmRestructureDecision(world, career, targets[0]?.id ?? '', 0).reason === 'need'
+
+  // ── Check D: coordinators can only clear cap for their side of the ball. ────
+  const ocCareer: CareerState = { ...career, level: 6, unitFocus: 'off' }
+  const dcCareer: CareerState = { ...career, level: 6, unitFocus: 'def' }
+  const market = [
+    ...world.teams.filter((t) => t.tier === 'NFL' && t.id !== career.teamId).flatMap((t) => world.roster[t.id] ?? []),
+    ...world.freeAgents,
+  ]
+  const ocBlocked = market.find((p) => !gmAskCovers(ocCareer, p.pos)) // a defender
+  const dcBlocked = market.find((p) => !gmAskCovers(dcCareer, p.pos)) // an offensive player
+  const coveredForOc = market.find((p) => gmAskCovers(ocCareer, p.pos)) // an offensive player
+  const restoreCareer = get().career
+  useGame.setState({ career: ocCareer })
+  const ocStoreRefused = ocBlocked ? get().requestGmRestructure(ocBlocked.id) === null : true
+  useGame.setState({ career: dcCareer })
+  const dcStoreRefused = dcBlocked ? get().requestGmRestructure(dcBlocked.id) === null : true
+  useGame.setState({ career: restoreCareer })
+  out.checks.sidePermission = {
+    hcEitherSide:
+      (!coveredForOc || gmAskCovers(career, coveredForOc.pos)) && (!ocBlocked || gmAskCovers(career, ocBlocked.pos)),
+    ocDefTargetRefused: !ocBlocked || gmRestructureDecision(world, ocCareer, ocBlocked.id).reason === 'side',
+    dcOffTargetRefused: !dcBlocked || gmRestructureDecision(world, dcCareer, dcBlocked.id).reason === 'side',
+    ocStoreCallRefused: ocStoreRefused,
+    dcStoreCallRefused: dcStoreRefused,
+    selectorFiltered:
+      gmRestructureTargets(world, ocCareer).every((t) => gmAskCovers(ocCareer, t.pos)) &&
+      gmRestructureTargets(world, dcCareer).every((t) => gmAskCovers(dcCareer, t.pos)),
+  }
+
+  // ── Example 2: release a bench player the dead/savings rule allows. ────────
+  resetDesk()
+  const pool = [...roster()].sort((a, b) => a.ovr - b.ovr || a.id.localeCompare(b.id))
+  const relP = pool.find((p) => {
+    const idx = depthAt(world, career.teamId, p.pos).findIndex((x) => x.id === p.id)
+    const starter = idx >= 0 && idx < (STARTERS[p.pos] ?? 1)
+    const save = capSavings(p.contract)
+    return !starter && save > 0 && deadMoney(p.contract) <= save
+  })
+  if (relP) {
+    const r = get().requestGmRelease(relP.id)
+    if (r) out.release = { player: relP.name, outcome: r.outcome, reason: r.reason, dead: r.dead, capSaved: r.capSaved, message: r.message }
+  }
+
+  // ── Example 3 (negative): a cut the dead-money rule must refuse. ───────────
+  resetDesk()
+  const badP = pool.find((p) => {
+    const save = capSavings(p.contract)
+    return save <= 0 || deadMoney(p.contract) > save
+  })
+  if (badP) {
+    const r = get().requestGmRelease(badP.id)
+    if (r) out.releaseNegative = { player: badP.name, outcome: r.outcome, reason: r.reason, dead: r.dead, capSaved: r.capSaved, message: r.message }
+  }
+
+  // ── Example 4: extend an eligible player (C4) through the desk. ────────────
+  resetDesk()
+  const extP = roster()
+    .filter((p) => p.contract.years <= 2 && career.gmAsks?.[p.id] !== world.season)
+    .sort((a, b) => b.ovr - a.ovr)[0]
+  if (extP) {
+    const r = get().askGmToExtend(extP.id)
+    if (r) out.extend = { player: extP.name, outcome: r.outcome, reason: r.reason }
+    const c2 = get().career!
+    out.checks.extendRecorded = {
+      inRequests: (c2.gmRequests ?? []).some((x) => x.kind === 'extend' && x.playerId === extP.id),
+      inLog: c2.gmRequestLog?.[extP.id] === monthKey,
+      consumedSlot: (c2.gmRequests ?? []).some((x) => x.kind === 'extend' && x.playerId === extP.id),
+    }
+  }
+
+  // ── Example 5: go get a player from another club. ──────────────────────────
+  resetDesk()
+  const abroad = world.teams
+    .filter((t) => t.tier === 'NFL' && t.id !== career.teamId)
+    .flatMap((t) => world.roster[t.id] ?? [])
+    .filter((p) => p.ovr >= 74)
+    .sort((a, b) => a.ovr - b.ovr || a.id.localeCompare(b.id))
+  let tradeTarget: Player | undefined
+  for (const cand of abroad) {
+    if (findPackagesFor(world, career.teamId, cand.id).length) {
+      tradeTarget = cand
+      break
+    }
+  }
+  if (tradeTarget) {
+    const r = get().requestGmTrade(tradeTarget.id)
+    if (r) out.trade = { player: tradeTarget.name, outcome: r.outcome, reason: r.reason, moved: r.moved }
+  }
+
+  // ── Example 6: sign the best free agent, then verify the reserve held. ─────
+  resetDesk()
+  const fa = [...world.freeAgents].sort((a, b) => b.ovr - a.ovr)[0]
+  if (fa) {
+    const r = get().requestGmSignFreeAgent(fa.id)
+    if (r) out.sign = { player: fa.name, outcome: r.outcome, reason: r.reason, message: r.message }
+    const after = summarizeCap(roster(), world.deadMoney[career.teamId] ?? 0, world.season)
+    out.checks.signReserve = {
+      outcome: r?.outcome ?? 'none',
+      reserve: out.checks.signReserve.reserve,
+      spaceAfter: Math.round(after.space),
+      held: r?.outcome !== 'done' || after.space + 1 >= out.checks.signReserve.reserve,
+    }
+  }
+
+  // ── The release rule as enforced on both examples. ─────────────────────────
+  out.checks.releaseRule = {
+    positiveEnforced: !out.release || out.release.outcome !== 'done' || (out.release.dead ?? 0) <= (out.release.capSaved ?? 0),
+    negativeEnforced: !out.releaseNegative || out.releaseNegative.outcome !== 'done',
+  }
+
+  return out
 }
 
 export interface SkillEffectRow {

@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, gmDeskProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 
@@ -25,6 +25,7 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__marketProbe = marketProbe
   ;(window as unknown as Record<string, unknown>).__deadMoneyProbe = deadMoneyProbe
   ;(window as unknown as Record<string, unknown>).__askGmProbe = askGmProbe
+  ;(window as unknown as Record<string, unknown>).__gmDeskProbe = gmDeskProbe
   ;(window as unknown as Record<string, unknown>).__rookieProbe = rookieProbe
   ;(window as unknown as Record<string, unknown>).__careerSmoke = careerSmoke
   ;(window as unknown as Record<string, unknown>).__leaguePbpProbe = leaguePbpProbe

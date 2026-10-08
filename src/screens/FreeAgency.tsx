@@ -13,6 +13,7 @@ import { capSummary } from '../game/selectors'
 import { getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { PlayerTable } from '../components/PlayerTable'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
+import { GmAskButton } from '../components/GmAskButton'
 import { Badge, Button, Card, PageHeader, Stat } from '../ui/kit'
 
 const POS_FILTERS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
@@ -237,6 +238,7 @@ export function FreeAgency() {
                       Winning-culture discount −{disc.pct}% · {disc.reasons.join(', ')}
                     </span>
                   )}
+                  <GmAskButton player={p} kind="sign" label={`Ask GM · ${money(deal.capHit)}`} />
                 </div>
               )
             }}

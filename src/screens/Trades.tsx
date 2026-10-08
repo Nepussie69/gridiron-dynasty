@@ -25,6 +25,7 @@ import type { Player, Position } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
+import { GmAskButton } from '../components/GmAskButton'
 import { HoverCard } from '../components/HoverCard'
 import { PlayerHoverCard } from '../components/PlayerHoverCard'
 import { Badge, Button, Card, PageHeader, OvrBadge, SectionTitle, TeamCrest } from '../ui/kit'
@@ -287,6 +288,7 @@ export function Trades() {
           onToggle={(a) => toggle(get, setGet, a)}
           onFindDeals={(a) => onFindDeals(a, 'buy')}
           showShadow={canScout}
+          showGmAsk
           onTeamClick={() => viewTeam(partnerId)}
         />
       </div>
@@ -402,6 +404,7 @@ function PositionFinder({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) 
                 </DealHover>
               </div>
               <OvrBadge value={r.player.ovr} pot={r.player.pot} size={30} />
+              <GmAskButton player={r.player} kind="trade" />
               <Button variant="team" onClick={() => onLoadDeal(r.offer)}>
                 Load deal
               </Button>
@@ -592,6 +595,7 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
                     </div>
                   </div>
                   <OvrBadge value={p.ovr} pot={p.pot} size={28} />
+                  <GmAskButton player={p} kind="trade" label="Ask GM" />
                   <button
                     type="button"
                     title="Find deals"
@@ -810,6 +814,7 @@ function AssetColumn({
   onToggle,
   onFindDeals,
   showShadow,
+  showGmAsk,
   blockIds,
   onToggleBlock,
   onTeamClick,
@@ -821,6 +826,8 @@ function AssetColumn({
   onToggle: (a: Asset) => void
   onFindDeals?: (a: Asset) => void
   showShadow?: boolean
+  /** L12.14 C6: show the "ask the GM to get him" button (partner column only). */
+  showGmAsk?: boolean
   blockIds?: string[]
   onToggleBlock?: (a: Asset) => void
   /** L12.8 V1: make the club header open its team page. */
@@ -980,6 +987,7 @@ function AssetColumn({
                     <span className="block truncate text-xs text-muted">{a.sub}</span>
                   </span>
                   <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
+                  {a.kind === 'player' && showGmAsk && player && <GmAskButton player={player} kind="trade" label="Ask GM" />}
                   {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
                   {a.kind === 'player' && onFindDeals && (
                     <button
