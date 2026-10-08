@@ -97,6 +97,10 @@ export interface World {
   userBook?: { season: number; teamId: string; book: import('./decisions').TendencyBook }
   /** L11 W2: players placed on waivers this season, awaiting the Tuesday turn. */
   waivers?: WaiverEntry[]
+  /** L12.6 C1: the step of the offseason calendar (resign → free agency → draft → camp). */
+  offseasonStage?: import('./draft').OffseasonStage
+  /** L12.6 C1: the offseason stages already run this cycle, so a fast path can't double-run them. */
+  offseasonDone?: { fa?: boolean; draft?: boolean; trades?: boolean }
 }
 
 // Backwards-compatible alias used by screen/selector imports.

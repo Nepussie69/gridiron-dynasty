@@ -23,6 +23,7 @@ import { cn } from '../lib/cn'
 import { inkOn, money, tint } from '../lib/format'
 import { SCREENS, useGame, useWorld, userCtx, type ScreenId } from '../store/gameStore'
 import { tierFor } from '../game/engine/career'
+import { stageOf } from '../game/engine/draft'
 import { accessFor } from '../game/engine/access'
 import { AccessBadge } from './AccessBadge'
 import type { AccessArea } from '../game/engine/access'
@@ -198,11 +199,25 @@ export function Sidebar() {
   )
 }
 
+const STAGE_LABEL: Record<string, string> = {
+  resign: 'FEB · RE-SIGN',
+  freeAgency: 'MAR · FREE AGENCY',
+  draft: 'APR · DRAFT',
+  camp: 'AUG · CAMP',
+}
+const STAGE_ADVANCE: Record<string, string> = {
+  resign: 'To free agency ▸',
+  freeAgency: 'To the draft ▸',
+  draft: 'To camp ▸',
+  camp: 'Start season ▸',
+}
+
 export function TopBar() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const career = useGame((s) => s.career)
   const advanceWeek = useGame((s) => s.advanceWeek)
+  const advanceStage = useGame((s) => s.advanceStage)
   const startGameDay = useGame((s) => s.startGameDay)
   const gameDay = useGame((s) => s.gameDay)
   const setScreen = useGame((s) => s.setScreen)
@@ -224,6 +239,7 @@ export function TopBar() {
   }, [league, activeTeamId, career, team.tier])
 
   const opp = next ? league.byId[next.opponentId] : null
+  const stage = stageOf(league)
   const canCoach =
     !!career &&
     !gameDay &&
@@ -259,17 +275,27 @@ export function TopBar() {
 
       <div className="flex-1" />
 
-      {opp && (
-        <button
-          onClick={() => setScreen('schedule')}
-          className="hidden items-center gap-3 rounded-lg border border-white/25 bg-black/20 px-3 py-1.5 text-white transition hover:bg-black/30 md:flex"
-        >
+      {stage ? (
+        <div className="hidden items-center gap-3 rounded-lg border border-white/25 bg-black/20 px-3 py-1.5 text-white md:flex">
           <div className="text-right leading-tight">
-            <div className="label !text-white/60">Week {next!.week} · {next!.home ? 'vs' : '@'}</div>
-            <div className="font-display text-base font-700 uppercase">{opp.name}</div>
+            <div className="label !text-white/60">Offseason</div>
+            <div className="font-display text-base font-700 uppercase">{STAGE_LABEL[stage]}</div>
           </div>
-          <TeamCrest team={opp} size={30} />
-        </button>
+          <CalendarDays size={18} className="text-white/80" />
+        </div>
+      ) : (
+        opp && (
+          <button
+            onClick={() => setScreen('schedule')}
+            className="hidden items-center gap-3 rounded-lg border border-white/25 bg-black/20 px-3 py-1.5 text-white transition hover:bg-black/30 md:flex"
+          >
+            <div className="text-right leading-tight">
+              <div className="label !text-white/60">Week {next!.week} · {next!.home ? 'vs' : '@'}</div>
+              <div className="font-display text-base font-700 uppercase">{opp.name}</div>
+            </div>
+            <TeamCrest team={opp} size={30} />
+          </button>
+        )
       )}
 
       {career && (
@@ -306,10 +332,10 @@ export function TopBar() {
       <Button
         variant="primary"
         className="!bg-white !text-ink hover:!bg-white/90"
-        onClick={() => void advanceWeek()}
+        onClick={() => (stage ? advanceStage() : void advanceWeek())}
       >
-        {league.phase === 'offseason'
-          ? 'Start Next Season ▸'
+        {stage
+          ? STAGE_ADVANCE[stage]
           : league.week >= 18
             ? 'Finish Season ▸'
             : 'Advance Week ▸'}

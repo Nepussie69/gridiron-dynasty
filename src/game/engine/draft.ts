@@ -15,6 +15,34 @@ export const DRAFT_ROUNDS = 7
 export const DRAFT_TEAMS = 32
 export const TOTAL_PICKS = DRAFT_ROUNDS * DRAFT_TEAMS
 
+/** L12.6 C1: the steps the offseason moves through, in calendar order. */
+export type OffseasonStage = 'resign' | 'freeAgency' | 'draft' | 'camp'
+
+export const OFFSEASON_STAGES: OffseasonStage[] = ['resign', 'freeAgency', 'draft', 'camp']
+
+/**
+ * The current offseason stage, or null during the regular season. A live save
+ * without the field (legacy) defaults to `draft` until the class is finished,
+ * otherwise `camp`.
+ */
+export function stageOf(world: World): OffseasonStage | null {
+  if (world.phase !== 'offseason') return null
+  if (world.offseasonStage) return world.offseasonStage
+  return world.draftState?.complete ? 'camp' : 'draft'
+}
+
+/** L12.6 C2: the draft is actionable only in April — the `draft` stage. */
+export function draftOpen(world: World): boolean {
+  return stageOf(world) === 'draft'
+}
+
+/** How many offseason stages remain before the draft (0 when the draft is open). */
+export function stagesUntilDraft(world: World): number {
+  const stage = stageOf(world)
+  if (!stage) return 0
+  return Math.max(0, OFFSEASON_STAGES.indexOf('draft') - OFFSEASON_STAGES.indexOf(stage))
+}
+
 export function initDraft(world: World) {
   const picks = ensureDraftPicks(world, world.season + 1)
   world.draftPicks = picks

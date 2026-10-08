@@ -64,6 +64,7 @@ import {
   runAITrades,
   enforceCapCompliance,
   tickAllContracts,
+  trimNflRosters,
   updateStaffLedgers,
   type ScoutingReport,
 } from '../game/engine/progress'
@@ -103,6 +104,8 @@ import {
   simulateRestOfDraft,
   userOnClock,
   awardCompensatoryPicks,
+  stageOf,
+  draftOpen,
 } from '../game/engine/draft'
 import { ensureDraftWindow, ledgerFreeAgent } from '../game/engine/picks'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
@@ -418,6 +421,8 @@ interface GameStore {
   startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId }) => void
   resetCareer: () => void
   advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
+  /** L12.6 C1: step the offseason calendar one stage (resign → FA → draft → camp → season). */
+  advanceStage: () => void
   startNextSeason: () => void
   dismissModal: () => void
   /** Resume the validated save held by the career hub. */
@@ -1071,6 +1076,53 @@ export const useGame = create<GameStore>((set, get) => ({
     get().showToast(v ? 'Authentic league sim ON — every game runs play-by-play.' : 'Fast league sim restored.')
   },
 
+  advanceStage: () => {
+    const career = get().career
+    if (!career) return
+    if (world.phase !== 'offseason') return
+    const stage = stageOf(world)
+    const done = (world.offseasonDone ??= {})
+    if (stage === 'resign') {
+      world.offseasonStage = 'freeAgency'
+      pushCareerNews(world, career, {
+        category: 'Roster',
+        headline: 'March: free agency opens',
+        body: 'The market is open. Expiring contracts and released veterans are up for bid — go get your guys.',
+      })
+    } else if (stage === 'freeAgency') {
+      // Leaving March: the AI clubs have their first crack at what is left.
+      if (!done.fa) {
+        runAIFreeAgency(world, career.teamId)
+        done.fa = true
+      }
+      world.offseasonStage = 'draft'
+      pushCareerNews(world, career, {
+        category: 'Draft',
+        headline: 'April: the draft is open',
+        body: 'The war room is live. Stack your board and make the call when your club is on the clock.',
+      })
+    } else if (stage === 'draft') {
+      // Leaving April with the class unfinished completes it, then camp opens.
+      if (!done.draft) completeDraft(world, career)
+      world.offseasonStage = 'camp'
+      if (!done.trades) {
+        runAITrades(world)
+        done.trades = true
+      }
+      pushCareerNews(world, career, {
+        category: 'League',
+        headline: 'August: training camp',
+        body: 'UDFAs are signed and the league has reshuffled. Free agency leftovers are still available before kickoff.',
+      })
+    } else {
+      // August → kickoff: run the new-season code with every stage done.
+      get().startNextSeason()
+      return
+    }
+    set({ tick: get().tick + 1 })
+    get().save()
+  },
+
   startNextSeason: () => {
     const career = get().career
     if (!career) return
@@ -1082,20 +1134,14 @@ export const useGame = create<GameStore>((set, get) => ({
       delete g.box
       delete g.film
     }
-    if (!world.draftState.complete) {
-      simulateRestOfDraft(world, career)
-      runUDFAs(world)
-      world.draftState.complete = true
-    }
-    // G2: log conviction calls for anyone drafted before the class rolls over.
-    logConvictionPicks(world, career)
-    // K4: log red-flag calls for anyone another club drafted.
-    logRedFlags(world, career)
-    runAIFreeAgency(world, career.teamId)
-    runAITrades(world)
+    // L12.6 C1: if the calendar was skipped (fast path, legacy save), run the
+    // remaining stages — AI free agency, draft + UDFAs, AI trades — in order.
+    completeOffseasonStages(world, career)
     world.season += 1
     world.week = 1
     world.phase = 'regular'
+    world.offseasonStage = undefined
+    world.offseasonDone = undefined
     world.awards = {}
     // #18: the league changes over the eras every few seasons.
     if (world.season % 6 === 0) world.era = ERAS[Math.floor(world.season / 6) % ERAS.length]
@@ -1729,7 +1775,13 @@ export const useGame = create<GameStore>((set, get) => ({
 
   draftProspect: (id) => {
     const career = get().career
-    if (!career || !userOnClock(world, career)) return
+    if (!career) return
+    // L12.6 C2: the draft is an April event — no drafting during the season.
+    if (!draftOpen(world)) {
+      get().showToast('The draft is in April — scout the class now.')
+      return
+    }
+    if (!userOnClock(world, career)) return
     const prospect = world.draft.find((d) => d.id === id)
     if (!prospect) return
     if (redFlagIds(world, career).includes(prospect.id)) {
@@ -1758,6 +1810,10 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
   simToMyPick: () => {
+    if (!draftOpen(world)) {
+      get().showToast('The draft is in April — scout the class now.')
+      return
+    }
     simUntilUser(world, get().career)
     const career = get().career
     if (career) logConvictionPicks(world, career)
@@ -1768,12 +1824,13 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
   finishDraft: () => {
-    simulateRestOfDraft(world, get().career)
-    runUDFAs(world)
-    world.draftState.complete = true
+    // L12.6 C2: only April opens the draft; in season this is a no-op.
+    if (!draftOpen(world)) {
+      get().showToast('The draft is in April — scout the class now.')
+      return
+    }
     const career = get().career
-    if (career) logConvictionPicks(world, career)
-    if (career) logRedFlags(world, career)
+    completeDraft(world, career)
     if (career) announceDraftPicks(world, career)
     if (career) resolveTradePicks(world, career)
     bump(set, get)
@@ -1784,6 +1841,11 @@ export const useGame = create<GameStore>((set, get) => ({
   signFreeAgent: (id) => {
     const career = get().career
     if (!career) return
+    // L12.6 C3: the true market opens in March; February is the re-sign window.
+    if (world.phase === 'offseason' && stageOf(world) === 'resign') {
+      get().showToast('Free agency opens in March.')
+      return
+    }
     if (!canSignFreeAgents(career)) {
       get().showToast('You do not have roster control yet — keep climbing.')
       return
@@ -2590,6 +2652,11 @@ function migrateWorld(w: World): World {
   w.compLedger ??= {}
   w.rivals ??= []
   w.waivers ??= []
+  // L12.6 C1: a legacy offseason save lands on the right stage — the draft if
+  // the class is unfinished, otherwise camp.
+  if (w.phase === 'offseason' && !w.offseasonStage) {
+    w.offseasonStage = w.draftState?.complete ? 'camp' : 'draft'
+  }
   w.era ??= { id: 'modern', label: 'Modern Spread Era', positionBias: {}, capSpike: 1 }
   // L10 G8: a tendency book from a past season is stale — drop it.
   if (w.userBook && w.userBook.season !== w.season) w.userBook = undefined
@@ -2724,6 +2791,46 @@ function reconcileCareerTeam(w: World, c: CareerState): CareerState {
 }
 
 // ── Season transition ────────────────────────────────────────────────────────
+
+/**
+ * L12.6 C1/C2: finish the draft class — the AI picks out the board, UDFAs sign —
+ * and log the conviction / red-flag calls. Idempotent: once the class is complete
+ * it only re-runs the (also idempotent) logging. Marks the stage done.
+ */
+function completeDraft(world: World, career: CareerState | null) {
+  if (!world.draftState.complete) {
+    simulateRestOfDraft(world, career)
+    runUDFAs(world)
+    world.draftState.complete = true
+  }
+  if (career) {
+    logConvictionPicks(world, career)
+    logRedFlags(world, career)
+  }
+  ;(world.offseasonDone ??= {}).draft = true
+}
+
+/**
+ * L12.6 C1: run every offseason stage that hasn't happened yet, in calendar
+ * order and exactly once. `startNextSeason` calls this so a fast path from any
+ * stage (probe, import, stall) still produces a legal new season.
+ */
+function completeOffseasonStages(world: World, career: CareerState | null) {
+  const done = (world.offseasonDone ??= {})
+  if (!done.fa) {
+    runAIFreeAgency(world, career?.teamId)
+    done.fa = true
+  }
+  if (!done.draft) completeDraft(world, career)
+  if (!done.trades) {
+    runAITrades(world)
+    done.trades = true
+  }
+  // The draft + UDFAs can push rosters over 53; the FA trim ran before them, so
+  // cut back to a legal 53 here (same trimmer the FA market uses).
+  trimNflRosters(world)
+}
+
 function runEndOfRegularSeason(
   set: (p: Partial<GameStore>) => void,
   get: () => GameStore,
@@ -3234,6 +3341,9 @@ function runEndOfRegularSeason(
   // L11 W2: the wire closes with the regular season — anything left clears to FA.
   clearWaivers(world)
   world.phase = 'offseason'
+  // L12.6 C1: the calendar opens with the February re-sign window.
+  world.offseasonStage = 'resign'
+  world.offseasonDone = {}
 
   const rec = world.standings[careerNext?.teamId ?? 'BUF']
   // #20: assemble the broadcast recap from what actually happened.
@@ -3626,6 +3736,94 @@ export function waiverProbe(weeks = 17) {
     maxRoster,
     minRoster: Number.isFinite(minRoster) ? minRoster : 0,
   }
+}
+
+/** Games a player has appeared in this season (summed across any team entries). */
+function gamesThisSeason(p: Player | undefined, season: number): number {
+  if (!p?.stats?.length) return 0
+  return p.stats.filter((s) => s.season === season && s.level === 'NFL').reduce((n, s) => n + (s.games ?? 0), 0)
+}
+
+/**
+ * L12.6 C3 dev probe: exercise the in-season release → waivers → FA → new club
+ * path on a throwaway clone of the live world. It releases a starter from an AI
+ * club and from the user's club, then runs two weeks of the REAL weekly flow
+ * (AI waiver claims, Tuesday resolution, AI injury signings, games) and reports
+ * each player's path and the snaps (games) he actually played.
+ */
+export function faFlowProbe() {
+  const clone = structuredClone(world) as World
+  const career = useGame.getState().career
+  const userTeamId = career?.teamId && clone.roster[career.teamId] ? career.teamId : 'BUF'
+  clone.phase = 'regular'
+  clone.week = 1
+  clone.waivers = []
+  for (const id of Object.keys(clone.standings)) clone.standings[id] = zeroRecord(id)
+  // Re-open weeks 1–2 so the probe always has games to simulate/stat.
+  for (const g of clone.schedule) {
+    if (g.week > 2) continue
+    g.played = false
+    g.homeScore = null
+    g.awayScore = null
+    g.statsDone = false
+  }
+  const gamesBefore = new Map(clone.players.map((p) => [p.id, gamesThisSeason(p, clone.season)]))
+
+  const aiTeamId = clone.teams.find((t) => t.tier === 'NFL' && t.id !== userTeamId)?.id ?? userTeamId
+  // Prefer an offensive starter: the weekly allocator builds offensive box lines
+  // from the depth chart, so the signed player's snaps are visible immediately.
+  const OFF_SKILL: Position[] = ['QB', 'RB', 'WR', 'TE']
+  const releaseStarter = (teamId: string): { p: Player; from: string } | null => {
+    const roster = clone.roster[teamId] ?? []
+    const skill = roster.filter((p) => OFF_SKILL.includes(p.pos))
+    const p = [...(skill.length ? skill : roster)].sort((a, b) => b.ovr - a.ovr || (a.id < b.id ? -1 : 1))[0]
+    if (!p) return null
+    roster.splice(roster.indexOf(p), 1)
+    const original = { ...p.contract }
+    const dead = deadMoney(p.contract)
+    clone.deadMoney[teamId] = (clone.deadMoney[teamId] ?? 0) + dead
+    p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+    placeOnWaivers(clone, p, teamId, original, dead)
+    return { p, from: teamId }
+  }
+  const aiRel = releaseStarter(aiTeamId)
+  const userRel = releaseStarter(userTeamId)
+
+  const describe = (rel: { p: Player; from: string } | null) => {
+    if (!rel) return null
+    const live = clone.players.find((x) => x.id === rel.p.id)
+    return {
+      name: live?.name ?? rel.p.name,
+      pos: live?.pos ?? rel.p.pos,
+      ovr: live?.ovr ?? rel.p.ovr,
+      releasedFrom: rel.from,
+      currentTeamId: live?.teamId ?? null,
+      depthRank: live?.teamId ? depthAt(clone, live.teamId, live.pos).findIndex((x) => x.id === live.id) + 1 : 0,
+      onWaivers: (clone.waivers ?? []).some((e) => e.playerId === rel.p.id),
+      freeAgent: clone.freeAgents.some((x) => x.id === rel.p.id),
+      gamesPlayed: gamesThisSeason(live, clone.season) - (gamesBefore.get(rel.p.id) ?? 0),
+    }
+  }
+
+  const weeks: unknown[] = []
+  for (let i = 0; i < 2; i++) {
+    // Mirror advanceWeek's order exactly: AI claims → Tuesday resolution → AI
+    // injury moves (the in-season free-agent consumer) → games.
+    aiWaiverClaims(clone, userTeamId)
+    const res = processWaivers(clone, userTeamId)
+    aiInjuryMoves(clone, userTeamId)
+    const week = clone.week
+    simWeek(clone, week)
+    clone.week += 1
+    weeks.push({
+      week,
+      claimed: res.claimed.map((c) => c.playerId),
+      cleared: res.cleared,
+      ai: describe(aiRel),
+      user: describe(userRel),
+    })
+  }
+  return { userTeam: userTeamId, aiTeam: aiTeamId, ai: describe(aiRel), user: describe(userRel), weeks }
 }
 
 /** Dev-only probe: weekly rhythm state (hours, actions, set piece, stretch). */

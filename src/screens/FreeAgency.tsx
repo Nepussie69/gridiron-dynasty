@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { canSignFreeAgents } from '../game/engine/career'
+import { stageOf } from '../game/engine/draft'
 import { freeAgentContract } from '../game/engine/progress'
 import { waiverBlockedReason, waiverPriority } from '../game/engine/waivers'
 import { canShadow } from '../game/engine/shadow'
@@ -37,6 +38,8 @@ export function FreeAgency() {
   const canScout = canShadow(career)
   const access = accessFor(career, 'freeagency')
   const cap = capSummary(league, career.teamId)
+  // L12.6 C3: the true market opens in March. February previews the pool only.
+  const faClosed = league.phase === 'offseason' && stageOf(league) === 'resign'
 
   // L11 W4: the waiver wire. Priority is worst-record-first; the user's own
   // released players stay on the list but cannot be re-claimed by them.
@@ -75,6 +78,13 @@ export function FreeAgency() {
           {access === 'advise'
             ? 'Roster building is the GM\u2019s call. You influence who the club targets \u2014 the GM signs the deal.'
             : <>You don't have roster control yet. Reach <strong>Director of Player Personnel</strong> or higher to sign free agents.</>}
+        </div>
+      )}
+
+      {faClosed && (
+        <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
+          Free agency opens in March. February is the re-sign window \u2014 extend your own expiring players first.
+          The pool below is a preview.
         </div>
       )}
 
@@ -202,10 +212,11 @@ export function FreeAgency() {
                   <Button
                     size="sm"
                     variant="team"
-                    disabled={!canSign || noRoom}
+                    disabled={!canSign || noRoom || faClosed}
+                    title={faClosed ? 'Free agency opens in March' : undefined}
                     onClick={() => signFreeAgent(p.id)}
                   >
-                    {!canSign ? 'GM decides' : noRoom ? 'No cap room' : `Sign · ${money(deal.capHit)}`}
+                    {!canSign ? 'GM decides' : faClosed ? 'Opens in March' : noRoom ? 'No cap room' : `Sign · ${money(deal.capHit)}`}
                   </Button>
                 </div>
               )
