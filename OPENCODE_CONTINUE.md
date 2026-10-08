@@ -25,6 +25,7 @@ _Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything t
 | `reads` / `wt-reads` | scratchpad/wt-reads | NEXT_PHASE_L12_7.md D5 (Now/Ceiling ranges on scouting reads) | /private/tmp/gridiron-l12_7p2.txt | Display only |
 | `routes` / `wt-routes` | scratchpad/wt-routes | Backlog #25: real route trees per concept + smooth motion in `playAnim.ts` | /private/tmp/gridiron-routes.txt | Visual only; check in the browser |
 | `skills` / `wt-skills` | scratchpad/wt-skills | NEXT_PHASE_L12_11.md P1–P4 skill points from goals; negotiation/development wired (user-only, small) | /private/tmp/gridiron-skills.txt | Pacing ±1 season |
+| `history` / `wt-history` | scratchpad/wt-history | NEXT_PHASE_L12_12.md History tab | /private/tmp/gridiron-history.txt | New screen + statsDb aggregation |
 Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade) and `src/screens/Draft.tsx` (calendar banner vs reads badges) — resolve by keeping both sides.
 
 ## Queue (after the running pushes)
