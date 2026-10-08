@@ -9,9 +9,27 @@ import { capabilities } from '../game/engine/capabilities'
 import { canFileMemo, spaceBucket, type SpaceBucket } from '../game/engine/capMemo'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
+import type { Player } from '../game/types'
 import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { ExtensionTalks } from '../components/ExtensionTalks'
 import { ContractExplainer } from '../components/ContractExplainer'
+
+type LedgerKey = 'name' | 'pos' | 'age' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'pct'
+const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
+  name: (p) => p.name,
+  pos: (p) => p.pos,
+  age: (p) => p.age,
+  capHit: (p) => p.contract.capHit,
+  annual: (p) => p.contract.annual,
+  guaranteed: (p) => p.contract.guaranteed,
+  years: (p) => p.contract.years,
+  dead: (p) => deadMoney(p.contract),
+  pct: (p) => p.contract.capHit,
+}
+const LEDGER_COLS: [string, LedgerKey | null][] = [
+  ['Player', 'name'], ['Pos', 'pos'], ['Age', 'age'], ['Cap Hit', 'capHit'], ['AAV', 'annual'],
+  ['Guaranteed', 'guaranteed'], ['Yrs', 'years'], ['Dead $', 'dead'], ['% Cap', 'pct'], ['', null],
+]
 import type { Position } from '../game/types'
 
 // L11.5 Q9: cap allocation is grouped by position family, in this order.
@@ -42,7 +60,26 @@ export function Cap() {
   const canMove = canSignFreeAgents(career)
   const canNegotiate = capabilities(career).can.has('negotiate')
   const access = accessFor(career, 'cap')
-  const contracts = useMemo(() => [...roster].sort((a, b) => b.contract.capHit - a.contract.capHit), [roster])
+  // Sortable ledger: click a header to sort by it, click again to flip.
+  const [sortKey, setSortKey] = useState<LedgerKey>('capHit')
+  const [sortDir, setSortDir] = useState<1 | -1>(-1)
+  const contracts = useMemo(() => {
+    const val = LEDGER_SORT[sortKey]
+    return [...roster].sort((a, b) => {
+      const x = val(a)
+      const y = val(b)
+      const c = typeof x === 'string' ? x.localeCompare(y as string) : (x as number) - (y as number)
+      return c * sortDir || b.contract.capHit - a.contract.capHit
+    })
+  }, [roster, sortKey, sortDir])
+  const sortBy = (k: LedgerKey) => {
+    if (k === sortKey) setSortDir((d) => (d === 1 ? -1 : 1))
+    else {
+      setSortKey(k)
+      // Text columns start A→Z, numbers start biggest first.
+      setSortDir(k === 'name' || k === 'pos' ? 1 : -1)
+    }
+  }
 
   return (
     <div>
@@ -145,8 +182,22 @@ export function Cap() {
           <table className="w-full text-sm tnum">
             <thead>
               <tr className="border-b border-line text-left">
-                {['Player', 'Pos', 'Age', 'Cap Hit', 'AAV', 'Guaranteed', 'Yrs', 'Dead $', '% Cap', ''].map((h) => (
-                  <th key={h} className="label whitespace-nowrap px-3 py-2">{h}</th>
+                {LEDGER_COLS.map(([h, k]) => (
+                  <th key={h} className="label whitespace-nowrap px-3 py-2">
+                    {k ? (
+                      <button
+                        type="button"
+                        onClick={() => sortBy(k)}
+                        className={cn('inline-flex items-center gap-1 uppercase hover:text-ink', sortKey === k && 'text-ink')}
+                        title={`Sort by ${h}`}
+                      >
+                        {h}
+                        <span className="text-[9px]">{sortKey === k ? (sortDir === 1 ? '▲' : '▼') : ''}</span>
+                      </button>
+                    ) : (
+                      h
+                    )}
+                  </th>
                 ))}
               </tr>
             </thead>

@@ -42,7 +42,7 @@ DeepSeek connections drop (ECONNRESET) with 5+ pushes at once; ds-push retries 3
 
 ## Queue — next, in order
 1. **QB pay to real 2025 money** (user said yes, 2026-10-08): top-5 signed QB AAV is $43.6M because `fitToCap` (cap.ts / generate) compresses every contract toward 0.79–0.86 cap use; the market curve is $62M. Make QB (and the other premium positions) keep their market share when fitting (e.g. fit by scaling non-QB / mid-tier deals first, or exempt the top-12 QBs), so signed top-5 QB AAV ≈ $55–60M while league cap use stays 0.76–0.90 and nobody is over the cap. Check with `__marketProbe` + `__balanceProbe(6,'personnel')`. Backlog row 67.
-2. **Cap screen contract ledger sortable** (user request, row 68): `src/screens/Cap.tsx` table — click headers (Player, Pos, Age, Cap hit, AAV, Guaranteed, Yrs, Dead $, % cap) to sort asc/desc with ▲/▼, like the other tables (see `PlayerTable.tsx` sort pattern).
+2. ~~Cap ledger sortable~~ ✅ done (Claude).
 3. **Possible dead-money double count** to check: Garrett shows cap hit $47.7M, 2 yrs, guaranteed $52.8M, dead $97.8M (= the whole remaining contract). `deadMoney = min(proration×years + guaranteed, remaining)` — if `guaranteed` already includes bonus, it double counts. Verify against the NFL rule (dead = remaining proration + remaining *guaranteed base*), fix in `cap.ts`.
 4. `NEXT_PHASE_UI.md` UI Broadcast 2.0 (U1 TV field … U4), one push per section, after `anim` (merged) — U1 touches playAnim/MatchView.
 5. `FUTURES.md` rows 3 → 25 one by one (row 20 press conferences was **dropped by the user** — skip; row 23 = hof running).

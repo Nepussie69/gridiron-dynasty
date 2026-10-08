@@ -71,5 +71,5 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 65 | 2026-10-08 | Trade values seem all wrong (Garrett 99 valued below Ward 90) | Claude: new playerTradeValue — steep at the top (99 ≈ 2× a 90), young players at expected rating, smooth position-specific age decline (no cliff at 30), position value | ✅ |
 | 66 | 2026-10-08 | Don't offer same-position players in trade packages unless significantly lower value | Claude: findPackagesFor skips your players at the target's position unless worth < 60% of him | ✅ |
 | 67 | 2026-10-08 | Pay QBs closer to real 2025 money (~$55–60M top-5) | Claude: queued/doing in cap.ts | 🔨 |
-| 68 | 2026-10-08 | Make the Cap screen contract ledger sortable | Claude | 🔨 |
-| 69 | 2026-10-08 | Write a ChatGPT handover before 95% usage | Claude: OPENCODE_CONTINUE.md + AGENTS.md | 🔨 |
+| 68 | 2026-10-08 | Make the Cap screen contract ledger sortable | Claude: every column header sorts (▲/▼), click again to flip | ✅ |
+| 69 | 2026-10-08 | Write a ChatGPT handover before 95% usage | Claude: OPENCODE_CONTINUE.md + AGENTS.md (08a896e) | ✅ |
