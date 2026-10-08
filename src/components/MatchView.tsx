@@ -394,7 +394,7 @@ export function MatchView() {
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-display text-sm font-700 uppercase tracking-wide">Game day</span>
-                  {career && <CallModePicker scope={gameDay.state.ctx?.scope} mode={career.callMode} />}
+                  {career && <CallModePicker scope={gameDay.state.ctx?.scope} mode={career.callMode} keepPlays={idx + 1} onFallback={() => jump(match.plays.length - 1)} />}
                   <span className="text-[11px] text-white/55">
                     {moment ? 'Your call is coming up — the replay is catching up.' : 'Paused. Change the plan in the side panel, or move the game on.'}
                   </span>
@@ -630,8 +630,10 @@ function gameDayFieldPosForPlay(world: World, p: PlayEvent): string {
 
 /** L11.5 Q3: a collapsible in-game plan editor, limited to the side(s) you coach. */
 /** L12.6: how often a coached game stops for your call. */
-function CallModePicker({ scope, mode }: { scope?: 'off' | 'def' | 'both' | 'hc'; mode?: 'off' | 'def' | 'both' }) {
+function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' | 'def' | 'both' | 'hc'; mode?: 'off' | 'def' | 'both'; keepPlays?: number; onFallback?: () => void }) {
   const setCallMode = useGame((s) => s.setCallMode)
+  const showToast = useGame((s) => s.showToast)
+  const gameDayAdvance = useGame((s) => s.gameDayAdvance)
   if (!scope) return null
   const all: { id: 'key' | 'off' | 'def' | 'both'; label: string }[] = [
     { id: 'key', label: 'Key moments' },
@@ -645,7 +647,15 @@ function CallModePicker({ scope, mode }: { scope?: 'off' | 'def' | 'both' | 'hc'
       {all.map((o) => (
         <button
           key={o.id}
-          onClick={() => setCallMode(o.id)}
+          onClick={() => {
+            if (o.id === active) return
+            // Re-simulates from the play on screen so the new mode applies to the very
+            // next snap; if the rebuild can't match what you watched, jump to the latest play.
+            if (!setCallMode(o.id, keepPlays)) onFallback?.()
+            // Every-snap modes: bring up the next call right away.
+            else if (o.id !== 'key') void gameDayAdvance('moment')
+            showToast(o.id === 'key' ? 'Key moments only — from the next snap.' : `${o.label}: you call it from the next snap.`)
+          }}
           className={cn('rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase', active === o.id ? 'bg-white text-ink' : 'text-white/65 hover:text-white')}
         >
           {o.label}

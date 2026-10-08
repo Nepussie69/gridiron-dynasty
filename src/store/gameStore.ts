@@ -219,6 +219,9 @@ export interface GameDay {
   plan: { off: GamePlan; def: GamePlan }
   /** L11.5 Q3: every mid-game plan switch, shown in the post-game film card. */
   changes: PlanChange[]
+  /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. */
+  callStart?: 'off' | 'def' | 'both'
+  callSwitches?: { at: number; mode: 'off' | 'def' | 'both' | undefined }[]
 }
 
 let world: World = buildWorld(20261004)
@@ -390,7 +393,7 @@ interface GameStore {
   setGameDayPlan: (side: 'off' | 'def', plan: GamePlan) => void
   answerGameMoment: (choiceId: string) => Promise<void>
   /** L12.6: how often a coached game asks for your call (applies from the next snap). */
-  setCallMode: (mode: 'key' | 'off' | 'def' | 'both') => void
+  setCallMode: (mode: 'key' | 'off' | 'def' | 'both', keepPlays?: number) => boolean
   simGameDayToEnd: () => Promise<void>
   abandonGameDay: () => void
   statsDb: () => CareerDatabase
@@ -983,14 +986,55 @@ export const useGame = create<GameStore>((set, get) => ({
   },
   closeMatch: () => set({ match: null }),
 
-  setCallMode: (mode) => {
+  setCallMode: (mode, keepPlays) => {
     const career = get().career
-    if (!career) return
+    if (!career) return false
     const callMode = mode === 'key' ? undefined : mode
     const gd = get().gameDay
-    if (gd?.state.ctx) gd.state.ctx.callAll = callMode
+    let applied = true
+    if (gd?.state.ctx) {
+      // User (2026-10-08): "make it apply straight away". The sim may already be
+      // ahead of the replay. Rebuild the game up to the play on screen by replaying
+      // the same seed with the same answers (the sim is deterministic), check every
+      // watched play is identical, then switch mode — so the very next snap obeys it.
+      const old = gd.state
+      const oldCtx = gd.state.ctx
+      const game = world.schedule.find((g) => g.id === gd.gameId)
+      if (keepPlays !== undefined && game && keepPlays < old.plays.length && !old.done) {
+        const switches = (gd.callSwitches ?? []).filter((w) => w.at <= keepPlays)
+        const rebuilt = createGame(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, { ...oldCtx, callAll: gd.callStart })
+        let ok = true
+        let guard = 4000
+        while (ok && rebuilt.plays.length < keepPlays && !rebuilt.done && guard-- > 0) {
+          // Re-apply earlier mid-game switches at the play they took effect.
+          for (const w of switches) if (w.at === rebuilt.plays.length) rebuilt.ctx!.callAll = w.mode
+          const m = runUntil(world, rebuilt, 'play')
+          if (m) {
+            const choice = old.answers[m.id]
+            if (choice === undefined) ok = false
+            else answerMoment(rebuilt, choice, old.autoAnswered?.[m.id] ? 'standing' : 'user')
+          }
+        }
+        ok = ok && rebuilt.plays.length === keepPlays && rebuilt.plays.every((p, i) => {
+          const q = old.plays[i]
+          return q && q.offId === p.offId && q.concept === p.concept && q.result === p.result && q.yards === p.yards
+        })
+        if (ok) {
+          rebuilt.ctx!.callAll = callMode
+          set({ gameDay: { ...gd, state: rebuilt, moment: null, callSwitches: [...switches, { at: keepPlays, mode: callMode }] }, match: finishGame(rebuilt) })
+        } else {
+          oldCtx.callAll = callMode
+          set({ gameDay: { ...gd, callSwitches: [...(gd.callSwitches ?? []), { at: old.plays.length, mode: callMode }] } })
+          applied = false
+        }
+      } else {
+        oldCtx.callAll = callMode
+        set({ gameDay: { ...gd, callSwitches: [...(gd.callSwitches ?? []), { at: old.plays.length, mode: callMode }] } })
+      }
+    }
     set({ career: { ...career, callMode }, tick: get().tick + 1 })
     get().save()
+    return applied
   },
 
   startGameDay: () => {
@@ -1013,7 +1057,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // L11.5 Q2: run out the first drive so the user sees the game start.
     const moment = runUntil(world, state, 'drive')
     set({
-      gameDay: { gameId: game.id, state, moment, plan, changes: [] },
+      gameDay: { gameId: game.id, state, moment, plan, changes: [], callStart: career.callMode, callSwitches: [] },
       match: finishGame(state),
       matchSeq: get().matchSeq + 1,
       tick: get().tick + 1,
