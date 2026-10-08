@@ -73,6 +73,8 @@ export interface PlaybookState {
   staffYears: number
   /** Cohesion 0-1: how intact the unit + staff are around him. Caps mastery. */
   cohesion: number
+  /** L12.13 M4: mastery points gained this season (for the UI tooltip). */
+  seasonGain?: number
   /** The scheme this mastery is for — a change resets progress. */
   scheme: string
   /** Team the player learned it with. */

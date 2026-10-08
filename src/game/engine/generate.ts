@@ -57,6 +57,8 @@ export interface World {
   rookieScaleV2?: boolean
   /** L12.10 B0: set once legacy utility/blocking backs have been moved to fullback. */
   fbMigrated?: boolean
+  /** L12.13 M1: set once starting mastery has been seeded (old saves are reseeded on load). */
+  masterySeedV2?: boolean
   teams: Team[]
   byId: Record<string, Team>
   players: Player[]

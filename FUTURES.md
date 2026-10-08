@@ -6,7 +6,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | # | Feature | What it is | Depends on | Status |
 |---|---|---|---|---|
 | 1 | **Full playbook + fullback** (`NEXT_PHASE_L12_10.md`) | Route tree (~26 routes), formations × real concepts, FB position, pick formation → play on calls, ratings visible in the animation | P5 ✅, routes ✅ | P1 ✅ (B0–B4) · P2 (B5–B6) 🔨 building |
-| 1a | **Playbook mastery that's real** (`NEXT_PHASE_L12_13.md`) | Realistic starting mastery, learning from snaps + production, relative effects for every unit in the sim, readable tooltip | culture | ⏳ next after culture |
+| 1a | **Playbook mastery that's real** (`NEXT_PHASE_L12_13.md`) | Realistic starting mastery, learning from snaps + production, relative effects for every unit in the sim, readable tooltip | culture | ✅ merged |
 | 1a2 | **Stars are rare** (`NEXT_PHASE_L12_15.md`) | ~25–32 players at 90+ (one per club), more 80s; rank order kept | contracts | ⏳ after contracts |
 | 1b | **Real NFL numbers retune** (`NEXT_PHASE_REALISM.md`) | Every team stat to the 2015–2024 NFL averages (passing ~241, comp 64%, sacks 2.4, ypc 4.3, red-zone TD 56% …) | playbook, culture | ⏳ next after them |
 | 2 | **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`) | TV field (yard numbers, blue LOS + yellow 1st-down line, end zones, camera follow, result toasts), scorebug/dock, dark mode, ⌘K, screen passes | current batch merged | ⏳ |

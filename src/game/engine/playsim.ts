@@ -14,7 +14,7 @@ import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
-import { masteryMultiplier, teamCohesion } from './playbook'
+import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { SCHEME_MENUS } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
 
@@ -176,11 +176,32 @@ function mkAttrs(p: Player): Record<string, number> {
   return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
 }
 
-/** Production multiplier from playbook mastery in the current system. */
-function famMult(p: Player | undefined): number {
-  if (!p) return 1
-  return masteryMultiplier(p)
+// ── L12.13 M3: mastery relative to the league mean for the position group ────
+// Each term is (mastery − league mean) × weight, so an average club adds 0 and
+// league averages hold. The QB/carrier slopes match the old absolute terms, so a
+// 0→100 swing is unchanged. No rng() draw is added or removed.
+/** Mastery points above the league mean for this player's position group. */
+function masteryOffset(p: Player | undefined, means: MasteryMeans): number {
+  if (!p) return 0
+  const g = masteryGroup(p.pos)
+  return g ? (p.playbook?.pct ?? 0) - means[g] : 0
 }
+/** Mean mastery offset (points) across a mixed group of players. */
+function masteryRelAvg(list: Array<Player | undefined>, means: MasteryMeans): number {
+  const ps = list.filter((p): p is Player => !!p)
+  if (!ps.length) return 0
+  return ps.reduce((a, p) => a + masteryOffset(p, means), 0) / ps.length
+}
+/** Team-wide mastery offset for one side of the ball (mental-error thresholds). */
+function teamMasteryOffset(world: World, teamId: string, side: 'off' | 'def', means: MasteryMeans): number {
+  const ps = (world.roster[teamId] ?? []).filter((p) => (p.side === 'DEF' ? 'def' : 'off') === side)
+  return masteryRelAvg(ps, means)
+}
+// The relative QB/carrier term differentiates against the league mean, but it is
+// anchored to the pre-L12.13 league-average edge (a 0%-mastery league) so the
+// league scoring averages it was calibrated against are unchanged.
+const MASTERY_ANCHOR_QB = (0.9 - 1) * 90
+const MASTERY_ANCHOR_CARRIER = (0.9 - 1) * 40
 function avg(list: number[]) {
   return list.length ? list.reduce((a, b) => a + b, 0) / list.length : 70
 }
@@ -790,7 +811,7 @@ function passTackler(n: number, defId: string, coverId: string | undefined, saf:
   return coverId ?? saf[0]?.id ?? lbs[0]?.id
 }
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0): PlayOutcome {
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
@@ -844,7 +865,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       pressure += q4 ? 1.5 : -1.5
     }
   }
-  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70)) - (isQ4 ? relAvg('STA', [...ol, qb]) * 0.08 * E2_W : 0)
+  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70)) - (isQ4 ? relAvg('STA', [...ol, qb]) * 0.08 * E2_W : 0) + clamp(masteryRelAvg(ol, means) * 0.04, -2, 2)
   const defPlan = planFor(defId, 'def')
   // G6 third-down heat: extra blitz on the opponent's 3rd downs.
   const heat = hasFix(env, defId, 'thirdDownHeat') && env?.down === 3 ? 0.15 : 0
@@ -931,7 +952,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     Math.min(readRank, 3) * TARGET_TUNE.readPenalty +
     qbDeepThp(qbA, concept.depth) +
     targetAccCod(target, tA) +
-    releaseVsPress(target, tA, coverPlayer, dStyle.manCoverage, concept.depth)
+    releaseVsPress(target, tA, coverPlayer, dStyle.manCoverage, concept.depth) +
+    // L12.13 M3: a receiver's mastery of the system shows in his separation.
+    (target && (target.pos === 'WR' || target.pos === 'TE') ? clamp(masteryOffset(target, means) * 0.06, -3, 3) : 0)
   const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
   const zoneCov = avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
   // G11 targetWeakCB: on 35% of passes the coverage keys their weakest corner
@@ -964,6 +987,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // L12 E2: secondary athleticism joins coverage; good recognition covers screens;
   // a tired defense loses a step in Q4.
   coverage += dbCoverageExtras(cbs, saf) * E2_W
+  // L12.13 M3: a secondary's mastery of the system shows in its coverage.
+  coverage += clamp(masteryRelAvg([...cbs, ...saf], means) * 0.05, -3, 3)
   if (concept.depth <= 2 && concept.yac >= 0.8) coverage += recog * 0.4 * E2_W
   if (isQ4) coverage += relAvg('STA', [...cbs, ...saf, ...lbs, ...dl]) * 0.12 * E2_W
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
@@ -975,7 +1000,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) * pacMult * recogMult : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
-  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + (famMult(qb) - 1) * 90 + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5 - spyPenalty
+  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + masteryOffset(qb, means) * 0.252 + MASTERY_ANCHOR_QB + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5 - spyPenalty
 
   // Completion probability based on real league rate vs. this matchup. Coordinator
   // quality shifts it: a great OC helps, a great DC hurts.
@@ -1062,7 +1087,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
 }
 
-function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0): PlayOutcome {
+function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only.
@@ -1126,7 +1151,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
 
-  const runBlock = avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te)
+  const runBlock = avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te) + clamp(masteryRelAvg(ol, means) * 0.06, -3, 3)
   const runDefBase = avg(dl.map((p) => (mkAttrs(p).BSH ?? 70) * 0.5 + (mkAttrs(p).TAK ?? 70) * 0.5)) * dStyle.runFit
   // The live defensive plan moves the front: stacking the box stops the run,
   // a soft-zone light box gives a little back on the ground.
@@ -1135,8 +1160,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const boxMult = hasFix(env, defId, 'loadTheBox') ? 1.08 : 1
   const runDef = ((dp
     ? runDefBase * (1 + (dp.aggression - 0.5) * 0.06 - (dp.coverage <= 0 ? 0.03 : 0))
-    : runDefBase) * boxMult) + relAvg('STR', dl) * 0.05 * E2_W
-  const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + lbRunExtras(lbs) * E2_W
+    : runDefBase) * boxMult) + relAvg('STR', dl) * 0.05 * E2_W + clamp(masteryRelAvg(dl, means) * 0.05, -3, 3) + clamp(masteryRelAvg([...cbs, ...saf], means) * 0.03, -2, 2)
+  const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + lbRunExtras(lbs) * E2_W + clamp(masteryRelAvg(lbs, means) * 0.05, -3, 3)
   const elusiveness = carrier?.pos === 'QB'
     ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1 + rmean('QB', 'RUN', cA.RUN ?? 70) * 0.4 * E2_W
     : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
@@ -1150,7 +1175,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + (famMult(carrier) - 1) * 40 + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (call?.edge ?? 0) * 1.6
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (call?.edge ?? 0) * 1.6
     + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0)
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
@@ -1343,6 +1368,10 @@ export interface GameState {
   cohesion?: Record<string, { off: number; def: number }>
   /** L12.9 K1: league mean cohesion per side, computed once at kickoff. */
   cohesionMean?: { off: number; def: number }
+  /** L12.13 M3: league mean mastery per position group, fixed for the game. */
+  mastery: MasteryMeans
+  /** L12.13 M3: per-team mental-error multiplier for penalty thresholds. */
+  mental: Record<string, { off: number; def: number }>
 }
 
 const MAX_PLAYS = 210
@@ -1751,6 +1780,13 @@ function usedTimeout(world: World, s: GameState, offId: string, defId: string, o
 export function createGame(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx): GameState {
   const isCollege = world.byId[homeId].tier !== 'NFL'
   const rng = makeRng(seed)
+  // L12.13 M3: league mastery means and per-team mental-error multipliers are
+  // fixed for the game (no rng drawn here, so the stream is unchanged).
+  const means = leagueMasteryMeans(world)
+  const teamMental = (id: string) => ({
+    off: clamp(1 - teamMasteryOffset(world, id, 'off', means) * 0.002, 0.95, 1.05),
+    def: clamp(1 - teamMasteryOffset(world, id, 'def', means) * 0.002, 0.95, 1.05),
+  })
   const s: GameState = {
     rng,
     plays: [],
@@ -1796,6 +1832,8 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     halfAdjustDone: false,
     qbChangeChecked: false,
     twoMinDrives: 0,
+    mastery: means,
+    mental: { [homeId]: teamMental(homeId), [awayId]: teamMental(awayId) },
   }
   s.defId = s.offId === homeId ? awayId : homeId
   // L12.9 K1: unit cohesion (relative to the league mean) nudges pre-snap penalty
@@ -1893,8 +1931,8 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
     const concept = pickConcept(s.rng, style, 4, 2, 0)
     const env = envFor(s)
     const out = concept.type === 'pass'
-      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n)
-      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n)
+      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n, s.mastery)
+      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n, s.mastery)
     s.clock -= out.timeUsed * s.pace
     const good = !out.turnover && out.yards >= 2
     if (good) {
@@ -2080,7 +2118,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   // Defensive penalty (~3.5%) — 5 yards and an automatic first down.
   const defDisc = ocEffect(world, defId).discipline * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
-  if (s.rng() < 0.035 * defDisc) {
+  // L12.13 M3: a defense that knows the system makes fewer mental errors.
+  if (s.rng() < 0.035 * defDisc * (s.mental[defId]?.def ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
     s.yard = clamp(s.yard + 5, 1, 99)
@@ -2098,7 +2137,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // Offensive penalty (~2.5%, ×1.3 in the G7 hurry-up) — 5 yards, replay the down.
   const offDisc = ocEffect(world, offId).discipline * cohesionMult(s.cohesionMean?.off, s.cohesion?.[offId]?.off, 0.6)
   const hurryPen = s.twoMinMode === 'hurry' ? 1.3 : 1
-  if (s.rng() < 0.025 * offDisc * hurryPen) {
+  if (s.rng() < 0.025 * offDisc * hurryPen * (s.mental[offId]?.off ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
     s.yard = clamp(s.yard - 5, 1, 99)
@@ -2145,8 +2184,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   const env = envFor(s)
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n)
-    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
+    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
 
   // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
