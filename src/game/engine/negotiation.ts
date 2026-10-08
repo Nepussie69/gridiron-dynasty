@@ -96,6 +96,12 @@ export function buildExtension(p: Player, season: number, offer: ExtensionOffer)
   const wsum = weights.reduce((a, b) => a + b, 0)
   const base = weights.map((w) => Math.round((totalBase * w) / wsum))
   const years = c.years + length
+  // `guaranteed` is remaining guaranteed BASE salary. The offer's guarantee is a
+  // share of the whole (bonus-inclusive) new money, so only the base portion is
+  // added here; the signing bonus is already guaranteed and is accounted for
+  // through `proration`. Recording the bonus-inclusive figure here double
+  // counted it in dead money.
+  const guaranteedBase = Math.max(0, Math.round(total * guaranteedPct) - signingBonus)
   const next: Contract = {
     ...c,
     years,
@@ -103,7 +109,7 @@ export function buildExtension(p: Player, season: number, offer: ExtensionOffer)
     base: [...c.base, ...base],
     signingBonus: c.signingBonus + signingBonus,
     proration: c.proration + Math.round(signingBonus / length),
-    guaranteed: c.guaranteed + Math.round(total * guaranteedPct),
+    guaranteed: c.guaranteed + guaranteedBase,
     annual: Math.round((c.annual * c.years + offer.aav * length) / years),
     signedThrough: season + years - 1,
   }

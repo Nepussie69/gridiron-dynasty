@@ -4,7 +4,7 @@ import type {
 } from '../types'
 import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
-import { capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
+import { SALARY_CAP, capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
 import { frontOfficeProfile } from './hiring'
 import { freshDraftWindow } from './picks'
@@ -221,14 +221,88 @@ function ovrFor(rng: Rng, prestige: number, pos: Position) {
   return Math.max(50, Math.min(95, Math.round(center + posPremium + (rng() - 0.5) * 18)))
 }
 
-/** Scale a team's contracts so total cap usage lands near a target. */
+/**
+ * Q1: a club's biggest deals (its top QB and top-8 AAVs) are "premium" and keep
+ * their market value when the cap forces a haircut; the compression is pushed
+ * onto the middle of the roster and backups. A single flat factor used to drag
+ * the elite market (top-5 QB ~$62M) down to ~$44M signed.
+ */
+const PREMIUM_DEALS = 8
+/** Premium deals keep this share of market when a club has to fit the cap. */
+const PREMIUM_KEEP = 0.93
+/** Never compress a contract below this share of market. */
+const MIN_FACTOR = 0.2
+/**
+ * Hard roster-spending ceiling as a share of the cap. Leaves room for a club's
+ * dead money so the flat starting dead-money roll never pushes it over the cap.
+ */
+const FIT_CEILING = 0.9
+
+/**
+ * Scale a team's contracts so total cap usage lands near a target — while its
+ * premium deals (top QB + biggest AAVs) stay near market and the mid/low tier
+ * and backups take the haircut. After generation the league's top-5 signed AAV
+ * at each position sits in the real 2025 bands instead of a uniform ~0.70 cut.
+ */
 export function fitToCap(roster: Player[], target: number) {
   const used = roster.reduce((s, p) => s + p.contract.capHit, 0)
   if (used <= 0) return
-  const factor = target / used
-  if (factor > 0.999 && factor < 1.001) return
+  const uniform = target / used
+  if (uniform > 0.999 && uniform < 1.001) return
+
+  // Rank by market AAV: the club's biggest deals (and its starting QB) lead.
+  const byAnnual = [...roster].sort((a, b) => b.contract.annual - a.contract.annual)
+  const premium = new Set(byAnnual.slice(0, PREMIUM_DEALS).map((p) => p.id))
+  const qb = byAnnual.find((p) => p.pos === 'QB')
+  if (qb) premium.add(qb.id)
+
+  const premiumHit = roster.reduce((s, p) => s + (premium.has(p.id) ? p.contract.capHit : 0), 0)
+  const restHit = used - premiumHit
+
+  let fPremium: number
+  let fRest: number
+  if (uniform >= 1) {
+    // Under the target: share the (small) increase evenly rather than distort.
+    fPremium = fRest = uniform
+  } else {
+    // Over the target: the premium tier keeps market (mild PREMIUM_KEEP trim so
+    // the league top-5 lands in band); the rest absorbs the difference.
+    fPremium = Math.max(uniform, PREMIUM_KEEP)
+    fRest = restHit > 0 ? (target - premiumHit * fPremium) / restHit : fPremium
+    if (fRest < MIN_FACTOR) {
+      // Backups cannot absorb enough on their own — pull the premium tier down.
+      fRest = MIN_FACTOR
+      fPremium = premiumHit > 0 ? (target - restHit * MIN_FACTOR) / premiumHit : fPremium
+    }
+  }
+  // The 900K base floor means the low tier can bottom out before the arithmetic
+  // target is reached. That is fine (moves us toward a top-heavy, real-NFL
+  // shape), but a club may not breach the hard ceiling, which leaves room for
+  // its dead money under the cap. When it would, pull the premium tier down
+  // until it fits: `hit` is the real cap-hit sum under the floor.
+  const hit = (fp: number, fr: number) =>
+    roster.reduce((s, p) => {
+      const f = premium.has(p.id) ? fp : fr
+      return s + Math.max(900_000, Math.round((p.contract.base[0] ?? 0) * f)) + Math.max(0, Math.round(p.contract.proration * f))
+    }, 0)
+  const ceiling = Math.round(SALARY_CAP * FIT_CEILING)
+  if (uniform < 1 && fPremium > 0 && hit(fPremium, fRest) > ceiling) {
+    let lo = 0
+    let hi = fPremium
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2
+      if (hit(mid, fRest) > ceiling) hi = mid
+      else lo = mid
+    }
+    fPremium = lo
+  }
+  // Scale down only when needed; never inflate past market on a haircut pass.
+  fRest = Math.min(fRest, 1)
+  fPremium = Math.min(fPremium, 1)
+
   for (const p of roster) {
     const c = p.contract
+    const factor = premium.has(p.id) ? fPremium : fRest
     const base = c.base.map((b) => Math.max(900_000, Math.round(b * factor)))
     const signingBonus = Math.round(c.signingBonus * factor)
     const proration = Math.max(0, Math.round(c.proration * factor))

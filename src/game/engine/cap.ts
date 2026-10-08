@@ -152,16 +152,23 @@ export function remainingContractValue(c: Contract) {
 
 /**
  * Dead money if released now. Real NFL rule: the remaining prorated signing
- * bonus (every remaining year, void years included) plus the guaranteed salary
- * still owed — never more than the remaining total contract value. The cap
- * matters because a guaranteed percentage can exceed the base dollars added by
- * an extension.
+ * bonus (every remaining year, void years included) plus the guaranteed BASE
+ * salary still owed — never more than the remaining total contract value.
+ *
+ * `guaranteed` is documented as remaining guaranteed base salary, but an
+ * extension can record a percentage of the whole (bonus-inclusive) new money,
+ * which would double count the signing bonus already amortized through
+ * `proration`. Capping it at the remaining base salary keeps the bonus from
+ * being counted twice. The cap matters because a guaranteed percentage can
+ * exceed the base dollars added by an extension.
  */
 export function deadMoney(c: Contract) {
   const remainingBonus = Math.max(0, finite(c.proration)) * Math.max(0, finite(c.years) + finite(c.voidYears))
-  const guaranteed = Math.max(0, finite(c.guaranteed))
+  const remainingBase = (c.base ?? []).reduce((a, b) => a + finite(b), 0)
+  // Guarantees guarantee base salary: never count more base than remains.
+  const guaranteedBase = Math.min(Math.max(0, finite(c.guaranteed)), remainingBase)
   const remainingValue = remainingContractValue(c)
-  return Math.round(Math.min(remainingBonus + guaranteed, remainingValue))
+  return Math.round(Math.min(remainingBonus + guaranteedBase, remainingValue))
 }
 
 /** Cap savings from releasing a player now (cap hit − dead money). */
