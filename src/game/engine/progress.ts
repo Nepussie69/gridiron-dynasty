@@ -1,35 +1,106 @@
-import type { CareerState, Contract, Player, Recommendation } from '../types'
+import type { CareerState, Contract, Player, Position, Recommendation, SeasonStats } from '../types'
 import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT } from './cap'
 import { coachEffect } from './coaching'
 import { generateProspectClass, indexPlayers, type World } from './generate'
 import { depthAt, STARTERS } from './depth'
+import { coverageGrade, passerRating } from './stats'
 import { ledgerFreeAgent } from './picks'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
 
 // ── Player development ───────────────────────────────────────────────────────
+/**
+ * L12.7 D2: a 0–1 score for how much a young player actually earned his growth
+ * this season, from playing time, starting status and production. `games` is the
+ * season's NFL line; a practice-squad player counts as zero games and no start.
+ */
+function experienceScore(world: World, p: Player, psIds: Set<string>): number {
+  const onPS = psIds.has(p.id)
+  const line = onPS ? undefined : p.stats?.find((s) => s.season === world.season && s.level === 'NFL')
+  const games = line?.games ?? 0
+  const starter = !onPS && isStarter(world, p)
+  const production = line ? productionScore(p.pos, line) : 0.5
+  return clamp(0.45 * Math.min(1, games / 14) + 0.35 * (starter ? 1 : 0) + 0.2 * production, 0, 1)
+}
+
+function isStarter(world: World, p: Player): boolean {
+  if (!p.teamId) return false
+  const idx = depthAt(world, p.teamId, p.pos).findIndex((x) => x.id === p.id)
+  return idx >= 0 && idx < (STARTERS[p.pos] ?? 1)
+}
+
+/**
+ * A position-relative 0–1 production grade from a season line: passer rating for
+ * QBs, yards-per-carry plus volume for RBs, yards-per-target plus volume for
+ * WR/TE, and the front-seven / coverage stats for defenders. Offensive linemen
+ * are graded on games played (they generate no stats). 0.5 when there is no line.
+ */
+function productionScore(pos: Position, line: SeasonStats): number {
+  switch (pos) {
+    case 'QB':
+      return clamp(passerRating(line) / 110, 0, 1)
+    case 'RB': {
+      const ypc = line.rushAtt > 0 ? line.rushYds / line.rushAtt : 0
+      return clamp((ypc / 5) * 0.6 + (line.rushYds / 1200) * 0.4, 0, 1)
+    }
+    case 'WR':
+    case 'TE': {
+      const ypt = line.targets > 0 ? line.recYds / line.targets : 0
+      return clamp((ypt / 9) * 0.6 + (line.recYds / 1100) * 0.4, 0, 1)
+    }
+    case 'OT':
+    case 'OG':
+    case 'C':
+      return clamp(line.games / 17, 0, 1)
+    case 'DE':
+    case 'DT':
+      return clamp((line.tackles / 60) * 0.5 + (line.defSacks / 10) * 0.4 + ((line.tfl ?? 0) / 15) * 0.1, 0, 1)
+    case 'LB':
+      return clamp((line.tackles / 100) * 0.6 + (line.defSacks / 6) * 0.2 + (line.defInts / 4) * 0.2, 0, 1)
+    case 'CB':
+    case 'S': {
+      const cov = coverageGrade(line)
+      return clamp((cov == null ? 0.5 : cov / 100) * 0.7 + (line.defInts / 5) * 0.2 + (line.passDef / 12) * 0.1, 0, 1)
+    }
+    default:
+      return 0.5
+  }
+}
+
+/** A short label for a player's last-season development reason (D3). */
+export function experienceLabel(experience: number): 'starter' | 'rotation' | 'barely played' {
+  return experience >= 0.55 ? 'starter' : experience >= 0.3 ? 'rotation' : 'barely played'
+}
+
 export function developPlayers(world: World) {
   const rng = makeRng(world.seed + world.season * 31337)
   const retired: Player[] = []
+  // Practice-squad players get no snaps and no starts, by rule (D2).
+  const psIds = new Set<string>()
+  for (const list of Object.values(world.practiceSquad ?? {})) for (const p of list) psIds.add(p.id)
 
   for (const p of world.players) {
+    const ovrBefore = p.ovr
     p.age += 1
     // Staff quality changes how fast young players grow and how slowly vets decline.
     // Character (hidden) is the second lever: motor and maturity decide whether
     // the talent actually arrives. It never touches current ratings directly.
     const dev = (p.teamId ? coachEffect(world, p.teamId).development : 1) * (p.character ? devModifier(p.character) : 1)
     const growth = Math.max(0, p.pot - p.ovr)
+    // D2: growth for young players is earned on the field, not handed out by age.
+    const experience = p.age <= 26 ? experienceScore(world, p, psIds) : 0
     if (p.age <= 24) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.34 + rng() * 0.2) * dev)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.1 + 0.4 * experience + rng() * 0.12) * dev)), 40, 99)
     } else if (p.age <= 26) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.2 + rng() * 0.15) * dev)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.06 + 0.26 * experience + rng() * 0.08) * dev)), 40, 99)
     } else if (p.age <= 29) {
       p.ovr = clamp(p.ovr + (rng() < 0.45 ? 1 : 0) - (rng() < 0.25 ? 1 : 0), 40, p.pot)
     } else {
       const decline = p.age >= 34 ? 3 : p.age >= 32 ? 2 : 1
       p.ovr = clamp(p.ovr - (rng() < 0.7 ? decline : 0), 40, 99)
     }
+    if (p.age <= 26) p.lastGrowth = { season: world.season, from: ovrBefore, to: p.ovr, experience }
 
     // Bust risk: a player who never got the motor can stall out. Generated
     // players only — we never invent off-field failure for real names.

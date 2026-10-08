@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, statShape, gameDayEquivalence, clockProbe, decisionProbe, waiverProbe, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, statShape, gameDayEquivalence, clockProbe, decisionProbe, waiverProbe, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 
@@ -22,6 +22,7 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__seasonProbe = seasonProbe
   ;(window as unknown as Record<string, unknown>).__tradeProbe = tradeProbe
   ;(window as unknown as Record<string, unknown>).__balanceProbe = balanceProbe
+  ;(window as unknown as Record<string, unknown>).__rookieProbe = rookieProbe
   ;(window as unknown as Record<string, unknown>).__careerSmoke = careerSmoke
   ;(window as unknown as Record<string, unknown>).__leaguePbpProbe = leaguePbpProbe
   ;(window as unknown as Record<string, unknown>).__adviceProbe = adviceProbe

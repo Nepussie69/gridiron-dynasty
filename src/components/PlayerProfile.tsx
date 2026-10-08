@@ -3,7 +3,8 @@ import { money } from '../lib/format'
 import { attributesFor, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
 import { RATING_INFO, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel, schemeFit } from '../game/engine/style'
-import { careerTotals, coverageGrade } from '../game/engine/stats'
+import { careerTotals, coverageGrade, seasonLine } from '../game/engine/stats'
+import { experienceLabel } from '../game/engine/progress'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, DevBadge, MiniBars, OvrBadge, RatingBar, TeamCrest } from '../ui/kit'
 import type { Player } from '../game/types'
@@ -41,6 +42,14 @@ export function PlayerProfile() {
     : undefined
   const fit = schemeLabel ? fitLabel(player, schemeLabel, player.side === 'DEF' ? 'DEF' : 'OFF') : null
   void schemeFit
+
+  // D3 (L12.7): young players show where their ceiling is and how they grew.
+  const g = player.lastGrowth
+  const devGames = g ? seasonLine(player, g.season, 'NFL')?.games ?? 0 : 0
+  const devLine =
+    g && g.experience >= 0.3
+      ? `Ceiling ${player.pot} · grew ${g.to - g.from >= 0 ? '+' : ''}${g.to - g.from} last season (${experienceLabel(g.experience)}, ${devGames} games)`
+      : `Ceiling ${player.pot} · needs snaps to grow`
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-ink/40 backdrop-blur-[1px]" onClick={close}>
@@ -103,6 +112,13 @@ export function PlayerProfile() {
             <div className="label mb-3">Attributes</div>
             <MiniBars items={posGroups} />
           </div>
+
+          {player.age <= 26 && (
+            <div className="rounded-xl border border-line bg-surface p-4">
+              <div className="label mb-1">Development</div>
+              <div className="font-cond text-sm font-600 text-ink">{devLine}</div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl border border-line bg-surface p-4">

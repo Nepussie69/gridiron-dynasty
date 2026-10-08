@@ -196,6 +196,12 @@ export interface Player {
   playbook?: PlaybookState
   /** How this player got to his current club (#5) — the fingerprints of a career. */
   origin?: PlayerOrigin
+  /**
+   * L12.7 D2: the last season-end development step. `experience` is the 0–1
+   * playing-time/production score that drove the gain. Used by the player
+   * profile and the season-end development report (D3).
+   */
+  lastGrowth?: { season: number; from: number; to: number; experience: number }
 }
 
 /**
