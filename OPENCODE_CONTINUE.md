@@ -1,11 +1,11 @@
 # Handoff — start here (any orchestrator: Claude, GPT/Codex, OpenCode)
 
-_Updated 2026-10-08 ~18:55 AEDT by Claude Opus 5.5, minutes before a usage limit. Live state below; re-check processes and git before acting. Background/workflow: `ORCHESTRATION_HANDOVER.md`._
+_Updated 2026-10-08 ~19:05 AEDT (4173 preview rebuilt at `aac267f`: everything through the calendar + rookies merges) by Claude Opus 5.5, minutes before a usage limit. Live state below; re-check processes and git before acting. Background/workflow: `ORCHESTRATION_HANDOVER.md`._
 
 ## How we work now (user's standing instructions, 2026-10-08)
 - **"Keep going through all the pushes"** and **"get DeepSeek doing updates in the background so we can move fast"**: run several DeepSeek Flash pushes **in parallel, each in its own git worktree**, then verify and merge each into `main`.
 - **"Keep adding my updates into the table for DeepSeek to build on"**: every user request goes into `PLAYTEST_BACKLOG.md` (one row each) → a spec task (`NEXT_PHASE_L12_x.md`) → a push. Update the row's status when merged.
-- After each merge: give the user a **status table**. The user is playtesting on http://127.0.0.1:4173 (frozen preview, still `b0e4f1e` — update it when a batch is merged, see below) and sends screenshots with requests.
+- After each merge: give the user a **status table**. The user is playtesting on http://127.0.0.1:4173 (preview rebuilt at `aac267f` on 2026-10-08 19:05 — rebuild it when a batch is merged, see below) and sends screenshots with requests.
 - Commit trailer: name your model (Claude: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Never commit `NEXT_PHASE.md`, `.claude/`, `CLAUDE_RESUME.md`. Keep this repo separate from the CRM repo.
 
 ## Parallel push tooling
@@ -22,7 +22,6 @@ _Updated 2026-10-08 ~18:55 AEDT by Claude Opus 5.5, minutes before a usage limit
 |---|---|---|---|---|
 | `p5` / `wt-p5` | scratchpad/wt-p5 | NEXT_PHASE_L12.md P5 (E2 defense/K/general ratings, E3 recalibrate, `__ratingSpread`) | /private/tmp/gridiron-l12p5.txt | Sim change: verify all 3 seeds in bands, statShape all ✅, equivalence 20/20, spread table. Appends L12 section to HANDOFF.md |
 | `l12_5` / `l12_5-trade` | scratchpad/trade-wt | NEXT_PHASE_L12_5.md T1–T5 trade desk | /private/tmp/gridiron-l12_5.txt | Launched by `/private/tmp/ds-push-wt`. Slow start |
-| `calendar` / `wt-calendar` | scratchpad/wt-calendar | NEXT_PHASE_L12_6.md P2 C1–C3 (offseason stages, draft only in April, FA in March, `__faFlowProbe`) | /private/tmp/gridiron-l12_6p2.txt | Store-heavy; smoke both paths 0/0 |
 | `hours` / `wt-hours` | scratchpad/wt-hours | NEXT_PHASE_L12_9.md P1 H1 (remove weekly hours, passive gains, pacing ±1 season) + L1 (coach Ledger) | /private/tmp/gridiron-l12_9p1.txt | Check the before/after pacing table |
 | `reads` / `wt-reads` | scratchpad/wt-reads | NEXT_PHASE_L12_7.md D5 (Now/Ceiling ranges on scouting reads) | /private/tmp/gridiron-l12_7p2.txt | Display only |
 | `qbrush` / `wt-qbrush` | scratchpad/wt-qbrush | Backlog #24: AI QBs get rushing in `statAlloc` | /private/tmp/gridiron-qbrush.txt | Team totals must not change; equivalence 20/20 |
@@ -37,5 +36,5 @@ Expected merge conflicts: `src/store/gameStore.ts` (calendar, hours, maybe trade
 - **Blocked on the user:** L12.9 K2 culture contract discount (contract pricing); team passing yards ~265 vs NFL ~220 (retune needs OK).
 
 ## Done today (main)
-L12 P2 `e1497f3` · game-day: jersey numbers, Space/Play, extra-point spot `10c7eb8`, live box `c34772a`, play log `ae568dd`, call every play `86b1c28` · L12 P4 `f129307` · potential bubble `3fc162e` · "Success Rate" `c3e3d00` · Stats Hub `1726392` · rookies D1–D4 `2097501`.
+L12 P2 `e1497f3` · game-day: jersey numbers, Space/Play, extra-point spot `10c7eb8`, live box `c34772a`, play log `ae568dd`, call every play `86b1c28` · L12 P4 `f129307` · potential bubble `3fc162e` · "Success Rate" `c3e3d00` · Stats Hub `1726392` · rookies D1–D4 `2097501` · calendar C1–C3 `983b153` (merged `7265ebb`).
 Lint baseline **4 warnings**. Guardrails as in `NEXT_PHASE_L12.md` DO NOT + no rng draws added/removed, optional save fields, canonical player objects, no new deps.
