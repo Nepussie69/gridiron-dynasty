@@ -96,6 +96,14 @@ function allocateWeekStats(world: World, week: number, exceptGameId?: string) {
   }
 }
 
+/** R5: weekly minor-injury base. Retuned so a 53-man club sees the NFL norm of
+ *  ≈ 6–8 injury events per month of season; the TGH multiplier below keeps the
+ *  low-vs-high exposure ratio near the spec's 1.5×. Draw sites are unchanged. */
+const INJ_BASE = 0.029
+/** R5: TGH slope (rating points per unit of relative risk). 80 sizes a natural
+ *  TGH 60 vs 95 gap at ≈ 1.5× while leaving the OVR fallback semantics intact. */
+const INJ_TGH_SLOPE = 80
+
 function healPlayers(world: World, rng: Rng, week: number, recovery?: WeekRecovery) {
   const mult = recovery?.injuryMult ?? 1
   for (const p of world.players) {
@@ -105,13 +113,14 @@ function healPlayers(world: World, rng: Rng, week: number, recovery?: WeekRecove
     }
     // Minor injury risk. The user's practice plan can raise or lower the odds —
     // the threshold is all that changes, so the number of rng() draws is fixed.
-    // L12 E2: a player's TGH moves his own threshold (relative to his position mean).
+    // L12 E2/R5: a player's TGH moves his own threshold (relative to his position
+    // mean). The fallback still reads the OVR-derived attribute, unchanged.
     if (!p.injured && p.teamId) {
       const m = recovery?.teamId === p.teamId ? mult : 1
       const tghMean = POS_MEAN[p.pos]?.TGH
       const tgh = (p.attrs?.TGH ?? attributesFor(p.id, p.pos, p.ovr).TGH ?? tghMean ?? 70)
-      const tghMult = tghMean === undefined ? 1 : clamp(1 + (tghMean - tgh) / 150, 0.6, 1.4)
-      if (rng() < 0.012 * m * tghMult) {
+      const tghMult = tghMean === undefined ? 1 : clamp(1 + (tghMean - tgh) / INJ_TGH_SLOPE, 0.5, 1.7)
+      if (rng() < INJ_BASE * m * tghMult) {
         p.injured = { games: 1 + Math.floor(rng() * 3), note: pickNote(rng) }
       }
     }

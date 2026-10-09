@@ -608,6 +608,13 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
   plays: PlayEvent[]; idx: number; world: World; onJump: (i: number) => void; downText: (p: PlayEvent) => string
 }) {
   const drives = useMemo(() => drivesOf(plays), [plays])
+  // R5: jersey numbers for the "broke a tackle by #54" note, one map per club.
+  const jerseys = useMemo(() => {
+    const m = new Map<string, Map<string, number>>()
+    for (const p of plays) if (!m.has(p.defId)) m.set(p.defId, teamJerseys(world, p.defId))
+    return m
+  }, [plays, world])
+  const jersey = (teamId: string, id: string) => jerseys.get(teamId)?.get(id)
   const activeRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest' })
@@ -653,6 +660,12 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
                   <span className="w-14 shrink-0 pt-px font-cond text-[11px] tnum text-white/45">{downText(p) || p.type.toUpperCase()}</span>
                   <span className="min-w-0 flex-1 leading-snug text-white/85">
                     <span className="font-600 text-white">{p.concept}</span> — {p.result}
+                    {p.missedTackleIds?.length ? (
+                      <span className="text-white/55"> — broke a tackle by {p.missedTackleIds.map((id) => `#${jersey(p.defId, id) ?? '?'}`).join(', ')}</span>
+                    ) : null}
+                    {p.dropId ? (
+                      <span className="text-white/55"> — dropped by #{jersey(p.offId, p.dropId) ?? '?'}</span>
+                    ) : null}
                   </span>
                   {(p.type === 'run' || p.type === 'pass') && (
                     <span className={cn('w-10 shrink-0 text-right font-cond tnum', p.yards > 0 ? 'text-[#8ef0b5]' : p.yards < 0 ? 'text-[#ffb3ba]' : 'text-white/45')}>
@@ -909,7 +922,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
   const rushing = rows.filter((r) => (r.line.rushAtt ?? 0) > 0)
   const receiving = rows.filter((r) => (r.line.rec ?? 0) > 0 || (r.line.targets ?? 0) > 0)
-  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0 || (r.line.defTargets ?? 0) > 0)
+  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0 || (r.line.defTargets ?? 0) > 0 || (r.line.missedTackles ?? 0) > 0)
   // Index once per render: the viewer re-renders every playback tick, so a
   // linear scan per box-score row would add up fast.
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
@@ -944,7 +957,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
         { k: 'rec', l: 'REC' }, { k: 'recYds', l: 'YDS' }, { k: 'recTD', l: 'TD' },
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
-        { k: 'tackles', l: 'TCK' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
+        { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
         { k: 'defYdsAllowed', l: 'ALW' },
         { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
       ]} />}

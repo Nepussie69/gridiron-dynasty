@@ -570,6 +570,15 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     })
   }
 
+
+  // R5: a broken tackle adds a brief stumble while preserving timed motion.
+  if ((play.missedTackleIds?.length ?? 0) > 0) {
+    for (let i = 0; i < curve.length; i++) {
+      const u = i / (curve.length - 1)
+      if (u > 0.6 && u < 0.82) curve[i].y = clampY(curve[i].y + side * 2.2 * Math.sin(((u - 0.6) / 0.22) * Math.PI))
+    }
+  }
+
   // Line: run blockers drive forward by RBK/IBL vs the defender's BSH/strength.
   for (let i = 0; i < 5; i++) {
     const dlKey = i < 2 ? `dl${i}` : i < 4 ? `dl${i - 1}` : 'dl3'

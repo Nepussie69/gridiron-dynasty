@@ -114,6 +114,8 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         add(play.intId, def, 'tackles', 1)
       }
       if (play.targetId) add(play.targetId, off, 'targets', 1)
+      // R5: a targeted incompletion can be a drop by the receiver (result unchanged).
+      if (play.dropId) add(play.dropId, off, 'drops', 1)
       if (play.carrierId && isComp && play.targetId === play.carrierId) {
         add(play.carrierId, off, 'rec', 1)
         add(play.carrierId, off, 'recYds', play.yards)
@@ -122,6 +124,10 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       // L12 S3: a completion is stopped by one defender (no credit on a score —
       // the resolver already withholds tackleIds there).
       if (isComp && play.tackleIds?.length) add(play.tackleIds[0], def, 'tackles', 1)
+      // R5: the defender who whiffed is charged a missed tackle; the carrier
+      // who broke it is credited with a forced miss.
+      if (play.missedTackleIds?.length) for (const id of play.missedTackleIds) add(id, def, 'missedTackles', 1)
+      if (play.forcedMissedIds?.length && play.carrierId) add(play.carrierId, off, 'forcedMissed', 1)
       // Q7: coverage credit goes to the defender on the target.
       if (play.coverId && play.targetId) {
         add(play.coverId, def, 'defTargets', 1)
@@ -148,6 +154,9 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         // Q7: the tackler on a run for a loss also gets the TFL.
         if (play.yards < 0) add(tackler, def, 'tfl', 1)
       }
+      // R5: charge the miss to the defender and credit the back who broke it.
+      if (play.missedTackleIds?.length) for (const id of play.missedTackleIds) add(id, def, 'missedTackles', 1)
+      if (play.forcedMissedIds?.length && play.carrierId) add(play.carrierId, off, 'forcedMissed', 1)
     }
   }
 
@@ -186,6 +195,10 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.defYdsAllowed = (season.defYdsAllowed ?? 0) + (line.defYdsAllowed ?? 0)
   season.defTDAllowed = (season.defTDAllowed ?? 0) + (line.defTDAllowed ?? 0)
   season.defIntsCov = (season.defIntsCov ?? 0) + (line.defIntsCov ?? 0)
+  // R5: missed tackles (defense) and forced missed tackles (offense).
+  season.missedTackles = (season.missedTackles ?? 0) + (line.missedTackles ?? 0)
+  season.forcedMissed = (season.forcedMissed ?? 0) + (line.forcedMissed ?? 0)
+  season.drops = (season.drops ?? 0) + (line.drops ?? 0)
 }
 
 /** Get or create this season's stat line for a player at a level. */
@@ -270,6 +283,9 @@ export function careerTotals(p: Player) {
     t.defYdsAllowed = (t.defYdsAllowed ?? 0) + (s.defYdsAllowed ?? 0)
     t.defTDAllowed = (t.defTDAllowed ?? 0) + (s.defTDAllowed ?? 0)
     t.defIntsCov = (t.defIntsCov ?? 0) + (s.defIntsCov ?? 0)
+    t.missedTackles = (t.missedTackles ?? 0) + (s.missedTackles ?? 0)
+    t.forcedMissed = (t.forcedMissed ?? 0) + (s.forcedMissed ?? 0)
+    t.drops = (t.drops ?? 0) + (s.drops ?? 0)
   }
   return t
 }

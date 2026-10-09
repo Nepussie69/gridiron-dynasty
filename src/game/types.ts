@@ -118,6 +118,11 @@ export interface SeasonStats {
   defYdsAllowed?: number
   defTDAllowed?: number
   defIntsCov?: number
+  /** R5: season-summed missed tackles / forced missed tackles. */
+  missedTackles?: number
+  forcedMissed?: number
+  /** R5: season-summed dropped passes. */
+  drops?: number
   // honors
   awards?: string[]
 }
@@ -129,6 +134,7 @@ export function emptySeason(season: number, level: StatLevel, teamId: string): S
     rushAtt: 0, rushYds: 0, rushTD: 0,
     targets: 0, rec: 0, recYds: 0, recTD: 0,
     tackles: 0, defSacks: 0, defInts: 0, passDef: 0,
+    missedTackles: 0, forcedMissed: 0, drops: 0,
   }
 }
 
@@ -159,6 +165,12 @@ export interface GameStatLine {
   defTDAllowed?: number
   /** L12 R4b: interceptions made on plays this defender was the cover man. */
   defIntsCov?: number
+  /** R5: tackles the defender failed to finish. */
+  missedTackles?: number
+  /** R5: missed tackles a carrier/receiver forced. */
+  forcedMissed?: number
+  /** R5: dropped passes as the targeted receiver. */
+  drops?: number
 }
 
 export interface Player {

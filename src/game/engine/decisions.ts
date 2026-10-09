@@ -46,10 +46,14 @@ export function convertProb(distance: number): number {
   return 0.22
 }
 
-/** FG make chance — shares the formula used by resolveSpecial in playsim. */
+/** R2: base values for the FG make model, tunable as a single constant pair. */
+export const FG_TUNE = { base: 0.995, slope: 0.014 }
+
+/** FG make chance — shares the formula used by resolveSpecial in playsim.
+ *  R2: retuned to the 2015–2024 NFL average (≈ 84–85% of attempts made). */
 export function fgProb(yard: number, kickPower: number): number {
   const dist = 100 - yard + 17
-  const make = 0.99 - Math.max(0, dist - 33) * 0.015 + (kickPower - 80) * 0.004
+  const make = FG_TUNE.base - Math.max(0, dist - 33) * FG_TUNE.slope + (kickPower - 80) * 0.004
   return Math.max(0.45, Math.min(0.99, make))
 }
 
@@ -58,7 +62,7 @@ export function fourthDownEV(s: Situation, kickPower: number): { go: number; fg:
   const p = convertProb(s.distance)
   const q = fgProb(s.yard, kickPower)
   const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard)
-  const fg = s.yard < 52 ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
+  const fg = s.yard < 55 ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
   // A 40-yard net punt, touchback at the 20.
   const punt = -epAt(100 - Math.min(80, s.yard + 40))
   return { go, fg, punt }
@@ -85,8 +89,9 @@ export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: nu
     if (s.distance <= 6 && ev.go >= val(best) - 0.4) return 'go'
     return best === 'go' ? (inRange ? 'fg' : 'punt') : best
   }
-  // standard: the best EV, but go only when distance <= 4.
-  if (best === 'go' && s.distance > 4) return inRange ? 'fg' : 'punt'
+  // standard: the best EV, but go only when distance <= 5 (modern NFL is more
+  // aggressive on 4th & medium than the old <= 4 threshold).
+  if (best === 'go' && s.distance > 5) return inRange ? 'fg' : 'punt'
   return best
 }
 

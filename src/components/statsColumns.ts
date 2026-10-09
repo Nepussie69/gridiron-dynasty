@@ -145,6 +145,30 @@ export const COL_TCK: StatCol = {
   fmt: (s) => num(s?.tackles),
 }
 
+export const COL_MT: StatCol = {
+  id: 'mt',
+  label: 'MT',
+  title: 'Missed tackles',
+  get: (s) => s?.missedTackles ?? null,
+  fmt: (s) => num(s?.missedTackles),
+}
+
+export const COL_FMT: StatCol = {
+  id: 'fmt',
+  label: 'FMT',
+  title: 'Forced missed tackles',
+  get: (s) => s?.forcedMissed ?? null,
+  fmt: (s) => num(s?.forcedMissed),
+}
+
+export const COL_DROP: StatCol = {
+  id: 'drop',
+  label: 'DRP',
+  title: 'Dropped passes',
+  get: (s) => s?.drops ?? null,
+  fmt: (s) => num(s?.drops),
+}
+
 export const COL_TFL: StatCol = {
   id: 'tfl',
   label: 'TFL',
