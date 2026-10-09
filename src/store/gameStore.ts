@@ -11,7 +11,7 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecovery } from '../game/engine/sim'
-import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
+import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills } from '../game/engine/coaching'
@@ -6137,6 +6137,91 @@ export function penaltyProbe(games = 300) {
     falseStartHomePerGame: per(fsHome),
     falseStartAwayPerGame: per(fsAway),
     homeWinPct: +((homeWins / games) * 100).toFixed(1),
+  }
+}
+
+/**
+ * Dev-only probe (R15): in-game stamina, rotation and snap counts. Reports the
+ * league snap counts and snap shares, how often a tiring DL is spelled, the
+ * fatigue reached, and an A/B of the full sim with the stamina effect toggled off
+ * on identical seeds — so both the feature's numbers and its calibration impact
+ * are visible.
+ */
+export function staminaProbe(games = 150) {
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const rng = makeRng(world.seed + 7654321)
+  const pmap = new Map(world.players.map((p) => [p.id, p]))
+  let made = 0
+  let offSnaps = 0
+  let defSnaps = 0
+  let qbPct = 0, qbN = 0
+  let rbPct = 0, rbN = 0
+  let dlPct = 0, dlN = 0
+  let rotPct = 0, rotN = 0
+  let rotateTeams = 0
+  let maxFat = 0
+  let endFat = 0, endFatN = 0
+  let dPoints = 0, dSacks = 0, dPassYds = 0, dComp = 0, dAtt = 0
+  while (made < games) {
+    const h = nfl[Math.floor(rng() * nfl.length)]
+    const a = nfl[Math.floor(rng() * nfl.length)]
+    if (!h || !a || h.id === a.id) continue
+    const seed = world.seed + made * 7919 + 101
+    const sim = simulatePlayByPlay(world, h.id, a.id, seed)
+    const side = sim.snapSide ?? {}
+    const snaps = sim.snaps ?? {}
+    offSnaps += (side[h.id]?.off ?? 0) + (side[a.id]?.off ?? 0)
+    defSnaps += (side[h.id]?.def ?? 0) + (side[a.id]?.def ?? 0)
+    for (const t of [h.id, a.id]) {
+      const off = side[t]?.off ?? 1
+      const def = side[t]?.def ?? 1
+      const top4 = new Set(depthGroup(world, t, ['DE', 'DT'], 4).map((p) => p.id))
+      let rotated = false
+      for (const [id, n] of Object.entries(snaps)) {
+        const p = pmap.get(id)
+        if (!p || p.teamId !== t || !n) continue
+        if (p.pos === 'QB') { qbPct += (n / off) * 100; qbN++ }
+        else if (p.pos === 'RB') { rbPct += (n / off) * 100; rbN++ }
+        else if ((p.pos === 'DE' || p.pos === 'DT') && top4.has(id)) { dlPct += (n / def) * 100; dlN++ }
+        else if ((p.pos === 'DE' || p.pos === 'DT') && !top4.has(id)) {
+          rotated = true
+          rotPct += (n / def) * 100
+          rotN++
+        }
+        maxFat = Math.max(maxFat, sim.fatigue?.[id] ?? 0)
+      }
+      if (rotated) rotateTeams++
+    }
+    for (const f of Object.values(sim.fatigue ?? {})) { endFat += f; endFatN++ }
+    // A/B: identical seeds with the stamina effect off.
+    setStamina(false)
+    const base = simulatePlayByPlay(world, h.id, a.id, seed)
+    setStamina(true)
+    dPoints += (sim.homeScore + sim.awayScore) - (base.homeScore + base.awayScore)
+    dSacks += (sim.stats.home.sacksTaken + sim.stats.away.sacksTaken) - (base.stats.home.sacksTaken + base.stats.away.sacksTaken)
+    dPassYds += (sim.stats.home.passYds + sim.stats.away.passYds) - (base.stats.home.passYds + base.stats.away.passYds)
+    dComp += (sim.stats.home.passComp + sim.stats.away.passComp) - (base.stats.home.passComp + base.stats.away.passComp)
+    dAtt += (sim.stats.home.passAtt + sim.stats.away.passAtt) - (base.stats.home.passAtt + base.stats.away.passAtt)
+    made++
+  }
+  const per = (x: number, n = made) => +(x / (n || 1)).toFixed(2)
+  return {
+    games: made,
+    snapsPerTeamGame: { off: per(offSnaps / 2), def: per(defSnaps / 2) },
+    snapPct: {
+      qb: per(qbPct / (qbN || 1)),
+      rb: per(rbPct / (rbN || 1)),
+      dlStarter: per(dlPct / (dlN || 1)),
+      rotationalDl: per(rotPct / (rotN || 1)),
+    },
+    rotationRatePct: per((rotateTeams / (made * 2)) * 100),
+    fatigue: { max: +maxFat.toFixed(3), meanEnd: +(endFat / (endFatN || 1)).toFixed(3) },
+    ab: {
+      pointsPerGame: per(dPoints),
+      sacksPerGame: per(dSacks),
+      passYdsPerGame: per(dPassYds),
+      compPctDelta: +((dComp / (dAtt || 1)) * 100).toFixed(2),
+    },
   }
 }
 

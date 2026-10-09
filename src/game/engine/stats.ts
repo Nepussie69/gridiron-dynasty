@@ -196,6 +196,33 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     }
   }
 
+  // R15: attach in-game snap counts and snap share. Players who saw the field but
+  // recorded no other stat (linemen, rotational defenders) still get a line, so the
+  // season snap % is complete.
+  if (sim.snaps && sim.snapSide) {
+    const pmap = new Map(world.players.map((p) => [p.id, p]))
+    const share = (id: string, teamId: string): number | undefined => {
+      const p = pmap.get(id)
+      const side = p?.side
+      if (side !== 'OFF' && side !== 'DEF') return undefined
+      const counts = sim.snapSide![teamId]
+      const base = side === 'OFF' ? counts?.off : counts?.def
+      return base ? Math.round(((sim.snaps![id] ?? 0) / base) * 1000) / 10 : undefined
+    }
+    for (const [id, n] of Object.entries(sim.snaps)) {
+      if (!n) continue
+      const p = pmap.get(id)
+      if (!p) continue
+      const teamId = p.teamId ?? meta[id]?.teamId ?? ''
+      const pct = share(id, teamId)
+      if (pct === undefined) continue
+      const line = ensure(id, teamId)
+      if (!line) continue
+      line.snaps = n
+      line.snapPct = pct
+    }
+  }
+
   return Object.entries(byId).map(([id, line]) => ({
     playerId: id,
     name: meta[id].name,
@@ -249,6 +276,9 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.sk = (season.sk ?? 0) + (line.sk ?? 0)
   season.sky = (season.sky ?? 0) + (line.sky ?? 0)
   season.pressured = (season.pressured ?? 0) + (line.pressured ?? 0)
+  // R15: snap totals and the games-weighted snap share.
+  season.snaps = (season.snaps ?? 0) + (line.snaps ?? 0)
+  if (line.snapPct !== undefined) season.snapPct = (season.snapPct ?? 0) + (line.snapPct - (season.snapPct ?? 0)) / season.games
 }
 
 /** Get or create this season's stat line for a player at a level. */
@@ -320,6 +350,7 @@ export function boxTeamTotals(box: PlayerBoxScore[]): Record<string, { passYds: 
 export function careerTotals(p: Player) {
   const t = emptySeason(0, 'NFL', '')
   const seasons = p.stats ?? []
+  let snapWeighted = 0
   for (const s of seasons) {
     t.games += s.games
     t.passAtt += s.passAtt; t.passComp += s.passComp; t.passYds += s.passYds
@@ -348,7 +379,10 @@ export function careerTotals(p: Player) {
     t.sk = (t.sk ?? 0) + (s.sk ?? 0)
     t.sky = (t.sky ?? 0) + (s.sky ?? 0)
     t.pressured = (t.pressured ?? 0) + (s.pressured ?? 0)
+    t.snaps = (t.snaps ?? 0) + (s.snaps ?? 0)
+    snapWeighted += (s.snapPct ?? 0) * s.games
   }
+  if (t.games > 0) t.snapPct = Math.round((snapWeighted / t.games) * 10) / 10
   return t
 }
 

@@ -10,7 +10,7 @@
 import type { GameStatLine, Player, Position } from '../types'
 import { attributesFor } from '../data/ratings'
 import { coachEffect } from './coaching'
-import { depthGroup } from './depth'
+import { depthAt, depthGroup } from './depth'
 import type { Game, World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
 import { currentSeason, recordGameStats } from './stats'
@@ -137,6 +137,41 @@ function detCount(total: number, rate: number, key: string): number {
   const expected = total * rate
   const base = Math.floor(expected)
   return base + (hashUnit(`${key}:frac`) < expected - base ? 1 : 0)
+}
+
+/**
+ * R15: deterministic fast-sim snap allocation. A player's share of his club's
+ * ~63 offensive / defensive snaps from his position and depth rank, so simmed
+ * seasons carry snap % exactly like a played game. No rng() draw is used.
+ */
+function snapShare(world: World, teamId: string, p: Player): number {
+  const rank = depthAt(world, teamId, p.pos).filter((x) => !x.injured).findIndex((x) => x.id === p.id)
+  const r = rank < 0 ? 9 : rank
+  switch (p.pos) {
+    case 'QB': return 1
+    case 'OT': case 'OG': case 'C': return 1
+    case 'RB': return r === 0 ? 0.62 : r === 1 ? 0.3 : 0.1
+    case 'FB': return 0.22
+    case 'WR': return [0.85, 0.78, 0.62, 0.2, 0.1][r] ?? 0.08
+    case 'TE': return r === 0 ? 0.72 : 0.28
+    case 'DE': case 'DT': return r < 2 ? 0.7 : 0.45
+    case 'LB': return r < 3 ? 0.82 : 0.35
+    case 'CB': return r < 2 ? 0.85 : 0.5
+    case 'S': return r < 2 ? 0.9 : 0.3
+    default: return 0.05
+  }
+}
+
+/** R15: stamp each allocated line with a deterministic snap count and snap %. */
+function applySnaps(world: World, teamId: string, lines: { playerId: string; line: GameStatLine }[]) {
+  const byId = new Map(world.players.map((p) => [p.id, p]))
+  for (const { playerId, line } of lines) {
+    const p = byId.get(playerId)
+    if (!p) continue
+    const share = snapShare(world, teamId, p)
+    line.snapPct = Math.round(share * 1000) / 10
+    line.snaps = Math.round(63 * share)
+  }
 }
 
 /**
@@ -401,6 +436,9 @@ export function allocateTeamGame(
     }
   }
 
+  // R15: fill in snaps / snap % last, once every line exists.
+  applySnaps(world, teamId, out)
+
   return { lines: out, offense, defMissed }
 }
 
@@ -630,6 +668,9 @@ function recordAllocatedStats(world: World, sim: GameSim, season: number, level:
       entry.defYdsAllowed = (entry.defYdsAllowed ?? 0) + (line.defYdsAllowed ?? 0)
       entry.defTDAllowed = (entry.defTDAllowed ?? 0) + (line.defTDAllowed ?? 0)
       entry.defIntsCov = (entry.defIntsCov ?? 0) + (line.defIntsCov ?? 0)
+      // R15: snap totals and the games-weighted snap share.
+      entry.snaps = (entry.snaps ?? 0) + (line.snaps ?? 0)
+      if (line.snapPct !== undefined) entry.snapPct = (entry.snapPct ?? 0) + (line.snapPct - (entry.snapPct ?? 0)) / entry.games
     }
   }
 }

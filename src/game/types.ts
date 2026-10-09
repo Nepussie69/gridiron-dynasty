@@ -139,6 +139,9 @@ export interface SeasonStats {
   pressured?: number
   sk?: number
   sky?: number
+  /** R15: scrimmage snaps played and the share of the club's snaps (0–100). */
+  snaps?: number
+  snapPct?: number
   // honors
   awards?: string[]
 }
@@ -153,6 +156,7 @@ export function emptySeason(season: number, level: StatLevel, teamId: string): S
     missedTackles: 0, forcedMissed: 0, drops: 0,
     kickRet: 0, kickRetYds: 0, puntRet: 0, puntRetYds: 0, retTD: 0, defTD: 0,
     prs: 0, qbHits: 0, hurries: 0, pressured: 0, sk: 0, sky: 0,
+    snaps: 0, snapPct: 0,
   }
 }
 
@@ -206,6 +210,9 @@ export interface GameStatLine {
   pressured?: number
   sk?: number
   sky?: number
+  /** R15: scrimmage snaps played and the share of the club's snaps (0–100). */
+  snaps?: number
+  snapPct?: number
 }
 
 export interface Player {

@@ -59,7 +59,7 @@ export const RATING_INFO: Record<string, RatingInfo> = {
   SPD: { name: 'Speed', what: 'Top-end straight-line speed.', sim: '30% of separation and 20% of RB elusiveness; QB sack escape; DL rush, LB pursuit, S deep help.' },
   SPM: { name: 'Spin Move', what: 'Spinning off tacklers in the open field.', sim: 'Joins RB elusiveness and the chance to force a missed tackle.' },
   SRR: { name: 'Short Route Running', what: 'Creating separation on short routes (under 8 yards).', sim: '50% of separation on short throws; route + SPD decide who gets targeted.' },
-  STA: { name: 'Stamina', what: 'Conditioning — how much energy is left late in games.', sim: 'In Q4 a tired unit loses part of its edge (works with the DL rotation).' },
+  STA: { name: 'Stamina', what: 'Conditioning — how much energy is left late in games.', sim: 'Per-snap in-game stamina: fresh legs rotate in for tiring DL/RB/WR, and a gassed side loses a step on both sides of the ball.' },
   STR: { name: 'Strength', what: 'Physical strength at the point of attack.', sim: 'OL short-yardage push; DL power vs the OL; QB sack escape and LB/DB physicality.' },
   TAK: { name: 'Tackle', what: 'Bringing down the ball carrier.', sim: '50% of DL and 60% of LB run defense; 50% of the tackle share; the biggest term in avoiding a missed tackle; shrinks yards after the catch.' },
   TGH: { name: 'Toughness', what: 'Playing through injury and pain.', sim: 'Weekly injury roll — a tougher player is hurt less often.' },

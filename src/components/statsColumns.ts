@@ -361,6 +361,14 @@ export const COL_COV: StatCol = {
   },
 }
 
+export const COL_SNAP: StatCol = {
+  id: 'snap',
+  label: 'SNP%',
+  title: 'Snaps played as a share of the club’s snaps on his side of the ball',
+  get: (s) => s?.snapPct ?? null,
+  fmt: (s) => (s && s.snapPct != null ? `${s.snapPct.toFixed(0)}%` : '—'),
+}
+
 export const COL_MAIN: StatCol = {
   id: 'main',
   label: 'Main',

@@ -27,6 +27,12 @@ let USER_COACH: { teamId: string; off: number; def: number; development: number;
 export function setUserCoaching(ctx: typeof USER_COACH) {
   USER_COACH = ctx
 }
+// R15: dev-only toggle so the stamina probe can A/B the feature. Default on; the
+// shipped sim always leaves it on.
+let STAMINA_ON = true
+export function setStamina(on: boolean) {
+  STAMINA_ON = on
+}
 function ocEffect(world: World, teamId: string) {
   const base = coachEffect(world, teamId)
   if (USER_COACH && USER_COACH.teamId === teamId) {
@@ -138,6 +144,37 @@ export const PRESSURE = {
   hi: 0.62,
   /** Share of non-sack pressures classified as a QB hit (the rest are hurries). */
   hitRate: 0.225,
+}
+
+// ── R15: in-game stamina, rotation and snap counts ───────────────────────────
+// Every player carries an in-game fatigue value (0 fresh → ~1 spent), charged per
+// scrimmage snap and scaled by his STA rating, then partly shed between
+// possessions and at halftime. Rotation spells a tiring starter with the next man
+// up the depth chart. The play effects are applied as an OFFENCE-vs-DEFENCE
+// difference, so a league-average club is exactly neutral and the calibration
+// means are unchanged — only the more tired side of a given snap is penalised.
+// All of it is deterministic arithmetic: no rng() draw is added or removed.
+export const R15 = {
+  /** Fatigue added to an average (STA 75) player per scrimmage snap. */
+  snap: 0.006,
+  /** Fraction of fatigue shed on a change of possession / at halftime. */
+  restDrive: 0.4,
+  restHalf: 0.55,
+  /** Extra fatigue charged to a defence on a hurry-up possession / a long drive. */
+  hurry: 1.7,
+  longDrive: 1.25,
+  /** Rotation: spell a starter once he is this much more tired than his backup. */
+  rotateGap: 0.22,
+  /** Rotation: the largest OVR drop a backup may be to take the rep. */
+  rotateMaxDrop: 6,
+  /** Effect slopes per unit-fatigue difference (defence minus offence). */
+  fatPress: 7,
+  fatComp: 0.02,
+  fatInt: 0.25,
+  fatRun: 6,
+  fatBig: 0.25,
+  /** Receiver target-score penalty per point of fatigue. */
+  fatTarget: 22,
 }
 
 // ── R14: typed penalties ─────────────────────────────────────────────────────
@@ -404,6 +441,13 @@ export interface GameSim {
   planChanges?: PlanChange[]
   homeLines?: { playerId: string; line: import('../types').GameStatLine }[]
   awayLines?: { playerId: string; line: import('../types').GameStatLine }[]
+  // ── R15: in-game stamina and snap counts (per played game) ─────────────────
+  /** Scrimmage snaps played per player. */
+  snaps?: Record<string, number>
+  /** Scrimmage snaps run by each club's offence / defence (the snap-% denominator). */
+  snapSide?: Record<string, { off: number; def: number }>
+  /** Final in-game fatigue per player (probe/reporting only). */
+  fatigue?: Record<string, number>
 }
 
 /** L11.5 Q3: one mid-game change to the user's live plan. */
@@ -682,6 +726,92 @@ function topGroup(world: World, teamId: string, positions: Position[], n: number
     }
   }
   return depthGroup(world, teamId, positions, n)
+}
+
+// ── R15 helpers ───────────────────────────────────────────────────────────────
+/** A group's average in-game fatigue (0 when untracked). */
+function unitFatigue(fat: Record<string, number> | undefined, list: Array<Player | undefined>): number {
+  if (!fat) return 0
+  const ps = list.filter((p): p is Player => !!p)
+  if (!ps.length) return 0
+  return ps.reduce((a, p) => a + (fat[p.id] ?? 0), 0) / ps.length
+}
+
+/**
+ * The on-field group, with a tiring starter spelled by the next man up the depth
+ * chart once that backup is close enough in overall. When nobody is tired this is
+ * exactly `depthGroup`, so the pre-R15 baseline sim is unchanged.
+ */
+function fieldGroup(world: World, teamId: string, positions: Position[], n: number, fat?: Record<string, number>): Player[] {
+  const pool = depthGroup(world, teamId, positions, n + 1)
+  const base = pool.slice(0, n)
+  if (!fat || pool.length <= n) return base
+  const sub = pool[n]
+  let worst = -1
+  let worstFat = 0
+  for (let i = 0; i < base.length; i++) {
+    const f = fat[base[i].id] ?? 0
+    if (f > worstFat) { worstFat = f; worst = i }
+  }
+  if (worst < 0) return base
+  if (worstFat - (fat[sub.id] ?? 0) < R15.rotateGap) return base
+  if (base[worst].ovr - sub.ovr > R15.rotateMaxDrop) return base
+  const out = [...base]
+  out[worst] = sub
+  return out
+}
+
+/** The 11 offensive players on the field for a scrimmage snap (with the QB override). */
+function onFieldOffense(world: World, offId: string, qbOverride?: Record<string, string>): Player[] {
+  const list: Array<Player | undefined> = [
+    topGroup(world, offId, ['QB'], 1, qbOverride)[0],
+    ...topGroup(world, offId, ['OT', 'OG', 'C'], 5),
+    topGroup(world, offId, ['RB'], 1)[0],
+    ...depthGroup(world, offId, ['WR', 'TE'], 3),
+    topGroup(world, offId, ['FB'], 1)[0],
+  ]
+  return list.filter((p): p is Player => !!p)
+}
+
+/** The 11 defensive players on the field for a scrimmage snap (with DL rotation). */
+function onFieldDefense(world: World, defId: string, fat?: Record<string, number>): Player[] {
+  return [
+    ...fieldGroup(world, defId, ['DE', 'DT'], 4, fat),
+    ...topGroup(world, defId, ['LB'], 3),
+    ...topGroup(world, defId, ['CB'], 2),
+    ...topGroup(world, defId, ['S'], 2),
+  ]
+}
+
+/** Charge one snap of fatigue to a player, at most once per play. */
+function chargeSnap(s: GameState, p: Player | undefined, mult: number, seen: Set<string>) {
+  if (!p || seen.has(p.id)) return
+  seen.add(p.id)
+  const sta = mkAttrs(p).STA ?? 75
+  const rate = clamp(1 + (75 - sta) / 100, 0.6, 1.8)
+  s.snaps[p.id] = (s.snaps[p.id] ?? 0) + 1
+  s.fat[p.id] = clamp((s.fat[p.id] ?? 0) + R15.snap * rate * mult, 0, 1.2)
+}
+
+/** Charge one scrimmage snap to both on-field units (and anyone who touched the ball). */
+function chargeSnaps(world: World, s: GameState, out: PlayOutcome) {
+  const offSide = (s.snapSide[s.offId] ??= { off: 0, def: 0 })
+  const defSide = (s.snapSide[s.defId] ??= { off: 0, def: 0 })
+  offSide.off += 1
+  defSide.def += 1
+  const defMult = (s.twoMinMode === 'hurry' ? R15.hurry : 1) * (s.driveSnaps >= 8 ? R15.longDrive : 1)
+  s.driveSnaps += 1
+  const seen = new Set<string>()
+  for (const p of onFieldOffense(world, s.offId, s.qbOverride)) chargeSnap(s, p, 1, seen)
+  for (const p of onFieldDefense(world, s.defId, s.fat)) chargeSnap(s, p, defMult, seen)
+  // Skill players and defenders outside the base group still took the rep.
+  const extras = [out.carrierId, out.targetId, out.qbId, out.sackId, out.pressureId, out.intId, out.coverId, ...(out.tackleIds ?? [])]
+  for (const id of extras) chargeSnap(s, id ? s.pIndex.get(id) : undefined, 1, seen)
+}
+
+/** Shed a fraction of every tracked player's in-game fatigue (between drives / halftime). */
+function restFatigue(s: GameState, frac: number) {
+  for (const id in s.fat) s.fat[id] *= 1 - frac
 }
 
 /**
@@ -1053,6 +1183,8 @@ interface SimEnv {
   margin?: number
   /** T2M: the current possession is in hurry-up mode. */
   hurry?: boolean
+  /** R15: live per-player in-game fatigue (for the offence/defence difference). */
+  fat?: Record<string, number>
 }
 
 /**
@@ -1254,12 +1386,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const rb = topGroup(world, offId, ['RB'], 1)[0]
   const fb = topGroup(world, offId, ['FB'], 1)[0]
-  const dl = topGroup(world, defId, ['DE', 'DT'], 4)
+  const dl = fieldGroup(world, defId, ['DE', 'DT'], 4, env?.fat)
   const lbs = topGroup(world, defId, ['LB'], 3)
   const cbs = topGroup(world, defId, ['CB'], 3)
   const saf = topGroup(world, defId, ['S'], 2)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
+  // R15: the offence's and defence's average in-game fatigue. Effects use the
+  // difference, so a league-average club is exactly neutral.
+  const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...cbs, ...saf]) - unitFatigue(env?.fat, [qb, ...wrs, ...ol, rb, fb])
 
   // ── L12 E2: unit-level relative ratings (centered; no rng) ──────────────────
   const isQ4 = (env?.qtr ?? 0) >= 4
@@ -1302,7 +1437,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
   const pressureEdge = pressure - protection + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
-    + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE
+    + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE - fatDiff * R15.fatPress
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
@@ -1342,7 +1477,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const styleBonus = longBall ? st.deepBias * 14 : st.yacBias * 10 + st.contested * 6
     const fit = schemeFit(w, ocScheme, 'OFF')
     const r = rng()
-    return { w, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + styleBonus + (fit - 0.5) * 16 + r * 12, r }
+    return { w, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + styleBonus + (fit - 0.5) * 16 + r * 12 - (env?.fat?.[w.id] ?? 0) * R15.fatTarget, r }
   })
   if (rb && !scored.some((s) => s.w.id === rb.id)) {
     const a = mkAttrs(rb)
@@ -1426,7 +1561,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // G6 fixes: load-the-box loosens coverage; two-deep gives up the underneath but
   // caps explosives; third-down heat concedes more explosives on 3rd down.
   const compMult = planOverrides.compMult * (hasFix(env, defId, 'twoDeep') ? 1.04 : 1)
-  let bigPlayRisk = planOverrides.bigPlayRisk * (hasFix(env, defId, 'twoDeep') ? 0.85 : 1) * (heat ? 1.1 : 1)
+  let bigPlayRisk = planOverrides.bigPlayRisk * (hasFix(env, defId, 'twoDeep') ? 0.85 : 1) * (heat ? 1.1 : 1) * (1 + fatDiff * R15.fatBig)
   // L12 E2: press coverage risks a deep shot if the receiver wins; a fast safety caps it.
   if (concept.depth >= 15) {
     bigPlayRisk *= clamp(1 + (relAvg('PRS', cbs) * 0.004 - relAvg('SPD', saf) * 0.003) * E2_W, 0.6, 1.5)
@@ -1461,7 +1596,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // throw. 0 at the 20, growing to `rzCompDamp` on the doorstep.
   const rzDamp = yard >= 80 ? R2.rzCompDamp * clamp((yard - 80) / 19, 0, 1) : 0
   let compProb = clamp(
-    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0),
+    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0) + fatDiff * R15.fatComp,
     0.42,
     0.74,
   )
@@ -1475,7 +1610,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const a = mkAttrs(p)
     return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
   }))
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth), 0.005, 0.06)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt), 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -1593,12 +1728,14 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const te = topGroup(world, offId, ['TE'], 1)[0]
   const fb = topGroup(world, offId, ['FB'], 1)[0]
-  const dl = topGroup(world, defId, ['DE', 'DT'], 4)
+  const dl = fieldGroup(world, defId, ['DE', 'DT'], 4, env?.fat)
   const lbs = topGroup(world, defId, ['LB'], 3)
   const saf = topGroup(world, defId, ['S'], 2)
   const cbs = topGroup(world, defId, ['CB'], 3)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
+  // R15: offence-vs-defence average in-game fatigue (difference only).
+  const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...saf, ...cbs]) - unitFatigue(env?.fat, [qb, ...ol, ...rb, fb])
   // L12 E2: Q4 fatigue uses each unit's relative STA (centered; no rng).
   const isQ4 = (env?.qtr ?? 0) >= 4
   // L12 S2: split carries RB1 / RB2 / QB from deterministic role weights, shifted
@@ -1626,6 +1763,13 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const qbStyle = qb ? styleProfile(qb) : undefined
   if (qbStyle) wq += qbStyle.scramble * 0.12
   if (distance <= 2) w1 += 0.12
+  // R15: fresher legs take the carries — a tiring back cedes work to his backup.
+  if (rb[0] && rb[1] && env?.fat) {
+    const f1 = env.fat[rb[0].id] ?? 0
+    const f2 = env.fat[rb[1].id] ?? 0
+    w1 = Math.max(0.05, w1 * clamp(1 - (f1 - f2) * 2, 0.6, 1.4))
+    w2 = Math.max(0.02, w2 * clamp(1 - (f2 - f1) * 2, 0.6, 1.4))
+  }
   if (!rb[1]) { w1 += w2; w2 = 0 }
   if (!qb) { w2 += wq; wq = 0 }
   const wTot = w1 + w2 + wq || 1
@@ -1667,7 +1811,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
   const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (call?.edge ?? 0) * 1.6
-    + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0)
+    + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -1685,7 +1829,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R2: on a money down a runner lowers his shoulder to the marker.
   if (gain > 0 && env?.down === 3) gain += R2.moneyYards
   // L12 E2: pursuit (DL/LB PUR + SPD) caps the long-run tail.
-  if (gain > 20) gain = 20 + Math.round((gain - 20) * clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4))
+  if (gain > 20) gain = 20 + Math.round((gain - 20) * clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4) * (1 + fatDiff * R15.fatBig))
   // R2: the long-TD rate is tuned separately from the short run game.
   if (gain > 20) gain = Math.round(gain * R2.explosiveCal)
   // R2: near the goal line the compressed front can stand a runner up short.
@@ -2019,6 +2163,17 @@ export interface GameState {
   mastery: MasteryMeans
   /** L12.13 M3: per-team mental-error multiplier for penalty thresholds. */
   mental: Record<string, { off: number; def: number }>
+  // ── R15: in-game stamina, snap counts and rotation ─────────────────────────
+  /** In-game fatigue per player (0 fresh → ~1 spent). */
+  fat: Record<string, number>
+  /** Scrimmage snaps played per player. */
+  snaps: Record<string, number>
+  /** Scrimmage snaps run by each club's offence / defence (the snap-% denominator). */
+  snapSide: Record<string, { off: number; def: number }>
+  /** Scrimmage snaps on the current possession (for the long-drive fatigue bonus). */
+  driveSnaps: number
+  /** Player index for O(1) lookups while charging snaps (not persisted). */
+  pIndex: Map<string, Player>
 }
 
 const MAX_PLAYS = 210
@@ -2034,6 +2189,9 @@ function swapPossession(s: GameState) {
   // A two-minute mode only lasts as long as the possession that chose it.
   s.twoMinMode = null
   s.twoMinChecked = false
+  // R15: a change of possession rests the tiring bodies and starts a new drive.
+  restFatigue(s, R15.restDrive)
+  s.driveSnaps = 0
   // G10: the opening script's edge only applies on the user's first drive.
   if (s.ctx && s.offId === s.ctx.userTeamId) s.userDrive += 1
 }
@@ -2336,7 +2494,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined }
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */
@@ -2495,6 +2653,11 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     twoMinDrives: 0,
     mastery: means,
     mental: { [homeId]: teamMental(homeId), [awayId]: teamMental(awayId) },
+    fat: {},
+    snaps: {},
+    snapSide: {},
+    driveSnaps: 0,
+    pIndex: new Map(world.players.map((p) => [p.id, p])),
   }
   s.defId = s.offId === homeId ? awayId : homeId
   // L12.9 K1: unit cohesion (relative to the league mean) nudges pre-snap penalty
@@ -2527,6 +2690,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
 function stepClock(s: GameState): 'continue' | 'done' {
   if (s.qtr === 2) {
     pushPlay(s, { type: 'end', concept: 'End of Half', yards: 0, result: 'Halftime', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+    restFatigue(s, R15.restHalf)
     s.phase = 'halftime'
     return 'continue'
   }
@@ -2895,6 +3059,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const out = concept.type === 'pass'
     ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
     : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
+  // R15: charge the snap (and its stamina cost) to the units on the field.
+  chargeSnaps(world, s, out)
 
   // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
@@ -3076,6 +3242,9 @@ export function finishGame(s: GameState): GameSim {
     plays: s.plays,
     stats: s.stats,
     decisions: s.decisions.length ? s.decisions : undefined,
+    snaps: s.snaps,
+    snapSide: s.snapSide,
+    fatigue: s.fat,
   }
 }
 
