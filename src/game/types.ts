@@ -731,6 +731,10 @@ export interface CareerState {
   trades?: TradeRecord[]
   /** L12.5 T5: players you are shopping (max 5) — your side of the trade block. */
   tradeBlock?: string[]
+  /** L14: trade deadline day — the offers the league sent you this week and which you answered. */
+  deadline?: import('./engine/deadline').DeadlineState
+  /** L14: let AI clubs make their own deadline trades (off by default; changes league rosters). */
+  deadlineAI?: boolean
   /** L12.8 V3: the clubs scouted this week (once per club per week; resets each week). */
   scoutedClubs?: { season: number; week: number; teamIds: string[] }
   /** The starting situation this career began from (F3). */

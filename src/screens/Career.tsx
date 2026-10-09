@@ -51,6 +51,7 @@ import { counterOffer } from '../game/engine/counter'
 import type { JobOffer } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { CareerRhythm } from '../components/CareerRhythm'
+import { DeadlinePanel } from '../components/DeadlinePanel'
 import { CareerPeople } from '../components/CareerPeople'
 import { GmRequestsDesk } from '../components/GmRequestsDesk'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
@@ -257,6 +258,9 @@ export function Career() {
                   )}
                 </Card>
               </>
+            )}
+            {career.deadline && career.deadline.season === league.season && career.deadline.week === league.week && (
+              <DeadlinePanel />
             )}
             <CareerRhythm />
           </div>
