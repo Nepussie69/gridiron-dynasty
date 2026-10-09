@@ -735,8 +735,27 @@ export interface CareerState {
   rivalWins?: { season: number; wins: number }
   /** The boss who is shaping you (#11). */
   mentor?: { name: string; philosophy: string; teamId: string }
-  /** People you developed who now run their own programs (#11). */
-  tree?: { name: string; role: string; teamId: string; season: number }[]
+  /** People you developed who now run their own programs (#11, FUTURES 21). */
+  tree?: {
+    name: string
+    role: string
+    teamId: string
+    season: number
+    /** FUTURES 21: the staffer's id while he was on your staff (legacy entries have none). */
+    id?: string
+    /** FUTURES 21: the role he held for you before he left. */
+    fromRole?: string
+    /** FUTURES 21: his rating when he left, and the install scheme he ran. */
+    rating?: number
+    scheme?: string
+    /** FUTURES 21: his record as a head coach, credited to your coaching tree. */
+    wins?: number
+    losses?: number
+    rings?: number
+    seasons?: number
+    /** FUTURES 21: 'hc' while running a club, 'available' once a club moves on. */
+    status?: 'hc' | 'available'
+  }[]
   /** The Wilderness after a firing (#17). */
   wilderness?: { path: string; untilSeason: number; blurb: string } | null
   /** College NIL collective budget (#15). */
