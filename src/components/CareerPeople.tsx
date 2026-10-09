@@ -4,6 +4,7 @@ import { contactIntel, philosophyLabel, rivalTitle } from '../game/engine/people
 import { WILDERNESS_PATHS, legacyCase } from '../game/engine/legacy'
 import { traitOrigin } from '../game/engine/earnedTraits'
 import { overallRep } from '../game/engine/career'
+import { accessFor } from '../game/engine/access'
 import { getAwards, getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, RatingBar, TeamCrest } from '../ui/kit'
 import { OwnerCard } from './OwnerCard'
@@ -14,9 +15,11 @@ export function CareerPeople() {
   const career = useGame((s) => s.career)!
   const chooseWilderness = useGame((s) => s.chooseWilderness)
   const startSuccessor = useGame((s) => s.startSuccessor)
+  const poach = useGame((s) => s.poachAssistant)
   const contacts = career.contacts ?? []
   const tree = career.tree ?? []
   const traits = career.earnedTraits ?? []
+  const canHireStaff = accessFor(career, 'staff') === 'decide'
   const myScore = overallRep(career.reputation)
   const myLevel = career.level
   const legacy = legacyCase(career, new Set(getAwards().inducted), getAwards(), getStatsDb())
@@ -113,7 +116,7 @@ export function CareerPeople() {
         </div>
         <p className="mt-2 text-[11px] leading-snug text-muted">
           <span className="font-600 text-ink-2">What gets you in:</span> rings ×25 · Ledger hits (max 20) · Guys in Canton ×8 ·
-          coaching tree ×5 · honours your players won and finalists you found (+10).
+          coaching tree ×5 plus your protégés' wins and rings (+8 max) · honours your players won and finalists you found (+10).
         </p>
         <p className="mt-1 text-[11px] leading-snug text-muted">
           When you retire, this is your Hall-of-Fame case as a contributor. Then you can keep playing as a protégé.
@@ -176,16 +179,47 @@ export function CareerPeople() {
 
       {tree.length > 0 && (
         <Card>
-          <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Coaching Tree</h3>
-          <div className="space-y-1.5">
-            {tree.map((t, i) => (
-              <div key={i} className="flex items-center gap-2 text-sm">
-                <span className="flex-1 truncate font-600 text-ink">{t.name}</span>
-                <span className="text-[11px] text-muted">{t.role} · {world.byId[t.teamId]?.name ?? t.teamId}</span>
-                <span className="font-cond text-[10px] text-faint">{t.season}</span>
-              </div>
-            ))}
+          <div className="mb-3 flex items-center gap-2">
+            <Network size={16} className="text-muted" />
+            <h3 className="font-display text-lg font-700 uppercase tracking-wide">Coaching Tree</h3>
+            <Badge tone="neutral" className="ml-auto">{tree.length}</Badge>
           </div>
+          <div className="space-y-2">
+            {tree.map((t, i) => {
+              const w = t.wins ?? 0
+              const l = t.losses ?? 0
+              const sitting = t.status !== 'available'
+              return (
+                <div key={`${t.name}-${t.season}-${i}`} className="rounded-lg border border-line p-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="flex-1 truncate font-600 text-ink">{t.name}</span>
+                    <Badge tone={sitting ? 'info' : 'warn'}>{sitting ? 'Head Coach' : 'Available'}</Badge>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
+                    <span>{t.fromRole ?? t.role}</span>
+                    <span>·</span>
+                    <span>{world.byId[t.teamId]?.name ?? t.teamId}</span>
+                    {(t.seasons ?? 0) > 0 && (
+                      <span className="tnum">
+                        {w}-{l}
+                        {t.rings ? ` · ${t.rings} ring${t.rings === 1 ? '' : 's'}` : ''}
+                      </span>
+                    )}
+                    <span className="ml-auto font-cond text-[10px] text-faint">left {t.season}</span>
+                  </div>
+                  {canHireStaff && t.id && (
+                    <Button size="sm" variant="team" className="mt-2 w-full" onClick={() => poach(t.name, t.season)}>
+                      {sitting ? `Poach ${t.name.split(' ').slice(-1)[0]} back` : `Bring ${t.name.split(' ').slice(-1)[0]} back`}
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[11px] leading-snug text-muted">
+            Assistants you developed who now run their own club. Their wins as a head coach count toward your legacy — and
+            once a club moves on, you can bring them home.
+          </p>
         </Card>
       )}
     </div>

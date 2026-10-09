@@ -155,13 +155,13 @@ import { attributesFor, playerAttrs } from '../game/data/ratings'
 import {
   advanceContacts,
   advanceRivals,
-  growCoachingTree,
   makeContacts,
   mediaItems,
   mentorFor,
   ownerMandate,
 } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerProfile } from '../game/engine/owner'
+import { advanceCoachingTree, poachAssistant } from '../game/engine/coachingTree'
 import { evaluateTraits } from '../game/engine/earnedTraits'
 import { applyWilderness, makeSuccessor } from '../game/engine/legacy'
 import { pushLedger, gradeLedger, logCoachCalls } from '../game/engine/ledger'
@@ -616,6 +616,8 @@ interface GameStore {
   fireStaff: (staffId: string) => void
   /** L11.5 Q8: change a front-office staffer's focus (once per season). */
   setStaffFocus: (staffId: string, focus: string) => void
+  /** FUTURES 21: bring a former assistant (now a head coach or available) back onto your staff. */
+  poachAssistant: (name: string, season: number) => void
   restructurePlayer: (id: string) => void
   extendPlayer: (id: string) => void
   /** G2: negotiate an extension with a player's agent (negotiate rungs). */
@@ -3427,6 +3429,11 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast(
         scheme ? `${res.message.replace(/\.$/, '')} — installing the ${scheme} system.` : res.message,
       )
+      // FUTURES 21: if he was in your coaching tree, he's back in the building.
+      const treeNow = (career.tree ?? []).filter((e) => e.id !== candidateId)
+      if (treeNow.length !== (career.tree ?? []).length) {
+        set({ career: { ...career, tree: treeNow }, tick: get().tick + 1 })
+      }
     } else {
       get().showToast(res.message)
     }
@@ -3473,6 +3480,29 @@ export const useGame = create<GameStore>((set, get) => ({
     m.focusChanged = world.season
     bump(set, get)
     get().showToast(`${m.name} now focuses on ${focus}.`)
+    get().save()
+  },
+
+  // FUTURES 21: bring a former assistant back from a head job.
+  poachAssistant: (name, season) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const res = poachAssistant(world, career, name, season)
+    if (!res.ok) {
+      get().showToast(res.message)
+      return
+    }
+    set({ career: res.career, tick: get().tick + 1 })
+    pushCareerNews(world, res.career, {
+      category: 'League',
+      headline: `${name} returns to your staff`,
+      body: res.message,
+    })
+    get().showToast(res.message)
     get().save()
   },
 
@@ -4739,7 +4769,13 @@ function runEndOfRegularSeason(
     careerNext = {
       ...careerNext,
       contacts: advanceContacts(careerNext.contacts ?? [], rngPeople),
-      tree: growCoachingTree(world, careerNext, rngPeople).tree ?? careerNext.tree,
+    }
+    // FUTURES 21: advance the coaching tree — credit protégés' records, let a
+    // struggling head coach go, and maybe see a coordinator hired away.
+    const treeAdvance = advanceCoachingTree(world, careerNext, playoffs.champion)
+    careerNext = treeAdvance.career
+    for (const n of treeAdvance.news) {
+      pushCareerNews(world, careerNext, { category: 'League', headline: n.headline, body: n.body })
     }
     // Z2: stamp each rival's reputation before they advance, so the Rising Star
     // award can score the year-over-year gain.

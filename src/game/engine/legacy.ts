@@ -76,6 +76,11 @@ export interface LegacyCase {
   myGuys: number
   cantonPlayers: number
   tree: number
+  /** FUTURES 21: your protégés' combined head-coaching record. */
+  treeWins: number
+  treeRings: number
+  /** FUTURES 21: the legacy points their success adds (capped). */
+  treeBonus: number
   /** L12.16 H4: honours (MVP/POY/All-Pro…) won by players on your club in your seasons. */
   honoursForYourPlayers: number
   /** L12.16 H4: ballot finalists you found (they appear on your Ledger). */
@@ -99,6 +104,11 @@ export function legacyCase(
   const ids = new Set((career.ledger ?? []).map((e) => e.playerId).filter((x): x is string => !!x))
   const cantonPlayers = [...ids].filter((id) => inductedIds.has(id)).length
   const tree = (career.tree ?? []).length
+  // FUTURES 21: a protégé who wins (or lifts a trophy) as a head coach is part of
+  // your résumé. Capped so the tree stays a bonus, not the whole case.
+  const treeWins = (career.tree ?? []).reduce((s, e) => s + (e.wins ?? 0), 0)
+  const treeRings = (career.tree ?? []).reduce((s, e) => s + (e.rings ?? 0), 0)
+  const treeBonus = Math.min(8, treeRings * 4 + Math.floor(treeWins / 12))
 
   // L12.16 H4: honours won by players who were on your club in the season they
   // won them, plus the ballot finalists your Ledger found.
@@ -134,13 +144,16 @@ export function legacyCase(
   }
   // The two new terms together are worth at most +10 (H4 guardrail).
   const bonus = Math.min(10, honoursForYourPlayers * 2 + finalistsYouFound * 3)
-  const score = rings * 25 + Math.min(20, ledgerHits) + cantonPlayers * 8 + tree * 5 + bonus
+  const score = rings * 25 + Math.min(20, ledgerHits) + cantonPlayers * 8 + tree * 5 + treeBonus + bonus
   return {
     rings,
     ledgerHits,
     myGuys,
     cantonPlayers,
     tree,
+    treeWins,
+    treeRings,
+    treeBonus,
     honoursForYourPlayers,
     finalistsYouFound,
     score,

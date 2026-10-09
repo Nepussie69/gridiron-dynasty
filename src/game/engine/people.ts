@@ -149,15 +149,7 @@ export function mentorFor(world: World, teamId: string): { name: string; philoso
   return { name, philosophy, teamId }
 }
 
-/** At season end, a staffer you developed may land a head job elsewhere. */
-export function growCoachingTree(world: World, career: CareerState, rng: Rng): CareerState {
-  if (career.path !== 'coach' && career.level < 3) return career
-  const candidates = (world.staff[career.teamId] ?? []).filter((m) => m.role.includes('Coordinator'))
-  if (!candidates.length || rng() > 0.35 + career.reputation.leadership / 400) return career
-  const who = rpick(rng, candidates)
-  const team = rpick(rng, NFL_TEAMS)
-  const tree = [...(career.tree ?? []), { name: who.name, role: 'Head Coach', teamId: team.id, season: world.season }]
-  return { ...career, tree }
-}
+// FUTURES 21: the coaching tree moved to engine/coachingTree.ts (it now runs the
+// full hire-away / record / poach-back loop with a stable hash, not rng draws).
 
 export { REGIONS }
