@@ -5588,7 +5588,7 @@ export function cohesionProbe(games = 60) {
     const sim = simulatePlayByPlay(world, a.id, b.id, world.seed + 51000 + i * 7919)
     for (const p of sim.plays) {
       if (p.type !== 'penalty') continue
-      const penalized = p.concept === 'Offensive Penalty' ? p.offId : p.defId
+      const penalized = p.penaltyTeam ?? (p.concept === 'Offensive Penalty' ? p.offId : p.defId)
       if (penalized === a.id) tightPen++
       if (penalized === b.id) churnPen++
     }
@@ -6085,6 +6085,58 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
     totalYds: Math.round(netPass + avg('rushYds')),
     topSec: Math.round(avg('top')),
     avgMargin: +(margin / made).toFixed(1),
+  }
+}
+
+/**
+ * R14 dev probe: typed-penalty rates per team-game and the directions the
+ * ratings drive (road false starts, coverage fouls vs MCV). AI-vs-AI play-by-play
+ * on the current world; deterministic seeds so the numbers are reproducible.
+ */
+export function penaltyProbe(games = 300) {
+  const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+  const byType: Record<string, number> = {}
+  let count = 0
+  let yds = 0
+  let accepted = 0
+  let declined = 0
+  let offset = 0
+  let fsHome = 0
+  let fsAway = 0
+  let homeWins = 0
+  for (let i = 0; i < games; i++) {
+    const h = nfl[i % nfl.length]
+    const a = nfl[(i + 1) % nfl.length]
+    if (!h || !a || h.id === a.id) continue
+    const sim = simulatePlayByPlay(world, h.id, a.id, world.seed + 90000 + i * 7919)
+    if (sim.homeScore > sim.awayScore) homeWins++
+    for (const p of sim.plays) {
+      if (p.type !== 'penalty') continue
+      if (p.penaltyDisposition === 'declined') declined++
+      else if (p.penaltyDisposition === 'offset') offset++
+      else accepted++
+      const k = p.penaltyKind ?? 'legacy'
+      byType[k] = (byType[k] ?? 0) + 1
+      count++
+      yds += Math.abs(p.yards ?? 0)
+      if (p.penaltyKind === 'falseStart') {
+        if (p.offId === h.id) fsHome++
+        else fsAway++
+      }
+    }
+  }
+  const per = (n: number) => +(n / games).toFixed(2)
+  return {
+    games,
+    penaltiesPerTeamGame: per(count / 2),
+    yardsPerTeamGame: +(yds / games / 2).toFixed(1),
+    byTypePerTeamGame: Object.fromEntries(Object.entries(byType).sort((x, y) => y[1] - x[1]).map(([k, n]) => [k, per(n / 2)])),
+    accepted: per(accepted),
+    declined: per(declined),
+    offset: per(offset),
+    falseStartHomePerGame: per(fsHome),
+    falseStartAwayPerGame: per(fsAway),
+    homeWinPct: +((homeWins / games) * 100).toFixed(1),
   }
 }
 
