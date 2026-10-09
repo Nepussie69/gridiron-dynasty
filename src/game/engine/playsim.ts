@@ -235,6 +235,8 @@ export interface Play {
   defTD?: boolean
   /** R6: a safety (two points for this play's defense). */
   safety?: boolean
+  /** T2M: the ball carrier ran out of bounds, stopping the clock (no runoff). */
+  outOfBounds?: boolean
   /** R7: the defender credited with the pressure (sack, QB hit or hurry). */
   pressureId?: string
   /** R7: how the pressure is classified. A sack is always a pressure. */
@@ -693,6 +695,8 @@ interface PlayOutcome {
   pressureId?: string
   /** R7: how the pressure is classified. A sack is always a pressure. */
   pressureType?: 'sack' | 'hit' | 'hurry'
+  /** T2M: a sideline carry/reception went out of bounds (stops the clock). */
+  outOfBounds?: boolean
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -908,6 +912,42 @@ interface SimEnv {
   /** L12.9 K1: the offense's unit cohesion and the league mean (0-1). */
   cohesionOff?: number
   cohesionMeanOff?: number
+  /** T2M: the offense's score margin (negative = trailing) for the two-minute drill. */
+  margin?: number
+  /** T2M: the current possession is in hurry-up mode. */
+  hurry?: boolean
+}
+
+/**
+ * T2M: is this a two-minute sideline situation? Inside the last 2:00 of a half,
+ * with the offense trailing or tied — in hurry-up, or in any 4th-quarter catch-up.
+ * Drives the out-of-bounds rate and the clock stop; no rng() draw is involved.
+ */
+function oobSituation(env: SimEnv | undefined): boolean {
+  if (!env) return false
+  if (env.qtr !== 2 && env.qtr !== 4) return false
+  if ((env.clock ?? 9999) > 120) return false
+  const m = env.margin ?? 0
+  if (m > 0) return false
+  return env.qtr === 4 || env.hurry === true || m < 0
+}
+
+// T2M: the concepts that get the ball on the edge — an outside run can reach the
+// sideline; an inside hand-off cannot.
+const OUTSIDE_RUNS = new Set(['Toss', 'Outside Zone', 'Pin-Pull', 'Jet Sweep', 'RPO Run', 'Read Option'])
+
+/**
+ * T2M: the chance a sideline carry goes out of bounds. Outside runs and short
+ * completions (outs, flats, screens, checkdowns) only; more for WR/RB on those
+ * routes. Purely a probability fed to a per-play hash — never an rng() draw.
+ */
+function oobChance(concept: Concept, pos: string | undefined): number {
+  if (concept.type === 'run') return OUTSIDE_RUNS.has(concept.name) ? 0.4 : 0
+  const short = concept.depth <= 8 || concept.yac >= 0.8
+  if (!short) return 0
+  const route = /out|flat|screen|bubble|swing|check|wheel|angle|texas|snag|whip|corner/i.test(concept.name) ? 0.1 : 0
+  const byPos = pos === 'WR' ? 0.16 : pos === 'RB' || pos === 'FB' ? 0.12 : pos === 'TE' ? 0.05 : 0
+  return clamp(0.2 + route + byPos, 0, 0.6)
 }
 
 function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
@@ -1351,10 +1391,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R2: on a money down the route is worked back to the sticks.
     if (gain > 0 && env?.down === 3) gain += R2.moneyYards
     // L12 S3: a completion is stopped by one defender — the coverage defender most
-    // often, support otherwise. No credit on a score or a late sideline catch.
-    const late = (env?.qtr ?? 0) >= 4 && (env?.clock ?? 9999) <= 120
-    const outOfBounds = late && hash32(`${n}:${offId}:oob`) % 100 < 35
-    const stopped = yard + gain < 100 && !outOfBounds ? passTackler(n, defId, coverId, saf, lbs) : undefined
+    // often, support otherwise. No credit on a score or a catch that goes out of
+    // bounds (T2M: a real sideline receiver steps out, so the clock stops).
+    const oob = oobSituation(env) && gain > 0 && yard + gain < 100 &&
+      h01(`${n}:${offId}:oob`) < oobChance(concept, target?.pos)
+    const stopped = yard + gain < 100 && !oob ? passTackler(n, defId, coverId, saf, lbs) : undefined
     const tacklerGroups = [cbs, saf, lbs]
     // L12 E2: a strong tackler cuts the YAC short.
     if (stopped && gain > 0) gain = Math.max(-4, gain - tacklerYacShrink(stopped, tacklerGroups))
@@ -1379,10 +1420,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R6: a strip-sack-style catch fumble is scooped and returned for a TD
     // ~7–8% of the time (deterministic hash, no rng).
     const fumTD = forceFumble && h01(`${n}:${defId}:passtd`) < 0.075
+    const baseResult = fumTD ? 'Fumble returned for a TOUCHDOWN!' : forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete'
     return {
       type: 'pass', concept: concept.name, yards: gain, blitz,
-      result: fumTD ? 'Fumble returned for a TOUCHDOWN!' : forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete',
+      result: oob ? `${baseResult} (out of bounds)` : baseResult,
       turnover: forceFumble, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !forceFumble && big,
+      outOfBounds: oob || undefined,
       fumbleId: forceFumble ? stopper : undefined,
       defTD: fumTD, returnerId: fumTD ? stopper : undefined, scorerId: fumTD ? stopper : undefined,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}),
@@ -1512,8 +1555,12 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (yard + gain >= 100 && gain > 0) gain = Math.round(gain * (1 - R2.rzRunDamp))
   const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
   const fumble = rng() < R2.runFumbleBase * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult
+  // T2M: an outside run in the two-minute drill can reach the sideline. The
+  // runner steps out, so there is no defender to credit and the clock stops.
+  const oob = oobSituation(env) && !fumble && gain > -3 && yard + gain < 100 &&
+    h01(`${n}:${offId}:oob`) < oobChance(concept, carrier?.pos)
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
-  let tackler = fumble ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
+  let tackler = fumble || oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
   let missedTackleIds: string[] | undefined
   let forcedMissedIds: string[] | undefined
   // R5: the first defender attempts the tackle. A deterministic miss adds yards
@@ -1543,10 +1590,12 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
       }, hash32(`${n}:${defId}:fumrec`))
     }
   }
+  const baseResult = fumbleTD ? 'Fumble returned for a TOUCHDOWN!' : isBig ? 'Big run!' : 'Rush'
   return {
     type: 'run', concept: concept.name, yards: gain,
-    result: fumbleTD ? 'Fumble returned for a TOUCHDOWN!' : isBig ? 'Big run!' : 'Rush',
+    result: oob ? `${baseResult} (out of bounds)` : baseResult,
     turnover: fumble, carrierId: carrier?.id, bigPlay: isBig,
+    outOfBounds: oob || undefined,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
     defTD: fumbleTD, returnerId: recoverer?.id, scorerId: recoverer?.id,
   }
@@ -1805,6 +1854,8 @@ export interface GameState {
   clockMode: Record<string, 'use' | 'save' | undefined>
   /** Whether the one clock moment for this game has been resolved. */
   clockChecked: boolean
+  /** T2M: a manual timeout (the dock button) waiting for the next dead ball. */
+  manualTimeout?: string
   // ── L10 G8/G9/G10 ─────────────────────────────────────────────────────────
   /** Standing concepts per call moment (so a paused game draws the RNG once). */
   callConcepts: Record<string, Concept>
@@ -2147,7 +2198,8 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off }
+  const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off }
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */
@@ -2223,6 +2275,19 @@ function wantsTimeout(world: World, s: GameState, defId: string): boolean {
 
 /** Spend a timeout on this play if the offense (hurry) or defense wants one (G7). */
 function usedTimeout(world: World, s: GameState, offId: string, defId: string, out: PlayOutcome): boolean {
+  // T2M: the dock's manual timeout stops the clock on the next dead ball,
+  // whichever side of the ball the user's club is on.
+  const manual = s.manualTimeout
+  if (manual) {
+    s.manualTimeout = undefined
+    if ((s.timeouts[manual] ?? 0) > 0) {
+      s.timeouts[manual] -= 1
+      s.timeoutsUsed[manual] = (s.timeoutsUsed[manual] ?? 0) + 1
+      return true
+    }
+  }
+  // A carry that already went out of bounds has stopped the clock — no timeout.
+  if (out.outOfBounds) return false
   if (s.twoMinMode === 'hurry' && out.yards > 0 && (s.timeouts[offId] ?? 0) > 0) {
     s.timeouts[offId] -= 1
     s.timeoutsUsed[offId] = (s.timeoutsUsed[offId] ?? 0) + 1
@@ -2676,6 +2741,9 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
   let t = out.timeUsed * s.pace * baseTimeScale(offId) * tempoMult
   if (usedTimeout(world, s, offId, defId, out)) t = Math.min(t, 6)
+  // T2M: a carry out of bounds stops the clock at the end of the play — no 40s
+  // runoff; only the few seconds the play itself took count.
+  if (out.outOfBounds) t = Math.min(t, 6)
   s.clock -= t
   const offS = statFor(s, offId)
   const defS = statFor(s, defId)

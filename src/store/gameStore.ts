@@ -448,6 +448,8 @@ interface GameStore {
   /** L11.5 Q3: adjust one side of the live plan for the rest of the game. */
   setGameDayPlan: (side: 'off' | 'def', plan: GamePlan) => void
   answerGameMoment: (choiceId: string) => Promise<void>
+  /** T2M: call a timeout on the next dead ball (game day dock). */
+  callTimeout: () => void
   /** L12.6: how often a coached game asks for your call (applies from the next snap). */
   setCallMode: (mode: 'key' | 'off' | 'def' | 'both', keepPlays?: number) => boolean
   simGameDayToEnd: () => Promise<void>
@@ -1273,6 +1275,19 @@ export const useGame = create<GameStore>((set, get) => ({
     // L11.5 Q2: no more automatic run-to-moment after an answer — resolve the
     // call with one play, then hand control back to the navigation bar.
     await get().gameDayAdvance('play')
+  },
+
+  callTimeout: () => {
+    const gd = get().gameDay
+    if (!gd) return
+    const team = gd.state.ctx?.userTeamId ?? get().career?.teamId
+    if (!team) return
+    if ((gd.state.timeouts[team] ?? 0) <= 0) return
+    if (gd.state.manualTimeout === team) return
+    // Arm the timeout; the sim spends it on the next dead ball (offense or defense).
+    gd.state.manualTimeout = team
+    set({ gameDay: { ...gd }, tick: get().tick + 1 })
+    get().showToast('Timeout — the clock stops after this play.')
   },
 
   simGameDayToEnd: async () => {

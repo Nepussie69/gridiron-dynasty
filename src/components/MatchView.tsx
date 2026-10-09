@@ -146,6 +146,7 @@ export function MatchView() {
   const gameDay = useGame((s) => s.gameDay)
   const gameDayAdvance = useGame((s) => s.gameDayAdvance)
   const answerGameMoment = useGame((s) => s.answerGameMoment)
+  const callTimeout = useGame((s) => s.callTimeout)
   const simGameDayToEnd = useGame((s) => s.simGameDayToEnd)
   const abandonGameDay = useGame((s) => s.abandonGameDay)
   const viewTeam = useGame((s) => s.viewTeam)
@@ -371,6 +372,10 @@ export function MatchView() {
     : { home: match.homeScore, away: match.awayScore }
   const moment = gameDay?.moment ?? null
   const showMoment = !!gameDay && !!moment && atEnd
+  // T2M: the dock's manual timeout, armed for the next dead ball.
+  const userTeamId = gameDay?.state.ctx?.userTeamId ?? career?.teamId
+  const timeoutsLeft = userTeamId ? (gameDay?.state.timeouts[userTeamId] ?? 0) : 0
+  const timeoutArmed = !!gameDay && !!userTeamId && gameDay.state.manualTimeout === userTeamId
 
   const vb = fullField
     ? `0 0 ${W} ${H}`
@@ -797,6 +802,15 @@ export function MatchView() {
                     {moment ? 'Your call is coming up — the replay is catching up.' : 'Paused. Change the plan in the side panel, or move the game on.'}
                   </span>
                   <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                    {timeoutsLeft > 0 && (
+                      <DockButton
+                        icon={<Timer size={14} />}
+                        label={timeoutArmed ? 'Timeout armed' : `Timeout (${timeoutsLeft})`}
+                        disabled={timeoutArmed || !!moment}
+                        onClick={callTimeout}
+                        title="Stop the clock on the next dead ball"
+                      />
+                    )}
                     <DockButton icon={<Play size={14} />} label="Next play" disabled={!!moment} onClick={() => advance('play')} />
                     <DockButton icon={<ChevronsRight size={14} />} label="Next drive" disabled={!!moment} onClick={() => advance('drive')} />
                     <DockButton icon={<Target size={14} />} label="Next moment" disabled={!!moment} onClick={() => advance('moment')} />
