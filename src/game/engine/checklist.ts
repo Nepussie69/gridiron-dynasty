@@ -12,6 +12,7 @@ import type { CareerState } from '../types'
 import type { World } from './generate'
 import { capabilities } from './capabilities'
 import { currentSetPiece } from './weekly'
+import { canByeWeek, isByeWeek } from './bye'
 
 export interface WeekTask {
   id: string
@@ -66,6 +67,16 @@ export function weeklyTasks(
   const piece = currentSetPiece(world, career)
   if (piece) {
     out.push({ id: 'setpiece', label: `Set piece: ${piece.title}`, hint: piece.blurb, done: career.setPieceDone === world.season, screen: 'career' })
+  }
+  // FUTURES 17: the bye-week choice is the week's real decision.
+  if (canByeWeek(career) && isByeWeek(world, career.teamId)) {
+    out.push({
+      id: 'bye',
+      label: 'Set your bye-week plan',
+      hint: 'Rest the roster, run an install week or self-scout',
+      done: career.bye?.season === world.season && career.bye.week === world.week,
+      screen: 'dashboard',
+    })
   }
   if (career.stretch && !career.stretch.accepted) {
     out.push({ id: 'stretch', label: `Respond: ${career.stretch.label}`, hint: 'A stretch assignment is on the table', done: false, screen: 'career' })

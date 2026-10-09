@@ -125,6 +125,7 @@ import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, red
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus, installSides } from '../game/engine/install'
 import { canPractice, practiceEdge, practiceInjuryMult, practiceIsRest, practiceMasteryMult, PRACTICE_OPTIONS, type PracticePlan } from '../game/engine/practice'
+import { BYE_OPTIONS, byeEdge, byeIsRest, byeLastWeek, byeMasteryMult, canByeWeek, isByeWeek, type ByePlan } from '../game/engine/bye'
 import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId, type KeyGrade } from '../game/engine/keys'
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
@@ -545,6 +546,8 @@ interface GameStore {
   chooseInstall: (plan: 'lean' | 'full') => void
   /** L12 W1: pick this week's practice plan (kept week to week). */
   pickPractice: (plan: PracticePlan) => void
+  /** FUTURES 17: pick this bye week's plan (Rest / Install / Self-scout). */
+  pickBye: (plan: ByePlan) => void
   /** L12 W2: add or remove a key to the game (up to two). */
   toggleKey: (id: GameKeyId) => void
   /** K3: pitch a starter on your side to the coordinator (once a week). */
@@ -1049,11 +1052,13 @@ export const useGame = create<GameStore>((set, get) => ({
     // L12 W1: the week's practice plan shapes the user's club only — its weekly
     // injury odds, Rest healing/fatigue, and (below) Install's mastery gain. AI
     // clubs pass no recovery, so league-wide injuries are unchanged.
+    // FUTURES 17: a Rest bye week heals the club the same way.
+    const byeRest = byeIsRest(career, world)
     const recovery: WeekRecovery = {
       teamId: career.teamId,
       injuryMult: practiceInjuryMult(career, world),
-      restHeal: practiceIsRest(career, world),
-      fatigueRelief: practiceIsRest(career, world),
+      restHeal: practiceIsRest(career, world) || byeRest,
+      fatigueRelief: practiceIsRest(career, world) || byeRest,
     }
     // Authentic mode runs the whole league through play-by-play in a worker,
     // falling back to the fast allocator if the worker is unavailable.
@@ -1078,7 +1083,7 @@ export const useGame = create<GameStore>((set, get) => ({
       // R4: keep a season-scoped box score for the user's game.
       userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
-      growPlaybookFromGame(world, sim, practiceMasteryMult(career, world), career.teamId)
+      growPlaybookFromGame(world, sim, practiceMasteryMult(career, world) * byeMasteryMult(career, world), career.teamId)
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
       // L10 G5: grade the user's fourth-down and two-point calls; keep the film
@@ -1156,6 +1161,16 @@ export const useGame = create<GameStore>((set, get) => ({
     let nextCareer: CareerState = { ...c, week: world.week, season: world.season, weekFlags: {} }
     // L12.9 H1: the weekly hours card is gone; its effects arrive passively.
     nextCareer = applyPassiveGains(nextCareer, world)
+    // FUTURES 17: a Self-scout bye sets up a sharp read on next week's opponent.
+    if (world.phase === 'regular' && byeLastWeek(c, world) === 'scout') {
+      const nextGame = world.schedule.find(
+        (g) => !g.played && g.week === world.week && (g.homeId === c.teamId || g.awayId === c.teamId),
+      )
+      if (nextGame) {
+        const oppId = nextGame.homeId === c.teamId ? nextGame.awayId : nextGame.homeId
+        nextCareer = { ...nextCareer, oppRead: { week: world.week, oppId, sharp: true } }
+      }
+    }
     // L12 W2: fold the graded keys into this season's leadership ledger, capped
     // at ±3 net per season (the applied amount is what actually moves the rep).
     if (keysRepDelta !== 0) {
@@ -1614,6 +1629,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // L12 W1/W2: the weekly practice plan, the keys you promised and the
     // season's leadership ledger all belong to the season that set them.
     seasonCareer.practice = undefined
+    seasonCareer.bye = undefined
     seasonCareer.keys = undefined
     seasonCareer.keysLedger = undefined
     // K1: opponents' film resets with the new season.
@@ -1854,6 +1870,18 @@ export const useGame = create<GameStore>((set, get) => ({
       prev = { plan: current.plan, week: world.week - 1 }
     }
     set({ career: { ...career, practice: { plan, week: world.week, season: world.season, prev } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  pickBye: (plan) => {
+    const career = get().career
+    if (!career || !canByeWeek(career)) return
+    if (!isByeWeek(world, career.teamId)) return
+    if (!BYE_OPTIONS.some((o) => o.id === plan)) return
+    const current = career.bye
+    // Re-picking the active plan during the same bye week is a no-op.
+    if (current && current.season === world.season && current.week === world.week && current.plan === plan) return
+    set({ career: { ...career, bye: { plan, week: world.week, season: world.season } }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -3439,9 +3467,10 @@ function applyUserCoaching(career: CareerState | null) {
   const wrinkle = wrinkleBonus(career, world.week)
   const install = installBonus(career, world)
   const practice = practiceEdge(career, world)
+  const bye = byeEdge(career, world)
   const extra = {
-    off: wrinkle.off + install.off + practice.off,
-    def: wrinkle.def + install.def + practice.def,
+    off: wrinkle.off + install.off + practice.off + bye.off,
+    def: wrinkle.def + install.def + practice.def + bye.def,
   }
   setUserCoaching({
     teamId: career.teamId,
@@ -6205,6 +6234,11 @@ export async function careerSmoke(
       const plans: PracticePlan[] = ['install', 'sharpen', 'rest', 'balanced']
       exercise('pickPractice', () => get().pickPractice(plans[(world.week - 1) % plans.length]))
     }
+    // FUTURES 17: on the bye, run the bye-week plan (cycles so every path runs).
+    if (canByeWeek(career) && isByeWeek(world, career.teamId)) {
+      const byePlans: ByePlan[] = ['rest', 'install', 'scout']
+      exercise('pickBye', () => get().pickBye(byePlans[(world.season + world.week) % byePlans.length]))
+    }
     // L12 W2: promise two keys to the game.
     if (canPickKeys(career)) {
       for (const k of pickableKeys(career).slice(0, MAX_KEYS)) {
@@ -6305,8 +6339,9 @@ export async function careerSmoke(
     const wrinkle = wrinkleBonus(career, world.week)
     const install = installBonus(career, world)
     const practice = practiceEdge(career, world)
+    const bye = byeEdge(career, world)
     for (const side of ['off', 'def'] as const) {
-      const extra = clamp(wrinkle[side] + install[side] + practice[side], -0.6, 1.5)
+      const extra = clamp(wrinkle[side] + install[side] + practice[side] + bye[side], -0.6, 1.5)
       if (extra < -0.6 || extra > 1.5) {
         violations.push(`${where}: ${side} wrinkle/install/practice extra ${extra.toFixed(2)} outside [-0.6, 1.5]`)
       }

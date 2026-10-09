@@ -1,6 +1,7 @@
 import { Flag, Handshake, X } from 'lucide-react'
 import { currentSetPiece } from '../game/engine/weekly'
 import { PracticeCard } from './PracticeCard'
+import { ByeWeekCard } from './ByeWeekCard'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card } from '../ui/kit'
 
@@ -70,6 +71,8 @@ export function CareerRhythm() {
           </div>
         </Card>
       )}
+
+      <ByeWeekCard />
 
       <PracticeCard />
     </div>
