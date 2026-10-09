@@ -17,9 +17,9 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 7 | **Halftime speech** | Fire up / calm / challenge a star / stay the course → morale and second-half edge, can backfire | — | ⏳ |
 | 8 | **Primetime & rivalry stakes** | TNF/SNF/MNF and rivalry games swing reputation more; a clutch rating for players | — | ⏳ |
 | 9 | **Trade deadline day** (L14) | A live deadline week: contenders buy, rebuilders sell, AI calls you with offers | trade desk ✅ | ✅ merged |
-| 10 | **Draft-day trades** (L14) | Trade up/down while on the clock; AI offers by the value chart; timer per pick | calendar ✅ | ⏳ |
+| 10 | **Draft-day trades** (L14) | Trade up/down while on the clock; AI offers by the value chart; timer per pick | calendar ✅ | ✅ merged |
 | 11 | **Free-agency frenzy** (L14) | March bidding window: competing offers, deadlines, players choosing money vs fit/winning/culture | calendar ✅, culture K2 | ⏳ |
-| 12 | **Contract holdouts, franchise/transition tags, 5th-year options** | Stars want new deals; tag, trade or pay; rookie options | — | ⏳ |
+| 12 | **Contract holdouts, franchise/transition tags, 5th-year options** | Stars want new deals; tag, trade or pay; rookie options | — | ✅ merged |
 | 13 | **Development plans** (L15) | Focus per young player (speed, hands, technique …) with Auto / Select all per group; works with the playing-time growth | rookies ✅ | ⏳ |
 | 14 | **Scouting travel budget** (L15) | All-star games, pro days, campus visits with Auto; coverage tightens reads | scouting reads ✅ | ⏳ |
 | 15 | **Injury decisions** (L15) | Play him hurt or sit him: risk of a longer injury, owner pressure in a playoff push | — | ⏳ |
