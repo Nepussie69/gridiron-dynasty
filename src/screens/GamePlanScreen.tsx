@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronRight, ClipboardList, Repeat, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
@@ -17,8 +17,10 @@ import { coachLabels } from '../game/engine/playsim'
 import { FORMATIONS, PLAYBOOK } from '../game/data/playbookData'
 import { RouteDiagram } from '../components/RouteDiagram'
 import { recordOf, scheduleFor } from '../game/selectors'
+import { teamRates, type TeamRateEntry } from '../game/teamRates'
 import { useGame, useWorld } from '../store/gameStore'
 import { TopPlayers } from '../components/TopPlayers'
+import { TeamHoverCard } from '../components/TeamHoverCard'
 import { ScoutButton } from '../components/ScoutClub'
 import { Badge, Button, Card, PageHeader, TeamCrest } from '../ui/kit'
 
@@ -28,6 +30,7 @@ export function GamePlanScreen() {
   const defaultPlan = useGame((s) => s.defaultPlan)
   const setDefaultPlan = useGame((s) => s.setDefaultPlan)
   const viewTeam = useGame((s) => s.viewTeam)
+  const tick = useGame((s) => s.tick)
   const [side, setSide] = useState<'off' | 'def'>('off')
 
   const team = league.byId[career.teamId]
@@ -38,6 +41,11 @@ export function GamePlanScreen() {
 
   const myRatings = teamRatings(league, career.teamId)
   const oppRatings = opp ? teamRatings(league, opp.id) : null
+  // Read-only per-game rates + league ranks (recomputed when the world ticks).
+  const rates = useMemo(() => {
+    void tick
+    return teamRates(league)
+  }, [league, tick])
 
   const plan: GamePlan = defaultPlan[side]
   const opponentScheme = opp
@@ -103,38 +111,43 @@ export function GamePlanScreen() {
                 <span className="label">Up Next · Week {next.week}</span>
               </div>
               <div className="flex items-center gap-4 p-4">
-                <button
-                  type="button"
-                  onClick={() => viewTeam(team.id)}
-                  className="flex flex-1 items-center gap-3 text-left transition hover:opacity-80"
-                >
-                  <TeamCrest team={team} size={44} />
-                  <div>
-                    <div className="font-display text-lg font-700 uppercase leading-none">{team.name}</div>
-                    <div className="font-cond text-xs text-muted">{recordOf(league, team.id).wins}-{recordOf(league, team.id).losses}</div>
-                  </div>
-                </button>
+                <TeamHoverCard team={team} className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => viewTeam(team.id)}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left transition hover:opacity-80"
+                  >
+                    <TeamCrest team={team} size={44} />
+                    <div>
+                      <div className="font-display text-lg font-700 uppercase leading-none">{team.name}</div>
+                      <div className="font-cond text-xs text-muted">{recordOf(league, team.id).wins}-{recordOf(league, team.id).losses}</div>
+                    </div>
+                  </button>
+                </TeamHoverCard>
                 <span className="font-display text-faint">vs</span>
-                <button
-                  type="button"
-                  onClick={() => viewTeam(opp.id)}
-                  className="flex flex-1 items-center justify-end gap-3 text-right transition hover:opacity-80"
-                >
-                  <div>
-                    <div className="font-display text-lg font-700 uppercase leading-none hover:underline">{opp.name}</div>
-                    <div className="font-cond text-xs text-muted">{recordOf(league, opp.id).wins}-{recordOf(league, opp.id).losses}</div>
-                  </div>
-                  <TeamCrest team={opp} size={44} />
-                </button>
+                <TeamHoverCard team={opp} className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => viewTeam(opp.id)}
+                    className="flex min-w-0 flex-1 items-center justify-end gap-3 text-right transition hover:opacity-80"
+                  >
+                    <div>
+                      <div className="font-display text-lg font-700 uppercase leading-none hover:underline">{opp.name}</div>
+                      <div className="font-cond text-xs text-muted">{recordOf(league, opp.id).wins}-{recordOf(league, opp.id).losses}</div>
+                    </div>
+                    <TeamCrest team={opp} size={44} />
+                  </button>
+                </TeamHoverCard>
               </div>
               <div className="grid grid-cols-2 gap-4 border-t border-line px-4 py-3">
-                <RatingColumn label="You" r={myRatings} />
-                <RatingColumn label={opp.name} r={oppRatings} right />
+                <RatingColumn label="You" r={myRatings} ranks={rates[team.id]?.ranks} />
+                <RatingColumn label={opp.name} r={oppRatings} ranks={rates[opp.id]?.ranks} right />
               </div>
               <div className="space-y-1.5 border-t border-line bg-surface-2/40 px-4 py-2.5">
                 <MatchupLine text="Your offense" mine={myRatings.off} other="their defense" theirs={oppRatings.def} />
                 <MatchupLine text="Your defense" mine={myRatings.def} other="their offense" theirs={oppRatings.off} />
               </div>
+              <RateColumns mine={rates[team.id]} theirs={rates[opp.id]} myLabel="You" theirLabel={opp.name} />
               {/* L12.8 V2/V3: their best players (hover for ratings) and a scout visit. */}
               <div className="space-y-2 border-t border-line px-4 py-3">
                 <TopPlayers teamId={opp.id} side="off" n={5} label="Their offense" />
@@ -350,23 +363,85 @@ function CallSheetRow<T extends string>({
 function RatingColumn({
   label,
   r,
+  ranks,
   right,
 }: {
   label: string
   r: { off: number; def: number; overall: number }
+  ranks?: TeamRateEntry['ranks']
   right?: boolean
 }) {
   return (
     <div className={cn(right && 'text-right')}>
       <div className="label mb-1.5 truncate">{label}</div>
       <div className={cn('flex items-center gap-4', right && 'justify-end')}>
-        {(['off', 'def', 'overall'] as const).map((k) => (
-          <div key={k}>
-            <div className="font-display text-base font-700 leading-none tnum text-ink">{r[k].toFixed(1)}</div>
-            <div className="label mt-0.5 !text-[9px]">{k === 'overall' ? 'OVR' : k.toUpperCase()}</div>
-          </div>
-        ))}
+        {(['off', 'def', 'overall'] as const).map((k) => {
+          const rank = ranks?.[k === 'overall' ? 'ovr' : k] ?? 0
+          return (
+            <div key={k}>
+              <div className="font-display text-base font-700 leading-none tnum text-ink">
+                {r[k].toFixed(1)}
+                {rank > 0 && <span className={cn('ml-1 font-cond text-[10px]', rankColor(rank))}>#{rank}</span>}
+              </div>
+              <div className="label mt-0.5 !text-[9px]">{k === 'overall' ? 'OVR' : k.toUpperCase()}</div>
+            </div>
+          )
+        })}
       </div>
+    </div>
+  )
+}
+
+/** 1 = best; green near the top of the league, red near the bottom. */
+function rankColor(rank: number): string {
+  if (rank <= 5) return 'text-win'
+  if (rank >= 28) return 'text-loss'
+  return 'text-muted'
+}
+
+/** L12.17: per-game offense and defense for both clubs, with league ranks. */
+function RateColumns({ mine, theirs, myLabel, theirLabel }: {
+  mine?: TeamRateEntry
+  theirs?: TeamRateEntry
+  myLabel: string
+  theirLabel: string
+}) {
+  if (!mine && !theirs) return null
+  return (
+    <div className="grid grid-cols-2 gap-4 border-t border-line px-4 py-3">
+      <RateList label={myLabel} rate={mine} />
+      <RateList label={theirLabel} rate={theirs} right />
+    </div>
+  )
+}
+
+function RateList({ label, rate, right }: { label: string; rate?: TeamRateEntry; right?: boolean }) {
+  const row = (l: string, v: number | null, rank: number, title: string) => (
+    <div key={l} title={title} className="flex items-baseline justify-between gap-2 text-xs">
+      <span className="truncate text-muted">{l}</span>
+      <span className="shrink-0 font-600 tnum text-ink-2">
+        {v == null ? '—' : v.toFixed(1)}
+        {v != null && rank > 0 && <span className={cn('ml-1 font-cond text-[10px]', rankColor(rank))}>#{rank}</span>}
+      </span>
+    </div>
+  )
+  return (
+    <div className={cn('min-w-0', right && 'text-right')}>
+      <div className="label mb-1 truncate">{label}</div>
+      {rate ? (
+        <div className="space-y-0.5">
+          <div className="label !mb-0 !text-[9px] text-faint">Offense</div>
+          {row('Points/G', rate.pf, rate.ranks.pf, 'Points scored per game')}
+          {row('Pass yds/G', rate.passYds, rate.ranks.passYds, 'Passing yards per game')}
+          {row('Rush yds/G', rate.rushYds, rate.ranks.rushYds, 'Rushing yards per game')}
+          <div className="label !mb-0 mt-1 !text-[9px] text-faint">Defense</div>
+          {row('Pts allowed/G', rate.pa, rate.ranks.pa, 'Points allowed per game')}
+          {row('Pass allowed/G', rate.passYdsAllowed, rate.ranks.passYdsAllowed, 'Pass yards allowed per game')}
+          {row('Rush allowed/G', rate.rushYdsAllowed, rate.ranks.rushYdsAllowed, 'Rush yards allowed per game')}
+        </div>
+      ) : (
+        <div className="text-xs text-muted">—</div>
+      )}
     </div>
   )
 }

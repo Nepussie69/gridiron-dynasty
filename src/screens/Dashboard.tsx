@@ -29,6 +29,7 @@ import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { WeeklyDecision } from '../components/WeeklyDecision'
 import { Badge, Button, Card, Donut, MiniBars, OvrBadge, PageHeader, RatingBar, Stat, TeamCrest } from '../ui/kit'
 import { TopPlayers } from '../components/TopPlayers'
+import { TeamHoverCard } from '../components/TeamHoverCard'
 
 export function Dashboard() {
   const league = useWorld()
@@ -161,36 +162,40 @@ export function Dashboard() {
                 <div className="label">{next.home ? 'Home' : 'Away'}</div>
               </div>
               <div className="flex items-center gap-4 p-5">
-                <button
-                  type="button"
-                  onClick={() => viewTeam(team.id)}
-                  className="flex flex-1 items-center gap-3 text-left transition hover:opacity-80"
-                >
-                  <TeamCrest team={team} size={52} />
-                  <div>
-                    <div className="font-display text-xl font-700 uppercase leading-none">
-                      {isNFL ? team.name : team.name}
+                <TeamHoverCard team={team} className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => viewTeam(team.id)}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left transition hover:opacity-80"
+                  >
+                    <TeamCrest team={team} size={52} />
+                    <div>
+                      <div className="font-display text-xl font-700 uppercase leading-none">
+                        {isNFL ? team.name : team.name}
+                      </div>
+                      <div className="mt-1 font-cond text-sm text-muted">{recordStr(rec)}</div>
                     </div>
-                    <div className="mt-1 font-cond text-sm text-muted">{recordStr(rec)}</div>
-                  </div>
-                </button>
+                  </button>
+                </TeamHoverCard>
                 <div className="text-center">
                   <div className="font-display text-2xl font-700 uppercase text-faint">vs</div>
                   <Badge tone="info" className="mt-1">{team.abbr && isNFL ? `${team.abbr} - ${opp.abbr}` : 'Matchup'}</Badge>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => viewTeam(opp.id)}
-                  className="flex flex-1 items-center justify-end gap-3 text-right transition hover:opacity-80"
-                >
-                  <div className="text-right">
-                    <div className="font-display text-xl font-700 uppercase leading-none hover:underline">{opp.name}</div>
-                    <div className="mt-1 font-cond text-sm text-muted">
-                      {recordStr(recordOf(league, opp.id))}
+                <TeamHoverCard team={opp} className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => viewTeam(opp.id)}
+                    className="flex min-w-0 flex-1 items-center justify-end gap-3 text-right transition hover:opacity-80"
+                  >
+                    <div className="text-right">
+                      <div className="font-display text-xl font-700 uppercase leading-none hover:underline">{opp.name}</div>
+                      <div className="mt-1 font-cond text-sm text-muted">
+                        {recordStr(recordOf(league, opp.id))}
+                      </div>
                     </div>
-                  </div>
-                  <TeamCrest team={opp} size={52} />
-                </button>
+                    <TeamCrest team={opp} size={52} />
+                  </button>
+                </TeamHoverCard>
               </div>
               {/* L12.8 V2: the opponent's best three on each side (hover for ratings). */}
               <div className="space-y-2 border-t border-line px-4 py-3">
@@ -332,8 +337,12 @@ export function Dashboard() {
                       className="flex items-center gap-3 rounded-lg px-2 py-1.5"
                       style={t.id === activeTeamId ? { background: 'var(--team-soft)' } : undefined}
                     >
-                      <TeamCrest team={t} size={24} />
-                      <span className="flex-1 font-cond text-sm font-600 text-ink">{t.name}</span>
+                      <TeamHoverCard team={t} className="min-w-0 flex-1">
+                        <span className="flex min-w-0 items-center gap-3">
+                          <TeamCrest team={t} size={24} />
+                          <span className="flex-1 truncate font-cond text-sm font-600 text-ink">{t.name}</span>
+                        </span>
+                      </TeamHoverCard>
                       <span className="font-display text-base font-700 tnum text-ink-2">
                         {r.wins}-{r.losses}
                       </span>
