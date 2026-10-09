@@ -71,6 +71,9 @@ Team `sacksTaken` exists, and sack plays carry `qbId`, but the QB's own line has
 - Fast-sim (`statAlloc`): the team's existing `sacksTaken` and sack yards go to the QBs by dropback share (deterministic, no rng), so simmed seasons match.
 - Keep NFL convention: sacks are not pass attempts and sack yards are not subtracted from the QB's passing yards (team net passing already handles it). Check: league QB SK/game ≈ team sacks taken (2.2–2.6), box totals == play-level counts.
 
+## R9 — Coverage stats in simmed games (2026-10-09, with "include receptions allowed")
+Game-day box score now shows REC/TGT and YDS ALW (Claude, main). But fast-sim `statAlloc` allocates no coverage stats (defTargets/defComp/defYdsAllowed/defTDAllowed/defIntsCov), so simmed seasons show zero. Allocate them deterministically (no rng) from the team's passing allowed to its CBs/S/LBs by coverage role and MCV/ZCV, consistent with PBP coverage shares, so season REC allowed / YDS ALW / COV grades exist for every game.
+
 ## Progress
 | Task | Current state |
 |---|---|

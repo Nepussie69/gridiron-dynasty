@@ -1398,7 +1398,8 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
-        { k: 'defYdsAllowed', l: 'ALW' },
+        { k: 'defComp', l: 'REC/TGT', fmt: (r) => ((r.defTargets ?? 0) > 0 ? `${r.defComp ?? 0}/${r.defTargets}` : '—') },
+        { k: 'defYdsAllowed', l: 'YDS ALW' },
         { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
       ]} />}
     </div>
