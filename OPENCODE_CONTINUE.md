@@ -4,6 +4,10 @@
 
 ### Latest follow-up, 23:30 AEDT
 
+- **Save slots131 running:** branch wt-saveslots, worktree `/private/tmp/gridiron-wt-saveslots`, runner `/private/tmp/ds-push-saveslots`, prompt `/private/tmp/gridiron-saveslots.txt`, log `/private/tmp/gridiron-saveslots.log`; spec NEXT_PHASE_SAVE_SLOTS.md. Five career slots, legacy primary+backup migration, atomic per-slot autosaves, rename/delete/import/export, no other-career erasure. Persistence/store/UI only; independent of sim/animation. Preserve save migration and run isolated persistence tests before accepting. Do not duplicate.
+- **New animation request133 full coverage/lead-blocking units:** updated NEXT_PHASE_ANIM_CONTACT.md; initial animcontact already running. AFTER it finishes, inspect output and launch prepared `/private/tmp/gridiron-animcontact2.txt` in SAME worktree if updated full11+11/blocking requirements are unfinished. No competing job in this worktree; no engine edits. Priority before FUTURES.
+- **Numbers132 live browser verified:** a fresh Pages load of index-BzwGXlhm.js shows #31 Jerome Ford/#26 Quinshon Judkins and #34 Dylan Sampson in Rushing/Returns, all other sections numbered. Screenshot `/private/tmp/gridiron-live-jersey-numbers.jpg`; user's screenshot likely an already-open prior bundle. Suggested finish/save current game then reload. No new number code fix needed based on current evidence.
+
 - **Publication130 complete:** user answered "yep push to githu" to the explicit Pages question; GitHub main + Pages now **765f362**, including box-score jersey numbers. Live `index-BzwGXlhm.js` served and SHA256 matches published build. Fresh build/lint4,200-gameeq20/20,secret scan0. This authorization is consumed for this publication; no authorization for later feature pushes. Stable4173 still held4377982. No unverified snapshots included.
 
 - realism16 completed23:22; snapshot `ffb17c2` independently checked, rejected: build/lint4, eq20/20, smokes0/0, anim216/216 pass; points22.1/21.9/21.5 fail two seeds; 19/19 muffed INTs also credited as completions. Repair added to queue6 prompt. realism17 now running, realism18 still queued; queue6 waiter PID4909 confirmed.
