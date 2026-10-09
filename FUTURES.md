@@ -24,7 +24,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 14 | **Scouting travel budget** (L15) | All-star games, pro days, campus visits with Auto; coverage tightens reads | scouting reads ✅ | ✅ merged |
 | 15 | **Injury decisions** (L15) | Play him hurt or sit him: risk of a longer injury, owner pressure in a playoff push | — | ⏳ |
 | 16 | **Locker room** (L15) | Leaders and problem players, mentoring rookies (faster growth), morale affecting effort | culture K1/K2 | ⏳ |
-| 17 | **Bye week** | A real choice: rest, install week or self-scout | practice ✅ | ⏳ |
+| 17 | **Bye week** | A real choice: rest, install week or self-scout | practice ✅ | ✅ merged |
 | 18 | **3-year cap planner** | Future cap hits, dead money and expiring deals before you sign anyone | — | ✅ merged |
 | 19 | **Analytics department** | Hire analysts: sharper win probability, 4th-down advice, opponent tendencies | staff redesign | ⏳ |
 | 20 | **Press conferences** (`NEXT_PHASE_L12_17.md`, spec only) | Answers move owner trust, player morale and your profile | — | ⛔ dropped by the user 2026-10-08 |
