@@ -167,10 +167,19 @@ export function allocateTeamGame(
   }
 
   const isNFL = world.byId[teamId]?.tier === 'NFL'
-  const basePass = isNFL ? 218 : 235
+  const basePass = isNFL ? 220 : 235
   const baseRush = isNFL ? 112 : 165
   const pace = isNFL ? 1 : 1.08
-  const schemePassBias = { 'Air Raid': 1.25, 'Pro Style': 0.95, Spread: 1.1, 'West Coast': 1.05, 'RPO Heavy': 0.9 }[scheme] ?? 1
+  const schemePassBias = { 'Air Raid': 1.16, 'Pro Style': 0.95, Spread: 1.1, 'West Coast': 1.05, 'RPO Heavy': 0.9 }[scheme] ?? 1
+
+  // R13: stable per-team-season workhorse concentration, so a 17-game season has
+  // real between-team spread in individual leaders and counts. The per-game score
+  // variance averages out over a season, so without this every #1 back/receiver
+  // lands near the mean and no 1,000-yd/1,500-yd season exists. Deterministic
+  // hashes only — no rng draw is added or removed.
+  const season = world.season
+  const recDecay = 0.66 + hashUnit(`r13:${season}:${teamId}:rcd`) * 0.2 // 0.66–0.86
+  const rbConc = 2.4 + Math.pow(hashUnit(`r13:${season}:${teamId}:rbc`), 1.2) * 6.0 // 2.4–8.4
 
   const variance = 0.72 + rng() * 0.7
   const passYds = Math.round(basePass * variance * schemePassBias * pace * (1 + eff.offEdge * 0.02))
@@ -200,7 +209,7 @@ export function allocateTeamGame(
   const rbs = group(world, teamId, ['RB'], 3, 'rush', scheme, means)
   if (rbs.items.length) {
     const carries = Math.round(rushYds / (isNFL ? 4.35 : 4.5))
-    const shares = rbs.weights.map((w, i) => (i === 0 ? w * 2.4 : w))
+    const shares = rbs.weights.map((w, i) => (i === 0 ? w * rbConc : w))
     // L12 S2 parity: score-only games must show the QB's rushing like play-by-play
     // does. Mirror playsim's carry split (RB1 0.60 / RB2 0.27 / QB 0.13, raised for a
     // scrambler) and use his own legs for yards per carry. Deterministic (style only,
@@ -249,7 +258,9 @@ export function allocateTeamGame(
   const recvs = group(world, teamId, ['WR', 'TE', 'RB', 'FB'], 6, 'rec', scheme, means)
   if (recvs.items.length && qb) {
     const completions = Math.round(passYds / (isNFL ? 9.6 : 10.5))
-    const shares = recvs.weights
+    // R13: rank decay concentrates the target/yards share on the lead receivers
+    // (NFL: WR1 ≈ 25–40% of team receiving) instead of splitting them evenly.
+    const shares = recvs.weights.map((w, i) => w * Math.pow(recDecay, i))
     const recSplit = split(rng, completions, shares)
     const yardSplit = split(rng, passYds, shares)
     const td = Math.max(0, Math.round((points / 7) * 0.72 * 0.9))
@@ -283,14 +294,40 @@ export function allocateTeamGame(
   if (defenders.length) {
     // Team tackles scale with opponent plays faced; sacks and INTs are rare events.
     const teamTackles = Math.round(58 + rng() * 26)
-    const w = defenders.map((p) => weight(p, 'def', scheme, means))
+    // R13: position-scoped weight (LB > S > CB/DL) concentrates tackles on the
+    // front seven so the tackle leader lands in the NFL 140–170 band.
+    const posMul: Record<string, number> = { LB: 1.3, S: 1.12, CB: 0.78, DE: 0.95, DT: 0.85 }
+    const w = defenders.map((p) => weight(p, 'def', scheme, means) * (posMul[p.pos] ?? 1))
     const tSplit = split(rng, teamTackles, w)
     const sacks = rng() < 0.68 ? (rng() < 0.6 ? 2 : rng() < 0.8 ? 3 : 4) : (rng() < 0.6 ? 1 : 0)
-    const ints = rng() < 0.3 ? 1 : rng() < 0.12 ? 2 : 0
+    const ints = rng() < 0.6 ? (rng() < 0.3 ? 2 : 1) : 0
     const rushers = defenders.filter((p) => ['DE', 'DT', 'LB'].includes(p.pos))
-    const dbGroup = defenders.filter((p) => ['CB', 'S'].includes(p.pos))
     const sSplit = rushers.length ? split(rng, sacks, rushers.map((p) => weight(p, 'def', scheme, means))) : []
-    const iSplit = dbGroup.length ? split(rng, ints, dbGroup.map((p) => weight(p, 'def', scheme, means))) : []
+    // R13: concentrate interceptions on the lead cover men (rank decay) over the
+    // club's whole corner/safety group, so the INT leader sits in the NFL 6–8
+    // band while the team total still matches the PBP rate.
+    const allDb = (world.roster[teamId] ?? []).filter((p) => (p.pos === 'CB' || p.pos === 'S') && !p.injured)
+    const dbW = allDb.map((p) => weight(p, 'def', scheme, means))
+    const dbShare = allDb.map(() => 0)
+    dbW
+      .map((v, i) => ({ i, v }))
+      .sort((a, b) => b.v - a.v)
+      .forEach((o, rank) => { dbShare[o.i] = o.v * Math.pow(0.75, rank) })
+    // Spread the club's INTs per event by a weighted hash lottery (no rng draw) so
+    // a single interception can go to any cover man, not always the top weight.
+    const iSplit = allDb.map(() => 0)
+    if (allDb.length) {
+      const tot = dbShare.reduce((a, b) => a + b, 0) || 1
+      const cum: number[] = []
+      let acc = 0
+      for (const v of dbShare) { acc += v / tot; cum.push(acc) }
+      for (let k = 0; k < ints; k++) {
+        const r = hashUnit(`${gameKey}:${teamId}:int:${k}`)
+        let i = 0
+        while (i < cum.length - 1 && cum[i] <= r) i++
+        iSplit[i]++
+      }
+    }
     // R5: team missed-tackle total sits in the play-by-play band (≈7–9); a
     // better-tackling defence sits lower, a poor one higher, using the SAME
     // rating helper the play-by-play uses. `MT_ALLOC_REF` is the model's
@@ -302,15 +339,22 @@ export function allocateTeamGame(
     defMissed = mtTotal
     defenders.forEach((p) => {
       const ri = rushers.indexOf(p)
-      const di = dbGroup.indexOf(p)
       const tk = tSplit[defenders.indexOf(p)] ?? 0
       addLine(p.id, {
         playerId: p.id,
         tackles: tk,
         defSacks: ri >= 0 ? sSplit[ri] ?? 0 : 0,
-        defInts: di >= 0 ? iSplit[di] ?? 0 : 0,
         missedTackles: mtSplit[defenders.indexOf(p)] ?? 0,
       })
+    })
+    // Fold each interception onto the cover man's line (creating one if he had no
+    // tackle), so the whole CB/S group shares the club's INTs.
+    allDb.forEach((p, i) => {
+      const got = iSplit[i] ?? 0
+      if (!got) return
+      const row = out.find((o) => o.playerId === p.id)
+      if (row) row.line.defInts = (row.line.defInts ?? 0) + got
+      else addLine(p.id, { playerId: p.id, defInts: got })
     })
   }
 

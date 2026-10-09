@@ -21,14 +21,14 @@ export interface WeekRecovery {
   fatigueRelief?: boolean
 }
 
-const HOME_ADV = 2.4
+const HOME_ADV = 1.4
 
 /** Simulate one game and write the result + standings. */
 export function simGame(world: World, game: Game, rng: Rng) {
   const homeStr = teamStrength(world.roster[game.homeId] ?? [])
   const awayStr = teamStrength(world.roster[game.awayId] ?? [])
   const diff = homeStr - awayStr + (game.postseason ? 0 : HOME_ADV)
-  const margin = gauss(rng, diff * 1.05, 9.5)
+  const margin = gauss(rng, diff * 2.0, 9.5)
 
   let homeScore = Math.round(21 + margin / 2 + gauss(rng, 0, 3.6))
   let awayScore = Math.round(21 - margin / 2 + gauss(rng, 0, 3.6))

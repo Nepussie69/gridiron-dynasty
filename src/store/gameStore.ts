@@ -6191,6 +6191,128 @@ export function statShape(games = 200) {
 }
 
 /**
+ * R13 dev probe: run a full 17-game regular season on the fast-sim allocation
+ * path for each seed and print the NFL 2015–24 season shapes — statistical
+ * leaders, 4,000-yard passers, 1,000-yard rushers, standings spread, point
+ * differential and home / favourite win rates. It builds its own throwaway world
+ * per seed, so it records nothing in the career world and draws no rng from the
+ * live seed stream.
+ */
+export function seasonRealism(seeds: number | number[] = [33333, 2222, 5150]) {
+  const list = Array.isArray(seeds) ? seeds : [seeds]
+  const per = list.map((seed) => {
+    const w = buildWorld(seed, getRealData())
+    seedWorldMastery(w)
+    setLivePlan(null)
+    for (let wk = 1; wk <= 18; wk++) simWeek(w, wk)
+    const nfl = new Set(w.teams.filter((t) => t.tier === 'NFL').map((t) => t.id))
+    const season = w.season
+    let passYds = 0, rushYds = 0, recYds = 0, sacks = 0, ints = 0, tackles = 0
+    let qb4000 = 0, rb1000 = 0, rec1500 = 0
+    for (const p of w.players) {
+      if (p.teamId == null || !nfl.has(p.teamId)) continue
+      const s = p.stats?.find((e) => e.season === season && e.level === 'NFL')
+      if (!s) continue
+      if (s.passYds > passYds) passYds = s.passYds
+      if (s.rushYds > rushYds) rushYds = s.rushYds
+      if (s.recYds > recYds) recYds = s.recYds
+      if (s.defSacks > sacks) sacks = s.defSacks
+      if (s.defInts > ints) ints = s.defInts
+      if (s.tackles > tackles) tackles = s.tackles
+      if (s.passYds >= 4000) qb4000++
+      if (s.rushYds >= 1000) rb1000++
+      if (s.recYds >= 1500) rec1500++
+    }
+    const ids = [...nfl]
+    // Per-team shapes: median #1 back / #1 receiver and team yardage per game.
+    const byTeam = new Map<string, Player[]>()
+    for (const p of w.players) {
+      if (p.teamId == null || !nfl.has(p.teamId)) continue
+      const arr = byTeam.get(p.teamId)
+      if (arr) arr.push(p)
+      else byTeam.set(p.teamId, [p])
+    }
+    const rb1Yds: number[] = []
+    const wr1Yds: number[] = []
+    let teamPass = 0
+    let teamRush = 0
+    for (const players of byTeam.values()) {
+      let rb = 0
+      let wr = 0
+      for (const p of players) {
+        const s = p.stats?.find((e) => e.season === season && e.level === 'NFL')
+        if (!s) continue
+        teamPass += s.passYds
+        teamRush += s.rushYds
+        if (p.pos === 'RB' && s.rushYds > rb) rb = s.rushYds
+        if (p.pos === 'WR' && s.recYds > wr) wr = s.recYds
+      }
+      rb1Yds.push(rb)
+      wr1Yds.push(wr)
+    }
+    const med = (a: number[]) => {
+      const s = [...a].sort((x, y) => x - y)
+      return s.length ? s[s.length >> 1] : 0
+    }
+    const ng = byTeam.size * 17 || 1
+    const wins = ids.map((id) => w.standings[id]?.wins ?? 0)
+    const pds = ids.map((id) => (w.standings[id]?.pointsFor ?? 0) - (w.standings[id]?.pointsAgainst ?? 0))
+    const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / (a.length || 1)
+    const winSD = Math.sqrt(mean(wins.map((x) => (x - mean(wins)) ** 2)))
+    let homeWin = 0, games = 0, favWin = 0, favGames = 0
+    for (const g of w.schedule) {
+      if (g.homeScore == null || g.awayScore == null) continue
+      games++
+      const homeWon = g.homeScore > g.awayScore
+      if (homeWon) homeWin++
+      const hs = teamStrength(w.roster[g.homeId] ?? [])
+      const as = teamStrength(w.roster[g.awayId] ?? [])
+      if (Math.abs(hs - as) < 0.5) continue
+      favGames++
+      if ((hs > as) === homeWon) favWin++
+    }
+    return {
+      seed,
+      passYds, rushYds, recYds, sacks, ints, tackles,
+      qb4000, rb1000, rec1500,
+      rb1Med: med(rb1Yds), wr1Med: med(wr1Yds),
+      teamPassPG: +(teamPass / ng).toFixed(1), teamRushPG: +(teamRush / ng).toFixed(1),
+      bestWins: Math.max(...wins), worstWins: Math.min(...wins),
+      winSD: +winSD.toFixed(2),
+      maxPD: Math.max(...pds), minPD: Math.min(...pds),
+      homeWinPct: +((homeWin / (games || 1)) * 100).toFixed(1),
+      favWinPct: +((favWin / (favGames || 1)) * 100).toFixed(1),
+    }
+  })
+  const avg = (k: keyof (typeof per)[number]) =>
+    +(per.reduce((s, r) => s + (r[k] as number), 0) / (per.length || 1)).toFixed(1)
+  const within = (v: number, lo: number, hi: number) => (v >= lo && v <= hi ? '✅' : '❌')
+  const rows: [string, number, string, string][] = [
+    ['Pass yds leader', avg('passYds'), '4,500–5,000', within(avg('passYds'), 4500, 5000)],
+    ['Rush yds leader', avg('rushYds'), '1,400–1,800', within(avg('rushYds'), 1400, 1800)],
+    ['Rec yds leader', avg('recYds'), '1,500–1,800', within(avg('recYds'), 1500, 1800)],
+    ['Sacks leader', avg('sacks'), '15–19', within(avg('sacks'), 15, 19)],
+    ['INTs leader', avg('ints'), '6–8', within(avg('ints'), 6, 8)],
+    ['Tackles leader', avg('tackles'), '140–170', within(avg('tackles'), 140, 170)],
+    ['RB1 rush yds (median)', avg('rb1Med'), '950–1,250', within(avg('rb1Med'), 950, 1250)],
+    ['WR1 rec yds (median)', avg('wr1Med'), '850–1,150', within(avg('wr1Med'), 850, 1150)],
+    ['Team pass yds/game', avg('teamPassPG'), '230–255', within(avg('teamPassPG'), 230, 255)],
+    ['Team rush yds/game', avg('teamRushPG'), '105–125', within(avg('teamRushPG'), 105, 125)],
+    ['4,000-yd passers', avg('qb4000'), '8–12', within(avg('qb4000'), 8, 12)],
+    ['1,000-yd rushers', avg('rb1000'), '12–18', within(avg('rb1000'), 12, 18)],
+    ['1,500-yd receivers', avg('rec1500'), '3–6', within(avg('rec1500'), 3, 6)],
+    ['Best record (wins)', avg('bestWins'), '12–14', within(avg('bestWins'), 12, 14)],
+    ['Worst record (wins)', avg('worstWins'), '2–4', within(avg('worstWins'), 2, 4)],
+    ['SD of wins', avg('winSD'), '2.6–3.4', within(avg('winSD'), 2.6, 3.4)],
+    ['Max point diff', avg('maxPD'), '+120…+300', within(avg('maxPD'), 120, 300)],
+    ['Min point diff', avg('minPD'), '−300…−120', within(avg('minPD'), -300, -120)],
+    ['Home win %', avg('homeWinPct'), '54–57', within(avg('homeWinPct'), 54, 57)],
+    ['Favourite win %', avg('favWinPct'), '67–70', within(avg('favWinPct'), 67, 70)],
+  ]
+  return { seeds: list, per, rows: rows.map(([measure, value, band, ok]) => ({ measure, value, band, ok })) }
+}
+
+/**
  * Dev-only probe (L12 E3): how much does one rating actually move the scoreboard?
  *
  * For each key rating, take one starter on the user's club and temporarily give
