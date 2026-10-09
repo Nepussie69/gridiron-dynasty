@@ -12,7 +12,7 @@ import type { Player } from '../game/types'
 type Dir = 'asc' | 'desc'
 
 /** A clickable, sortable column. Composites/ratings are prefixed for lookup. */
-type SortKey = 'name' | 'pos' | 'age' | 'ovr' | 'fit' | `composite:${string}` | `rating:${string}`
+type SortKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | 'fit' | `composite:${string}` | `rating:${string}`
 
 interface Props {
   players: Player[]
@@ -51,6 +51,8 @@ function rawValue(
       return p.age
     case 'ovr':
       return p.ovr
+    case 'pot':
+      return p.pot
     case 'fit': {
       if (p.side === 'ST') return -1
       const useScheme = p.side === 'DEF' ? defScheme : scheme
@@ -229,7 +231,19 @@ export function RatingsTable({
                 {showTeam && <Th className="sticky top-0 z-20">Team</Th>}
                 <Th {...hdr('pos')} className="sticky top-0 z-20">Pos</Th>
                 <Th {...hdr('age')} className="sticky top-0 z-20">Age</Th>
-                <Th {...hdr('ovr')} className="sticky top-0 z-20">OVR/POT</Th>
+                <th className="label sticky top-0 z-20 whitespace-nowrap border-b border-line bg-surface-2 px-2 py-2 font-700">
+                  <span className="inline-flex items-center gap-1">
+                    {([['ovr', 'OVR', 'Sort by overall'], ['pot', 'POT', 'Sort by potential']] as const).map(([k, label, tip], i) => (
+                      <span key={k} className="inline-flex items-center gap-1">
+                        {i > 0 && <span className="text-faint">/</span>}
+                        <button type="button" title={`${tip} (click again to flip)`} onClick={() => toggle(k)} className={cn('inline-flex cursor-pointer select-none items-center gap-0.5 hover:text-ink-2', sortKey === k && 'text-ink')}>
+                          {label}
+                          {sortKey === k && <span className="text-[9px] leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
+                        </button>
+                      </span>
+                    ))}
+                  </span>
+                </th>
                 {showCap && <Th className="sticky top-0 z-20 text-right">Cap Hit</Th>}
                 {showFit && <Th {...hdr('fit')} className="sticky top-0 z-20 text-center">Fit</Th>}
                 {composites.map((c) => (

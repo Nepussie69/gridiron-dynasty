@@ -33,7 +33,7 @@ import { useGame, useWorld } from '../store/gameStore'
 import { Badge, OvrBadge, TeamCrest } from '../ui/kit'
 
 type Dir = 'asc' | 'desc'
-type SortKey = 'name' | 'pos' | 'age' | 'ovr' | `col:${string}`
+type SortKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | `col:${string}`
 
 const QB_COLS: StatCol[] = [COL_PASS_ATT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_RTG]
 
@@ -78,6 +78,7 @@ function sortValue(
   if (key === 'pos') return p.pos
   if (key === 'age') return p.age
   if (key === 'ovr') return p.ovr
+  if (key === 'pot') return p.pot
   const c = cols.find((x) => `col:${x.id}` === key)
   return c ? c.get(lines.get(p.id), p) : null
 }
@@ -216,7 +217,19 @@ export function StatsTable({
                 {showTeam && <Th className="sticky top-0 z-20">Team</Th>}
                 <Th {...hdr('pos')} className="sticky top-0 z-20">Pos</Th>
                 <Th {...hdr('age')} className="sticky top-0 z-20">Age</Th>
-                <Th {...hdr('ovr')} className="sticky top-0 z-20">OVR/POT</Th>
+                <th className="label sticky top-0 z-20 whitespace-nowrap border-b border-line bg-surface-2 px-2 py-2 font-700">
+                  <span className="inline-flex items-center gap-1">
+                    {([['ovr', 'OVR', 'Sort by overall'], ['pot', 'POT', 'Sort by potential']] as const).map(([k, label, tip], i) => (
+                      <span key={k} className="inline-flex items-center gap-1">
+                        {i > 0 && <span className="text-faint">/</span>}
+                        <button type="button" title={`${tip} (click again to flip)`} onClick={() => toggle(k)} className={cn('inline-flex cursor-pointer select-none items-center gap-0.5 hover:text-ink-2', sortKey === k && 'text-ink')}>
+                          {label}
+                          {sortKey === k && <span className="text-[9px] leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
+                        </button>
+                      </span>
+                    ))}
+                  </span>
+                </th>
                 {showCap && <Th className="sticky top-0 z-20 text-right">Cap Hit</Th>}
                 {cols.map((c) => (
                   <Th key={c.id} {...hdr(`col:${c.id}`)} title={c.title} className="sticky top-0 z-20 text-center">
