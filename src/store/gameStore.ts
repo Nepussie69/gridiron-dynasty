@@ -26,7 +26,7 @@ import {
   snapShare,
   teamCohesion,
 } from '../game/engine/playbook'
-import { applyHire, attemptHire, focusOptions, openCandidates, frontOfficeProfile, isFrontOfficeRole } from '../game/engine/hiring'
+import { applyHire, attemptHire, focusOptions, openCandidates, frontOfficeProfile, isFrontOfficeRole, generateAnalyticsPool, ANALYTICS_ROLE } from '../game/engine/hiring'
 import {
   leaderboard,
   newDatabase,
@@ -3453,8 +3453,11 @@ export const useGame = create<GameStore>((set, get) => ({
     if (idx < 0) return
     const m = staff[idx]
     staff.splice(idx, 1)
-    // Move them back to the open market.
-    world.staffPool.push({ ...m, teamId: null, status: 'Available' })
+    // Move them back to the open market. FUTURES 19: analysts return to their own
+    // user-only pool so the Analytics market keeps listing them (never the AI's).
+    const open = { ...m, teamId: null, status: 'Available' as const }
+    if (m.role === ANALYTICS_ROLE) world.analyticsPool = [...(world.analyticsPool ?? []), open]
+    else world.staffPool.push(open)
     bump(set, get)
     get().showToast(`${m.name} was let go as ${m.role}.`)
     get().save()
@@ -3943,6 +3946,8 @@ function migrateWorld(w: World): World {
     w.fbMigrated = true
   }
   w.staffTenure ??= {}
+  // FUTURES 19: legacy saves get the deterministic analyst market (no rng draw).
+  w.analyticsPool ??= generateAnalyticsPool(w.seed)
   w.draft ??= []
   w.draftPicks ??= []
   w.draftRounds ??= []

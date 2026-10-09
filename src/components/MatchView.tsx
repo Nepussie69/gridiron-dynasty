@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, penaltyTotals, PENALTY_INFO, type GameState, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
@@ -10,6 +10,7 @@ import { boxScore, coverageGrade, passerRating } from '../game/engine/stats'
 import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
+import { fourthAdvice } from '../game/engine/analytics'
 import { PlanEditor } from './PlanEditor'
 import { PersonnelCard } from './PersonnelCard'
 import { KeysCard } from './KeysCard'
@@ -802,6 +803,7 @@ export function MatchView() {
                     fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)}
                     onAnswer={answer}
                     quick={(lean) => quickOffCall(world, moment.teamId === match.homeId ? match.awayId : match.homeId, moment, lean)}
+                    fourthNote={analyticsFourthNote(world, moment)}
                   />
                 </div>
               ) : (
@@ -1261,7 +1263,27 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   )
 }
 
-function MomentCard({ moment, fieldPos, onAnswer, quick }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void; quick?: (lean: 'run' | 'pass') => string | null }) {
+/** FUTURES 19: the analytics 4th-down recommendation, when an analyst is hired. */
+function analyticsFourthNote(world: World, moment: Moment): string | null {
+  if (moment.kind !== 'fourth') return null
+  const adv = fourthAdvice(world, moment.teamId, {
+    yard: moment.yard,
+    down: 4,
+    distance: moment.distance ?? 0,
+    qtr: moment.qtr,
+    clockSec: clockSeconds(moment.clock),
+    margin: moment.us - moment.them,
+  })
+  if (!adv) return null
+  return `Analytics: ${adv.note} (${adv.confidence} confidence)`
+}
+
+function clockSeconds(clock: string): number {
+  const [m, s] = clock.split(':').map(Number)
+  return (m || 0) * 60 + (s || 0)
+}
+
+function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void; quick?: (lean: 'run' | 'pass') => string | null; fourthNote?: string | null }) {
   return (
     <div className="rounded-2xl border border-[#c99a2e]/70 bg-black/40 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1283,6 +1305,12 @@ function MomentCard({ moment, fieldPos, onAnswer, quick }: { moment: Moment; fie
         <div className="mb-2 flex items-center gap-1.5 text-[11px] text-white/60">
           <Eye size={12} className="shrink-0" />
           <span>{moment.staffRead}</span>
+        </div>
+      )}
+      {fourthNote && (
+        <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-[#ffd34d]/10 px-2 py-1 text-[11px] text-[#ffe9a3]">
+          <BarChart3 size={12} className="shrink-0" />
+          <span>{fourthNote}</span>
         </div>
       )}
       {moment.kind === 'call' && quick && <QuickCallBar quick={quick} onAnswer={onAnswer} />}
