@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Eye, Pause, Play, SkipForward, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { coachLabels, type GameState, type Play as PlayEvent, type Moment } from '../game/engine/playsim'
+import { coachLabels, type GameState, type Play as PlayEvent, type Moment, type MomentKind } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
@@ -473,11 +473,11 @@ export function MatchView() {
 
   return (
     <div className="fixed inset-0 z-50 flex h-screen w-screen flex-col overflow-hidden bg-[#0a1626] text-white">
-      {/* ── Scoreboard ─────────────────────────────────────────────────────── */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-black/40 px-4 py-2">
-        <ScoreSide team={away} score={shownScore.away} hasBall={play.offId === away.id} align="left" />
-        <div className="mx-auto flex min-w-0 flex-col items-center leading-tight">
-          <div className="flex items-center gap-2">
+      {/* ── U2: broadcast scorebug (replaces the header row) ───────────────── */}
+      <header className="flex shrink-0 items-center gap-1.5 border-b border-white/10 bg-black/45 px-2 py-1.5 sm:gap-2 sm:px-3">
+        <ScoreBlock team={away} score={shownScore.away} hasBall={play.offId === away.id} timeouts={gameDay?.state.timeouts?.[away.id]} align="left" />
+        <div className="mx-auto flex min-w-0 flex-col items-center justify-center leading-tight">
+          <div className="flex items-center gap-1.5">
             <span className="whitespace-nowrap rounded bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum sm:text-sm">Q{play.qtr} · {play.clock}</span>
             {play.down ? (
               <span className="whitespace-nowrap font-cond text-xs font-700 uppercase sm:text-sm">
@@ -487,7 +487,7 @@ export function MatchView() {
               <span className="font-cond text-sm font-600 uppercase text-white/70">{play.concept}</span>
             )}
           </div>
-          <span className="mt-0.5 hidden truncate text-[10px] text-white/45 md:block">
+          <span className="mt-0.5 hidden max-w-[42vw] truncate text-[10px] text-white/45 md:block">
             {[away, home].map((t) => {
               const c = coachLabels(world, t.id)
               return `${t.abbr}: ${c.ocScheme} / ${c.dcScheme}`
@@ -499,8 +499,8 @@ export function MatchView() {
             </span>
           )}
         </div>
-        <ScoreSide team={home} score={shownScore.home} hasBall={play.offId === home.id} align="right" />
-        <button onClick={onClose} title={gameDay ? 'Abandon game' : 'Close'} className="ml-2 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/10 hover:bg-white/20">
+        <ScoreBlock team={home} score={shownScore.home} hasBall={play.offId === home.id} timeouts={gameDay?.state.timeouts?.[home.id]} align="right" />
+        <button onClick={onClose} title={gameDay ? 'Abandon game' : 'Close'} className="ml-0.5 grid h-8 w-8 shrink-0 place-items-center self-center rounded-lg bg-white/10 hover:bg-white/20">
           <X size={16} />
         </button>
       </header>
@@ -729,16 +729,40 @@ export function MatchView() {
 
             {/* play-result toast */}
             {toast && (
-              <div key={idx} className="gd-toast pointer-events-none absolute inset-x-0 bottom-2 z-10 flex justify-center">
+              <div key={idx} className="gd-toast pointer-events-none absolute inset-x-0 bottom-16 z-10 flex justify-center">
                 <span className={cn('rounded-md border px-3 py-1 font-cond text-sm font-700 uppercase tracking-wide shadow-lg backdrop-blur-sm', TOAST_TONE[toast.tone])}>
                   {toast.text}
                 </span>
               </div>
             )}
+
+            {/* U2: floating replay pill (glass, bottom-centre over the field) */}
+            <div className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
+              <div className="flex items-center gap-0.5 rounded-full border border-white/15 bg-black/45 px-1 py-0.5 shadow-[0_8px_24px_-10px_rgba(0,0,0,0.8)] backdrop-blur-md sm:gap-1 sm:px-1.5 sm:py-1">
+                <IconBtn title="Previous play" onClick={() => jump(Math.max(0, idx - 1))}><ChevronLeft size={15} /></IconBtn>
+                <IconBtn playToggle title={showPause ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{showPause ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
+                <IconBtn title="Next play" onClick={() => jump(Math.min(match.plays.length - 1, idx + 1))}><ChevronRight size={15} /></IconBtn>
+                <IconBtn title="Jump to the latest play" onClick={() => jump(match.plays.length - 1)}><SkipForward size={15} /></IconBtn>
+                <span className="mx-0.5 h-4 w-px bg-white/15 sm:mx-1" />
+                {[0.5, 1, 2, 4].map((sp) => (
+                  <button
+                    key={sp}
+                    onClick={() => setSpeed(sp)}
+                    className={cn('rounded-full px-1.5 py-0.5 font-cond text-[11px] font-700', speed === sp ? 'bg-white text-ink' : 'text-white/60 hover:bg-white/10')}
+                  >
+                    {sp}×
+                  </button>
+                ))}
+                <span className="ml-1 font-cond text-[11px] tnum text-white/50">{idx + 1}/{match.plays.length}</span>
+                <span className="ml-1 hidden items-center gap-1 font-cond text-[10px] uppercase text-white/35 md:flex">
+                  <kbd className="rounded border border-white/20 px-1 py-px leading-none">Space</kbd>
+                </span>
+              </div>
+            </div>
           </div>
 
-          {/* What just happened + replay controls */}
-          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
+          {/* What just happened */}
+          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5">
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="font-display text-lg font-700 uppercase" style={{ color: play.bigPlay ? '#ffd34d' : '#fff' }}>{play.concept}</span>
               <span className="truncate font-cond text-base font-600 text-white/85">{play.result}</span>
@@ -748,44 +772,27 @@ export function MatchView() {
                 </span>
               )}
             </div>
-            <div className="ml-auto flex items-center gap-1 rounded-lg bg-white/5 p-1">
-              <IconBtn title="Previous play" onClick={() => jump(Math.max(0, idx - 1))}><ChevronLeft size={15} /></IconBtn>
-              <IconBtn playToggle title={showPause ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{showPause ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
-              <IconBtn title="Next play" onClick={() => jump(Math.min(match.plays.length - 1, idx + 1))}><ChevronRight size={15} /></IconBtn>
-              <IconBtn title="Jump to the latest play" onClick={() => jump(match.plays.length - 1)}><SkipForward size={15} /></IconBtn>
-              <span className="mx-1 h-4 w-px bg-white/15" />
-              {[0.5, 1, 2, 4].map((sp) => (
-                <button
-                  key={sp}
-                  onClick={() => setSpeed(sp)}
-                  className={cn('rounded px-1.5 py-0.5 font-cond text-[11px] font-700', speed === sp ? 'bg-white text-ink' : 'text-white/60 hover:bg-white/10')}
-                >
-                  {sp}×
-                </button>
-              ))}
-              <span className="ml-1 font-cond text-[11px] tnum text-white/40">{idx + 1}/{match.plays.length}</span>
-            </div>
           </div>
 
-          {/* Game day: your call, or how to move the game on */}
+          {/* U2: game-day dock — sticky to the bottom of the game column */}
           {gameDay && (
-            <div className="shrink-0 border-t border-white/10 bg-[#0d1a2b] px-4 py-3">
+            <div className="sticky bottom-0 z-30 shrink-0 border-t border-white/10 bg-[#0d1a2b]/95 px-3 py-2 backdrop-blur-md">
               {showMoment && moment ? (
-                <MomentCard moment={moment} fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)} onAnswer={answer} />
+                <div className="gd-slide-up">
+                  <MomentCard moment={moment} fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)} onAnswer={answer} />
+                </div>
               ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-display text-sm font-700 uppercase tracking-wide">Game day</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                  <span className="hidden font-display text-sm font-700 uppercase tracking-wide sm:inline">Game day</span>
                   {career && <CallModePicker scope={gameDay.state.ctx?.scope} mode={career.callMode} keepPlays={idx + 1} onFallback={() => jump(match.plays.length - 1)} />}
-                  <span className="text-[11px] text-white/55">
+                  <span className="hidden text-[11px] text-white/55 md:inline">
                     {moment ? 'Your call is coming up — the replay is catching up.' : 'Paused. Change the plan in the side panel, or move the game on.'}
                   </span>
-                  <div className="ml-auto flex flex-wrap items-center gap-2">
-                    <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('play')}>Next play</Button>
-                    <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('drive')}>Next drive</Button>
-                    <Button size="sm" variant="primary" className="!bg-white !text-ink" disabled={!!moment} onClick={() => advance('moment')}>Next moment</Button>
-                    <Button size="sm" variant="ghost" className="!text-white/80 hover:!bg-white/10" onClick={simToEnd}>
-                      <SkipForward size={14} /> Sim to end
-                    </Button>
+                  <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                    <DockButton icon={<Play size={14} />} label="Next play" disabled={!!moment} onClick={() => advance('play')} />
+                    <DockButton icon={<ChevronsRight size={14} />} label="Next drive" disabled={!!moment} onClick={() => advance('drive')} />
+                    <DockButton icon={<Target size={14} />} label="Next moment" disabled={!!moment} onClick={() => advance('moment')} />
+                    <DockButton icon={<SkipForward size={14} />} label="Sim to end" onClick={simToEnd} />
                   </div>
                 </div>
               )}
@@ -910,19 +917,71 @@ export function MatchView() {
   )
 }
 
-function ScoreSide({ team, score, hasBall, align }: { team: import('../game/types').Team; score: number; hasBall: boolean; align: 'left' | 'right' }) {
+/** U2: a club-colour scorebug block — abbr, big score, possession ball, timeout pips. */
+function ScoreBlock({ team, score, hasBall, timeouts, align }: {
+  team: import('../game/types').Team; score: number; hasBall: boolean; timeouts?: number; align: 'left' | 'right'
+}) {
+  const ink = luminance(team.primary) > 0.5 ? '#0a1626' : '#ffffff'
   return (
-    <div className={cn('flex items-center gap-2.5', align === 'right' && 'flex-row-reverse')}>
-      <TeamCrest team={team} size={30} />
+    <div
+      className="flex min-w-0 items-center rounded-lg px-2 py-1 sm:px-2.5"
+      style={{ background: team.primary, color: ink, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)' }}
+    >
       <div className={cn('flex flex-col leading-none', align === 'right' && 'items-end')}>
-        <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-white/60">
+        <span className="flex items-center gap-1 font-cond text-[11px] font-700 uppercase tracking-wide">
+          {align === 'left' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
           {team.abbr}
-          {hasBall && <span className="ml-1 text-[#ffd34d]">●</span>}
+          {align === 'right' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
         </span>
-        <span className="hidden font-display text-sm font-700 uppercase sm:block">{team.name}</span>
+        <span className="font-display text-2xl font-700 tnum leading-none sm:text-3xl">{score}</span>
+        {timeouts != null && <TimeoutPips n={timeouts} ink={ink} />}
       </div>
-      <span className="font-display text-3xl font-700 tnum">{score}</span>
     </div>
+  )
+}
+
+/** A small football marking the club with the ball (hidden, not removed, when it isn't theirs). */
+function PossessionBall({ on, ink, bg }: { on: boolean; ink: string; bg: string }) {
+  return (
+    <svg width={11} height={11} viewBox="0 0 24 24" aria-hidden className={cn('shrink-0', on ? 'opacity-100' : 'opacity-0')}>
+      <ellipse cx="12" cy="12" rx="9.5" ry="6.2" fill={ink} />
+      <path d="M7 12h10" stroke={bg} strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M10 10.6v2.8M12 10.4v3.2M14 10.6v2.8" stroke={bg} strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** U2: three timeout pips per side, filled in club-block ink. */
+function TimeoutPips({ n, ink }: { n: number; ink: string }) {
+  return (
+    <span className="mt-1 flex gap-0.5" title={`${n} timeout${n === 1 ? '' : 's'} left`}>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="h-1.5 w-2.5 rounded-full"
+          style={{ background: i < n ? ink : 'transparent', border: `1px solid ${ink}`, opacity: i < n ? 0.9 : 0.4 }}
+        />
+      ))}
+    </span>
+  )
+}
+
+/** U2: a dock button — icon always, label from 400px up. */
+function DockButton({ icon, label, onClick, disabled, title }: {
+  icon: React.ReactNode; label: string; onClick: () => void; disabled?: boolean; title?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title ?? label}
+      aria-label={label}
+      className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 font-cond text-xs font-700 uppercase tracking-wide text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {icon}
+      <span className="hidden min-[400px]:inline">{label}</span>
+    </button>
   )
 }
 
@@ -1037,8 +1096,18 @@ function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' 
     ...(scope === 'hc' || scope === 'both' ? [{ id: 'both' as const, label: 'Every snap' }] : []),
   ]
   const active = mode ?? 'key'
+  const activeIdx = Math.max(0, all.findIndex((o) => o.id === active))
   return (
-    <div className="inline-flex rounded-lg bg-white/10 p-0.5" title="How often the game stops for your call (from the next snap)">
+    <div
+      className="relative grid w-full max-w-xs shrink-0 rounded-full bg-white/10 p-0.5"
+      style={{ gridTemplateColumns: `repeat(${all.length}, minmax(0, 1fr))` }}
+      title="How often the game stops for your call (from the next snap)"
+    >
+      <span
+        aria-hidden
+        className="gd-pill-slide pointer-events-none absolute bottom-0.5 left-0.5 top-0.5 rounded-full bg-white shadow"
+        style={{ width: `calc((100% - 0.25rem) / ${all.length})`, transform: `translateX(${activeIdx * 100}%)` }}
+      />
       {all.map((o) => (
         <button
           key={o.id}
@@ -1051,7 +1120,7 @@ function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' 
             else if (o.id !== 'key') void gameDayAdvance('moment')
             showToast(o.id === 'key' ? 'Key moments only — from the next snap.' : `${o.label}: you call it from the next snap.`)
           }}
-          className={cn('rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase', active === o.id ? 'bg-white text-ink' : 'text-white/65 hover:text-white')}
+          className={cn('relative z-10 whitespace-nowrap rounded-full px-2 py-1 font-cond text-[10px] font-700 uppercase transition sm:px-2.5 sm:text-[11px]', active === o.id ? 'text-ink' : 'text-white/65 hover:text-white')}
         >
           {o.label}
         </button>
@@ -1133,7 +1202,7 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
 
 function MomentCard({ moment, fieldPos, onAnswer }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void }) {
   return (
-    <div className="rounded-xl border border-[#c99a2e]/70 bg-black/30 p-3">
+    <div className="rounded-2xl border border-[#c99a2e]/70 bg-black/40 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Badge tone="gold">Your call</Badge>
         <span className="font-display text-base font-700 uppercase text-white">{moment.title}</span>
@@ -1158,28 +1227,61 @@ function MomentCard({ moment, fieldPos, onAnswer }: { moment: Moment; fieldPos: 
       {moment.kind === 'call' ? (
         <CallPicker moment={moment} onAnswer={onAnswer} />
       ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-          {moment.options.map((o) => (
-            <button
-              key={o.id}
-              onClick={() => onAnswer(o.id)}
-              className="flex flex-col items-start gap-0.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-left transition hover:bg-white/20"
-            >
-              <span className="flex w-full items-center gap-1.5">
-                <span className="font-cond text-sm font-700 uppercase text-white">{o.label}</span>
-                {o.id === moment.defaultId && (
-                  <span className="ml-auto rounded bg-white/20 px-1 py-px font-cond text-[9px] font-700 uppercase text-white/80">
-                    Standing order
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {moment.options.map((o) => {
+            const Icon = optionIcon(moment.kind, o.id)
+            const ev = optionEv(o)
+            return (
+              <button
+                key={o.id}
+                onClick={() => onAnswer(o.id)}
+                className="flex items-start gap-2.5 rounded-xl border border-white/15 bg-white/[0.07] p-2.5 text-left transition hover:border-white/30 hover:bg-white/15"
+              >
+                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/10 text-[#ffd34d]">
+                  <Icon size={17} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex w-full items-center gap-1.5">
+                    <span className="font-cond text-sm font-700 uppercase text-white">{o.label}</span>
+                    {ev != null && (
+                      <span className="ml-auto rounded bg-[#ffd34d]/20 px-1.5 py-px font-cond text-[10px] font-700 tnum uppercase text-[#ffe9a3]">
+                        EV {ev >= 0 ? '+' : ''}{ev.toFixed(1)}
+                      </span>
+                    )}
+                    {o.id === moment.defaultId && (
+                      <span className={cn('rounded bg-white/20 px-1.5 py-px font-cond text-[9px] font-700 uppercase text-white/80', ev == null && 'ml-auto')}>
+                        Standing order
+                      </span>
+                    )}
                   </span>
-                )}
-              </span>
-              {o.hint && <span className="text-[11px] leading-snug text-white/60">{o.hint}</span>}
-            </button>
-          ))}
+                  {o.hint && <span className="mt-0.5 block text-[11px] leading-snug text-white/60">{o.hint}</span>}
+                </span>
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
   )
+}
+
+/** U2: a decorative icon per moment option (the sim only exposes id/label/hint). */
+function optionIcon(kind: MomentKind, id: string) {
+  if (id === 'go') return Target
+  if (id === 'fg' || id === 'fgRange') return Goal
+  if (id === 'punt') return Wind
+  if (id === 'hurry') return Zap
+  if (id === 'protect') return Shield
+  if (id === 'useTimeouts') return Timer
+  if (id === 'save' || id === 'normal') return Clock
+  if (kind === 'defCall' || kind === 'halftime') return Shield
+  return Target
+}
+
+/** The moment option's EV/edge, if the sim ever attaches one — it doesn't today. */
+function optionEv(o: Moment['options'][number]): number | null {
+  const v = (o as { ev?: number; edge?: number }).ev ?? (o as { edge?: number }).edge
+  return typeof v === 'number' ? v : null
 }
 
 /**

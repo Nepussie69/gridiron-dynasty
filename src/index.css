@@ -146,11 +146,24 @@ body {
   animation-fill-mode: forwards;
 }
 
+/* ── U2 game-day dock + controls ───────────────────────────────────────────── */
+@keyframes gd-slide-up {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.gd-slide-up { animation: gd-slide-up 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+
+.gd-pill-slide { transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1); }
+
 @media (prefers-reduced-motion: reduce) {
   .gd-toast,
   .gd-burst,
   .gd-flash,
-  .gd-confetti-piece {
+  .gd-confetti-piece,
+  .gd-slide-up {
     animation: none;
+  }
+  .gd-pill-slide {
+    transition: none;
   }
 }
