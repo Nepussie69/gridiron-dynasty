@@ -16,6 +16,7 @@ import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { ExtensionTalks } from '../components/ExtensionTalks'
 import { ContractExplainer } from '../components/ContractExplainer'
 import { GmRestructureRequest } from '../components/GmRestructureRequest'
+import { CapPlanner } from '../components/CapPlanner'
 
 type LedgerKey = 'name' | 'pos' | 'age' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'pct'
 const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
@@ -119,6 +120,8 @@ export function Cap() {
         <Card><Stat label="Dead Money" value={money(summary.dead)} sub="accelerated charges" /></Card>
         <Card><Stat label="Top-5 Hits" value={money(summary.top5)} sub={`${Math.round((summary.top5 / Math.max(1, summary.used)) * 100)}% of payroll`} /></Card>
       </div>
+
+      <CapPlanner className="mb-4" />
 
       <div className="mb-4 grid gap-3 lg:grid-cols-3">
         <Card className="lg:col-span-2">
