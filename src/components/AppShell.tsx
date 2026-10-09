@@ -30,6 +30,7 @@ import { tierFor } from '../game/engine/career'
 import { stageOf } from '../game/engine/draft'
 import { accessFor } from '../game/engine/access'
 import { AccessBadge } from './AccessBadge'
+import { CommandPalette } from './CommandPalette'
 import type { AccessArea } from '../game/engine/access'
 import { capSpace, recordOf, rosterOf, scheduleFor, teamAvgOvr } from '../game/selectors'
 import { Badge, Button, TeamCrest, ThemeToggle, TweenNumber } from '../ui/kit'
@@ -453,6 +454,15 @@ export function TopBar() {
       )}
 
       <button
+        type="button"
+        onClick={() => window.dispatchEvent(new Event('gd:command-palette'))}
+        title={`Search screens, players, clubs and actions (${isMac ? '⌘K' : 'Ctrl+K'})`}
+        className="motion grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/25 bg-black/20 text-white/85 hover:bg-black/30 hover:text-white"
+      >
+        <Search size={15} />
+      </button>
+
+      <button
         onClick={() => setLeaguePbp(!leaguePbp)}
         title="Simulate every league game play-by-play (slower, more authentic stats)"
         className={cn(
@@ -580,6 +590,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="rounded-full bg-ink px-5 py-2.5 text-sm font-600 text-canvas shadow-xl">{toast}</div>
         </div>
       )}
+      <CommandPalette />
     </div>
   )
 }

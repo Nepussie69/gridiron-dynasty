@@ -152,7 +152,7 @@ body {
   font-family: var(--font-cond);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.055em;
   font-size: 0.68rem;
   color: var(--color-muted);
 }
@@ -205,6 +205,21 @@ body {
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.05) inset,
     0 10px 30px -14px rgba(0, 0, 0, 0.65);
+}
+
+/* ── U3b: table density (comfortable / compact) ─────────────────────────────── */
+/* Compact shrinks row/header padding and the base font for every table that
+   opts in with data-density="compact". Comfortable leaves the utilities alone. */
+[data-density='compact'] td {
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+[data-density='compact'] th {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+table[data-density='compact'] {
+  font-size: 0.75rem;
 }
 
 /* ── U3 motion: shared interaction easing ───────────────────────────────────── */

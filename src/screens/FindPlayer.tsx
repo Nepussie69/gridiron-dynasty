@@ -5,9 +5,10 @@ import { groupPositions } from '../game/data/ratingInfo'
 import type { World } from '../game/engine/generate'
 import type { Player } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
+import { PlayerCard } from '../components/PlayerCard'
 import { RatingsTable } from '../components/RatingsTable'
 import { StatsTable } from '../components/StatsTable'
-import { Badge, Card, PageHeader } from '../ui/kit'
+import { Badge, Button, Card, PageHeader } from '../ui/kit'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Find a Player — every NFL player in the league (all clubs + free agents,
@@ -17,7 +18,13 @@ import { Badge, Card, PageHeader } from '../ui/kit'
 // ratings work is cached per player inside RatingsTable (and here per tick).
 // ─────────────────────────────────────────────────────────────────────────────
 
-type View = 'ratings' | 'stats'
+type View = 'ratings' | 'stats' | 'cards'
+
+const VIEWS: { id: View; label: string }[] = [
+  { id: 'ratings', label: 'Ratings' },
+  { id: 'stats', label: 'Stats' },
+  { id: 'cards', label: 'Cards' },
+]
 
 const POS_CHIPS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K/P'] as const
 type PosChip = (typeof POS_CHIPS)[number]
@@ -75,6 +82,7 @@ export function FindPlayer() {
   const world = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const tick = useGame((s) => s.tick)
+  const selectPlayer = useGame((s) => s.selectPlayer)
 
   const [view, setView] = useState<View>('ratings')
   const [group, setGroup] = useState<PosChip>('ALL')
@@ -136,7 +144,7 @@ export function FindPlayer() {
         eyebrow="League"
         title="Find a Player"
         subtitle={`${filtered.length} of ${rows.length} NFL players · ${
-          view === 'ratings' ? 'ratings & attributes' : `${world.season} season stats`
+          view === 'ratings' ? 'ratings & attributes' : view === 'cards' ? 'card view' : `${world.season} season stats`
         }`}
         right={
           <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
@@ -156,16 +164,16 @@ export function FindPlayer() {
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex rounded-lg bg-surface-2 p-0.5">
-          {(['ratings', 'stats'] as View[]).map((v) => (
+          {VIEWS.map((v) => (
             <button
-              key={v}
-              onClick={() => apply(setView)(v)}
+              key={v.id}
+              onClick={() => apply(setView)(v.id)}
               className={cn(
                 'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                view === v ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                view === v.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
               )}
             >
-              {v === 'ratings' ? 'Ratings' : 'Stats'}
+              {v.label}
             </button>
           ))}
         </div>
@@ -229,37 +237,64 @@ export function FindPlayer() {
         </div>
       </div>
 
-      <Card pad={false}>
-        {view === 'ratings' ? (
-          <RatingsTable
-            players={players}
-            group={group}
-            showTeam
-            showCap
-            showFit={false}
-            tagFor={tagFor}
-            mineTeamId={activeTeamId}
-            limit={limit}
-            onShowMore={() => setLimit((n) => n + PAGE)}
-          />
-        ) : (
-          <StatsTable
-            key={`stats-${group}`}
-            players={players}
-            group={group}
-            season={world.season}
-            level="NFL"
-            showTeam
-            showCap
-            tagFor={tagFor}
-            mineTeamId={activeTeamId}
-            limit={limit}
-            onShowMore={() => setLimit((n) => n + PAGE)}
-            defaultSortKey={statDefaultKey}
-            defaultDir="desc"
-          />
-        )}
-      </Card>
+      {view === 'cards' ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {filtered.slice(0, limit).map(({ player, teamId }) => (
+              <PlayerCard
+                key={player.id}
+                player={player}
+                team={teamId ? world.byId[teamId] : null}
+                tag={tagFor(player)}
+                onClick={() => selectPlayer(player.id)}
+                footer={
+                  <span className="font-cond text-[10px] font-700 uppercase tracking-wide tnum text-muted">
+                    {teamId ? `$${(player.contract.capHit / 1_000_000).toFixed(1)}M · ${world.byId[teamId]?.abbr ?? ''}` : 'Free agent'}
+                  </span>
+                }
+              />
+            ))}
+          </div>
+          {!filtered.length && <p className="py-8 text-center text-sm text-muted">No players match these filters.</p>}
+          {filtered.length > limit && (
+            <div className="mt-4 flex justify-center">
+              <Button onClick={() => setLimit((n) => n + PAGE)}>Show more · {filtered.length - limit} left</Button>
+            </div>
+          )}
+        </>
+      ) : (
+        <Card pad={false}>
+          {view === 'ratings' ? (
+            <RatingsTable
+              players={players}
+              group={group}
+              showTeam
+              showCap
+              showFit={false}
+              tagFor={tagFor}
+              mineTeamId={activeTeamId}
+              limit={limit}
+              onShowMore={() => setLimit((n) => n + PAGE)}
+            />
+          ) : (
+            <StatsTable
+              key={`stats-${group}`}
+              players={players}
+              group={group}
+              season={world.season}
+              level="NFL"
+              showTeam
+              showCap
+              tagFor={tagFor}
+              mineTeamId={activeTeamId}
+              limit={limit}
+              onShowMore={() => setLimit((n) => n + PAGE)}
+              defaultSortKey={statDefaultKey}
+              defaultDir="desc"
+            />
+          )}
+        </Card>
+      )}
     </div>
   )
 }

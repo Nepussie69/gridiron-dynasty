@@ -8,7 +8,7 @@ import { capSavings, deadMoney } from '../game/engine/cap'
 import { fitLabel, schemeFit } from '../game/engine/style'
 import { leagueMasteryMeans, masteryEffectText, masteryGroup, masteryLabel, masteryProgress, type MasteryMeans } from '../game/engine/playbook'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, DevBadge, OvrBadge, RatingBar } from '../ui/kit'
+import { Badge, DensityToggle, DevBadge, OvrBadge, RatingBar, useDensity } from '../ui/kit'
 import { PlayerName } from './PlayerHoverCard'
 
 type SortKey =
@@ -143,6 +143,7 @@ export function PlayerTable({
   const selectPlayer = useGame((s) => s.selectPlayer)
   const world = useWorld()
   const masteryMeans = leagueMasteryMeans(world)
+  const { density, fontSize } = useDensity()
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [dir, setDir] = useState<SortDir>('asc')
 
@@ -195,8 +196,12 @@ export function PlayerTable({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm tnum">
+    <div>
+      <div className="flex items-center justify-end px-2 pb-1.5">
+        <DensityToggle />
+      </div>
+      <div className="overflow-x-auto">
+      <table data-density={density} className={cn('w-full border-collapse tnum', fontSize)}>
         <thead>
           <tr className="border-b border-line text-left">
             {rank && <Th className="w-8">#</Th>}
@@ -246,7 +251,7 @@ export function PlayerTable({
             <tr
               key={p.id}
               onClick={() => selectPlayer(p.id)}
-              className="cursor-pointer border-b border-line/60 transition hover:bg-[var(--team-soft)]"
+              className="motion cursor-pointer border-b border-line/60 hover:bg-[var(--team-soft)] hover:shadow-[0_6px_16px_-10px_rgba(10,22,38,0.45)]"
             >
               {rank && <Td className="font-cond text-muted">{i + 1}</Td>}
               <Td className="sticky left-0 bg-surface">
@@ -314,6 +319,7 @@ export function PlayerTable({
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
@@ -367,12 +373,14 @@ function Th({
   dir?: SortDir
   title?: string
 }) {
+  const { headPad } = useDensity()
   return (
     <th
       title={title}
       onClick={onClick}
       className={cn(
-        'label whitespace-nowrap px-2 py-2 font-700',
+        'label whitespace-nowrap px-2 font-700',
+        headPad,
         onClick && 'cursor-pointer select-none hover:text-ink-2',
         active && 'text-ink',
         className,
@@ -390,7 +398,8 @@ function Th({
   )
 }
 function Td({ children, className }: { children?: ReactNode; className?: string }) {
-  return <td className={cn('whitespace-nowrap px-2 py-1.5', className)}>{children}</td>
+  const { rowPad } = useDensity()
+  return <td className={cn('whitespace-nowrap px-2', rowPad, className)}>{children}</td>
 }
 
 function MoraleDots({ value }: { value: number }) {
