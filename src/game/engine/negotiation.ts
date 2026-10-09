@@ -13,6 +13,7 @@ import type { Contract, Player } from '../types'
 import { capScale, marketAAV, recomputeCapHit } from './cap'
 import { hash32 } from './rng'
 import { negotiationAskMultiplier } from './skills'
+import { unscaleOvr } from './ovrScale'
 
 export type AgentStyle = 'hardball' | 'market' | 'loyal'
 
@@ -88,7 +89,7 @@ export function buildExtension(p: Player, season: number, offer: ExtensionOffer)
   const length = Math.max(1, Math.round(offer.years))
   const total = offer.aav * length
   const guaranteedPct = offer.guarantee === 'low' ? 0.3 : offer.guarantee === 'mid' ? 0.5 : 0.7
-  const bonusPct = p.ovr >= 90 ? 0.46 : p.ovr >= 82 ? 0.36 : p.ovr >= 72 ? 0.24 : 0.14
+  const bonusPct = unscaleOvr(p.ovr) >= 90 ? 0.46 : unscaleOvr(p.ovr) >= 82 ? 0.36 : unscaleOvr(p.ovr) >= 72 ? 0.24 : 0.14
   const signingBonus = Math.round(total * bonusPct)
   const totalBase = total - signingBonus
   // Escalating base schedule, normalized to the total base (mirrors extendContract).

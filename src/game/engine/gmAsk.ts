@@ -17,6 +17,7 @@ import { capabilities } from './capabilities'
 import { summarizeCap } from './cap'
 import { buildExtension, marketAsk, type ExtensionOffer } from './negotiation'
 import { OFF_POSITIONS, DEF_POSITIONS } from './pitch'
+import { unscaleOvr } from './ovrScale'
 
 /** Why the GM answered the way he did, for the UI and the probe. */
 export type GmAskReason = 'agreed' | 'cap' | 'age' | 'value' | 'revisit'
@@ -50,7 +51,7 @@ export function gmAskCovers(career: CareerState, pos: Position): boolean {
 /** The extension the GM would put on the table: market AAV, 3–4 years by age. */
 export function gmOffer(p: Player, season: number): ExtensionOffer {
   const years = p.age <= 27 ? 4 : 3
-  return { years, aav: marketAsk(p, season), guarantee: p.ovr >= 86 ? 'high' : 'mid' }
+  return { years, aav: marketAsk(p, season), guarantee: unscaleOvr(p.ovr) >= 86 ? 'high' : 'mid' }
 }
 
 /**
@@ -62,9 +63,11 @@ export function gmExtendDecision(world: World, career: CareerState, p: Player): 
   const offer = gmOffer(p, season)
   const total = offer.aav * offer.years
   const base = { years: offer.years, aav: offer.aav, total }
+  // L12.15 S2: decisions read the old (rank) scale so the same players qualify.
+  const raw = unscaleOvr(p.ovr)
 
   // Value: a player who isn't a core piece isn't getting new money.
-  if (p.ovr < 68) {
+  if (raw < 68) {
     return { ...base, outcome: 'declined', reason: 'value', message: `${p.name} isn't a core piece at ${p.ovr} OVR.` }
   }
   // Age: the GM won't commit long money to the end of a career. A proven star
@@ -72,7 +75,7 @@ export function gmExtendDecision(world: World, career: CareerState, p: Player): 
   if (p.age >= 33) {
     return { ...base, outcome: 'declined', reason: 'age', message: `At ${p.age}, the GM won't commit new money.` }
   }
-  if (p.age >= 30 && p.ovr < 88) {
+  if (p.age >= 30 && raw < 88) {
     return { ...base, outcome: 'notNow', reason: 'age', message: "The GM wants to see this season first — we'll revisit." }
   }
   // Cap: the deal has to fit once the old hit comes off the books.
@@ -87,14 +90,14 @@ export function gmExtendDecision(world: World, career: CareerState, p: Player): 
   const mandate = (career.ownerExpectation ?? '').toLowerCase()
   const rebuild = /draft|build|young|three-year/.test(mandate)
   const winNow = /playoff|championship|title|win now|make a change/.test(mandate)
-  if (rebuild && p.age >= 27 && p.ovr < 90) {
+  if (rebuild && p.age >= 27 && raw < 90) {
     return { ...base, outcome: 'notNow', reason: 'revisit', message: "The owner wants to build through the draft — we'll revisit." }
   }
   // Standing: leadership reputation and job security buy the coach the benefit
   // of the doubt. A weak-room coach has to bring a star to get a yes.
   const standing = career.reputation.leadership * 0.6 + career.jobSecurity * 0.4
   const threshold = rebuild ? 58 : winNow ? 42 : 50
-  const need = p.ovr >= 88 ? threshold - 12 : p.ovr >= 82 ? threshold - 6 : threshold
+  const need = raw >= 88 ? threshold - 12 : raw >= 82 ? threshold - 6 : threshold
   if (standing < need) {
     return { ...base, outcome: 'notNow', reason: 'revisit', message: "The GM isn't sold yet — we'll revisit after the season." }
   }

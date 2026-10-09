@@ -11,6 +11,7 @@ import { freshDraftWindow } from './picks'
 import { makeCharacter } from './character'
 import { makeScoutBias } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
+import { rescaleOvr, rescaleQuantile, unscaleOvr } from './ovrScale'
 import { STARS } from './starSeed'
 import type { RealCfbPlayer, RealCfbTeam, RealData, RealNflPlayer } from '../data/realData'
 import type { PlayerBoxScore } from './stats'
@@ -55,6 +56,8 @@ export interface World {
   phase: 'regular' | 'offseason'
   /** L12.7: set once real-data rookies are on the NFL rookie scale (old saves are rescaled on load). */
   rookieScaleV2?: boolean
+  /** L12.15 S3: set once every player has been moved onto the new (rare-stars) OVR scale. */
+  ovrScaleV2?: boolean
   /** L12.10 B0: set once legacy utility/blocking backs have been moved to fullback. */
   fbMigrated?: boolean
   /** L12.13 M1: set once starting mastery has been seeded (old saves are reseeded on load). */
@@ -164,18 +167,21 @@ function weightFor(rng: Rng, pos: Position) {
 }
 
 function devFor(ovr: number, pot: number): Player['dev'] {
-  if (ovr >= 95) return 'X-Factor'
-  if (ovr >= 89) return 'Superstar'
-  if (ovr >= 83) return 'Star'
-  if (ovr >= 76 || pot - ovr >= 8) return 'Starter'
-  if (ovr >= 68) return 'Depth'
+  const rawOvr = unscaleOvr(ovr)
+  const rawPot = unscaleOvr(pot)
+  if (rawOvr >= 95) return 'X-Factor'
+  if (rawOvr >= 89) return 'Superstar'
+  if (rawOvr >= 83) return 'Star'
+  if (rawOvr >= 76 || rawPot - rawOvr >= 8) return 'Starter'
+  if (rawOvr >= 68) return 'Depth'
   return 'Backup'
 }
 
 function traitsFor(rng: Rng, pos: Position, ovr: number) {
   const pool = TRAITS_BY_POS[pos] ?? []
   if (!pool.length) return []
-  const n = ovr >= 90 ? 2 : ovr >= 80 ? 1 : rng() > 0.5 ? 1 : 0
+  const rawOvr = unscaleOvr(ovr)
+  const n = rawOvr >= 90 ? 2 : rawOvr >= 80 ? 1 : rng() > 0.5 ? 1 : 0
   const out = new Set<string>()
   while (out.size < n && out.size < pool.length) out.add(rpick(rng, pool))
   return [...out]
@@ -185,10 +191,15 @@ let PID = 0
 const nextPid = () => `p${PID++}`
 
 function makePlayer(
-  rng: Rng, teamId: string | null, pos: Position, ovr: number, season: number, name?: string,
+  rng: Rng, teamId: string | null, pos: Position, rawOvr: number, season: number, name?: string,
 ): Player {
+  // L12.15 S1: generated players share the same (new) scale as real-data ones.
+  const ovr = rescaleOvr(rawOvr)
   const age = rint(rng, 22, 34)
-  const pot = Math.min(99, ovr + (age < 26 ? rint(rng, 0, 9) : rint(rng, 0, 2)))
+  // Ceiling headroom is a *raw-scale* number of points, then remapped — so a
+  // generated player's growth room matches the old game, not new-scale points.
+  const rawPot = Math.min(99, rawOvr + (age < 26 ? rint(rng, 0, 9) : rint(rng, 0, 2)))
+  const pot = Math.max(ovr, rescaleOvr(rawPot))
   const rookie = age <= 24 && rchance(rng, 0.6)
   const contract = rookie
     ? makeRookieContract(rint(rng, 1, 224), season)
@@ -438,6 +449,12 @@ export function generateProspectClass(rng: Rng, season: number, count = 170): Dr
       college: rpick(rng, CFB_TEAMS).name,
       age: rint(rng, 20, 23),
       ovr: Math.round(48 + grade * 0.24),
+      // L12.15 S4: the raw (old-scale) formula ceiling stays capped as it was
+      // before the remap, so the body of every class tops out around 93 → 88 on
+      // the new scale. The handful of prospects who can grow into the league's
+      // top bands are assigned a new-scale ceiling by *class standing* in
+      // `rookieRatings` (a static, rank-ordered funnel), not by a fat +15 bonus
+      // that used to put 13–25 players a class at 95–99.
       pot: Math.round(Math.min(93, 56 + trueGrade * 0.32)),
       grade,
       trueGrade,
@@ -546,14 +563,15 @@ function cfbTeamIdBySchool(school: string): string | undefined {
   return CFB_TEAMS.find((t) => t.name === norm)?.id
 }
 
-function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: number): Player {
+function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: number, newOvr = rescaleOvr(p.ovr)): Player {
   // L12.10 B0: Madden lists fullbacks as RBs; utility/blocking backs become FBs.
   const pos: Position = p.pos === 'RB' && /Utility|Blocking/i.test(p.archetype) ? 'FB' : p.pos
   const rookie = p.age <= 24 && rchance(rng, 0.5)
   const contract = rookie
     ? makeRookieContract(rint(rng, 1, 224), season)
-    : makeVeteranContract(rng, p.ovr, pos, p.age, season)
-  const pot = Math.min(99, p.ovr + (p.age <= 25 ? rint(rng, 0, 8) : rint(rng, 0, 2)))
+    : makeVeteranContract(rng, newOvr, pos, p.age, season)
+  // L12.15 S1: the ceiling is remapped too (never below the new overall).
+  const pot = Math.max(newOvr, rescaleOvr(Math.min(99, p.ovr + (p.age <= 25 ? rint(rng, 0, 8) : rint(rng, 0, 2)))))
   return {
     id: nextPid(),
     name: p.name,
@@ -563,10 +581,10 @@ function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: numbe
     height: p.height,
     weight: p.weight,
     college: p.college || rpick(rng, CFB_TEAMS).name,
-    ovr: p.ovr,
+    ovr: newOvr,
     pot,
-    dev: devFor(p.ovr, pot),
-    traits: p.archetype ? [p.archetype] : traitsFor(rng, p.pos, p.ovr),
+    dev: devFor(newOvr, pot),
+    traits: p.archetype ? [p.archetype] : traitsFor(rng, p.pos, newOvr),
     attrs: p.attrs,
     contract,
     teamId,
@@ -581,14 +599,18 @@ function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: numbe
  * Cut an NFL roster down to 53 by moving its lowest-rated surplus players to free
  * agency — a realistic roster cutdown that keeps every player a real, exact-rated one.
  */
-function cutTo53(players: Player[], freeAgents: Player[]) {
+function cutTo53(players: Player[], freeAgents: Player[], rawOvr?: Map<Player, number>) {
   if (players.length <= 53) return
   const FLOOR: Record<string, number> = {
     QB: 2, RB: 2, FB: 1, WR: 4, TE: 2, OT: 3, OG: 3, C: 1, DE: 3, DT: 3, LB: 4, CB: 4, S: 3, K: 1, P: 1,
   }
   const counts: Record<string, number> = {}
   for (const p of players) counts[p.pos] = (counts[p.pos] ?? 0) + 1
-  for (const p of [...players].sort((a, b) => a.ovr - b.ovr)) {
+  // L12.15 S1: order the cut by the pre-remap OVR when we have it. The compressed
+  // scale rounds adjacent ranks together, and a remap must not change who a club
+  // keeps — so the tie-break stays the original OVR order (ties keep data order).
+  const key = (p: Player) => rawOvr?.get(p) ?? unscaleOvr(p.ovr)
+  for (const p of [...players].sort((a, b) => key(a) - key(b))) {
     if (players.length <= 53) break
     if ((counts[p.pos] ?? 0) <= (FLOOR[p.pos] ?? 2)) continue
     const idx = players.indexOf(p)
@@ -652,10 +674,22 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
   PID = 0
   const season = 2026
   const nflReal: Record<string, RealNflPlayer[]> = {}
+  // L12.15 S1: rank every real player once so ties at the top spread across the
+  // target bands (a pure per-OVR map would leave all seven 99s in one band).
+  const newOvrByPlayer = new Map<RealNflPlayer, number>()
   if (data) {
     for (const p of data.nfl) {
       const id = nflTeamIdByName(p.team)
       if (id) (nflReal[id] ??= []).push(p)
+    }
+    // Ties in the source OVR are spread across the target bands, and (so the
+    // league's own roster cutdown `cutTo53` still removes exactly the same
+    // players as before the remap) the *later* data row takes the higher band.
+    // That way the ascending new-OVR order reproduces the old ascending OVR
+    // order, ties included — no roster churn from the remap itself.
+    const sorted = data.nfl.map((p, i) => ({ p, i })).sort((a, b) => b.p.ovr - a.p.ovr || b.i - a.i)
+    for (let r = 0; r < sorted.length; r++) {
+      newOvrByPlayer.set(sorted[r].p, rescaleQuantile((r + 0.5) / sorted.length))
     }
   }
   const teams: Team[] = [...NFL_TEAMS]
@@ -671,8 +705,13 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     byId[t.id] = t
     let players: Player[]
     if (nflReal[t.id]?.length) {
-      players = nflReal[t.id].map((p) => realNflPlayer(rng, t.id, p, season))
-      cutTo53(players, freeAgents)
+      const rawOvr = new Map<Player, number>()
+      players = nflReal[t.id].map((p) => {
+        const pl = realNflPlayer(rng, t.id, p, season, newOvrByPlayer.get(p))
+        rawOvr.set(pl, p.ovr)
+        return pl
+      })
+      cutTo53(players, freeAgents, rawOvr)
     } else {
       players = generateNFLRoster(rng, t, season)
     }
@@ -721,6 +760,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     week: 1,
     phase: 'regular',
     rookieScaleV2: true,
+    ovrScaleV2: true,
     teams,
     byId,
     players: allPlayers,
@@ -776,7 +816,10 @@ export function indexPlayers(world: World): void {
 export function teamStrength(players: Player[]): number {
   if (!players.length) return 60
   const top = [...players].sort((a, b) => b.ovr - a.ovr).slice(0, 22)
-  return top.reduce((s, p) => s + p.ovr, 0) / top.length
+  // L12.15 S2: report on the old (sim) scale so fast-sim/playoff/AI results hold.
+  // Invert each player then average (the remap is nonlinear, so inverting the
+  // mean is not the same score).
+  return top.reduce((s, p) => s + unscaleOvr(p.ovr), 0) / top.length
 }
 
 export { hash32 }

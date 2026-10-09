@@ -31,6 +31,7 @@ import { gainSeasonTraining, refreshCohesion, teamCohesion } from './playbook'
 import { awardCompensatoryPicks, initDraft, runUDFAs, simulateRestOfDraft } from './draft'
 import { readRookieRanges } from './evaluation'
 import { ensureDraftWindow } from './picks'
+import { OVR_BANDS, ovrBand, unscaleOvr } from './ovrScale'
 import { simulatePlayoffs, simWeek } from './sim'
 import { depthAt, STARTERS } from './depth'
 import {
@@ -391,7 +392,7 @@ function summarizeReport(
     for (const p of world.roster[t.id] ?? []) {
       ovrSum += p.ovr
       ovrN++
-      if (p.ovr >= 90) stars++
+      if (unscaleOvr(p.ovr) >= 90) stars++
     }
   }
   for (const g of world.schedule) {
@@ -631,4 +632,158 @@ export function runRookieProbe(opts: { seasons?: number; seed?: number; data?: R
     },
     projectionCheck,
   }
+}
+
+// ── L12.15 S4: league OVR distribution vs the rare-stars targets ──────────────
+export interface OvrBandRow {
+  label: string
+  lo: number
+  hi: number
+  target: number
+  count: number
+}
+export interface OvrDistributionSeason {
+  season: number
+  bands: OvrBandRow[]
+  total: number
+  /** Players at 90+ on the new scale (target ~25–35 every season). */
+  above90: number
+}
+export interface OvrDistributionReport {
+  /**
+   * Whole-league snapshot (`world.players`): every canonical player, including
+   * unsigned prospects and free agents that accumulate between seasons.
+   */
+  seasons: OvrDistributionSeason[]
+  /**
+   * Active-NFL snapshot: only players on a 53-man roster (`world.roster`). This
+   * is the population the L12.15 targets were written about ("about one per
+   * club"); kept as a diagnostic because the strict acceptance uses the whole
+   * canonical league.
+   */
+  activeSeasons: OvrDistributionSeason[]
+  /** Strict whole-league acceptance: every band + 90+ inside its target range. */
+  within: boolean
+  /** The same acceptance applied to the active-NFL population (diagnostic). */
+  withinActive: boolean
+  /** Why the strict whole-league acceptance is false, if it is. */
+  note: string
+}
+
+function bandLabel(lo: number, hi: number): string {
+  return lo === 0 ? `<${hi + 1}` : `${lo}-${hi}`
+}
+
+/** The acceptance range for a band's count (the spec's target intervals). */
+function bandRange(b: OvrBandRow): [number, number] {
+  if (b.lo >= 97) return [2, 4]
+  if (b.lo === 93) return [8, 12]
+  if (b.lo === 90) return [12, 18]
+  if (b.lo === 85) return [70, 90]
+  if (b.lo === 80) return [160, 200]
+  if (b.lo === 70) return [650, 750]
+  if (b.lo === 60) return [650, 750]
+  return [0, Number.MAX_SAFE_INTEGER]
+}
+
+/** Count the L12.15 bands + 90+ for one population at one season. */
+function ovrSnapshot(season: number, players: Player[]): OvrDistributionSeason {
+  const counts = new Map<string, number>()
+  let above90 = 0
+  for (const p of players) {
+    const b = ovrBand(p.ovr)
+    if (b) {
+      const key = bandLabel(b.lo, b.hi)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    if (p.ovr >= 90) above90++
+  }
+  const bands = OVR_BANDS.map((b) => ({
+    label: bandLabel(b.lo, b.hi),
+    lo: b.lo,
+    hi: b.hi,
+    target: b.target,
+    count: counts.get(bandLabel(b.lo, b.hi)) ?? 0,
+  }))
+  return { season, bands, total: players.length, above90 }
+}
+
+/** Strict acceptance for a series of snapshots (90+ in 25–35, every band in range). */
+function seasonsWithin(snaps: OvrDistributionSeason[]): boolean {
+  return snaps.every(
+    (s) =>
+      s.above90 >= 25 &&
+      s.above90 <= 35 &&
+      s.bands.every((b) => {
+        if (b.lo === 0) return b.count >= 0
+        const [lo, hi] = bandRange(b)
+        return b.count >= lo && b.count <= hi
+      }),
+  )
+}
+
+/**
+ * S4: run whole seasons headlessly and report the league OVR distribution
+ * against the L12.15 target bands, so we can see development/aging/rookies keep
+ * the shape (90+ stays ~25–35).
+ *
+ * Two honest populations are reported. `seasons`/`within` are the strict
+ * whole-league numbers the spec was written against; `activeSeasons`/
+ * `withinActive` restrict to the 53-man rosters, since the whole-world list also
+ * accumulates unsigned prospects and free agents (which the target counts,
+ * sized for the ~1,833-player Madden 26 league, were never meant to include).
+ */
+export function runOvrDistribution(
+  opts: { seasons?: number; seed?: number; data?: RealData | null } = {},
+): OvrDistributionReport {
+  const seasons = opts.seasons ?? 6
+  const seed = opts.seed ?? 987654
+  const world = buildWorld(seed, opts.data ?? null)
+  const out: OvrDistributionSeason[] = []
+  const active: OvrDistributionSeason[] = []
+
+  const take = () => {
+    const onRoster: Player[] = []
+    for (const t of world.teams) for (const p of world.roster[t.id] ?? []) onRoster.push(p)
+    out.push(ovrSnapshot(world.season, world.players))
+    active.push(ovrSnapshot(world.season, onRoster))
+  }
+
+  take()
+  for (let s = 1; s < seasons; s++) {
+    for (let w = 1; w <= 18; w++) simWeek(world, w)
+    simulatePlayoffs(world)
+    developPlayers(world)
+    runAIResign(world)
+    tickAllContracts(world)
+    advanceTenure(world)
+    for (const teamId of Object.keys(world.roster)) {
+      for (const p of world.roster[teamId]) {
+        const next = gainSeasonTraining(p)
+        if (next) p.playbook = next
+      }
+    }
+    refreshAllCohesion(world)
+    awardCompensatoryPicks(world)
+    initDraft(world)
+    simulateRestOfDraft(world, null)
+    runUDFAs(world)
+    runAIFreeAgency(world)
+    runAITrades(world)
+    enforceCapCompliance(world)
+    world.season += 1
+    world.week = 1
+    world.phase = 'regular'
+    world.draftPicks = world.draftPicks.filter((p) => p.season > world.season)
+    ensureDraftWindow(world, world.season + 1)
+    resetSeason(world)
+    take()
+  }
+
+  const within = seasonsWithin(out)
+  const withinActive = seasonsWithin(active)
+  const note = within
+    ? ''
+    : 'Strict whole-league acceptance does not hold: the absolute band targets were sized for the ~1,833-player Madden 26 population, but world.players accumulates unsigned prospects/free agents each season, so the broad 60-79 bands grow far past 650-750. See activeSeasons for the 53-man-roster population.'
+  return { seasons: out, activeSeasons: active, within, withinActive, note }
 }

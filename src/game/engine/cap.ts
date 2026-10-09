@@ -13,6 +13,7 @@
 
 import type { Contract, Player, Position } from '../types'
 import { rint, type Rng } from './rng'
+import { unscaleOvr } from './ovrScale'
 
 /** Coerce a possibly-undefined/NaN contract field to a usable number. */
 function finite(n: number | undefined): number {
@@ -55,10 +56,11 @@ const POS_TOP: Record<string, number> = {
   RB: 26, LB: 40.5, C: 41.5, K: 30.6, P: 16.3,
 }
 
-/** Estimated market AAV for a player. */
+/** Estimated market AAV for a player. L12.15: priced on the old (rank) scale. */
 export function marketAAV(ovr: number, pos: Position, age: number) {
   const top = (POS_TOP[pos] ?? 20) * 1_000_000
-  const frac = Math.pow(Math.max(ovr - 58, 1) / 41, 2.6)
+  const raw = unscaleOvr(ovr)
+  const frac = Math.pow(Math.max(raw - 58, 1) / 41, 2.6)
   let aav = top * frac
   if (age >= 33) aav *= 0.58
   else if (age >= 31) aav *= 0.8
@@ -75,8 +77,9 @@ export function recomputeCapHit(c: Contract): Contract {
 /** Build a veteran market contract. */
 export function makeVeteranContract(rng: Rng, ovr: number, pos: Position, age: number, season: number): Contract {
   const aav = Math.round((marketAAV(ovr, pos, age) * capScale(season)) / 100_000) * 100_000
+  const raw = unscaleOvr(ovr)
   const length = age <= 25 ? rint(rng, 3, 5) : age <= 28 ? rint(rng, 3, 4) : age <= 31 ? rint(rng, 2, 3) : rint(rng, 1, 2)
-  const bonusPct = ovr >= 90 ? 0.46 : ovr >= 82 ? 0.36 : ovr >= 72 ? 0.24 : 0.14
+  const bonusPct = raw >= 90 ? 0.46 : raw >= 82 ? 0.36 : raw >= 72 ? 0.24 : 0.14
   const signingBonus = Math.round(aav * length * bonusPct)
   const totalBase = aav * length - signingBonus
   // Escalating base schedule, normalized to the total base.
@@ -85,7 +88,7 @@ export function makeVeteranContract(rng: Rng, ovr: number, pos: Position, age: n
   const base = weights.map((w) => Math.round((totalBase * w) / wsum))
   // Guard the 1-year deal: base[1] is undefined for a single season, which used
   // to leak NaN through guaranteed (and thus dead money).
-  const guaranteedBase = ovr >= 86 ? base[0] + (base[1] ?? 0) : ovr >= 78 ? base[0] : Math.round(base[0] * 0.4)
+  const guaranteedBase = raw >= 86 ? base[0] + (base[1] ?? 0) : raw >= 78 ? base[0] : Math.round(base[0] * 0.4)
   const proration = Math.round(signingBonus / length)
   const c: Contract = {
     years: length,

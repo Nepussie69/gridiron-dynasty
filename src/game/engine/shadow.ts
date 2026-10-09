@@ -12,6 +12,7 @@ import type { CareerState, Player, ShadowEntry } from '../types'
 import type { Reputation } from './career'
 import type { World } from './generate'
 import { capabilities } from './capabilities'
+import { unscaleOvr } from './ovrScale'
 
 export const MAX_SHADOW = 10
 
@@ -68,9 +69,9 @@ function evaluateEntry(
 ): { hit: boolean; line: string } | null {
   const p = findShadowPlayer(world, e.playerId)
   if (!p) return null
-  const grew = p.ovr - e.ovrAtAdd >= 4
-  const star = p.ovr >= 85 && p.age <= 27
-  const landed = p.teamId === career.teamId && p.ovr >= 78 && (p.origin?.note ?? '').includes('shadow board')
+  const grew = unscaleOvr(p.ovr) - unscaleOvr(e.ovrAtAdd) >= 4
+  const star = unscaleOvr(p.ovr) >= 85 && p.age <= 27
+  const landed = p.teamId === career.teamId && unscaleOvr(p.ovr) >= 78 && (p.origin?.note ?? '').includes('shadow board')
   if (!grew && !star && !landed) return { hit: false, line: '' }
   const line =
     landed && !grew
