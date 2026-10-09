@@ -44,3 +44,6 @@ Foreground checks, WAIT for completion (no detached tests left in final report).
 
 ## Verification status — 2026-10-10
 DeepSeek finished at step limit; saved unreviewed snapshot0a4b48e. Reported build/lint4,31 persistence shim checks,17 SSR checks,unchanged3×50022.5/21.9/22.3,eq20/20,smokes0/0. Independent code/save-preservation/browser checks and animation gate remain required before merge. No real user storage accessed; no merge or publish.
+
+## Independent review — 2026-10-10
+Codex rejected0a4b48e before merge: null-career save before title Continue, stale occupancy permitting overwrite, full-slots runtime replacement, switch despite failed save, active import erased by later autosave, backup-only slot visibility, future-schema legacy rewrite and partial/concurrent migration hazards. Evidence in persistence.ts saveSlot/readSlots/migrateLegacy and gameStore startCareer/continueSlot/openSaves/save/importSlotText/flush. No actual user save storage accessed. Focused saveslots2 now running, prompt /private/tmp/gridiron-saveslots2.txt, log /private/tmp/gridiron-saveslots2.log. Require isolated real IndexedDB and user-flow verification plus full gates after repairs.
