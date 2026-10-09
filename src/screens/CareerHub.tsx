@@ -255,7 +255,7 @@ export function CareerHub() {
 
   return (
     <div className="min-h-screen bg-canvas">
-      <div className="mx-auto grid max-w-[1240px] gap-8 px-6 py-10 lg:grid-cols-[1.05fr_1fr]">
+      <div className="mx-auto grid max-w-[1240px] grid-cols-[minmax(0,1fr)] gap-8 px-6 py-10 lg:grid-cols-[1.05fr_1fr]">
         {/* Hero */}
         <div>
           <div className="mb-6 flex items-center gap-3">
