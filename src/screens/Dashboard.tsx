@@ -31,6 +31,7 @@ import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { WeeklyDecision } from '../components/WeeklyDecision'
 import { Badge, Button, Card, Donut, MiniBars, OvrBadge, PageHeader, RatingBar, Stat, TeamCrest } from '../ui/kit'
 import { TopPlayers } from '../components/TopPlayers'
+import { TeamHoverCard } from '../components/TeamHoverCard'
 
 export function Dashboard() {
   const league = useWorld()
@@ -180,37 +181,41 @@ export function Dashboard() {
                 </div>
 
                 <div className="relative grid grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => viewTeam(team.id)}
-                    className="motion relative flex min-h-[148px] flex-col justify-between overflow-hidden p-4 text-left hover:brightness-105 sm:p-5"
-                    style={{ background: `linear-gradient(135deg, ${team.primary}, ${team.secondary})` }}
-                  >
-                    <TeamCrest team={team} size={50} />
-                    <div className="relative text-white">
-                      <div className="label !text-white/70">{team.conference} {team.division ?? ''}</div>
-                      <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">
-                        {isNFL ? team.name : team.name}
+                  <TeamHoverCard team={team} className="flex">
+                    <button
+                      type="button"
+                      onClick={() => viewTeam(team.id)}
+                      className="motion relative flex min-h-[148px] flex-col justify-between overflow-hidden p-4 text-left hover:brightness-105 sm:p-5"
+                      style={{ background: `linear-gradient(135deg, ${team.primary}, ${team.secondary})` }}
+                    >
+                      <TeamCrest team={team} size={50} />
+                      <div className="relative text-white">
+                        <div className="label !text-white/70">{team.conference} {team.division ?? ''}</div>
+                        <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">
+                          {isNFL ? team.name : team.name}
+                        </div>
+                        <div className="mt-1 font-cond text-sm font-600 text-white/85">{recordStr(rec)}</div>
                       </div>
-                      <div className="mt-1 font-cond text-sm font-600 text-white/85">{recordStr(rec)}</div>
-                    </div>
-                  </button>
+                    </button>
+                  </TeamHoverCard>
 
-                  <button
-                    type="button"
-                    onClick={() => viewTeam(opp.id)}
-                    className="motion relative flex min-h-[148px] flex-col items-end justify-between overflow-hidden p-4 text-right hover:brightness-105 sm:p-5"
-                    style={{ background: `linear-gradient(225deg, ${opp.primary}, ${opp.secondary})` }}
-                  >
-                    <TeamCrest team={opp} size={50} />
-                    <div className="relative text-white">
-                      <div className="label !text-white/70">{opp.conference} {opp.division ?? ''}</div>
-                      <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">{opp.name}</div>
-                      <div className="mt-1 font-cond text-sm font-600 text-white/85">
-                        {recordStr(recordOf(league, opp.id))}
+                  <TeamHoverCard team={opp} className="flex">
+                    <button
+                      type="button"
+                      onClick={() => viewTeam(opp.id)}
+                      className="motion relative flex min-h-[148px] flex-col items-end justify-between overflow-hidden p-4 text-right hover:brightness-105 sm:p-5"
+                      style={{ background: `linear-gradient(225deg, ${opp.primary}, ${opp.secondary})` }}
+                    >
+                      <TeamCrest team={opp} size={50} />
+                      <div className="relative text-white">
+                        <div className="label !text-white/70">{opp.conference} {opp.division ?? ''}</div>
+                        <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">{opp.name}</div>
+                        <div className="mt-1 font-cond text-sm font-600 text-white/85">
+                          {recordStr(recordOf(league, opp.id))}
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                  </TeamHoverCard>
 
                   <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
                     <span className="grid h-12 w-12 place-items-center rounded-full border-4 border-surface bg-ink font-display text-lg font-700 uppercase text-canvas shadow-lg">
@@ -381,8 +386,12 @@ export function Dashboard() {
                       className="flex items-center gap-3 rounded-lg px-2 py-1.5"
                       style={t.id === activeTeamId ? { background: 'var(--team-soft)' } : undefined}
                     >
-                      <TeamCrest team={t} size={24} />
-                      <span className="flex-1 font-cond text-sm font-600 text-ink">{t.name}</span>
+                      <TeamHoverCard team={t} className="min-w-0 flex-1">
+                        <span className="flex min-w-0 items-center gap-3">
+                          <TeamCrest team={t} size={24} />
+                          <span className="flex-1 truncate font-cond text-sm font-600 text-ink">{t.name}</span>
+                        </span>
+                      </TeamHoverCard>
                       <span className="font-display text-base font-700 tnum text-ink-2">
                         {r.wins}-{r.losses}
                       </span>

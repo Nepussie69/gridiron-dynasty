@@ -12,6 +12,7 @@ import {
   type TeamStanding,
 } from '../game/engine/playoffs'
 import { useGame, useWorld } from '../store/gameStore'
+import { TeamHoverCard } from '../components/TeamHoverCard'
 import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
 
 type Tab = 'divisions' | 'picture' | 'bracket' | 'conference'
@@ -205,13 +206,20 @@ function ClubLine({
     <div className={cn('flex items-center gap-3 px-4 py-2', mine && 'bg-[var(--team-soft)]')}>
       {showSeed ? <SeedPill n={standing.seed ?? 0} leader={standing.seed === 1} /> : <span className="w-5 shrink-0" />}
       {team ? (
-        <TeamCrest team={team} size={24} />
+        <TeamHoverCard team={team} className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-3">
+            <TeamCrest team={team} size={24} />
+            <span className={cn('flex-1 truncate font-cond text-sm font-600', mine ? 'text-ink' : 'text-ink')}>
+              {`${team.city} ${team.name}`}
+            </span>
+          </span>
+        </TeamHoverCard>
       ) : (
-        <span className="h-6 w-6 shrink-0 rounded-lg bg-surface-3" />
+        <>
+          <span className="h-6 w-6 shrink-0 rounded-lg bg-surface-3" />
+          <span className="flex-1 truncate font-cond text-sm font-600 text-ink">{standing.teamId}</span>
+        </>
       )}
-      <span className={cn('flex-1 truncate font-cond text-sm font-600', mine ? 'text-ink' : 'text-ink')}>
-        {team ? `${team.city} ${team.name}` : standing.teamId}
-      </span>
       {bye && <Badge tone="neutral">BYE</Badge>}
       <MarkerBadge marker={standing.marker} />
       {showGb && (
@@ -233,15 +241,33 @@ function MatchupLine({ matchup, activeTeamId }: { matchup: ConferencePicture['wi
         <span className="label">{record(matchup.high)} · {record(matchup.low)}</span>
       </div>
       <div className="flex items-center gap-1.5">
-        <span className={cn('inline-flex min-w-0 items-center gap-1', matchup.high.teamId === activeTeamId && 'rounded bg-[var(--team-soft)] px-1')}>
-          {high && <TeamCrest team={high} size={18} />}
-          <span className="truncate font-cond text-xs font-700 text-ink">{high?.abbr ?? matchup.high.teamId}</span>
-        </span>
+        {high ? (
+          <TeamHoverCard
+            team={high}
+            className={cn('min-w-0', matchup.high.teamId === activeTeamId && 'rounded bg-[var(--team-soft)] px-1')}
+          >
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <TeamCrest team={high} size={18} />
+              <span className="truncate font-cond text-xs font-700 text-ink">{high.abbr}</span>
+            </span>
+          </TeamHoverCard>
+        ) : (
+          <span className="truncate font-cond text-xs font-700 text-ink">{matchup.high.teamId}</span>
+        )}
         <span className="font-cond text-[10px] font-700 uppercase text-faint">vs</span>
-        <span className={cn('inline-flex min-w-0 items-center gap-1', matchup.low.teamId === activeTeamId && 'rounded bg-[var(--team-soft)] px-1')}>
-          {low && <TeamCrest team={low} size={18} />}
-          <span className="truncate font-cond text-xs font-700 text-ink">{low?.abbr ?? matchup.low.teamId}</span>
-        </span>
+        {low ? (
+          <TeamHoverCard
+            team={low}
+            className={cn('min-w-0', matchup.low.teamId === activeTeamId && 'rounded bg-[var(--team-soft)] px-1')}
+          >
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <TeamCrest team={low} size={18} />
+              <span className="truncate font-cond text-xs font-700 text-ink">{low.abbr}</span>
+            </span>
+          </TeamHoverCard>
+        ) : (
+          <span className="truncate font-cond text-xs font-700 text-ink">{matchup.low.teamId}</span>
+        )}
       </div>
     </div>
   )
@@ -446,10 +472,18 @@ function DivisionTable({ division, activeTeamId }: { division: DivisionStanding;
                   <td className="py-2 pl-4 pr-1">
                     <span className="flex items-center gap-2">
                       <SeedPill n={division.teams.indexOf(s) + 1} leader={division.teams[0].teamId === s.teamId} />
-                      {team && <TeamCrest team={team} size={22} />}
-                      <span className="truncate font-cond text-sm font-600 text-ink">
-                        {team ? `${team.city} ${team.name}` : s.teamId}
-                      </span>
+                      {team ? (
+                        <TeamHoverCard team={team} className="min-w-0">
+                          <span className="flex min-w-0 items-center gap-2">
+                            <TeamCrest team={team} size={22} />
+                            <span className="truncate font-cond text-sm font-600 text-ink">
+                              {`${team.city} ${team.name}`}
+                            </span>
+                          </span>
+                        </TeamHoverCard>
+                      ) : (
+                        <span className="truncate font-cond text-sm font-600 text-ink">{s.teamId}</span>
+                      )}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-1 text-right font-cond text-[11px] text-ink-2">
@@ -530,10 +564,18 @@ function ConferenceTable({ conf, activeTeamId }: { conf: string; activeTeamId: s
                     <td className="py-1.5 pl-4 pr-2">
                       <span className="flex items-center gap-2">
                         <SeedPill n={s.seed ?? 0} leader={s.seed === 1} />
-                        {team && <TeamCrest team={team} size={22} />}
-                        <span className="truncate font-cond text-sm font-600 text-ink">
-                          {team ? `${team.city} ${team.name}` : s.teamId}
-                        </span>
+                        {team ? (
+                          <TeamHoverCard team={team} className="min-w-0">
+                            <span className="flex min-w-0 items-center gap-2">
+                              <TeamCrest team={team} size={22} />
+                              <span className="truncate font-cond text-sm font-600 text-ink">
+                                {`${team.city} ${team.name}`}
+                              </span>
+                            </span>
+                          </TeamHoverCard>
+                        ) : (
+                          <span className="truncate font-cond text-sm font-600 text-ink">{s.teamId}</span>
+                        )}
                         <MarkerBadge marker={s.marker} />
                       </span>
                     </td>

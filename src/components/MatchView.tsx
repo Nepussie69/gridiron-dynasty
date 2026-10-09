@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, type GameState, type Play as PlayEvent, type Moment, type MomentKind } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
@@ -19,6 +19,7 @@ import { RouteDiagram } from './RouteDiagram'
 import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
+import { TeamHoverCard } from './TeamHoverCard'
 import { Badge, Button, TeamCrest } from '../ui/kit'
 
 const CENTER_Y = 26.65
@@ -937,20 +938,22 @@ function ScoreBlock({ team, score, hasBall, timeouts, align }: {
 }) {
   const ink = luminance(team.primary) > 0.5 ? '#0a1626' : '#ffffff'
   return (
-    <div
-      className="flex min-w-0 items-center rounded-lg px-2 py-1 sm:px-2.5"
-      style={{ background: team.primary, color: ink, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)' }}
-    >
-      <div className={cn('flex flex-col leading-none', align === 'right' && 'items-end')}>
-        <span className="flex items-center gap-1 font-cond text-[11px] font-700 uppercase tracking-wide">
-          {align === 'left' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
-          {team.abbr}
-          {align === 'right' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
-        </span>
-        <span className="font-display text-2xl font-700 tnum leading-none sm:text-3xl">{score}</span>
-        {timeouts != null && <TimeoutPips n={timeouts} ink={ink} />}
+    <TeamHoverCard team={team} className="min-w-0">
+      <div
+        className="flex min-w-0 items-center rounded-lg px-2 py-1 sm:px-2.5"
+        style={{ background: team.primary, color: ink, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)' }}
+      >
+        <div className={cn('flex flex-col leading-none', align === 'right' && 'items-end')}>
+          <span className="flex items-center gap-1 font-cond text-[11px] font-700 uppercase tracking-wide">
+            {align === 'left' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
+            {team.abbr}
+            {align === 'right' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
+          </span>
+          <span className="font-display text-2xl font-700 tnum leading-none sm:text-3xl">{score}</span>
+          {timeouts != null && <TimeoutPips n={timeouts} ink={ink} />}
+        </div>
       </div>
-    </div>
+    </TeamHoverCard>
   )
 }
 
@@ -1358,48 +1361,68 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
   }, [moment.options])
   const defaultFormation = playbookPlay(moment.defaultId)?.formation ?? groups[0]?.[0] ?? ''
   const [formation, setFormation] = useState(defaultFormation)
+  // The detailed book is a compact, collapsible tray so the field stays visible;
+  // RUN / PASS above remain the always-visible quick calls.
+  const [open, setOpen] = useState(true)
   const active = groups.some(([f]) => f === formation) ? formation : groups[0]?.[0] ?? ''
   const plays = groups.find(([f]) => f === active)?.[1] ?? []
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1">
-        {groups.map(([f]) => (
-          <button
-            key={f}
-            onClick={() => setFormation(f)}
-            className={cn(
-              'rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide',
-              active === f ? 'bg-white text-ink' : 'bg-white/10 text-white/70 hover:bg-white/20',
-            )}
-          >
-            {f}
-          </button>
-        ))}
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-white/80 transition hover:bg-white/20 hover:text-white"
+        >
+          <ChevronDown size={12} className={cn('transition-transform', !open && '-rotate-90')} />
+          Playbook
+          <span className="text-white/45">{plays.length}</span>
+        </button>
+        <span className="truncate text-[11px] text-white/45">
+          {open ? 'Tap a play to call it — scroll for more' : `${active} · tap to browse the book`}
+        </span>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {plays.map((o) => {
-          const pb = playbookPlay(o.id)
-          return (
-            <button
-              key={o.id}
-              onClick={() => onAnswer(o.id)}
-              className={cn(
-                'flex flex-col gap-1 rounded-lg border p-1.5 text-left transition',
-                o.id === moment.defaultId ? 'border-[#ffd34d]/70 bg-white/15' : 'border-white/20 bg-white/10 hover:bg-white/20',
-              )}
-            >
-              <RouteDiagram name={o.id} className="h-14 w-full rounded" />
-              <span className="flex items-center gap-1.5">
-                <span className="font-cond text-xs font-700 uppercase text-white">{o.label}</span>
-                {pb && <span className="ml-auto font-cond text-[9px] uppercase text-white/45">{pb.type}</span>}
-              </span>
-              <span className="line-clamp-2 text-[10px] leading-snug text-white/55">
-                {o.id === moment.defaultId ? 'Standing order · ' : ''}{o.hint}
-              </span>
-            </button>
-          )
-        })}
-      </div>
+      {open && (
+        <div className="space-y-1.5">
+          <div className="flex gap-1 overflow-x-auto pb-0.5">
+            {groups.map(([f]) => (
+              <button
+                key={f}
+                onClick={() => setFormation(f)}
+                className={cn(
+                  'shrink-0 rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide',
+                  active === f ? 'bg-white text-ink' : 'bg-white/10 text-white/70 hover:bg-white/20',
+                )}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1.5 overflow-x-auto pb-1">
+            {plays.map((o) => {
+              const pb = playbookPlay(o.id)
+              return (
+                <button
+                  key={o.id}
+                  onClick={() => onAnswer(o.id)}
+                  title={`${o.label} — ${o.hint}`}
+                  className={cn(
+                    'flex w-[78px] shrink-0 flex-col gap-0.5 rounded-lg border p-1 text-left transition',
+                    o.id === moment.defaultId ? 'border-[#ffd34d]/70 bg-white/15' : 'border-white/20 bg-white/10 hover:bg-white/20',
+                  )}
+                >
+                  <RouteDiagram name={o.id} className="h-8 w-full rounded" />
+                  <span className="truncate font-cond text-[10px] font-700 uppercase leading-tight text-white">{o.label}</span>
+                  <span className="truncate font-cond text-[8px] uppercase leading-none text-white/45">
+                    {o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1417,22 +1440,26 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
   const fp = { gmName, myTeamId, byId }
   return (
     <div className="rounded-lg bg-black/30 p-2">
-      {onTeamClick ? (
-        <button
-          type="button"
-          onClick={() => onTeamClick(team.id)}
-          title={`View the ${team.name}`}
-          className="mb-2 flex items-center gap-2 transition hover:opacity-80"
-        >
-          <TeamCrest team={team} size={22} />
-          <span className="font-display text-sm font-700 uppercase underline-offset-2 hover:underline">{team.name}</span>
-        </button>
-      ) : (
-        <div className="mb-2 flex items-center gap-2">
-          <TeamCrest team={team} size={22} />
-          <span className="font-display text-sm font-700 uppercase">{team.name}</span>
-        </div>
-      )}
+      <div className="mb-2">
+        <TeamHoverCard team={team}>
+          {onTeamClick ? (
+            <button
+              type="button"
+              onClick={() => onTeamClick(team.id)}
+              title={`View the ${team.name}`}
+              className="flex items-center gap-2 transition hover:opacity-80"
+            >
+              <TeamCrest team={team} size={22} />
+              <span className="font-display text-sm font-700 uppercase underline-offset-2 hover:underline">{team.name}</span>
+            </button>
+          ) : (
+            <span className="flex items-center gap-2">
+              <TeamCrest team={team} size={22} />
+              <span className="font-display text-sm font-700 uppercase">{team.name}</span>
+            </span>
+          )}
+        </TeamHoverCard>
+      </div>
       {passing.length > 0 && <BoxBlock title="Passing" rows={passing} fp={fp} cols={[
         { k: 'passComp', l: 'C/ATT', fmt: (r) => `${r.passComp ?? 0}/${r.passAtt ?? 0}` },
         { k: 'passYds', l: 'YDS' }, { k: 'passTD', l: 'TD' }, { k: 'ints', l: 'INT' },

@@ -4,6 +4,7 @@ import { cn } from '../lib/cn'
 import { recordOf, recordStr, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { BoxScore } from '../components/MatchView'
+import { TeamHoverCard } from '../components/TeamHoverCard'
 import { Badge, Button, Card, PageHeader, Stat, TeamCrest } from '../ui/kit'
 
 export function Schedule() {
@@ -60,18 +61,20 @@ export function Schedule() {
                   <div className="label">Week {g.week}</div>
                 </div>
                 <div className="w-10 shrink-0 font-cond text-xs font-700 uppercase text-muted">{g.home ? 'vs' : '@'}</div>
-                <button
-                  type="button"
-                  onClick={() => viewTeam(opp.id)}
-                  title={`View the ${opp.name}`}
-                  className="flex flex-1 items-center gap-2.5 text-left transition hover:opacity-80"
-                >
-                  <TeamCrest team={opp} size={28} />
-                  <span className="font-cond text-sm font-600 text-ink underline-offset-2 hover:underline">
-                    {opp.tier === 'NFL' ? `${opp.city} ${opp.name}` : opp.name}
-                  </span>
-                  {isNext && <Badge tone="team">Up Next</Badge>}
-                </button>
+                <TeamHoverCard team={opp} className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => viewTeam(opp.id)}
+                    title={`View the ${opp.name}`}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left transition hover:opacity-80"
+                  >
+                    <TeamCrest team={opp} size={28} />
+                    <span className="font-cond text-sm font-600 text-ink underline-offset-2 hover:underline">
+                      {opp.tier === 'NFL' ? `${opp.city} ${opp.name}` : opp.name}
+                    </span>
+                    {isNext && <Badge tone="team">Up Next</Badge>}
+                  </button>
+                </TeamHoverCard>
 
                 {g.played ? (
                   <div className="flex items-center gap-3">
