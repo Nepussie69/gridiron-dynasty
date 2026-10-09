@@ -109,3 +109,48 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #a9b8ca;
 }
+
+/* ── U1 game-day field: broadcast motion (SVG + CSS only) ───────────────────── */
+@keyframes gd-toast {
+  0% { opacity: 0; transform: translateY(6px) scale(0.96); }
+  10% { opacity: 1; transform: translateY(0) scale(1); }
+  75% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+.gd-toast { animation: gd-toast 2s ease-out forwards; }
+
+@keyframes gd-burst {
+  0% { opacity: 0.9; transform: scale(0.35); }
+  100% { opacity: 0; transform: scale(2.1); }
+}
+.gd-burst { transform-box: fill-box; transform-origin: center; animation: gd-burst 0.5s ease-out forwards; }
+
+@keyframes gd-flash {
+  0% { opacity: 0; }
+  22% { opacity: 0.5; }
+  100% { opacity: 0; }
+}
+.gd-flash { animation: gd-flash 0.95s ease-out forwards; }
+
+@keyframes gd-confetti {
+  0% { opacity: 0; transform: translateY(-3px) rotate(0deg); }
+  12% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(15px) rotate(320deg); }
+}
+.gd-confetti-piece {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation-name: gd-confetti;
+  animation-timing-function: ease-in;
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gd-toast,
+  .gd-burst,
+  .gd-flash,
+  .gd-confetti-piece {
+    animation: none;
+  }
+}

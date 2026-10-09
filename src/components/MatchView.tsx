@@ -61,6 +61,82 @@ function jerseyColors(home: import('../game/types').Team, away: import('../game/
   return { home: homeC, away: awayC }
 }
 
+// ── U1: TV broadcast field helpers (visual only; never touch the sim) ─────────
+const MOW_A = '#1d7a3d'
+const MOW_B = '#238a48'
+/** NFL hash marks sit 70'9" in from each sideline. */
+const HASH_A = 23.58
+const HASH_B = H - HASH_A
+const clampN = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+
+// Static field geometry, built once as path data so the whole field renders as
+// a handful of nodes instead of hundreds on every animation frame.
+const YARD_LINE_10 = Array.from({ length: 11 }, (_, i) => 10 + i * 10).map((x) => `M${x} 0V${H}`).join(' ')
+const YARD_LINE_5 = Array.from({ length: 10 }, (_, i) => 15 + i * 10).map((x) => `M${x} 0V${H}`).join(' ')
+function hashPath(long: boolean): string {
+  const out: string[] = []
+  for (let x = long ? 15 : 11; x <= (long ? 105 : 109); x += long ? 5 : 1) {
+    if (!long && x % 5 === 0) continue
+    const inLen = long ? 1.5 : 0.8
+    const sideLen = long ? 1.2 : 0.7
+    out.push(
+      `M${x} ${HASH_A}V${HASH_A + inLen}`,
+      `M${x} ${HASH_B}V${HASH_B - inLen}`,
+      `M${x} 0.6V${0.6 + sideLen}`,
+      `M${x} ${H - 0.6}V${H - 0.6 - sideLen}`,
+    )
+  }
+  return out.join(' ')
+}
+const HASH_LONG = hashPath(true)
+const HASH_SHORT = hashPath(false)
+
+// 10, 20 … 50 … 20, 10 measured from the nearer goal line.
+const YARD_NUMBERS = Array.from({ length: 9 }, (_, i) => 20 + i * 10)
+
+/** Deterministic confetti pieces (no rng): layout, timing and club-colour index. */
+const CONFETTI = Array.from({ length: 16 }, (_, i) => ({
+  x: ((i * 37) % 21) - 10,
+  y: ((i * 53) % 11) - 5,
+  delay: (i % 8) * 0.07,
+  dur: 1.05 + (i % 5) * 0.12,
+  c: i % 2,
+  w: 0.5 + (i % 3) * 0.14,
+  h: 0.3 + (i % 2) * 0.14,
+}))
+
+type ToastTone = 'gold' | 'good' | 'bad' | 'plain'
+const TOAST_TONE: Record<ToastTone, string> = {
+  gold: 'border-[#ffd34d]/70 bg-[#ffd34d]/20 text-[#ffe9a3]',
+  good: 'border-[#8ef0b5]/50 bg-[#0d3b26]/70 text-[#8ef0b5]',
+  bad: 'border-[#ffb3ba]/50 bg-[#3b0d13]/70 text-[#ffb3ba]',
+  plain: 'border-white/20 bg-black/55 text-white/85',
+}
+
+/** The TV play-result toast, built only from the recorded PlayEvent fields. */
+function playToast(play: PlayEvent, next?: PlayEvent): { text: string; tone: ToastTone } | null {
+  if (play.type === 'run' || play.type === 'pass') {
+    if (play.result === 'TOUCHDOWN!') return { text: 'TOUCHDOWN', tone: 'gold' }
+    if (play.type === 'pass' && play.result.startsWith('Sack')) return { text: `SACK −${Math.abs(play.yards)}`, tone: 'bad' }
+    if (play.type === 'pass' && play.result.startsWith('Interception')) return { text: 'INTERCEPTED', tone: 'bad' }
+    if (play.result.includes('Fumble')) return { text: 'FUMBLE', tone: 'bad' }
+    if (play.result === 'Incomplete') return { text: 'INCOMPLETE', tone: 'plain' }
+    const firstDown = play.result.includes('first down')
+      || (!!next && next.offId === play.offId && next.down === 1 && (next.type === 'run' || next.type === 'pass'))
+    const sign = play.yards >= 0 ? '+' : '−'
+    return { text: `${sign}${Math.abs(play.yards)}${firstDown ? ' · First down' : ''}`, tone: firstDown ? 'good' : play.yards < 0 ? 'bad' : 'plain' }
+  }
+  if (play.type === 'pat') return play.result.includes('good')
+    ? { text: play.result.includes('Two-point') ? '2-PT GOOD' : 'EXTRA POINT', tone: 'good' }
+    : { text: 'XP MISSED', tone: 'bad' }
+  if (play.type === 'fg') return /no good|MISSED/i.test(play.result) ? { text: 'FG MISSED', tone: 'bad' } : { text: 'FIELD GOAL', tone: 'good' }
+  if (play.type === 'punt') return { text: 'PUNT', tone: 'plain' }
+  if (play.type === 'penalty') return { text: 'PENALTY', tone: 'bad' }
+  if (play.type === 'kickoff') return { text: play.result === 'Touchback' ? 'TOUCHBACK' : 'KICKOFF', tone: 'plain' }
+  if (play.type === 'end') return { text: play.result.toUpperCase(), tone: 'plain' }
+  return null
+}
+
 
 export function MatchView() {
   const world = useWorld()
@@ -88,6 +164,70 @@ export function MatchView() {
   const timer = useRef<number | null>(null)
   const [tab, setTab] = useState<'plays' | 'box' | 'plan' | 'keys' | 'film'>('plays')
   const [boxTeam, setBoxTeam] = useState<string | null>(null)
+
+  // U1: follow camera + full-field toggle + reduced-motion pref.
+  const [fullField, setFullField] = useState(() => {
+    try {
+      return localStorage.getItem('gd.fullField') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [fieldAspect, setFieldAspect] = useState(0.55)
+  const [cam, setCam] = useState({ x: W / 2, y: CENTER_Y })
+  const [reduced] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+  const fieldRef = useRef<HTMLDivElement | null>(null)
+  const ballRef = useRef({ x: W / 2, y: CENTER_Y })
+  const frozenRef = useRef(false)
+  const hasMatch = !!match
+
+  // A ~45-yard window shaped like the field box, but never cropping the field
+  // to less than ~47 yards sideline to sideline (yard numbers stay visible): on wide, short boxes
+  // the window widens instead, so players and dots keep a sensible scale.
+  const followW = 45
+  const minViewH = 47
+  const aspect = fieldAspect > 0.05 ? fieldAspect : 0.55
+  let viewH = Math.min(H, Math.max(minViewH, followW / aspect))
+  let viewW = viewH * aspect
+  if (viewW > W) {
+    viewW = W
+    viewH = Math.min(H, W / aspect)
+  }
+  const halfW = viewW / 2
+  const halfH = viewH / 2
+
+  // Measure the field box so the follow camera keeps the picture square to it.
+  useEffect(() => {
+    const el = fieldRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect
+      if (r && r.width > 0 && r.height > 0) setFieldAspect(r.width / r.height)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasMatch])
+
+  // Ease the camera toward the ball (instant under reduced motion); it holds
+  // still while the animation is frozen, so a pause never jitters.
+  useEffect(() => {
+    if (fullField) return
+    let raf = 0
+    const loop = () => {
+      if (!frozenRef.current) {
+        setCam((c) => {
+          const tx = clampN(ballRef.current.x, halfW, W - halfW)
+          const ty = clampN(ballRef.current.y, halfH, H - halfH)
+          if (Math.abs(tx - c.x) < 0.02 && Math.abs(ty - c.y) < 0.02) return c
+          const k = reduced ? 1 : 0.15
+          return { x: c.x + (tx - c.x) * k, y: c.y + (ty - c.y) * k }
+        })
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [fullField, halfW, halfH, reduced])
 
   const play = match?.plays[idx]
 
@@ -120,6 +260,18 @@ export function MatchView() {
       actors: actorMap ?? undefined,
     })
   }, [play, nextForAnim, byId, actorMap])
+
+  // Feed the follow camera (the ball's mirrored spot and the freeze state) via
+  // refs, so the render loop can read them without writing refs during render.
+  useEffect(() => {
+    frozenRef.current = frozen
+    if (match && play && anim) {
+      const tt = clock.i === idx ? clock.t : 0
+      const bp = posAt(anim.ball, tt)
+      ballRef.current = { x: play.offId === match.homeId ? bp.x : W - bp.x, y: bp.y }
+    }
+  })
+
   const PRE_SNAP = 250
 
   // Run the play's animation: a pre-snap beat, then t from 0 to 1.
@@ -212,6 +364,23 @@ export function MatchView() {
   const moment = gameDay?.moment ?? null
   const showMoment = !!gameDay && !!moment && atEnd
 
+  const vb = fullField
+    ? `0 0 ${W} ${H}`
+    : `${clampN(cam.x, halfW, W - halfW) - halfW} ${clampN(cam.y, halfH, H - halfH) - halfH} ${viewW} ${viewH}`
+  const firstDown = play.down != null && play.distance != null && play.type !== 'kickoff' && play.type !== 'pat'
+    ? play.startYard + play.distance
+    : null
+  const fdX = firstDown != null && firstDown < 100 ? mx(10 + firstDown) : null
+  const inRedZone = (play.type === 'run' || play.type === 'pass' || play.type === 'fg') && play.down != null && play.startYard >= 80
+  const rzX = Math.min(mx(90), mx(110))
+  const rzW = Math.abs(mx(110) - mx(90))
+  const isTD = (play.type === 'run' || play.type === 'pass') && play.result === 'TOUCHDOWN!'
+  const offTeam = world.byId[play.offId] ?? home
+  const ezX = flip ? 0 : 110
+  const tgtKey = play.type === 'pass' && play.targetId ? targetKey(play, { targetPos: byId.get(play.targetId)?.pos }) : null
+  const trailKeys = [...new Set([holder, tgtKey].filter((k): k is string => !!k))]
+  const toast = playToast(play, nextPlay)
+
   const sideTabs: { id: 'plays' | 'box' | 'plan' | 'keys' | 'film'; label: string }[] = [
     { id: 'plays', label: 'Plays' },
     { id: 'box', label: 'Box score' },
@@ -292,6 +461,16 @@ export function MatchView() {
     setPlaying(false)
   }
 
+  const toggleFullField = () => {
+    const next = !fullField
+    try {
+      localStorage.setItem('gd.fullField', next ? '1' : '0')
+    } catch {
+      /* storage unavailable */
+    }
+    setFullField(next)
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex h-screen w-screen flex-col overflow-hidden bg-[#0a1626] text-white">
       {/* ── Scoreboard ─────────────────────────────────────────────────────── */}
@@ -330,30 +509,113 @@ export function MatchView() {
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,42vh)] lg:grid-cols-[minmax(0,1fr)_400px] lg:grid-rows-1">
         <div className="flex min-h-0 flex-col overflow-y-auto lg:overflow-hidden">
           {/* Field */}
-          <div className="relative min-h-[140px] flex-1 p-3 pb-0">
-            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="h-full w-full">
-              <rect x={10} y={0} width={100} height={H} fill="#1f7a3f" />
-              <rect x={0} y={0} width={10} height={H} fill={home.primary} opacity={0.9} />
-              <rect x={110} y={0} width={10} height={H} fill={away.primary} opacity={0.9} />
-              {Array.from({ length: 21 }, (_, i) => 10 + i * 5).map((x, i) => (
-                <line key={x} x1={x} y1={0} x2={x} y2={H} stroke="#ffffff" strokeOpacity={i % 2 === 0 ? 0.5 : 0.25} strokeWidth={0.12} />
-              ))}
-              {Array.from({ length: 9 }, (_, i) => 20 + i * 10).map((x) => (
-                <line key={`n${x}`} x1={x} y1={0} x2={x} y2={H} stroke="#ffffff" strokeOpacity={0.6} strokeWidth={0.2} />
-              ))}
-              <line x1={los} y1={0} x2={los} y2={H} stroke="#ffd34d" strokeWidth={0.35} />
-              <text x={4.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
-                {home.abbr}
+          <div ref={fieldRef} className="relative min-h-[140px] flex-1 p-3 pb-0">
+            <svg viewBox={vb} preserveAspectRatio="xMidYMid meet" className="h-full w-full">
+              <defs>
+                <filter id="gd-dot-shadow" x="-60%" y="-60%" width="220%" height="220%">
+                  <feDropShadow dx="0" dy="0.26" stdDeviation="0.3" floodColor="#04140b" floodOpacity="0.55" />
+                </filter>
+                <linearGradient id="gd-ez-home" gradientUnits="userSpaceOnUse" x1={0} y1={0} x2={10} y2={H}>
+                  <stop offset="0" stopColor={home.primary} />
+                  <stop offset="1" stopColor={home.secondary} />
+                </linearGradient>
+                <linearGradient id="gd-ez-away" gradientUnits="userSpaceOnUse" x1={110} y1={0} x2={120} y2={H}>
+                  <stop offset="0" stopColor={away.secondary} />
+                  <stop offset="1" stopColor={away.primary} />
+                </linearGradient>
+                <linearGradient id="gd-wm" gradientUnits="userSpaceOnUse" x1={54} y1={CENTER_Y - 8} x2={66} y2={CENTER_Y + 9}>
+                  <stop offset="0" stopColor={home.primary} />
+                  <stop offset="1" stopColor={away.primary} />
+                </linearGradient>
+              </defs>
+
+              {/* end zones: club-colour gradients + TV end-zone lettering */}
+              <rect x={0} y={0} width={10} height={H} fill="url(#gd-ez-home)" />
+              <rect x={110} y={0} width={10} height={H} fill="url(#gd-ez-away)" />
+              <text transform={`translate(5 ${CENTER_Y}) rotate(-90)`} textAnchor="middle" dominantBaseline="middle" fill="#ffffff" fillOpacity={0.92} fontSize={4.7} textLength={46} lengthAdjust="spacingAndGlyphs" className="font-display" style={{ fontStyle: 'italic', fontWeight: 800 }}>
+                {home.name.toUpperCase()}
               </text>
-              <text x={115.5} y={CENTER_Y + 1.5} fill="#fff" fontSize={3.4} textAnchor="middle" opacity={0.85} className="font-display">
-                {away.abbr}
+              <text transform={`translate(115 ${CENTER_Y}) rotate(90)`} textAnchor="middle" dominantBaseline="middle" fill="#ffffff" fillOpacity={0.92} fontSize={4.7} textLength={46} lengthAdjust="spacingAndGlyphs" className="font-display" style={{ fontStyle: 'italic', fontWeight: 800 }}>
+                {away.name.toUpperCase()}
               </text>
-              {anim?.posts && (
-                <g>
-                  <line x1={mx(119)} y1={CENTER_Y - 3.1} x2={mx(119)} y2={CENTER_Y + 3.1} stroke="#ffd34d" strokeWidth={0.45} />
-                  <line x1={mx(118)} y1={CENTER_Y} x2={mx(119)} y2={CENTER_Y} stroke="#ffd34d" strokeWidth={0.35} />
+
+              {/* two-tone 5-yard mowing stripes */}
+              <rect x={10} y={0} width={100} height={H} fill={MOW_A} />
+              {Array.from({ length: 20 }, (_, i) => 10 + i * 5).map((x, i) => (
+                <rect key={`m${x}`} x={x} y={0} width={5} height={H} fill={i % 2 ? MOW_A : MOW_B} />
+              ))}
+
+              {/* red-zone tint inside the 20 the offence is attacking */}
+              {inRedZone && <rect x={rzX} y={0} width={rzW} height={H} fill="#e0344a" opacity={0.1} />}
+
+              {/* midfield club-crest watermark */}
+              <g opacity={0.09} pointerEvents="none">
+                <path d={`M54 ${CENTER_Y - 8} L66 ${CENTER_Y - 8} L66 ${CENTER_Y + 1} Q66 ${CENTER_Y + 8} 60 ${CENTER_Y + 9} Q54 ${CENTER_Y + 8} 54 ${CENTER_Y + 1} Z`} fill="url(#gd-wm)" />
+                <ellipse cx={60} cy={CENTER_Y} rx={3.4} ry={2.1} fill="#ffffff" opacity={0.55} />
+                <line x1={60} y1={CENTER_Y - 1} x2={60} y2={CENTER_Y + 1} stroke="#0a1626" strokeWidth={0.22} />
+                <line x1={59.3} y1={CENTER_Y - 0.6} x2={60.7} y2={CENTER_Y - 0.6} stroke="#0a1626" strokeWidth={0.16} />
+                <line x1={59.3} y1={CENTER_Y} x2={60.7} y2={CENTER_Y} stroke="#0a1626" strokeWidth={0.16} />
+                <line x1={59.3} y1={CENTER_Y + 0.6} x2={60.7} y2={CENTER_Y + 0.6} stroke="#0a1626" strokeWidth={0.16} />
+              </g>
+
+              {/* yard lines, hashes every yard, and the white border */}
+              <path d={YARD_LINE_5} stroke="#ffffff" strokeOpacity={0.16} strokeWidth={0.1} />
+              <path d={YARD_LINE_10} stroke="#ffffff" strokeOpacity={0.34} strokeWidth={0.16} />
+              <path d={HASH_SHORT} stroke="#ffffff" strokeOpacity={0.34} strokeWidth={0.1} />
+              <path d={HASH_LONG} stroke="#ffffff" strokeOpacity={0.5} strokeWidth={0.14} />
+              <rect x={0.15} y={0.15} width={W - 0.3} height={H - 0.3} fill="none" stroke="#ffffff" strokeOpacity={0.75} strokeWidth={0.34} />
+              <line x1={10} y1={0} x2={10} y2={H} stroke="#ffffff" strokeOpacity={0.85} strokeWidth={0.38} />
+              <line x1={110} y1={0} x2={110} y2={H} stroke="#ffffff" strokeOpacity={0.85} strokeWidth={0.38} />
+
+              {/* yard numbers every 10 near both sidelines, arrows to the nearer goal */}
+              {YARD_NUMBERS.map((x) => {
+                const n = Math.min(x - 10, 110 - x)
+                const left = x < 60
+                return (
+                  <g key={`yn${x}`} className="font-display" fill="#ffffff" fillOpacity={0.6} style={{ fontWeight: 800, fontStyle: 'italic' }}>
+                    <text x={x} y={7.4} fontSize={5} textAnchor="middle">{n}</text>
+                    <text x={x} y={48.6} fontSize={5} textAnchor="middle">{n}</text>
+                    {x !== 60 && (
+                      <>
+                        <path d={left ? `M${x - 2.6} 5.4 l1.6 -0.85 v1.7 z` : `M${x + 2.6} 5.4 l-1.6 -0.85 v1.7 z`} />
+                        <path d={left ? `M${x - 2.6} 47.4 l1.6 -0.85 v1.7 z` : `M${x + 2.6} 47.4 l-1.6 -0.85 v1.7 z`} />
+                      </>
+                    )}
+                  </g>
+                )
+              })}
+
+              {/* line of scrimmage (blue) + first-down line (yellow, if any) */}
+              <line x1={los} y1={0} x2={los} y2={H} stroke="#2f7dff" strokeWidth={0.34} opacity={0.95} />
+              {fdX != null && <line x1={fdX} y1={0} x2={fdX} y2={H} stroke="#ffd400" strokeWidth={0.3} opacity={0.95} />}
+
+              {/* goal posts at both end lines (bolder on a kick) */}
+              {[{ back: 0.8, x: 2.1, dir: 1 }, { back: 119.2, x: 117.9, dir: -1 }].map((gp) => (
+                <g key={`gp${gp.x}`} stroke="#ffd34d" strokeOpacity={0.92} strokeWidth={anim?.posts ? 0.42 : 0.32}>
+                  <line x1={gp.back} y1={CENTER_Y} x2={gp.x} y2={CENTER_Y} />
+                  <line x1={gp.x} y1={CENTER_Y - 3.1} x2={gp.x} y2={CENTER_Y + 3.1} />
+                  <line x1={gp.x} y1={CENTER_Y - 3.1} x2={gp.x + gp.dir * 0.9} y2={CENTER_Y - 3.1} />
+                  <line x1={gp.x} y1={CENTER_Y + 3.1} x2={gp.x + gp.dir * 0.9} y2={CENTER_Y + 3.1} />
                 </g>
-              )}
+              ))}
+
+              {/* motion trails: ball carrier + targeted receiver (render only) */}
+              {anim && trailKeys.map((k) => {
+                const act = anim.actors.find((a) => a.key === k)
+                if (!act) return null
+                return (
+                  <g key={`trail-${k}`}>
+                    {[6, 5, 4, 3, 2, 1].map((s) => {
+                      const tt = t - s * 0.035
+                      if (tt <= 0) return null
+                      const p = posAt(act.path, tt)
+                      return <circle key={s} cx={mx(p.x)} cy={p.y} r={1.4 - s * 0.12} fill={k === holder ? '#ffd34d' : offColor} opacity={0.28 - s * 0.04} />
+                    })}
+                  </g>
+                )
+              })}
+
+              {/* players: larger pucks, side ring colours, soft shadow, carrier pulse */}
               {anim?.actors.map((a) => {
                 const pt = posAt(a.path, t)
                 const carrying = holder === a.key
@@ -367,31 +629,112 @@ export function MatchView() {
                         {frozen ? ` · SPD ${Math.round(who.attrs?.SPD ?? who.ovr)} · ${actorWhy(play, a.key, who)}` : ''}
                       </title>
                     )}
-                    {carrying && <circle r={2} fill="#ffd34d" opacity={0.35} />}
-                    <circle r={1.15} fill={a.side === 'off' ? offColor : defColor} stroke={carrying ? '#ffd34d' : '#fff'} strokeWidth={carrying ? 0.35 : 0.2} />
+                    {carrying && !frozen && !reduced && (
+                      <circle r={2} fill="none" stroke="#ffd34d" strokeWidth={0.26} opacity={0.7}>
+                        <animate attributeName="r" values="2;3.6" dur="0.9s" repeatCount="indefinite" />
+                        <animate attributeName="opacity" values="0.7;0" dur="0.9s" repeatCount="indefinite" />
+                      </circle>
+                    )}
+                    <circle r={1.75} fill={a.side === 'off' ? offColor : defColor} stroke={carrying ? '#ffd34d' : a.side === 'off' ? '#ffffff' : '#0a1626'} strokeWidth={carrying ? 0.42 : 0.3} filter="url(#gd-dot-shadow)" />
                     {num !== undefined && (
-                      <text y={0.42} fontSize={1.2} textAnchor="middle" fill="#fff" stroke="#000" strokeOpacity={0.55} strokeWidth={0.14} paintOrder="stroke" className="font-cond" style={{ fontWeight: 700, pointerEvents: 'none' }}>
+                      <text y={0.62} fontSize={1.9} textAnchor="middle" fill="#fff" stroke="#000" strokeOpacity={0.6} strokeWidth={0.16} paintOrder="stroke" className="font-cond" style={{ fontWeight: 700, pointerEvents: 'none' }}>
                         {num}
                       </text>
                     )}
                   </g>
                 )
               })}
+
+              {/* ball: dashed arc while airborne, lace, and a burst at the end spot */}
               {anim && (() => {
                 const b = posAt(anim.ball, t)
                 const lift = liftAt(anim, t)
                 const bx = mx(b.x)
+                const flight = anim.flights.find((f) => t > f.t0 && t < f.t1)
                 return (
                   <g>
+                    {flight && (() => {
+                      const pts: string[] = []
+                      for (let s = 0; s <= 14; s++) {
+                        const tt = flight.t0 + (flight.t1 - flight.t0) * (s / 14)
+                        const p = posAt(anim.ball, tt)
+                        pts.push(`${mx(p.x)} ${p.y - liftAt(anim, tt) * 3.2}`)
+                      }
+                      return <polyline points={pts.join(' ')} fill="none" stroke="#ffd34d" strokeWidth={0.16} strokeDasharray="0.8 0.7" opacity={0.85} />
+                    })()}
                     {lift > 0.02 && <ellipse cx={bx} cy={b.y} rx={0.6} ry={0.3} fill="#000" opacity={0.3} />}
-                    <ellipse cx={bx} cy={b.y - lift * 3.2} rx={0.78 * (1 + lift * 0.45)} ry={0.5 * (1 + lift * 0.45)} fill="#8a4b1f" stroke="#fff" strokeWidth={0.14} />
+                    <ellipse cx={bx} cy={b.y - lift * 3.2} rx={0.82 * (1 + lift * 0.45)} ry={0.53 * (1 + lift * 0.45)} fill="#8a4b1f" stroke="#fff" strokeWidth={0.14} />
+                    <line x1={bx - 0.26} y1={b.y - lift * 3.2} x2={bx + 0.26} y2={b.y - lift * 3.2} stroke="#fff" strokeWidth={0.08} />
+                    {!frozen && !reduced && t > 0.9 && (() => {
+                      const e = posAt(anim.ball, 1)
+                      const ex = mx(e.x)
+                      return (
+                        <g transform={`translate(${ex} ${e.y})`}>
+                          <g className="gd-burst">
+                            {[0, 60, 120, 180, 240, 300].map((deg) => (
+                              <line key={deg} x1={0} y1={0} x2={Math.cos((deg * Math.PI) / 180) * 2.2} y2={Math.sin((deg * Math.PI) / 180) * 2.2} stroke={offColor} strokeWidth={0.24} strokeLinecap="round" />
+                            ))}
+                            <circle r={0.9} fill="none" stroke={offColor} strokeWidth={0.2} />
+                          </g>
+                        </g>
+                      )
+                    })()}
                   </g>
                 )
               })()}
+
+              {/* touchdown: end-zone flash + club-colour confetti */}
+              {isTD && !frozen && !reduced && t > 0.4 && (
+                <rect x={ezX} y={0} width={10} height={H} fill={offTeam.primary} className="gd-flash" opacity={0} pointerEvents="none" />
+              )}
+              {isTD && !frozen && !reduced && t > 0.5 && (
+                <g className="gd-confetti" pointerEvents="none">
+                  {CONFETTI.map((cft, i) => (
+                    <g key={i} transform={`translate(${ezX + 5 + cft.x * 0.42} ${6 + cft.y})`}>
+                      <rect x={-cft.w / 2} y={-cft.h / 2} width={cft.w} height={cft.h} rx={0.06} fill={cft.c ? offTeam.secondary : offTeam.primary} className="gd-confetti-piece" style={{ animationDelay: `${cft.delay}s`, animationDuration: `${cft.dur}s` }} />
+                    </g>
+                  ))}
+                </g>
+              )}
+
+              {/* penalty flag */}
               {anim?.flag && t >= anim.flag.t && (
                 <rect x={mx(anim.flag.x) - 0.5} y={anim.flag.y - 0.5} width={1} height={1} fill="#ffd400" stroke="#000" strokeWidth={0.08} />
               )}
             </svg>
+
+            {/* glass down & distance chip (top-left) */}
+            <div className="pointer-events-none absolute left-4 top-3 z-10 flex flex-wrap items-center gap-2">
+              <span className="rounded-md border border-white/15 bg-black/45 px-2.5 py-1 font-cond text-xs font-700 uppercase tracking-wide text-white/90 shadow-lg backdrop-blur-sm">
+                {play.down ? (
+                  <>
+                    <span className="text-[#ffd34d]">{downText(play)}</span>
+                    <span className="mx-1 text-white/40">·</span>
+                    {gameDayFieldPosForPlay(world, play)}
+                  </>
+                ) : (
+                  play.concept
+                )}
+              </span>
+            </div>
+
+            {/* full-field / follow-camera toggle (top-right) */}
+            <button
+              type="button"
+              onClick={toggleFullField}
+              className="absolute right-4 top-3 z-10 rounded-md border border-white/15 bg-black/45 px-2.5 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-white/80 shadow-lg backdrop-blur-sm hover:bg-black/65 hover:text-white"
+            >
+              {fullField ? 'Follow' : 'Full field'}
+            </button>
+
+            {/* play-result toast */}
+            {toast && (
+              <div key={idx} className="gd-toast pointer-events-none absolute inset-x-0 bottom-2 z-10 flex justify-center">
+                <span className={cn('rounded-md border px-3 py-1 font-cond text-sm font-700 uppercase tracking-wide shadow-lg backdrop-blur-sm', TOAST_TONE[toast.tone])}>
+                  {toast.text}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* What just happened + replay controls */}
