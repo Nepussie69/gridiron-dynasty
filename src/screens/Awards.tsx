@@ -1,16 +1,19 @@
 import { useState } from 'react'
-import { Award, ChevronDown, Trophy } from 'lucide-react'
+import { Activity, Award, ChevronDown, Trophy } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { getAwards } from '../store/gameStore'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
-import type { AwardWinner, HofClass, HofInductee, SeasonHonors } from '../game/engine/awards'
+import { PlayerName } from '../components/PlayerHoverCard'
+import { awardRace } from '../game/engine/awards'
+import type { AwardRaceGroup, AwardWinner, HofClass, HofInductee, RaceCandidate, SeasonHonors } from '../game/engine/awards'
+import type { CareerDatabase } from '../game/engine/statsDb'
+import type { Player } from '../game/types'
 import type { StaffAward } from '../game/engine/staffAwards'
 
 export function Awards() {
   const world = useWorld()
   const db = useGame((s) => s.statsDb)()
-  void db
   const history = getAwards()
   const [tab, setTab] = useState<'honors' | 'hof'>('honors')
 
@@ -38,6 +41,7 @@ export function Awards() {
 
       {tab === 'honors' ? (
         <div className="space-y-5">
+          <AwardRaceCard world={world} db={db} history={history} />
           <StaffAwardsCard world={world} />
           {!current ? (
             <Card className="py-12 text-center text-sm text-muted">
@@ -77,6 +81,121 @@ export function Awards() {
       ) : (
         <HallOfFame history={history} world={world} />
       )}
+    </div>
+  )
+}
+
+function AwardRaceCard({
+  world,
+  db,
+  history,
+}: {
+  world: ReturnType<typeof useWorld>
+  db: CareerDatabase
+  history: ReturnType<typeof getAwards>
+}) {
+  const race = awardRace(world, db, history)
+  const players = new Map(world.players.map((p) => [p.id, p]))
+
+  if (!race.started) {
+    return (
+      <Card className="flex items-center gap-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand">
+          <Activity size={18} />
+        </div>
+        <div className="min-w-0">
+          <div className="font-display text-base font-700 uppercase leading-none text-ink">Award Race</div>
+          <div className="mt-1 text-sm text-muted">Race starts after week 1.</div>
+        </div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card pad={false}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+        <span className="label flex items-center gap-1">
+          <Activity size={11} className="text-brand" /> Award Race — {race.season}
+        </span>
+        <span className="font-cond text-xs text-muted">live thru week {race.week}</span>
+      </div>
+      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">
+        {race.groups.map((g) => (
+          <RaceGroupCard key={g.award} group={g} players={players} world={world} />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function RaceGroupCard({
+  group,
+  players,
+  world,
+}: {
+  group: AwardRaceGroup
+  players: Map<string, Player>
+  world: ReturnType<typeof useWorld>
+}) {
+  const max = group.candidates.reduce((m, c) => Math.max(m, c.score), 1)
+  return (
+    <div className="rounded-xl border border-line bg-surface-2/40 p-3">
+      <div className="label mb-2 flex items-center gap-1">
+        {group.kind === 'staff' ? <Award size={11} /> : <Trophy size={11} className="text-gold" />} {group.award}
+      </div>
+      {group.candidates.length === 0 ? (
+        <div className="py-1 text-xs text-muted">No qualifying candidates yet.</div>
+      ) : (
+        <div className="space-y-2.5">
+          {group.candidates.map((c, i) => (
+            <RaceRow key={`${c.playerId ?? c.name}-${i}`} c={c} rank={i + 1} max={max} players={players} world={world} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RaceRow({
+  c,
+  rank,
+  max,
+  players,
+  world,
+}: {
+  c: RaceCandidate
+  rank: number
+  max: number
+  players: Map<string, Player>
+  world: ReturnType<typeof useWorld>
+}) {
+  const pct = Math.max(0, Math.min(100, (c.score / max) * 100))
+  const team = world.byId[c.teamId]
+  const player = c.playerId ? players.get(c.playerId) : undefined
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-1.5">
+        <span className="w-3.5 shrink-0 text-center font-display text-xs font-700 tnum text-muted">{rank}</span>
+        {team && <TeamCrest team={team} size={18} />}
+        <div className="flex min-w-0 flex-1">
+          {player ? (
+            <PlayerName player={player} className="min-w-0 text-sm font-600 text-ink" />
+          ) : (
+            <span className="block truncate text-sm font-600 text-ink">{c.name}</span>
+          )}
+        </div>
+        <span className="shrink-0 font-cond text-[10px] font-700 uppercase text-muted">{c.pos}</span>
+        <span className="shrink-0 font-cond text-[11px] tnum text-muted">{c.record}</span>
+      </div>
+      <div className="mt-1 pl-5">
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-3">
+            <div className="h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="shrink-0 font-cond text-[10px] tnum text-ink-2">{c.score.toLocaleString()}</span>
+        </div>
+        <div className="mt-0.5 truncate text-[11px] text-muted" title={c.value}>{c.value}</div>
+      </div>
     </div>
   )
 }
