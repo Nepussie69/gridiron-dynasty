@@ -15,7 +15,7 @@ import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
 import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, coachTendency, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
@@ -938,25 +938,27 @@ interface OffenseStyle {
   concepts: Concept[]
 }
 
+// R18: the pass-rate identity lives in decisions.ts (coachTendency shows it on
+// the scouting card) so the sim and the report can never drift apart.
 const OFF_STYLES: Record<string, OffenseStyle> = {
   'Air Raid': {
-    passRate: 0.62,
+    passRate: OFF_PASS_RATE['Air Raid'],
     concepts: SCHEME_MENUS['Air Raid'],
   },
   'Pro Style': {
-    passRate: 0.5,
+    passRate: OFF_PASS_RATE['Pro Style'],
     concepts: SCHEME_MENUS['Pro Style'],
   },
   Spread: {
-    passRate: 0.55,
+    passRate: OFF_PASS_RATE.Spread,
     concepts: SCHEME_MENUS.Spread,
   },
   'West Coast': {
-    passRate: 0.53,
+    passRate: OFF_PASS_RATE['West Coast'],
     concepts: SCHEME_MENUS['West Coast'],
   },
   'RPO Heavy': {
-    passRate: 0.47,
+    passRate: OFF_PASS_RATE['RPO Heavy'],
     concepts: SCHEME_MENUS['RPO Heavy'],
   },
 }
@@ -2393,9 +2395,15 @@ function swapPossession(s: GameState) {
   if (s.ctx && s.offId === s.ctx.userTeamId) s.userDrive += 1
 }
 
-function baseTimeScale(id: string): number {
+/** R18: how much a point of coach tempo bends the AI's game-clock burn. */
+const R18_TEMPO_TIME = 0.06
+
+function baseTimeScale(world: World, id: string): number {
   const p = planFor(id, 'off')
-  return p ? planEffects(p, false).timeScale : 1
+  if (p) return planEffects(p, false).timeScale
+  // R18: AI clubs play at their coach's tempo — a small, league-centered shift
+  // (mean tempo ≈ 0) so calibration stays put while identities differ.
+  return clamp(1 - coachTendency(world, id).tempo * R18_TEMPO_TIME, 0.94, 1.06)
 }
 
 function pushPlay(s: GameState, p: Omit<Play, 'n' | 'qtr' | 'clock' | 'offId' | 'defId' | 'homeScore' | 'awayScore'>) {
@@ -3282,7 +3290,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
-  let t = out.timeUsed * s.pace * baseTimeScale(offId) * tempoMult
+  let t = out.timeUsed * s.pace * baseTimeScale(world, offId) * tempoMult
   if (usedTimeout(world, s, offId, defId, out)) t = Math.min(t, 6)
   // T2M: a carry out of bounds stops the clock at the end of the play — no 40s
   // runoff; only the few seconds the play itself took count.

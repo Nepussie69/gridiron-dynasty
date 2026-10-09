@@ -8,12 +8,13 @@
 
 import type { World } from './generate'
 import type { GamePlan } from './gameplan'
+import { clamp, hash32 } from './rng'
 
 export type FourthStyle = 'conservative' | 'standard' | 'aggressive'
 
 export interface CallSheet {
   fourth: FourthStyle
-  twoPoint: 'chart' | 'kick'
+  twoPoint: 'chart' | 'kick' | 'go'
   timeouts: 'save' | 'aggressive'
 }
 
@@ -103,18 +104,88 @@ export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: nu
   return best
 }
 
-export function twoPointChoice(rule: 'chart' | 'kick', marginAfterTD: number, qtr: number): 'kick' | 'go2' {
+export function twoPointChoice(rule: 'chart' | 'kick' | 'go', marginAfterTD: number, qtr: number): 'kick' | 'go2' {
   if (rule === 'kick') return 'kick'
   const chartGo = qtr === 4 && [-2, -5, -9, -10, 1, 5].includes(marginAfterTD)
+  // R18: an aggressive head coach also chases the deficit on two in the fourth
+  // quarter instead of waiting for the exact chart margins.
+  if (rule === 'go') return chartGo || (qtr === 4 && marginAfterTD <= 0 && marginAfterTD >= -8) ? 'go2' : 'kick'
   return chartGo ? 'go2' : 'kick'
 }
 
-/** An AI club's call sheet, scaled by its head-coach rating. */
+// ── R18: coaching tendencies ──────────────────────────────────────────────────
+// Each club's head coach (and offensive coordinator) gets a deterministic
+// personality: how aggressive he is on 4th down, whether he chases two points,
+// his run/pass identity, how he uses timeouts, and his tempo. Derived from the
+// staff's ratings, scheme and specialty plus a stable per-coach hash — never an
+// rng() draw, so the seed stream and coached/sim equivalence are untouched.
+
+/** Offensive pass-rate identity per OC scheme (the single source offStyle reads). */
+export const OFF_PASS_RATE: Record<string, number> = {
+  'Air Raid': 0.62,
+  'Pro Style': 0.5,
+  Spread: 0.55,
+  'West Coast': 0.53,
+  'RPO Heavy': 0.47,
+}
+
+export interface CoachTendency {
+  /** 4th-down aggressiveness. */
+  fourth: FourthStyle
+  /** Two-point appetite: follow the chart, always kick, or chase it. */
+  twoPoint: 'chart' | 'kick' | 'go'
+  /** Run/pass identity: pass share outside obvious passing downs (0–1). */
+  passRate: number
+  /** Timeout usage. */
+  timeouts: 'save' | 'aggressive'
+  /** Tempo: −1 deliberate … +1 up-tempo. */
+  tempo: number
+}
+
+/** Head-coach specialty nudges to the aggression score (league mean ≈ 0). */
+const HC_AGGRO: Record<string, number> = {
+  'Play Calling': 0.55,
+  'Red Zone': 0.35,
+  'QB Development': 0.1,
+  'Pass Rush': 0.05,
+  Secondary: -0.05,
+  'Talent Evaluation': -0.1,
+  'College Scouting': -0.1,
+  'Pro Personnel': -0.05,
+  'O-Line Play': -0.2,
+  'Culture Builder': -0.55,
+}
+
+/** Coordinator scheme pace (Air Raid up-tempo … RPO Heavy deliberate). */
+const OC_TEMPO: Record<string, number> = {
+  'Air Raid': 0.5,
+  Spread: 0.3,
+  'West Coast': 0,
+  'Pro Style': -0.15,
+  'RPO Heavy': -0.35,
+}
+
+export function coachTendency(world: World, teamId: string): CoachTendency {
+  const staff = world.staff[teamId] ?? []
+  const hc = staff.find((s) => s.role === 'Head Coach')
+  const oc = staff.find((s) => s.role === 'Offensive Coordinator')
+  const hcRating = hc?.rating ?? 74
+  const ocRating = oc?.rating ?? 74
+  // Per-coach personality from a stable hash, centered on zero (−0.3..+0.3).
+  const jitter = (hash32(hc?.id ?? teamId, 41) / 4294967296 - 0.5) * 0.6
+  const aggro = (hcRating - 74) / 10 + (HC_AGGRO[hc?.specialty ?? ''] ?? 0) + jitter
+  const fourth: FourthStyle = aggro >= 0.8 ? 'aggressive' : aggro <= -0.8 ? 'conservative' : 'standard'
+  const twoPoint: CoachTendency['twoPoint'] = aggro >= 0.7 ? 'go' : 'chart'
+  const timeouts: CoachTendency['timeouts'] = hcRating >= 75 || hc?.specialty === 'Play Calling' ? 'aggressive' : 'save'
+  const passRate = OFF_PASS_RATE[oc?.scheme ?? ''] ?? OFF_PASS_RATE['Pro Style']
+  const tempo = clamp((OC_TEMPO[oc?.scheme ?? ''] ?? 0) + (ocRating - 74) / 120, -1, 1)
+  return { fourth, twoPoint, passRate, timeouts, tempo }
+}
+
+/** An AI club's call sheet, derived from its coaching tendencies (R18). */
 export function aiCallSheet(world: World, teamId: string): CallSheet {
-  const hc = (world.staff[teamId] ?? []).find((s) => s.role === 'Head Coach')
-  const rating = hc?.rating ?? 74
-  const fourth: FourthStyle = rating >= 82 ? 'aggressive' : rating <= 66 ? 'conservative' : 'standard'
-  return { fourth, twoPoint: 'chart', timeouts: rating >= 75 ? 'aggressive' : 'save' }
+  const t = coachTendency(world, teamId)
+  return { fourth: t.fourth, twoPoint: t.twoPoint, timeouts: t.timeouts }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
