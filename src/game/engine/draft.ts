@@ -264,7 +264,14 @@ export function rookieRatings(
   classSize: number,
 ): { ovr: number; pot: number } {
   const real = !prospect.generated
-  const pot = real ? clamp(Math.round(58 + (prospect.pot - 60) * 0.95), 60, 97) : prospect.pot
+  // L12.15 S4: a real prospect's pro ceiling is his college pot compressed onto
+  // the new scale. The very top of the class (college pot 99) otherwise collapses
+  // to one value → one new ceiling (91), stacking the whole 90-92 band on a single
+  // rating. The elite few (rank ≤ 12) keep that ceiling, while a deterministic half
+  // of the rest step one point lower (→ 89) so the pipeline feeds 90-92 less hard
+  // without moving the body of the class.
+  const topTrim = classRank > 12 && prospect.pot >= 99 && hash32(prospect.id, 41) % 2 === 0 ? 1 : 0
+  const pot = real ? clamp(Math.round(58 + (prospect.pot - 60) * 0.95) - topTrim, 60, 97) : prospect.pot
   const jitter = (hash32(prospect.id, 13) % 3) - 1
   const curve = Math.round(rookieOvrCurve(classRank) + jitter)
   const today = Math.min(prospect.pot, Math.round(prospect.ovr + 3))
@@ -272,7 +279,16 @@ export function rookieRatings(
   // L12.15 S1: the L12.7 curve was tuned on the old scale — map it through the
   // same remap so a rookie enters on the new scale, with no one over 76.
   const frac = 0.5
-  const ovr = Math.min(76, rescaleOvr(Math.max(50, Math.min(base, pot - 3)), frac))
+  const raw = Math.min(76, rescaleOvr(Math.max(50, Math.min(base, pot - 3)), frac))
+  // L12.15 S4: a late-round rookie is a replacement-level body, but the bottom
+  // of every class is a spread of bodies, not one flat rating. The raw curve
+  // (rank-derived) sets the order; a deterministic ±2 wobble from the prospect
+  // id gives each late round a real p10–p90 spread with no extra RNG draw.
+  let ovr = raw
+  if (raw < 65) {
+    const wob = (hash32(prospect.id, 29) % 5) - 2
+    ovr = clamp(Math.round((raw + 63) / 2) + wob, 56, 64)
+  }
   // L12.15 S4: real prospects keep the L12.7 compressed ceiling (topping out near
   // 90 new-scale). Generated prospects also take a new-scale ceiling from their
   // class standing, so only a small rank-ordered funnel can ever reach 90+.
@@ -291,12 +307,11 @@ export function rookieRatings(
  */
 function generatedCeiling(rank: number, size: number): number {
   const q = rank / Math.max(1, size)
-  if (q <= 0.003) return 98
+  if (q <= 0.0025) return 98
   if (q <= 0.005) return 96
   if (q <= 0.008) return 94
-  if (q <= 0.024) return 89
-  if (q <= 0.05) return 87
-  if (q <= 0.09) return 85
+  if (q <= 0.012) return 87
+  if (q <= 0.045) return 84
   return 0
 }
 
@@ -496,7 +511,7 @@ export function runUDFAs(world: World) {
       by: null,
     })
     player.contract = makeRookieContract(224, world.season + 1)
-    player.ovr = Math.max(55, player.ovr - 5)
+    player.ovr = Math.max(60, player.ovr - 5)
     world.players.push(player)
     world.roster[team.id].push(player)
     prospect.draftedBy = team.id

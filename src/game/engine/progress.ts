@@ -112,7 +112,7 @@ export function developPlayers(world: World, user?: { teamId: string; growth: nu
       // the opening, mostly-28-to-33-star cohort.
       const elite = p.ovr >= 90
       const decline = p.age >= 34 ? (elite ? 2 : 3) : p.age >= 32 ? (elite ? 1 : 2) : 1
-      const rate = p.age <= 33 ? (p.ovr >= 93 ? 0.25 : elite ? 0.35 : 0.7) : elite ? 0.5 : 0.7
+      const rate = p.age <= 33 ? (p.ovr >= 93 ? 0.25 : elite ? 0.5 : 0.7) : elite ? 0.5 : 0.7
       p.ovr = clamp(p.ovr - (rng() < rate ? decline : 0), 40, 99)
     }
     if (p.age <= 26) p.lastGrowth = { season: world.season, from: ovrBefore, to: p.ovr, experience }
