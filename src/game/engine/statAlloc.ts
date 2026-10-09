@@ -106,6 +106,21 @@ const MT_ALLOC_REF = 0.083
 /** R5: base team missed-tackle total (play-by-play expectation). */
 const MT_ALLOC_BASE = 8
 
+/** R12: forced-miss share. Weighting by the raw per-touch rate concentrates the
+ *  opponent's whole missed-tackle total on the lead back (an RB1 ran at ≈ 7–8 per
+ *  game). A compressive touches curve with a bounded rating tilt spreads it over
+ *  the whole skill group (NFL: RB1 ≈ 25–35 per 17 games, WR1 ≈ 5–15). Deterministic
+ *  (no rng draw); the team total is still reconciled to the opponent's missed
+ *  tackles in `reconcileForced`. */
+const MT_FORCE_EXP = 0.08
+const MT_FORCE_LO = 0.95
+const MT_FORCE_HI = 1.05
+
+function forcedWeight(p: Player, touches: number): number {
+  const rel = clamp(carrierMissRate(p) / MT_ALLOC_REF, MT_FORCE_LO, MT_FORCE_HI)
+  return Math.pow(Math.max(1, touches), MT_FORCE_EXP) * rel
+}
+
 /** R5: a deterministic uniform in [0,1) from a string key — never an rng() draw. */
 function hashUnit(key: string): number {
   return (hash32(key) >>> 0) / 4294967296
@@ -214,8 +229,9 @@ export function allocateTeamGame(
       rushAtt: split_[i] ?? 0,
       rushYds: yardsSplit[i] ?? 0,
       rushTD: tdSplit[i] ?? 0,
-      // R5: rating-weighted forced-miss share (reconciled to the opponent's total).
-      forcedMissed: (split_[i] ?? 0) * carrierMissRate(p),
+      // R5/R12: compressive, rating-tilted forced-miss share (reconciled to the
+      // opponent's team total).
+      forcedMissed: forcedWeight(p, split_[i] ?? 0),
     }))
     // Fold the keepers onto the QB's existing (passing) line so he is only counted
     // once per game, matching how a played game's box score merges by player.
@@ -253,8 +269,9 @@ export function allocateTeamGame(
         rec,
         recYds: yardSplit[i] ?? 0,
         recTD: tdSplit[i] ?? 0,
-        // R5: rating-weighted forced-miss share (reconciled to the opponent's total).
-        forcedMissed: rec * carrierMissRate(p),
+        // R5/R12: compressive, rating-tilted forced-miss share (reconciled to the
+        // opponent's team total).
+        forcedMissed: forcedWeight(p, rec),
         drops: detCount(tg, dropRate, `${gameKey}:${p.id}:drop`),
       })
     })
@@ -319,7 +336,7 @@ export function allocateTeamGame(
     const krN = 1 + (hashUnit(`${gameKey}:${rets.kr.id}:krn`) < 0.35 ? 1 : 0)
     addRet(rets.kr.id, {
       kickRet: krN,
-      kickRetYds: Math.round(krN * (20 + hashUnit(`${gameKey}:${rets.kr.id}:kry`) * 8)),
+      kickRetYds: Math.round(krN * (18 + hashUnit(`${gameKey}:${rets.kr.id}:kry`) * 8)),
       retTD: hashUnit(`${gameKey}:${rets.kr.id}:krtd`) < 0.003 ? 1 : 0,
     })
   }
@@ -439,24 +456,49 @@ function allocateCoverageAndPressure(
 }
 
 /**
- * R5: each club's forced-miss total must equal the opponent's missed-tackle
+ * R5/R12: each club's forced-miss total must equal the opponent's missed-tackle
  * total (they are the same events), so the fast allocation never reports two
  * independent counts for one play. The rating-weighted shares set the split.
+ *
+ * R12: two fixes so player FMT lands in the NFL per-player bands while the team
+ * total still reconciles exactly. (1) A back carries and catches on two separate
+ * lines — aggregate a player's weight first, or he claims two remainder shares.
+ * (2) The integer remainder is assigned by a stratified, hash-seeded lottery over
+ * each player's fractional expectation (no rng draw) instead of always to the
+ * largest fractions, which otherwise hands the same lead backs an extra point
+ * every game and inflates their season totals to roughly 2x.
  */
-function reconcileForced(offense: { playerId: string; line: GameStatLine }[], target: number) {
-  const cur = offense.reduce((s, o) => s + (o.line.forcedMissed ?? 0), 0)
-  if (target <= 0 || !offense.length) {
+function reconcileForced(offense: { playerId: string; line: GameStatLine }[], target: number, key: string) {
+  if (!offense.length) return
+  if (target <= 0) {
     for (const o of offense) o.line.forcedMissed = 0
     return
   }
-  const raw = cur > 0
-    ? offense.map((o) => ((o.line.forcedMissed ?? 0) / cur) * target)
-    : offense.map(() => target / offense.length)
+  const groups = new Map<string, { raw: number; lines: { playerId: string; line: GameStatLine }[] }>()
+  for (const o of offense) {
+    let g = groups.get(o.playerId)
+    if (!g) { g = { raw: 0, lines: [] }; groups.set(o.playerId, g) }
+    g.raw += o.line.forcedMissed ?? 0
+    g.lines.push(o)
+  }
+  const list = [...groups.values()]
+  const cur = list.reduce((s, g) => s + g.raw, 0)
+  const raw = cur > 0 ? list.map((g) => (g.raw / cur) * target) : list.map(() => target / list.length)
   const out = raw.map((v) => Math.floor(v))
-  let rem = target - out.reduce((a, b) => a + b, 0)
-  const order = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac)
-  for (let k = 0; k < rem && order.length; k++) out[order[k % order.length].i] += 1
-  offense.forEach((o, i) => { o.line.forcedMissed = out[i] })
+  const frac = raw.map((v) => v - Math.floor(v))
+  const rem = target - out.reduce((a, b) => a + b, 0)
+  if (rem > 0) {
+    const cum: number[] = []
+    let acc = 0
+    for (const f of frac) { acc += f; cum.push(acc) }
+    for (let j = 0; j < rem; j++) {
+      const pos = j + hashUnit(`${key}:frc:${j}`)
+      let i = 0
+      while (i < cum.length - 1 && cum[i] <= pos) i++
+      out[Math.min(i, out.length - 1)] += 1
+    }
+  }
+  list.forEach((g, i) => g.lines.forEach((o, j) => { o.line.forcedMissed = j === 0 ? out[i] : 0 }))
 }
 
 /**
@@ -473,8 +515,8 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
   // missed-tackle total (they are the same plays).
   const homeAlloc = allocateTeamGame(world, game.homeId, game.homeScore, game.awayScore, rng, `${game.week}:${game.homeId}`)
   const awayAlloc = allocateTeamGame(world, game.awayId, game.awayScore, game.homeScore, rng, `${game.week}:${game.awayId}`)
-  reconcileForced(homeAlloc.offense, awayAlloc.defMissed)
-  reconcileForced(awayAlloc.offense, homeAlloc.defMissed)
+  reconcileForced(homeAlloc.offense, awayAlloc.defMissed, `${game.week}:${game.homeId}:frc`)
+  reconcileForced(awayAlloc.offense, homeAlloc.defMissed, `${game.week}:${game.awayId}:frc`)
   // R7/R9: coverage allowed and pressures generated by each defence, from the
   // opponent's passing production. Deterministic, so the rng stream is unchanged.
   allocateCoverageAndPressure(world, homeAlloc, awayAlloc, `${game.week}:${game.homeId}:cov`)
