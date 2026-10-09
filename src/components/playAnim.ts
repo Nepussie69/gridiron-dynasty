@@ -551,7 +551,11 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const holeY = MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 1.5 + hash(seed + 1) * 3.5)
   const endX = clampX(10 + play.endYard)
   const fumble = !!play.turnover
-  const endY = clampY(holeY + (hash(seed + 2) - 0.5) * (Math.abs(play.yards) > 12 ? 18 : 7))
+  // T2M: a run that went out of bounds finishes against the sideline, not in the
+  // middle of the field. The end spot (x) is unchanged.
+  const endY = play.outOfBounds
+    ? (side < 0 ? 1.6 : FIELD_H - 1.6)
+    : clampY(holeY + (hash(seed + 2) - 0.5) * (Math.abs(play.yards) > 12 ? 18 : 7))
   const carrier = qbRun ? 'qb' : 'rb'
   const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
   const meshX = qbRun ? f.qb.x - 1 : f.qb.x + 0.7
@@ -911,7 +915,11 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const goal = clampX(10 + play.endYard)
   const endX = goal >= 110 && catchPt.x >= goal ? clampX(catchPt.x + 1.5) : goal
   const yac = Math.abs(endX - catchPt.x)
-  const endY = clampY(catchPt.y + (MID_Y - catchPt.y) * (yac > 8 ? 0.35 : 0.12) + (hash(seed + 8) - 0.5) * 4)
+  // T2M: a catch that went out of bounds finishes against the nearest sideline;
+  // the end spot (x) is unchanged.
+  const endY = play.outOfBounds
+    ? (catchPt.y < MID_Y ? 1.6 : FIELD_H - 1.6)
+    : clampY(catchPt.y + (MID_Y - catchPt.y) * (yac > 8 ? 0.35 : 0.12) + (hash(seed + 8) - 0.5) * 4)
   m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: true })
   const endSec = Math.max(catchSec, m[tgt].t)
   pursueRun(m, DEF_KEYS, catchSec, { x: endX + 0.8, y: endY }, endSec, seed, { x: endX - catchPt.x, y: endY - catchPt.y })
