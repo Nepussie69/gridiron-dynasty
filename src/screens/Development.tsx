@@ -14,6 +14,7 @@ import {
   type DevFocusId,
 } from '../game/engine/devPlan'
 import type { Player } from '../game/types'
+import { LockerRoomCard } from '../components/LockerRoomCard'
 import { Badge, Button, Card, OvrBadge, PageHeader, Stat } from '../ui/kit'
 
 const SELECT_CLASS =
@@ -88,6 +89,8 @@ export function Development() {
           club, and a player with no focus develops exactly as before.
         </p>
       </Card>
+
+      <LockerRoomCard teamId={teamId} className="mb-4" />
 
       {!groups.length && (
         <Card>

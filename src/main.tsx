@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, ovrDistribution, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, ovrDistribution, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 import { animProbe } from './game/engine/animProbe'
@@ -36,6 +36,7 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__adviceProbe = adviceProbe
   ;(window as unknown as Record<string, unknown>).__scoutBiasProbe = scoutBiasProbe
   ;(window as unknown as Record<string, unknown>).__scoutTravelProbe = scoutTravelProbe
+  ;(window as unknown as Record<string, unknown>).__lockerRoomProbe = lockerRoomProbe
   ;(window as unknown as Record<string, unknown>).__characterProbe = characterProbe
   ;(window as unknown as Record<string, unknown>).__rhythmProbe = rhythmProbe
   ;(window as unknown as Record<string, unknown>).__dominanceProbe = dominanceProbe

@@ -130,6 +130,18 @@ import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
 import { MAX_DEV_AGE, autoFocusFor, devFocusById, devGroupFor, type DevFocusId } from '../game/engine/devPlan'
+import {
+  MAX_CAPTAINS,
+  MAX_MENTEES,
+  MAX_MENTEE_AGE,
+  lockerEffort,
+  lockerRoomState,
+  leaderScore,
+  menteesOf,
+  problemPlayers,
+  problemScore,
+  rankedLeaders,
+} from '../game/engine/lockerRoom'
 import { evaluateTrade, executeTrade, findDeals, findPackagesFor, isTradeablePick, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { DEADLINE_WEEK, buildDeadlineOffers, deadlineNewsItem, runDeadlineAI } from '../game/engine/deadline'
@@ -515,6 +527,14 @@ interface GameStore {
   autoDevPlans: (groupId?: string) => void
   /** L15: apply one focus to every young player in a position group. */
   selectAllDevFocus: (groupId: string, focus: DevFocusId) => void
+  /** L15 (FUTURES 16): name or un-name a captain (max 3). */
+  toggleLockerCaptain: (playerId: string) => void
+  /** L15 (FUTURES 16): pair a young player with a captain as his mentor (or clear it). */
+  assignMentor: (playerId: string, mentorId: string | null) => void
+  /** L15 (FUTURES 16): turn the morale-driven effort edge on or off (off by default). */
+  toggleLockerEffort: () => void
+  /** L15 (FUTURES 16): auto-pick the top leaders and pair every young player. */
+  autoLockerRoom: () => void
   startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId }) => void
   resetCareer: () => void
   advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
@@ -922,6 +942,104 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     bump(set, get)
     get().save()
+  },
+
+  // L15 locker room (FUTURES 16): captains, mentors, and the opt-in effort edge.
+  toggleLockerCaptain: (playerId) => {
+    const career = get().career
+    if (!career) return
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+    if (!p) return
+    const state = lockerRoomState(career, world.season)
+    const has = state.captains.includes(playerId)
+    if (!has && state.captains.length >= MAX_CAPTAINS) {
+      get().showToast(`You can name at most ${MAX_CAPTAINS} captains.`)
+      return
+    }
+    const captains = has ? state.captains.filter((id) => id !== playerId) : [...state.captains, playerId]
+    // Dropping a captain drops every pairing with him.
+    const mentors = { ...state.mentors }
+    if (has) for (const [r, m] of Object.entries(mentors)) if (m === playerId) delete mentors[r]
+    set({ career: { ...career, lockerRoom: { season: state.season, captains, mentors, effort: state.effort } } })
+    bump(set, get)
+    get().save()
+  },
+
+  assignMentor: (playerId, mentorId) => {
+    const career = get().career
+    if (!career) return
+    const state = lockerRoomState(career, world.season)
+    if (mentorId) {
+      if (mentorId === playerId) return
+      if (!state.captains.includes(mentorId)) {
+        get().showToast('Pick one of your captains as the mentor.')
+        return
+      }
+      const mentee = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+      if (!mentee || mentee.age > MAX_MENTEE_AGE) return
+      if (!(playerId in state.mentors) && Object.keys(state.mentors).length >= MAX_MENTEES) {
+        get().showToast(`You can mentor at most ${MAX_MENTEES} young players at once.`)
+        return
+      }
+    }
+    const mentors = { ...state.mentors }
+    if (mentorId) mentors[playerId] = mentorId
+    else delete mentors[playerId]
+    set({ career: { ...career, lockerRoom: { season: state.season, captains: state.captains, mentors, effort: state.effort } } })
+    bump(set, get)
+    get().save()
+  },
+
+  toggleLockerEffort: () => {
+    const career = get().career
+    if (!career) return
+    const state = lockerRoomState(career, world.season)
+    const next = !state.effort
+    set({ career: { ...career, lockerRoom: { season: state.season, captains: state.captains, mentors: state.mentors, effort: next } } })
+    bump(set, get)
+    get().save()
+    get().showToast(
+      next
+        ? 'Locker-room effort is on: your squad’s morale now moves its on-field edge.'
+        : 'Locker-room effort is off: morale no longer changes results.',
+    )
+  },
+
+  autoLockerRoom: () => {
+    const career = get().career
+    if (!career) return
+    const roster = world.roster[career.teamId] ?? []
+    if (!roster.length) return
+    const state = lockerRoomState(career, world.season)
+    // The room's best leaders by makeup, then everyone else by rating.
+    const captains = [...roster]
+      .sort((a, b) => leaderScore(b) - leaderScore(a) || b.ovr - a.ovr)
+      .slice(0, MAX_CAPTAINS)
+      .map((p) => p.id)
+    const mentees = menteesOf(world, career.teamId)
+    const mentors: Record<string, string> = {}
+    const captainPlayers = captains
+      .map((id) => roster.find((p) => p.id === id))
+      .filter((p): p is (typeof roster)[number] => !!p)
+    // Spread the mentees evenly across the captains by current load, then by
+    // leadership, so dropping one captain never strands the whole room.
+    const load: Record<string, number> = {}
+    for (const c of captainPlayers) load[c.id] = 0
+    for (const m of mentees.slice(0, MAX_MENTEES)) {
+      const best = captainPlayers
+        .filter((c) => c.id !== m.id)
+        .sort((a, b) => load[a.id] - load[b.id] || leaderScore(b) - leaderScore(a))[0]
+      if (best) {
+        mentors[m.id] = best.id
+        load[best.id]++
+      }
+    }
+    set({ career: { ...career, lockerRoom: { season: state.season, captains, mentors, effort: state.effort } } })
+    bump(set, get)
+    get().save()
+    get().showToast(
+      `Locker room set: ${captains.length} captain${captains.length === 1 ? '' : 's'}, ${Object.keys(mentors).length} mentee${Object.keys(mentors).length === 1 ? '' : 's'}.`,
+    )
   },
 
   startCareer: ({ name, path: chosenPath, archetype, teamId: chosenTeamId, startLevel = 0, seed, scenarioId }) => {
@@ -3439,9 +3557,13 @@ function applyUserCoaching(career: CareerState | null) {
   const wrinkle = wrinkleBonus(career, world.week)
   const install = installBonus(career, world)
   const practice = practiceEdge(career, world)
+  // L15 locker room (FUTURES 16): when the user opts in, the club's morale nudges
+  // its on-field effort. Off by default (0 edge), so league calibration is
+  // untouched unless the user turns it on.
+  const effort = lockerEffort(world, career)
   const extra = {
-    off: wrinkle.off + install.off + practice.off,
-    def: wrinkle.def + install.def + practice.def,
+    off: wrinkle.off + install.off + practice.off + effort.off,
+    def: wrinkle.def + install.def + practice.def + effort.def,
   }
   setUserCoaching({
     teamId: career.teamId,
@@ -4052,9 +4174,16 @@ function runEndOfRegularSeason(
     if (entry) entry.peakOvr = Math.max(entry.peakOvr ?? 0, p.ovr)
   }
 
+  // L15 locker room (FUTURES 16): pass this season's mentor pairings so a
+  // mentored young player grows faster. Only the current season's pairings
+  // apply, and only for the user's club.
+  const locker = career?.lockerRoom
+  const mentors = locker && locker.season === world.season ? locker.mentors : undefined
   const retired = developPlayers(
     world,
-    career ? { teamId: career.teamId, growth: developmentGrowthMult(career.skills.recruiting) } : undefined,
+    career
+      ? { teamId: career.teamId, growth: developmentGrowthMult(career.skills.recruiting), mentors }
+      : undefined,
   )
   // L12.16 H1: whoever leave the league this year get a retirement stamp.
   const idsAfterDev = new Set(world.players.map((p) => p.id))
@@ -5160,6 +5289,68 @@ export function draftTradeProbe() {
     accepted: evaluateTrade(clone, o.partnerId, career.teamId, o.give, o.get).accepted,
   }))
   return { userTeam: career.teamId, slot, onClock: slot >= 0 ? clone.draftOrder[slot] : null, down, up }
+}
+
+/**
+ * L15 locker-room probe (FUTURES 16). Reads the room's leaders, problems and
+ * mentees, then runs one season-end `developPlayers` on two clones — one with
+ * the mentor pairings set, one control — and checks that only the mentored young
+ * players moved. Identical rng streams mean every non-mentored player is
+ * byte-for-byte the same, proving the feature is opt-in/neutral by default.
+ */
+export function lockerRoomProbe(teamId?: string) {
+  const career = useGame.getState().career
+  const tid = teamId ?? career?.teamId ?? useGame.getState().activeTeamId
+  const base = structuredClone(world) as World
+  const leaders = rankedLeaders(base, tid)
+    .slice(0, 6)
+    .map((p) => ({ name: p.name, pos: p.pos, age: p.age, ovr: p.ovr, score: leaderScore(p) }))
+  const problems = problemPlayers(base, tid)
+    .slice(0, 6)
+    .map((p) => ({ name: p.name, pos: p.pos, age: p.age, score: problemScore(p) }))
+  const menteeList = menteesOf(base, tid)
+  const captains = rankedLeaders(base, tid).slice(0, MAX_CAPTAINS)
+  const mentors: Record<string, string> = {}
+  let i = 0
+  for (const m of menteeList.slice(0, MAX_MENTEES)) {
+    const c = captains[i % captains.length]
+    i++
+    if (c && c.id !== m.id) mentors[m.id] = c.id
+  }
+
+  const onClone = structuredClone(world) as World
+  const offClone = structuredClone(world) as World
+  developPlayers(onClone, { teamId: tid, growth: 1, mentors })
+  developPlayers(offClone, { teamId: tid, growth: 1 })
+
+  const offById = new Map(offClone.players.map((p) => [p.id, p]))
+  const mentoredIds = new Set(Object.keys(mentors))
+  let compared = 0
+  let mentoredDelta = 0
+  let otherDelta = 0
+  for (const p of onClone.roster[tid] ?? []) {
+    const ctrl = offById.get(p.id)
+    if (!ctrl) continue
+    const d = p.ovr - ctrl.ovr
+    compared++
+    if (mentoredIds.has(p.id)) mentoredDelta += d
+    else otherDelta += d
+  }
+  return {
+    team: base.byId[tid]?.abbr ?? tid,
+    captains: captains.map((p) => ({ name: p.name, pos: p.pos, score: leaderScore(p) })),
+    mentors: Object.entries(mentors).map(([id, mentorId]) => ({
+      mentee: base.players.find((p) => p.id === id)?.name ?? id,
+      mentor: base.players.find((p) => p.id === mentorId)?.name ?? mentorId,
+    })),
+    leaders,
+    problems,
+    menteeCount: menteeList.length,
+    compared,
+    mentoredDelta, // ≥ 0: the paired young players grew a little more
+    otherDelta, // must be 0: nobody else is touched
+    neutralByDefault: otherDelta === 0,
+  }
 }
 
 /**
