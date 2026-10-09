@@ -1461,7 +1461,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const forceFumble = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)
     // R6: a strip-sack-style catch fumble is scooped and returned for a TD
     // ~7–8% of the time (deterministic hash, no rng).
-    const fumTD = forceFumble && h01(`${n}:${defId}:passtd`) < 0.075
+    const fumTD = forceFumble && h01(`${n}:${defId}:passtd`) < 0.085
     const baseResult = fumTD ? 'Fumble returned for a TOUCHDOWN!' : forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete'
     return {
       type: 'pass', concept: concept.name, yards: gain, blitz,
@@ -1631,7 +1631,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   let fumbleTD = false
   let recoverer: Player | undefined
   if (fumble) {
-    fumbleTD = h01(`${n}:${defId}:fumtd`) < 0.075
+    fumbleTD = h01(`${n}:${defId}:fumtd`) < 0.085
     if (fumbleTD) {
       const pool = [...lbs, ...dl, ...cbs, ...saf]
       recoverer = hashPick(pool, (p) => {
@@ -1691,7 +1691,7 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
   if ((kind === 'return' || kind === 'fairCatch' || kind === 'muff') && pr) returnerId = pr.id
   if (kind === 'return' && pr) {
     const cov = defId ? coverageScore(world, defId) : 72
-    retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 9, 14))
+    retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 7, 14))
     returnTD = h01(`${key}:td`) < 0.006
     // A return touchdown is caught at the punt's landing spot and taken the rest
     // of the way, so its recorded yardage runs to the goal line.
@@ -1743,7 +1743,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
   const k = topGroup(world, kicking, ['K'], 1)[0]
   const kA = k ? mkAttrs(k) : {}
   const base = `${s.n}:${kicking}:ko`
-  const pTb = clamp(0.57 + ((kA.KPW ?? 80) - 78) * 0.012, 0.45, 0.72)
+  const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006, 0.42, 0.66)
   const returner = clubReturners(world, receiving).kr
   const touchback = !returner || h01(`${base}:tb`) < pTb
   let retYds = 0
@@ -1753,7 +1753,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
   if (!touchback && returner) {
     catchYard = clamp(2 + Math.round(h01(`${base}:cy`) * 7), 0, 9)
     const cov = coverageScore(world, kicking)
-    retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 22, 26))
+    retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5, 26))
     returnTD = h01(`${base}:td`) < 0.003
     fumble = !returnTD && h01(`${base}:fum`) < 0.005
     if (returnTD) retYds = 100 - catchYard
@@ -2818,7 +2818,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // R6: a safety — a run or sack stopped in the end zone when the offense started
   // inside its own 3 (deterministic hash, ~0.04 per team-game).
   const safety = !out.turnover && !out.defTD && (out.type === 'run' || isSack(out)) &&
-    s.yard <= 3 && s.yard + out.yards <= 0 && h01(`${s.n}:${offId}:safety`) < 0.5
+    s.yard <= 4 && s.yard + out.yards <= 0 && h01(`${s.n}:${offId}:safety`) < 1
   const gainedYard = clamp(s.yard + out.yards, 0, 100)
   const endYard = out.defTD ? 100 : safety ? 0 : gainedYard
   const scored = endYard >= 100 && !out.turnover && !out.defTD
@@ -2826,7 +2826,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     offS.firstDowns += 1
     if (s.down === 3) offS.thirdDownConv += 1
   }
-  pushPlay(s, { ...out, result: safety ? 'Safety!' : out.result, safety, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
+  pushPlay(s, { ...out, result: safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
 
   if (out.defTD) {
     // R6: a takeaway returned for a touchdown (pick-six / fumble return).
