@@ -7,20 +7,32 @@ import {
   COL_COV_TGT,
   COL_COV_YDS,
   COL_DEF_INT,
+  COL_DEF_TD,
   COL_DROP,
   COL_FMT,
   COL_GP,
+  COL_KR,
+  COL_KR_YDS,
   COL_MT,
   COL_PASS_ATT,
   COL_PASS_INT,
   COL_PASS_PCT,
+  COL_PASS_PRESSURED,
+  COL_PASS_SK,
+  COL_PASS_SKY,
   COL_PASS_TD,
   COL_PASS_YDS,
   COL_PD,
+  COL_PR,
+  COL_PR_YDS,
+  COL_PRS,
+  COL_QBH,
+  COL_HUR,
   COL_REC,
   COL_REC_AVG,
   COL_REC_TD,
   COL_REC_YDS,
+  COL_RET_TD,
   COL_RTG,
   COL_RUSH_ATT,
   COL_RUSH_AVG,
@@ -60,18 +72,25 @@ interface ColGroup {
   cols: StatCol[]
 }
 
+const RETURNS_GROUP: ColGroup = {
+  label: 'Returns',
+  cols: [COL_KR, COL_KR_YDS, COL_PR, COL_PR_YDS, COL_RET_TD, COL_DEF_TD],
+}
+
 const OFFENSE_GROUPS: ColGroup[] = [
-  { label: 'Passing', cols: [COL_PASS_ATT, COL_PASS_PCT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_RTG] },
+  { label: 'Passing', cols: [COL_PASS_ATT, COL_PASS_PCT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_PASS_SK, COL_PASS_SKY, COL_RTG, COL_PASS_PRESSURED] },
   {
     label: 'Rushing',
     cols: [{ ...COL_RUSH_ATT, label: 'ATT' }, COL_RUSH_YDS, { ...COL_RUSH_AVG, label: 'Y/A' }, COL_RUSH_TD, COL_FMT],
   },
   { label: 'Receiving', cols: [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_AVG, COL_REC_TD, COL_FMT, COL_DROP] },
+  RETURNS_GROUP,
 ]
 
 const DEFENSE_GROUPS: ColGroup[] = [
-  { label: 'Defense', cols: [COL_TCK, COL_MT, COL_TFL, COL_SCK, COL_DEF_INT, COL_PD] },
+  { label: 'Defense', cols: [COL_TCK, COL_MT, COL_TFL, COL_SCK, COL_PRS, COL_QBH, COL_HUR, COL_DEF_INT, COL_PD] },
   { label: 'Coverage', cols: [COL_COV_TGT, COL_COV_CMP, { ...COL_COV_YDS, label: 'YDS' }, COL_COV_TD, COL_COV] },
+  RETURNS_GROUP,
 ]
 
 // No FG/punt fields exist on `SeasonStats`, so the kicking tab is omitted.
@@ -164,6 +183,23 @@ function sumInto(a: SeasonStats, b: SeasonStats) {
   a.defYdsAllowed = (a.defYdsAllowed ?? 0) + (b.defYdsAllowed ?? 0)
   a.defTDAllowed = (a.defTDAllowed ?? 0) + (b.defTDAllowed ?? 0)
   a.defIntsCov = (a.defIntsCov ?? 0) + (b.defIntsCov ?? 0)
+  // R6: returns and defensive touchdowns.
+  a.kickRet = (a.kickRet ?? 0) + (b.kickRet ?? 0)
+  a.kickRetYds = (a.kickRetYds ?? 0) + (b.kickRetYds ?? 0)
+  a.puntRet = (a.puntRet ?? 0) + (b.puntRet ?? 0)
+  a.puntRetYds = (a.puntRetYds ?? 0) + (b.puntRetYds ?? 0)
+  a.retTD = (a.retTD ?? 0) + (b.retTD ?? 0)
+  a.defTD = (a.defTD ?? 0) + (b.defTD ?? 0)
+  a.missedTackles = (a.missedTackles ?? 0) + (b.missedTackles ?? 0)
+  a.forcedMissed = (a.forcedMissed ?? 0) + (b.forcedMissed ?? 0)
+  a.drops = (a.drops ?? 0) + (b.drops ?? 0)
+  // R7/R8: pressure credit and QB sacks taken / pressures faced.
+  a.prs = (a.prs ?? 0) + (b.prs ?? 0)
+  a.qbHits = (a.qbHits ?? 0) + (b.qbHits ?? 0)
+  a.hurries = (a.hurries ?? 0) + (b.hurries ?? 0)
+  a.sk = (a.sk ?? 0) + (b.sk ?? 0)
+  a.sky = (a.sky ?? 0) + (b.sky ?? 0)
+  a.pressured = (a.pressured ?? 0) + (b.pressured ?? 0)
 }
 
 interface HubRow {

@@ -1295,7 +1295,7 @@ function optionIcon(kind: MomentKind, id: string) {
   if (id === 'protect') return Shield
   if (id === 'useTimeouts') return Timer
   if (id === 'save' || id === 'normal') return Clock
-  if (kind === 'defCall' || kind === 'halftime') return Shield
+  if (kind === 'defCall' || kind === 'halftime') return id === 'twoHigh' ? Eye : Shield
   return Target
 }
 
@@ -1375,7 +1375,8 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
   const rushing = rows.filter((r) => (r.line.rushAtt ?? 0) > 0)
   const receiving = rows.filter((r) => (r.line.rec ?? 0) > 0 || (r.line.targets ?? 0) > 0)
-  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0 || (r.line.defTargets ?? 0) > 0 || (r.line.missedTackles ?? 0) > 0)
+  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.prs ?? 0) > 0 || (r.line.qbHits ?? 0) > 0 || (r.line.hurries ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0 || (r.line.defTargets ?? 0) > 0 || (r.line.missedTackles ?? 0) > 0 || (r.line.defTD ?? 0) > 0)
+  const returns = rows.filter((r) => (r.line.kickRet ?? 0) > 0 || (r.line.puntRet ?? 0) > 0 || (r.line.retTD ?? 0) > 0 || (r.line.defTD ?? 0) > 0)
   // Index once per render: the viewer re-renders every playback tick, so a
   // linear scan per box-score row would add up fast.
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
@@ -1401,7 +1402,10 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
       {passing.length > 0 && <BoxBlock title="Passing" rows={passing} fp={fp} cols={[
         { k: 'passComp', l: 'C/ATT', fmt: (r) => `${r.passComp ?? 0}/${r.passAtt ?? 0}` },
         { k: 'passYds', l: 'YDS' }, { k: 'passTD', l: 'TD' }, { k: 'ints', l: 'INT' },
+        { k: 'sk', l: 'SK', title: 'Times sacked (not a pass attempt)' },
+        { k: 'sky', l: 'SKY', title: 'Sack yards lost (not removed from passing yards)' },
         { k: 'passerRating', l: 'RTG', fmt: (r) => passerRating(r).toFixed(1) },
+        { k: 'pressurePct', l: 'PRS%', title: 'Pressured % (pressures faced ÷ dropbacks)', fmt: (r) => { const db = (r.passAtt ?? 0) + (r.sk ?? 0); return db > 0 ? `${(((r.pressured ?? 0) / db) * 100).toFixed(1)}%` : '—' } },
       ]} />}
       {rushing.length > 0 && <BoxBlock title="Rushing" rows={rushing} fp={fp} cols={[
         { k: 'rushAtt', l: 'CAR' }, { k: 'rushYds', l: 'YDS' }, { k: 'rushTD', l: 'TD' },
@@ -1410,10 +1414,18 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
         { k: 'rec', l: 'REC' }, { k: 'recYds', l: 'YDS' }, { k: 'recTD', l: 'TD' },
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
-        { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
+        { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' },
+        { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'qbHits', l: 'QBH', title: 'QB hits' }, { k: 'hurries', l: 'HUR', title: 'Hurries' },
+        { k: 'defInts', l: 'INT' },
         { k: 'defComp', l: 'REC', w: 'w-10', title: 'Receptions allowed / targets in coverage', fmt: (r) => ((r.defTargets ?? 0) > 0 ? `${r.defComp ?? 0}/${r.defTargets}` : '—') },
         { k: 'defYdsAllowed', l: 'ALW', title: 'Yards allowed in coverage' },
         { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
+        { k: 'defTD', l: 'TD', title: 'Defensive touchdowns (pick-six, fumble return)' },
+      ]} />}
+      {returns.length > 0 && <BoxBlock title="Returns" rows={returns} fp={fp} cols={[
+        { k: 'kickRet', l: 'KR', title: 'Kickoff returns' }, { k: 'kickRetYds', l: 'KR YDS', title: 'Kickoff return yards' },
+        { k: 'puntRet', l: 'PR', title: 'Punt returns' }, { k: 'puntRetYds', l: 'PR YDS', title: 'Punt return yards' },
+        { k: 'retTD', l: 'RET TD', title: 'Return touchdowns' }, { k: 'defTD', l: 'DEF TD', title: 'Defensive touchdowns' },
       ]} />}
     </div>
   )
@@ -1425,7 +1437,7 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
   // Lead with the volume stat: yards for offense, tackles for defense.
   const sortKey = (title === 'Defense' ? cols[0]?.k : cols[1]?.k) as keyof GameStatLine
   const sorted = [...rows].sort((a, b) => ((b.line[sortKey] as number) ?? 0) - ((a.line[sortKey] as number) ?? 0))
-  const wide = (k: string) => k === 'passComp' || k === 'passerRating'
+  const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct'
   return (
     <div className="mb-3">
       <div className="label mb-0.5 !text-white/50">{title}</div>

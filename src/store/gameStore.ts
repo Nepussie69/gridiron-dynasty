@@ -56,6 +56,7 @@ import {
 import { counterOffer } from '../game/engine/counter'
 import { rivalFor } from '../game/engine/rivalry'
 import { recordGameStats, boxScore, recordBoxLines, boxPlayerLines, boxTeamTotals } from '../game/engine/stats'
+import { allocProbe } from '../game/engine/statAlloc'
 import { simLeagueGames } from '../game/engine/leagueSim'
 import { gradeGame } from '../game/engine/film'
 import {
@@ -344,8 +345,9 @@ function updateUserBook(world: World, sim: GameSim, teamId: string) {
   for (const p of sim.plays) {
     if (p.type !== 'run' && p.type !== 'pass') continue
     const bucket = bucketFor(p.down ?? 1, p.distance ?? 10, p.startYard)
-    if (p.offId === teamId && p.offClass) book.off[bucket][p.offClass] += 1
-    else if (p.defId === teamId && p.defCall) book.def[bucket][p.defCall] += 1
+    // R10: an old save's book predates `twoHigh`; treat a missing key as 0.
+    if (p.offId === teamId && p.offClass) book.off[bucket][p.offClass] = (book.off[bucket][p.offClass] ?? 0) + 1
+    else if (p.defId === teamId && p.defCall) book.def[bucket][p.defCall] = (book.def[bucket][p.defCall] ?? 0) + 1
   }
 }
 // Teach the stats layer to stamp each season with the scheme played.
@@ -4279,7 +4281,7 @@ export function decisionProbe(n = 100) {
   type CallPolicy = 'standing' | 'run' | 'short' | 'deep'
   type DefPolicy = 'standing' | DefCall
   const callPolicies: CallPolicy[] = ['standing', 'run', 'short', 'deep']
-  const defPolicies: DefPolicy[] = ['standing', 'blitz', 'man', 'zone', 'stack']
+  const defPolicies: DefPolicy[] = ['standing', 'blitz', 'man', 'zone', 'stack', 'twoHigh']
 
   const margin = (call: CallPolicy, def: DefPolicy): number => {
     let total = 0
@@ -5754,6 +5756,119 @@ export interface SimRow {
   ok: boolean
 }
 
+/**
+ * Dev-only audit (R7/R8/R9): PBP pressure / coverage rates, a box-score vs
+ * play-level reconciliation, the projected top-rusher season pressures, and the
+ * fast-sim allocation rates for comparison. Read-only against the sim.
+ */
+export function statAudit(games = 150) {
+  const pool = world.teams.filter((t) => t.tier === 'NFL')
+  const rng = makeRng(world.seed + 778899)
+  const byRusher = new Map<string, number>()
+  const teamGames = new Map<string, number>()
+  let dropbacks = 0
+  let pressures = 0
+  let sacksP = 0
+  let hits = 0
+  let hurries = 0
+  let playsPrs = 0
+  let playsSk = 0
+  let playsCovTgt = 0
+  let playsCovComp = 0
+  let playsCovYds = 0
+  let boxPrs = 0
+  let boxSk = 0
+  let boxCovTgt = 0
+  let boxCovComp = 0
+  let boxCovYds = 0
+  let mismatch = 0
+  let made = 0
+  while (made < games) {
+    const h = pool[Math.floor(rng() * pool.length)]
+    const a = pool[Math.floor(rng() * pool.length)]
+    if (h.id === a.id) continue
+    const sim = simulatePlayByPlay(world, h.id, a.id, world.seed + made * 7919 + 707)
+    teamGames.set(h.id, (teamGames.get(h.id) ?? 0) + 1)
+    teamGames.set(a.id, (teamGames.get(a.id) ?? 0) + 1)
+    let plPrs = 0
+    let plSk = 0
+    let plTgt = 0
+    let plComp = 0
+    let plYds = 0
+    for (const p of sim.plays) {
+      if (p.type !== 'pass') continue
+      dropbacks++
+      if (p.pressure) pressures++
+      if (p.pressureType === 'sack') sacksP++
+      else if (p.pressureType === 'hit') hits++
+      else if (p.pressureType === 'hurry') hurries++
+      if (p.pressureId) { byRusher.set(p.pressureId, (byRusher.get(p.pressureId) ?? 0) + 1); plPrs++ }
+      if (p.qbId && /^Sack/.test(p.result)) plSk++
+      if (p.coverId && p.targetId) {
+        plTgt++
+        const comp = p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || !!p.fumbleId
+        if (comp) { plComp++; plYds += Math.max(0, p.yards) }
+      }
+    }
+    const box = boxScore(world, sim)
+    let bxPrs = 0
+    let bxSk = 0
+    let bxTgt = 0
+    let bxComp = 0
+    let bxYds = 0
+    for (const b of box) {
+      bxPrs += b.line.prs ?? 0
+      bxSk += b.line.sk ?? 0
+      bxTgt += b.line.defTargets ?? 0
+      bxComp += b.line.defComp ?? 0
+      bxYds += b.line.defYdsAllowed ?? 0
+    }
+    playsPrs += plPrs
+    playsSk += plSk
+    playsCovTgt += plTgt
+    playsCovComp += plComp
+    playsCovYds += plYds
+    boxPrs += bxPrs
+    boxSk += bxSk
+    boxCovTgt += bxTgt
+    boxCovComp += bxComp
+    boxCovYds += bxYds
+    if (plPrs !== bxPrs || plSk !== bxSk || plTgt !== bxTgt || plComp !== bxComp || plYds !== bxYds) mismatch++
+    made++
+  }
+  const info = (id: string) => world.players.find((p) => p.id === id)
+  const top = [...byRusher.entries()]
+    .map(([id, n]) => {
+      const tg = teamGames.get(info(id)?.teamId ?? '') ?? 1
+      return { name: info(id)?.name ?? id, pos: info(id)?.pos ?? '', perGame: n / tg, season17: (n / tg) * 17 }
+    })
+    .sort((x, y) => y.season17 - x.season17)
+    .slice(0, 10)
+    .map((x) => ({ ...x, perGame: +x.perGame.toFixed(2), season17: +x.season17.toFixed(1) }))
+  return {
+    games: made,
+    pbp: {
+      dropbacksPerGame: +(dropbacks / made).toFixed(1),
+      pressureRatePct: +((pressures / dropbacks) * 100).toFixed(1),
+      pressuresPerTeamGame: +(pressures / (made * 2)).toFixed(2),
+      sackShareOfPressurePct: +((sacksP / Math.max(1, pressures)) * 100).toFixed(1),
+      hitShareOfNonSackPct: +((hits / Math.max(1, pressures - sacksP)) * 100).toFixed(1),
+      hurryPerTeamGame: +(hurries / (made * 2)).toFixed(2),
+      qbHitPerTeamGame: +(hits / (made * 2)).toFixed(2),
+      topRushers: top,
+    },
+    boxVsPlays: {
+      mismatchGames: mismatch,
+      prs: { plays: playsPrs, box: boxPrs },
+      sk: { plays: playsSk, box: boxSk },
+      covTargets: { plays: playsCovTgt, box: boxCovTgt },
+      covComp: { plays: playsCovComp, box: boxCovComp },
+      covYds: { plays: playsCovYds, box: boxCovYds },
+    },
+    fastSim: allocProbe(world, 200),
+  }
+}
+
 export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
   const pool = world.teams.filter((t) => t.tier === tier)
   const rng = makeRng(world.seed + 999331)
@@ -5774,6 +5889,19 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
   let xpMade = 0
   let missedTackles = 0
   let forcedMissed = 0
+  // R6: special teams / defensive scoring over the whole game (both clubs).
+  let allKickoffs = 0
+  let allTouchbacks = 0
+  let allKickReturns = 0
+  let allKickRetYds = 0
+  let allPuntReturns = 0
+  let allPuntRetYds = 0
+  let homeReturnTD = 0
+  let homePickSix = 0
+  let homeFumTD = 0
+  let homeSafeties = 0
+  let puntNetSum = 0
+  let puntNetCount = 0
   // R5: tackle attempts (the denominator for the missed-tackle rate). A whiff is
   // an attempt; a credited tackle is an attempt; on a miss the finishing defender
   // is a second attempt. No tackle is credited on a score.
@@ -5790,6 +5918,27 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
     let prevOff: string | null = null
     for (const p of sim.plays) {
       if (p.type === 'penalty') { penCount += 1; penYds += Math.abs(p.yards ?? 0); continue }
+      // R6: kick/punt returns and takeaway scores (both clubs, for league rates).
+      if (p.type === 'kickoff') {
+        allKickoffs++
+        if (p.returnKind === 'touchback') allTouchbacks++
+        if (p.returnKind === 'return' && p.returnerId) {
+          allKickReturns++
+          allKickRetYds += p.returnYards ?? 0
+          if (p.returnTD && p.offId === h.id) homeReturnTD++
+        }
+      } else if (p.type === 'punt') {
+        if (p.returnKind === 'return' && p.returnerId) {
+          allPuntReturns++
+          allPuntRetYds += p.returnYards ?? 0
+          if (p.returnTD && p.defId === h.id) homeReturnTD++
+        }
+      }
+      if (p.defTD && p.defId === h.id) {
+        if (p.type === 'pass' && !p.fumbleId) homePickSix++
+        else homeFumTD++
+      }
+      if (p.safety && p.defId === h.id) homeSafeties++
       // One red-zone trip per possession: reset at every change of possession.
       if (p.offId !== prevOff) { if (p.offId === h.id) possessions += 1; inRZ = false; prevOff = p.offId }
       const homeOff = p.offId === h.id
@@ -5800,7 +5949,7 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
       // counted once per drive. A touchdown from outside the 20 is not a trip.
       const reachesRz = p.startYard >= 80 || ((p.type === 'run' || p.type === 'pass') && p.endYard >= 80 && p.result !== 'TOUCHDOWN!')
       if (!inRZ && reachesRz) { rzTrips += 1; inRZ = true }
-      if (p.type === 'punt') punts += 1
+      if (p.type === 'punt') { punts += 1; puntNetSum += p.yards ?? 0; puntNetCount += 1 }
       if (p.type === 'pass' && isSack(p)) sackYds += Math.abs(p.yards ?? 0)
       if (p.type === 'pat' && p.concept === 'Extra Point') { xpAtt += 1; if (/good/.test(p.result)) xpMade += 1 }
       missedTackles += p.missedTackleIds?.length ?? 0

@@ -116,5 +116,9 @@ export function actorPlayers(
     else if (c) place('rb', c.id)
   }
   if (play.type === 'pass' && play.targetId && targetKey) place(targetKey, play.targetId)
+  // R6: the real returner stands on the returner's dot — `rb` on a kickoff
+  // (the receiving club is `off`), `s0` on a punt (the receiving club is `def`).
+  if (play.type === 'kickoff' && play.returnerId) place('rb', play.returnerId)
+  if (play.type === 'punt' && play.returnerId) place('s0', play.returnerId)
   return map
 }

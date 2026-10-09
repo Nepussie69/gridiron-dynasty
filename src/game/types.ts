@@ -123,6 +123,22 @@ export interface SeasonStats {
   forcedMissed?: number
   /** R5: season-summed dropped passes. */
   drops?: number
+  /** R6: kickoff / punt returns, return yards and return touchdowns. */
+  kickRet?: number
+  kickRetYds?: number
+  puntRet?: number
+  puntRetYds?: number
+  retTD?: number
+  /** R6: defensive touchdowns (pick-six, fumble return). */
+  defTD?: number
+  /** R7: defensive pressures (PRS = SCK + QBH + HUR), QB hits and hurries. */
+  prs?: number
+  qbHits?: number
+  hurries?: number
+  /** R7/R8: pressures the QB faced, times sacked (SK) and sack yards lost (SKY). */
+  pressured?: number
+  sk?: number
+  sky?: number
   // honors
   awards?: string[]
 }
@@ -135,6 +151,8 @@ export function emptySeason(season: number, level: StatLevel, teamId: string): S
     targets: 0, rec: 0, recYds: 0, recTD: 0,
     tackles: 0, defSacks: 0, defInts: 0, passDef: 0,
     missedTackles: 0, forcedMissed: 0, drops: 0,
+    kickRet: 0, kickRetYds: 0, puntRet: 0, puntRetYds: 0, retTD: 0, defTD: 0,
+    prs: 0, qbHits: 0, hurries: 0, pressured: 0, sk: 0, sky: 0,
   }
 }
 
@@ -171,6 +189,23 @@ export interface GameStatLine {
   forcedMissed?: number
   /** R5: dropped passes as the targeted receiver. */
   drops?: number
+  /** R6: kickoff returns / return yards / return touchdowns. */
+  kickRet?: number
+  kickRetYds?: number
+  /** R6: punt returns / return yards / return touchdowns (retTD shared). */
+  puntRet?: number
+  puntRetYds?: number
+  retTD?: number
+  /** R6: defensive touchdowns (pick-six, fumble return). */
+  defTD?: number
+  /** R7: defensive pressures (PRS = SCK + QBH + HUR), QB hits and hurries. */
+  prs?: number
+  qbHits?: number
+  hurries?: number
+  /** R7/R8: pressures the QB faced, times sacked (SK) and sack yards lost (SKY). */
+  pressured?: number
+  sk?: number
+  sky?: number
 }
 
 export interface Player {
