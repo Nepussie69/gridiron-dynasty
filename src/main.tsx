@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, penaltyProbe, ownerMeetingProbe, ovrDistribution, ownerProbe, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, penaltyProbe, ownerMeetingProbe, ovrDistribution, ownerProbe, setProbeIsolation, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 import { animProbe } from './game/engine/animProbe'
@@ -14,55 +14,86 @@ createRoot(document.getElementById('root')!).render(
 )
 
 if (import.meta.env.DEV) {
-  ;(window as unknown as Record<string, unknown>).__simTest = simTest
-  ;(window as unknown as Record<string, unknown>).__staffProbe = staffProbe
-  ;(window as unknown as Record<string, unknown>).__hiringProbe = hiringProbe
-  ;(window as unknown as Record<string, unknown>).__cohesionProbe = cohesionProbe
-  ;(window as unknown as Record<string, unknown>).__masteryProbe = masteryProbe
-  ;(window as unknown as Record<string, unknown>).__draftProbe = draftProbe
-  ;(window as unknown as Record<string, unknown>).__draftFlowProbe = draftFlowProbe
-  ;(window as unknown as Record<string, unknown>).__seasonProbe = seasonProbe
-  ;(window as unknown as Record<string, unknown>).__tradeProbe = tradeProbe
-  ;(window as unknown as Record<string, unknown>).__balanceProbe = balanceProbe
-  ;(window as unknown as Record<string, unknown>).__ownerProbe = ownerProbe
-  ;(window as unknown as Record<string, unknown>).__ownerMeetingProbe = ownerMeetingProbe
-  ;(window as unknown as Record<string, unknown>).__marketProbe = marketProbe
-  ;(window as unknown as Record<string, unknown>).__deadMoneyProbe = deadMoneyProbe
-  ;(window as unknown as Record<string, unknown>).__askGmProbe = askGmProbe
-  ;(window as unknown as Record<string, unknown>).__gmDeskProbe = gmDeskProbe
-  ;(window as unknown as Record<string, unknown>).__contractLifeProbe = contractLifeProbe
-  ;(window as unknown as Record<string, unknown>).__rookieProbe = rookieProbe
-  ;(window as unknown as Record<string, unknown>).__ovrDistribution = ovrDistribution
-  ;(window as unknown as Record<string, unknown>).__careerSmoke = careerSmoke
-  ;(window as unknown as Record<string, unknown>).__leaguePbpProbe = leaguePbpProbe
-  ;(window as unknown as Record<string, unknown>).__adviceProbe = adviceProbe
-  ;(window as unknown as Record<string, unknown>).__scoutBiasProbe = scoutBiasProbe
-  ;(window as unknown as Record<string, unknown>).__scoutTravelProbe = scoutTravelProbe
-  ;(window as unknown as Record<string, unknown>).__lockerRoomProbe = lockerRoomProbe
-  ;(window as unknown as Record<string, unknown>).__characterProbe = characterProbe
-  ;(window as unknown as Record<string, unknown>).__rhythmProbe = rhythmProbe
-  ;(window as unknown as Record<string, unknown>).__dominanceProbe = dominanceProbe
-  ;(window as unknown as Record<string, unknown>).__planMatrix = planMatrix
-  ;(window as unknown as Record<string, unknown>).__personnelMatrix = personnelMatrix
-  ;(window as unknown as Record<string, unknown>).__statShape = statShape
-  ;(window as unknown as Record<string, unknown>).__seasonRealism = seasonRealism
-  ;(window as unknown as Record<string, unknown>).__ratingSpread = ratingSpread
-  ;(window as unknown as Record<string, unknown>).__gameDayEquivalence = gameDayEquivalence
-  ;(window as unknown as Record<string, unknown>).__clockProbe = clockProbe
-  ;(window as unknown as Record<string, unknown>).__decisionProbe = decisionProbe
-  ;(window as unknown as Record<string, unknown>).__aiManagerProbe = aiManagerProbe
-  ;(window as unknown as Record<string, unknown>).__deadlineProbe = deadlineProbe
-  ;(window as unknown as Record<string, unknown>).__draftTradeProbe = draftTradeProbe
-  ;(window as unknown as Record<string, unknown>).__devPlanProbe = devPlanProbe
-  ;(window as unknown as Record<string, unknown>).__waiverProbe = waiverProbe
-  ;(window as unknown as Record<string, unknown>).__faFlowProbe = faFlowProbe
-  ;(window as unknown as Record<string, unknown>).__skillProbe = skillProbe
-  ;(window as unknown as Record<string, unknown>).__hofProbe = hofProbe
-  ;(window as unknown as Record<string, unknown>).__penaltyProbe = penaltyProbe
-  ;(window as unknown as Record<string, unknown>).__leagueWorkerDebug = leagueWorkerDebug
-  ;(window as unknown as Record<string, unknown>).__game = useGame
-  ;(window as unknown as Record<string, unknown>).__world = getWorld
-  ;(window as unknown as Record<string, unknown>).__simOne = (homeId = 'BUF', awayId = 'MIA') =>
-    simulatePlayByPlay(getWorld(), homeId, awayId, 12345)
-  ;(window as unknown as Record<string, unknown>).__animProbe = (games = 2) => animProbe(getWorld(), games)
+  const w = window as unknown as Record<string, unknown>
+
+  // Dev probes are ISOLATED from real player storage: while any probe runs, the
+  // store's autosave is suspended, so a probe can spin up seeded universes,
+  // advance seasons or start careers without reading or overwriting a real
+  // career slot. (Node-side calibration has no IndexedDB at all, so it is
+  // inherently isolated; the standalone save/load shims use a scratch key.)
+  let probeDepth = 0
+  const isolated = <T extends (...a: never[]) => unknown>(fn: T): T =>
+    ((...args: never[]) => {
+      probeDepth++
+      setProbeIsolation(true)
+      const done = () => {
+        probeDepth--
+        if (probeDepth <= 0) setProbeIsolation(false)
+      }
+      try {
+        const out = fn(...args)
+        if (out && typeof (out as Promise<unknown>).then === 'function') {
+          return (out as Promise<unknown>).finally(done)
+        }
+        done()
+        return out
+      } catch (e) {
+        done()
+        throw e
+      }
+    }) as T
+
+  const probes: Record<string, (...a: never[]) => unknown> = {
+    __simTest: simTest,
+    __staffProbe: staffProbe,
+    __hiringProbe: hiringProbe,
+    __cohesionProbe: cohesionProbe,
+    __masteryProbe: masteryProbe,
+    __draftProbe: draftProbe,
+    __draftFlowProbe: draftFlowProbe,
+    __seasonProbe: seasonProbe,
+    __tradeProbe: tradeProbe,
+    __balanceProbe: balanceProbe,
+    __ownerProbe: ownerProbe,
+    __ownerMeetingProbe: ownerMeetingProbe,
+    __marketProbe: marketProbe,
+    __deadMoneyProbe: deadMoneyProbe,
+    __askGmProbe: askGmProbe,
+    __gmDeskProbe: gmDeskProbe,
+    __contractLifeProbe: contractLifeProbe,
+    __rookieProbe: rookieProbe,
+    __ovrDistribution: ovrDistribution,
+    __careerSmoke: careerSmoke,
+    __leaguePbpProbe: leaguePbpProbe,
+    __adviceProbe: adviceProbe,
+    __scoutBiasProbe: scoutBiasProbe,
+    __scoutTravelProbe: scoutTravelProbe,
+    __lockerRoomProbe: lockerRoomProbe,
+    __characterProbe: characterProbe,
+    __rhythmProbe: rhythmProbe,
+    __dominanceProbe: dominanceProbe,
+    __planMatrix: planMatrix,
+    __personnelMatrix: personnelMatrix,
+    __statShape: statShape,
+    __seasonRealism: seasonRealism,
+    __ratingSpread: ratingSpread,
+    __gameDayEquivalence: gameDayEquivalence,
+    __clockProbe: clockProbe,
+    __decisionProbe: decisionProbe,
+    __aiManagerProbe: aiManagerProbe,
+    __deadlineProbe: deadlineProbe,
+    __draftTradeProbe: draftTradeProbe,
+    __devPlanProbe: devPlanProbe,
+    __waiverProbe: waiverProbe,
+    __faFlowProbe: faFlowProbe,
+    __skillProbe: skillProbe,
+    __hofProbe: hofProbe,
+    __penaltyProbe: penaltyProbe,
+  }
+  for (const [name, fn] of Object.entries(probes)) w[name] = isolated(fn)
+  w.__leagueWorkerDebug = leagueWorkerDebug
+  w.__game = useGame
+  w.__world = getWorld
+  w.__simOne = (homeId = 'BUF', awayId = 'MIA') => simulatePlayByPlay(getWorld(), homeId, awayId, 12345)
+  w.__animProbe = (games = 2) => animProbe(getWorld(), games)
 }

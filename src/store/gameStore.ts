@@ -254,6 +254,7 @@ import type { CapMemo, CareerPath, CareerState, Contract, GameStatLine, JobOffer
 import { OFF_PERSONNEL, DEF_PACKAGES, normalizeOffPersonnel, normalizeDefPackage, type OffPersonnel, type DefPackage } from '../game/engine/personnel'
 import {
   SLOT_IDS,
+  isValidSlot,
   saveGame,
   loadGame,
   saveSlot,
@@ -268,6 +269,7 @@ import {
   migrateLegacy,
   markSlotRecovered,
   flushPersistence,
+  persistenceAvailable,
   PersistenceError,
   type SlotView,
   type SlotMeta,
@@ -339,6 +341,28 @@ export interface GameDay {
 let world: World = buildWorld(20261004)
 let statDb: CareerDatabase = newDatabase()
 let awards: AwardHistory = newAwardHistory()
+
+/**
+ * Dev-probe isolation. The in-browser probes (and the node calibration run)
+ * call `startCareer`, which would otherwise autosave into whatever slot the
+ * running app has active. While suspended, no store write touches storage at
+ * all — probes can spin up and tear down dozens of seeded universes without
+ * ever reading or overwriting a real player's career. `persistenceAvailable()`
+ * covers the node side automatically (no IndexedDB → nothing to write).
+ */
+let autosaveSuspended = false
+/** The current active slot was last loaded from its backup: don't rotate the damaged primary over a healthy backup. */
+let pendingBackupRepair = false
+
+export function setProbeIsolation(suspended: boolean): void {
+  autosaveSuspended = suspended
+}
+
+/** True when store autosaves/claims should actually reach storage. */
+function autosaveEnabled(): boolean {
+  return !autosaveSuspended && persistenceAvailable()
+}
+
 export function getWorld() {
   return world
 }
@@ -517,6 +541,8 @@ interface GameStore {
   savesOpen: boolean
   /** A persistence error the UI should show without pretending the save worked. */
   slotError: string | null
+  /** True while a heavy slot transition (continue/import/create) is running. */
+  busy: boolean
   match: GameSim | null
   /** Bumped whenever a fresh replay opens, so the match view resets its playback. */
   matchSeq: number
@@ -581,7 +607,7 @@ interface GameStore {
   toggleLockerEffort: () => void
   /** L15 (FUTURES 16): auto-pick the top leaders and pair every young player. */
   autoLockerRoom: () => void
-  startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId; slot?: number }) => void
+  startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId; slot?: number }) => Promise<void>
   resetCareer: () => void
   advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
   /** L12.6 C1: step the offseason calendar one stage (resign → FA → draft → camp → season). */
@@ -645,7 +671,8 @@ interface GameStore {
   /** Slot management for the picker. */
   openSaves: () => Promise<void>
   closeSaves: () => void
-  flush: () => Promise<void>
+  /** Commit the active career's autosave and wait for it; false = save failed. */
+  flush: () => Promise<boolean>
   setSlotError: (message: string | null) => void
   /** Load another slot over the current career (validated; never crosses data). */
   continueSlot: (slot: number) => Promise<void>
@@ -744,7 +771,8 @@ interface GameStore {
   markAllNewsRead: () => void
   showToast: (msg: string) => void
   clearToast: () => void
-  save: () => void
+  /** Persist the active career. Resolves TRUE only on a committed write (or when there is nothing to write). */
+  save: () => Promise<boolean>
   hydrate: () => Promise<void>
 }
 
@@ -886,6 +914,7 @@ export const useGame = create<GameStore>((set, get) => ({
   activeSlot: null,
   savesOpen: false,
   slotError: null,
+  busy: false,
   match: null,
   matchSeq: 0,
   gameDay: null,
@@ -1112,97 +1141,154 @@ export const useGame = create<GameStore>((set, get) => ({
     )
   },
 
-  startCareer: ({ name, path: chosenPath, archetype, teamId: chosenTeamId, startLevel = 0, seed, scenarioId, slot: chosenSlot }) => {
+  startCareer: async ({ name, path: chosenPath, archetype, teamId: chosenTeamId, startLevel = 0, seed, scenarioId, slot: chosenSlot }) => {
+    if (get().busy) {
+      get().showToast('Please wait for the current save action to finish.')
+      return
+    }
+    // Probes and the node calibration run have no durable storage (or are
+    // explicitly isolated), so nothing is persisted and occupancy never
+    // refuses them. A real "new career" from the picker claims storage.
+    const persist = autosaveEnabled()
     // Choose the target slot: the explicit one from the picker, else the first
     // free slot. Never silently overwrite an occupied slot.
-    const occupied = new Set(get().slots.filter((s) => s.occupied).map((s) => s.slot))
     let targetSlot: number | null = null
-    if (chosenSlot !== undefined) {
-      if (occupied.has(chosenSlot)) {
-        get().showToast(`Slot ${chosenSlot} already holds a career. Delete it or choose another slot.`)
+    if (persist) {
+      const occupied = new Set(get().slots.filter((s) => s.occupied).map((s) => s.slot))
+      if (chosenSlot !== undefined) {
+        if (!isValidSlot(chosenSlot)) {
+          get().showToast(`Slot ${String(chosenSlot)} is not a valid save slot.`)
+          return
+        }
+        if (occupied.has(chosenSlot)) {
+          get().showToast(`Slot ${chosenSlot} already holds a career. Delete it or choose another slot.`)
+          return
+        }
+        targetSlot = chosenSlot
+      } else {
+        targetSlot = SLOT_IDS.find((n) => !occupied.has(n)) ?? null
+      }
+      // Refuse BEFORE building a world: nothing to save, old runtime untouched.
+      if (targetSlot === null) {
+        get().showToast('All five save slots are full. Delete a slot before starting a new career.')
         return
       }
-      targetSlot = chosenSlot
     } else {
-      targetSlot = SLOT_IDS.find((n) => !occupied.has(n)) ?? null
+      // Probes and node calibration never persist and never refuse on occupancy.
+      targetSlot = chosenSlot !== undefined && isValidSlot(chosenSlot) ? chosenSlot : SLOT_IDS[0]
     }
-    world = buildWorld(seed ?? (Date.now() % 2147483647), getRealData())
-    // L12.16 H0: a new career starts with an empty league database and no honours.
-    statDb = newDatabase()
-    awards = newAwardHistory()
-    initAllPlaybooks()
-    // A scenario can override the path, the starting rung and the club.
-    const scenario = scenarioById(scenarioId)
-    const path = scenario.path ?? chosenPath
-    const teamId = scenario.forceLowestPrestige
-      ? [...NFL_TEAMS].sort((a, b) => a.prestige - b.prestige)[0].id
-      : chosenTeamId
-    const ladder = ladderFor(path)
-    const level = scenario.level ?? Math.max(minNflLevel(path), Math.min(ladder.length - 1, startLevel))
-    const tier = tierFor(path, level).tier
-    const resolvedTeam = world.byId[teamId]?.tier === tier ? teamId : 'BUF'
-    // Starting at a higher rung seeds the reputation needed to have earned it.
-    const seedRep: Reputation = { ...ZERO_REP }
-    for (const [k, v] of Object.entries(ladder[level].gate)) {
-      ;(seedRep as unknown as Record<string, number>)[k] = Math.max(
-        (seedRep as unknown as Record<string, number>)[k] ?? 0,
-        (v as number) + 2,
-      )
+
+    set({ busy: true })
+    const prev = captureRuntime(get)
+    try {
+      if (persist) {
+        // Commit the career we are about to leave BEFORE replacing the world.
+        const saved = await get().save()
+        if (!saved && prev.career) {
+          get().showToast('Your current career could not be saved, so a new one was not started.')
+          return
+        }
+      }
+      world = buildWorld(seed ?? (Date.now() % 2147483647), getRealData())
+      // L12.16 H0: a new career starts with an empty league database and no honours.
+      statDb = newDatabase()
+      awards = newAwardHistory()
+      initAllPlaybooks()
+      // A scenario can override the path, the starting rung and the club.
+      const scenario = scenarioById(scenarioId)
+      const path = scenario.path ?? chosenPath
+      const teamId = scenario.forceLowestPrestige
+        ? [...NFL_TEAMS].sort((a, b) => a.prestige - b.prestige)[0].id
+        : chosenTeamId
+      const ladder = ladderFor(path)
+      const level = scenario.level ?? Math.max(minNflLevel(path), Math.min(ladder.length - 1, startLevel))
+      const tier = tierFor(path, level).tier
+      const resolvedTeam = world.byId[teamId]?.tier === tier ? teamId : 'BUF'
+      // Starting at a higher rung seeds the reputation needed to have earned it.
+      const seedRep: Reputation = { ...ZERO_REP }
+      for (const [k, v] of Object.entries(ladder[level].gate)) {
+        ;(seedRep as unknown as Record<string, number>)[k] = Math.max(
+          (seedRep as unknown as Record<string, number>)[k] ?? 0,
+          (v as number) + 2,
+        )
+      }
+      let career: CareerState = {
+        gmName: name,
+        path,
+        archetype,
+        teamId: resolvedTeam,
+        season: world.season,
+        week: world.week,
+        reputation: seedRep,
+        skills: { ...ZERO_SKILLS },
+        level,
+        salary: salaryFor(path, level),
+        jobSecurity: 70,
+        unitFocus: path === 'coach' ? (archetype === 'def' ? 'def' : archetype === 'ceo' ? 'both' : 'off') : undefined,
+        ownerExpectation: ownerMandate(resolvedTeam, tier),
+        tier,
+        recommendationsMade: 0,
+        hits: 0,
+        misses: 0,
+        seasonRecs: 0,
+        seasonHits: 0,
+        ledger: [],
+        contacts: makeContacts(makeRng(world.seed + world.season * 77), 'National'),
+        earnedTraits: [],
+        mentor: mentorFor(world, resolvedTeam),
+        weekFlags: {},
+        tree: [],
+        history: [],
+        seasonMoments: [],
+        ambitions: [],
+      }
+      career = applyScenario(world, career, scenario)
+      career.seasonQuestion = makeSeasonQuestion(world, career)
+      career.devBaseline = snapshotDevBaseline(world, career)
+      // L11.5 Q14: the opening inbox was written for Buffalo; re-point it at this club.
+      retargetSeedNews(world, career.teamId)
+      pendingBackupRepair = false
+      set({
+        career,
+        activeTeamId: resolvedTeam,
+        screen: 'career',
+        scoutingPoints: MAX_SCOUT_POINTS,
+        offers: [],
+        modal: 'none',
+        summary: null,
+        pendingSave: null,
+        saveInfo: null,
+        saveError: null,
+        match: null,
+        gameDay: null,
+        activeSlot: persist ? targetSlot : null,
+        savesOpen: false,
+        slotError: null,
+        tick: get().tick + 1,
+      })
+      if (persist && targetSlot !== null) {
+        // Claim the slot atomically: two tabs racing cannot both take it, and the
+        // occupancy check reads stored bytes rather than possibly-stale UI state.
+        const payload: SaveData = { world, career, activeTeamId: resolvedTeam, screen: 'career', readNews: {}, statDb, awards }
+        try {
+          await saveSlot(targetSlot, payload, { createOnly: true, summary: slotSummaryFromSave(payload) })
+        } catch (e) {
+          applyRuntime(set, prev)
+          const message =
+            e instanceof PersistenceError && e.code === 'occupied'
+              ? `Slot ${targetSlot} already holds a career. Delete it or choose another slot.`
+              : persistMessage(e)
+          const slots = await readSlots().catch(() => get().slots)
+          set({ slots, slotError: message, tick: get().tick + 1 })
+          get().showToast(message)
+          return
+        }
+        const slots = await readSlots().catch(() => get().slots)
+        set({ slots, tick: get().tick + 1 })
+      }
+    } finally {
+      set({ busy: false })
     }
-    let career: CareerState = {
-      gmName: name,
-      path,
-      archetype,
-      teamId: resolvedTeam,
-      season: world.season,
-      week: world.week,
-      reputation: seedRep,
-      skills: { ...ZERO_SKILLS },
-      level,
-      salary: salaryFor(path, level),
-      jobSecurity: 70,
-      unitFocus: path === 'coach' ? (archetype === 'def' ? 'def' : archetype === 'ceo' ? 'both' : 'off') : undefined,
-      ownerExpectation: ownerMandate(resolvedTeam, tier),
-      tier,
-      recommendationsMade: 0,
-      hits: 0,
-      misses: 0,
-      seasonRecs: 0,
-      seasonHits: 0,
-      ledger: [],
-      contacts: makeContacts(makeRng(world.seed + world.season * 77), 'National'),
-      earnedTraits: [],
-      mentor: mentorFor(world, resolvedTeam),
-      weekFlags: {},
-      tree: [],
-      history: [],
-      seasonMoments: [],
-      ambitions: [],
-    }
-    career = applyScenario(world, career, scenario)
-    career.seasonQuestion = makeSeasonQuestion(world, career)
-    career.devBaseline = snapshotDevBaseline(world, career)
-    // L11.5 Q14: the opening inbox was written for Buffalo; re-point it at this club.
-    retargetSeedNews(world, career.teamId)
-    set({
-      career,
-      activeTeamId: resolvedTeam,
-      screen: 'career',
-      scoutingPoints: MAX_SCOUT_POINTS,
-      offers: [],
-      modal: 'none',
-      summary: null,
-      pendingSave: null,
-      saveInfo: null,
-      saveError: null,
-      match: null,
-      gameDay: null,
-      activeSlot: targetSlot,
-      savesOpen: false,
-      slotError: null,
-      tick: get().tick + 1,
-    })
-    get().save()
   },
 
   resetCareer: () => {
@@ -1885,40 +1971,61 @@ export const useGame = create<GameStore>((set, get) => ({
     const p = get().pendingSave
     if (!p || !p.career) return
     const slot = get().activeSlot
+    // If the pending card itself came from a backup, keep the first autosave from
+    // rotating the damaged primary over the healthy backup.
+    if (get().saveInfo?.usedBackup) pendingBackupRepair = true
     set({ ...restoreSaveData(p), tick: get().tick + 1 })
     if (slot !== null) void persistActiveSlot(slot).catch(() => undefined)
     get().showToast('Career resumed.')
   },
 
   continueSlot: async (slot) => {
-    const state = get()
-    if (state.gameDay) {
+    if (!isValidSlot(slot)) {
+      set({ slotError: `Slot ${String(slot)} is not a valid save slot.`, tick: get().tick + 1 })
+      return
+    }
+    if (get().gameDay) {
       get().showToast('Finish or cancel the game in progress before switching careers.')
       return
     }
-    // Commit the current career's autosave before loading another slot.
-    state.save()
-    await flushPersistence()
-    let load: SlotLoad<SaveData>
-    try {
-      load = await loadSlot<SaveData>(slot, isSaveValid)
-    } catch (e) {
-      set({ slotError: persistMessage(e), tick: get().tick + 1 })
+    if (get().busy) {
+      get().showToast('Please wait for the current save action to finish.')
       return
     }
-    if (!load.payload || !load.payload.career) {
-      set({ slotError: slotLoadMessage(slot, load), tick: get().tick + 1 })
-      return
-    }
-    set({ ...restoreSaveData(load.payload), activeSlot: slot, tick: get().tick + 1 })
+    set({ busy: true })
     try {
-      await persistActiveSlot(slot)
-      if (load.usedBackup) await markSlotRecovered(slot)
-      set({ slots: await readSlots(), tick: get().tick + 1 })
-    } catch {
-      /* pointer/recovery metadata is best effort */
+      // Commit the current career's autosave before loading another slot, and
+      // abort the switch if it cannot be written (never lose unsaved work).
+      const saved = await get().save()
+      if (!saved) {
+        set({ slotError: get().slotError ?? 'Your current career could not be saved, so the switch was cancelled.', tick: get().tick + 1 })
+        return
+      }
+      await flushPersistence()
+      let load: SlotLoad<SaveData>
+      try {
+        load = await loadSlot<SaveData>(slot, isSaveValid)
+      } catch (e) {
+        set({ slotError: persistMessage(e), tick: get().tick + 1 })
+        return
+      }
+      if (!load.payload || !load.payload.career) {
+        set({ slotError: slotLoadMessage(slot, load), tick: get().tick + 1 })
+        return
+      }
+      pendingBackupRepair = load.usedBackup
+      set({ ...restoreSaveData(load.payload), activeSlot: slot, tick: get().tick + 1 })
+      try {
+        await persistActiveSlot(slot)
+        if (load.usedBackup) await markSlotRecovered(slot)
+        set({ slots: await readSlots(), tick: get().tick + 1 })
+      } catch {
+        /* pointer/recovery metadata is best effort */
+      }
+      get().showToast(load.usedBackup ? `Career in slot ${slot} recovered from its backup.` : `Career in slot ${slot} resumed.`)
+    } finally {
+      set({ busy: false })
     }
-    get().showToast(load.usedBackup ? `Career in slot ${slot} recovered from its backup.` : `Career in slot ${slot} resumed.`)
   },
 
   discardSave: () => {
@@ -1931,17 +2038,33 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('Finish or cancel the game in progress before opening your saves.')
       return
     }
-    // Finish the current autosave before showing the picker.
-    get().save()
-    await flushPersistence()
-    set({ savesOpen: true, slotError: null, tick: get().tick + 1 })
+    if (get().busy) {
+      get().showToast('Please wait for the current save action to finish.')
+      return
+    }
+    set({ busy: true })
+    try {
+      // Finish the current autosave before showing the picker; abort on failure
+      // so a broken save is never quietly hidden behind the picker.
+      const saved = await get().save()
+      if (!saved) {
+        set({ slotError: get().slotError ?? 'Your current career could not be saved.', tick: get().tick + 1 })
+        return
+      }
+      await flushPersistence()
+      const slots = await readSlots().catch(() => get().slots)
+      set({ savesOpen: true, slots, slotError: null, tick: get().tick + 1 })
+    } finally {
+      set({ busy: false })
+    }
   },
 
   closeSaves: () => set({ savesOpen: false, slotError: null, tick: get().tick + 1 }),
 
   flush: async () => {
-    get().save()
+    const ok = await get().save()
     await flushPersistence()
+    return ok
   },
 
   setSlotError: (slotError) => set({ slotError }),
@@ -1957,23 +2080,69 @@ export const useGame = create<GameStore>((set, get) => ({
   },
 
   deleteSlot: async (slot) => {
-    try {
-      await persistDeleteSlot(slot)
-    } catch (e) {
-      set({ slotError: persistMessage(e), tick: get().tick + 1 })
+    if (!isValidSlot(slot)) {
+      set({ slotError: `Slot ${String(slot)} is not a valid save slot.`, tick: get().tick + 1 })
       return
     }
-    const wasActive = get().activeSlot === slot
-    const next = wasActive
-      ? { career: null, activeSlot: null, pendingSave: null, saveInfo: null, match: null, gameDay: null, modal: 'none' as const, summary: null, offers: [] }
-      : {}
-    set({ ...next, slots: await readSlots(), tick: get().tick + 1 })
-    get().showToast(`Slot ${slot} deleted.`)
+    if (get().busy) {
+      get().showToast('Please wait for the current save action to finish.')
+      return
+    }
+    set({ busy: true })
+    try {
+      if (get().activeSlot !== slot) {
+        // Deleting another slot must not silently drop the active career's latest
+        // edits; commit them first and abort if that fails.
+        const saved = await get().save()
+        if (!saved) {
+          set({ slotError: get().slotError ?? 'Your current career could not be saved.', tick: get().tick + 1 })
+          return
+        }
+      }
+      try {
+        await persistDeleteSlot(slot)
+      } catch (e) {
+        set({ slotError: persistMessage(e), tick: get().tick + 1 })
+        return
+      }
+      const wasActive = get().activeSlot === slot
+      const next = wasActive
+        ? { career: null, activeSlot: null, pendingSave: null, saveInfo: null, match: null, gameDay: null, modal: 'none' as const, summary: null, offers: [] }
+        : {}
+      set({ ...next, slots: await readSlots().catch(() => get().slots), tick: get().tick + 1 })
+      get().showToast(`Slot ${slot} deleted.`)
+    } finally {
+      set({ busy: false })
+    }
   },
 
-  exportSlotText: (slot) => exportSlot(slot),
+  exportSlotText: async (slot) => {
+    if (!isValidSlot(slot)) {
+      set({ slotError: `Slot ${String(slot)} is not a valid save slot.`, tick: get().tick + 1 })
+      return null
+    }
+    // Flush the live career first so the export includes the latest mutations
+    // rather than whatever the last autosave happened to reach disk with.
+    if (get().activeSlot === slot) {
+      const ok = await get().save()
+      if (!ok) {
+        set({ slotError: get().slotError ?? 'Your career could not be saved, so the export was cancelled.', tick: get().tick + 1 })
+        return null
+      }
+      await flushPersistence()
+    }
+    return exportSlot(slot)
+  },
 
   importSlotText: async (text, slot) => {
+    if (!isValidSlot(slot)) {
+      set({ slotError: `Slot ${String(slot)} is not a valid save slot.`, tick: get().tick + 1 })
+      return
+    }
+    if (get().busy) {
+      get().showToast('Please wait for the current save action to finish.')
+      return
+    }
     let parsed
     try {
       parsed = parseImport(text)
@@ -1986,12 +2155,26 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const data = parsed.data as SaveData
+    set({ busy: true })
     try {
+      const targetIsActive = get().activeSlot === slot
+      // Import into the EXACT chosen slot (the UI has already confirmed an
+      // overwrite); other slots are never touched.
       await saveSlot(slot, data, { label: parsed.label, summary: slotSummaryFromSave(data) })
-      set({ slots: await readSlots(), tick: get().tick + 1 })
+      // If we just overwrote the slot the live career autosaves to, switch the
+      // running world to the imported career — otherwise the next autosave would
+      // silently erase what was just imported.
+      if (targetIsActive && get().career) {
+        pendingBackupRepair = false
+        set({ ...restoreSaveData(data), activeSlot: slot, tick: get().tick + 1 })
+        await persistActiveSlot(slot).catch(() => undefined)
+      }
+      set({ slots: await readSlots().catch(() => get().slots), tick: get().tick + 1 })
       get().showToast(`Save imported into slot ${slot}.`)
     } catch (e) {
       set({ slotError: persistMessage(e), tick: get().tick + 1 })
+    } finally {
+      set({ busy: false })
     }
   },
 
@@ -3785,20 +3968,38 @@ export const useGame = create<GameStore>((set, get) => ({
 
   save: () => {
     const { career, activeTeamId, screen, readNews, activeSlot } = get()
-    // Autosave writes ONLY the active slot. Before hydrate there is none.
-    if (activeSlot === null) return
+    // Never write a placeholder/unloaded career, and never write before a slot
+    // is assigned. Title-screen reads (hydrate / continueSlot / openSaves /
+    // flush) must therefore leave the stored primary and backup byte-identical.
+    if (activeSlot === null || !career) return Promise.resolve(true)
+    // Probes and node calibration do not touch storage at all.
+    if (!autosaveEnabled()) return Promise.resolve(true)
     const payload: SaveData = { world, career, activeTeamId, screen, readNews, statDb, awards }
-    const summary: SlotSummaryPatch = career ? slotSummaryFromSave(payload) : {}
-    void saveSlot(activeSlot, payload, { summary }).catch((e) => {
-      const message = persistMessage(e)
-      set({ slotError: message, tick: get().tick + 1 })
-      get().showToast(message)
-    })
+    const summary: SlotSummaryPatch = slotSummaryFromSave(payload)
+    // The first save after a backup recovery must not rotate the damaged primary
+    // over the healthy backup.
+    const noRotate = pendingBackupRepair
+    return saveSlot(activeSlot, payload, { summary, ...(noRotate ? { noRotate: true } : {}) })
+      .then(async () => {
+        if (noRotate) pendingBackupRepair = false
+        // Refresh the picker's occupancy/summary from the committed bytes.
+        const slots = await readSlots().catch(() => get().slots)
+        set({ slots })
+        return true
+      })
+      .catch((e) => {
+        const message = persistMessage(e)
+        set({ slotError: message, tick: get().tick + 1 })
+        get().showToast(message)
+        return false
+      })
   },
 
   exportSaveText: async () => {
     const slot = get().activeSlot
-    return slot === null ? null : exportSlot(slot)
+    if (slot === null) return null
+    // Route through exportSlotText so the live career is flushed first.
+    return get().exportSlotText(slot)
   },
 
   importSaveText: async (text) => {
@@ -3815,20 +4016,27 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     const data = parsed.data as SaveData
     // Import into an empty slot by default; never overwrite an occupied slot.
-    let slot = get().activeSlot
     const occupiedAt = (n: number) => get().slots.find((s) => s.slot === n)?.occupied ?? false
-    if (slot === null || occupiedAt(slot)) slot = SLOT_IDS.find((n) => !occupiedAt(n)) ?? null
-    if (slot === null) {
+    const candidates = SLOT_IDS.filter((n) => !occupiedAt(n))
+    if (!candidates.length) {
       get().showToast('All five slots are full. Delete a slot before importing.')
       return
     }
-    try {
-      await saveSlot(slot, data, { label: parsed.label, summary: slotSummaryFromSave(data) })
-      set({ slots: await readSlots(), tick: get().tick + 1 })
-      get().showToast(`Save imported into slot ${slot}.`)
-    } catch (e) {
-      get().showToast(persistMessage(e))
+    for (const candidate of candidates) {
+      try {
+        // createOnly makes the empty check atomic, so a concurrent save can't be
+        // clobbered by the import.
+        await saveSlot(candidate, data, { createOnly: true, label: parsed.label, summary: slotSummaryFromSave(data) })
+        set({ slots: await readSlots().catch(() => get().slots), tick: get().tick + 1 })
+        get().showToast(`Save imported into slot ${candidate}.`)
+        return
+      } catch (e) {
+        if (e instanceof PersistenceError && e.code === 'occupied') continue
+        get().showToast(persistMessage(e))
+        return
+      }
     }
+    get().showToast('All five slots are full. Delete a slot before importing.')
   },
 
   hydrate: async () => {
@@ -3840,7 +4048,10 @@ export const useGame = create<GameStore>((set, get) => ({
 
     // One-time, idempotent migration of a pre-slots save into the first free slot.
     try {
-      const migration = await migrateLegacy((data, savedAt, label) => summarizeRaw(data, savedAt, label))
+      const migration = await migrateLegacy(
+        (data, savedAt, label) => summarizeRaw(data, savedAt, label),
+        { validate: (data) => isSaveValid(data as SaveData) },
+      )
       if (migration.error) saveError = migration.error
     } catch (e) {
       saveError = persistMessage(e)
@@ -3872,6 +4083,7 @@ export const useGame = create<GameStore>((set, get) => ({
     }
 
     if (load.payload && load.payload.career) {
+      pendingBackupRepair = load.usedBackup
       if (load.usedBackup) {
         saveError = saveError ?? 'Recovered your career from its backup — the last save was damaged.'
         try {
@@ -4405,6 +4617,79 @@ function slotLoadMessage(slot: number, load: SlotLoad<SaveData>): string {
     return `Slot ${slot} is damaged and its backup could not be read. The slot was left untouched.`
   }
   return `Slot ${slot} is empty.`
+}
+
+/** Everything a failed "new career" claim must put back, byte-for-byte. */
+interface RuntimeSnapshot {
+  world: World
+  statDb: CareerDatabase
+  awards: AwardHistory
+  career: CareerState | null
+  activeTeamId: string
+  screen: ScreenId
+  readNews: Record<string, boolean>
+  activeSlot: number | null
+  savesOpen: boolean
+  pendingSave: SaveData | null
+  saveInfo: SaveInfo | null
+  saveError: string | null
+  slots: SlotView[]
+  match: GameSim | null
+  gameDay: GameDay | null
+  scoutingPoints: number
+  offers: JobOffer[]
+  modal: GameStore['modal']
+  summary: SeasonSummary | null
+}
+
+function captureRuntime(get: () => GameStore): RuntimeSnapshot {
+  const s = get()
+  return {
+    world,
+    statDb,
+    awards,
+    career: s.career,
+    activeTeamId: s.activeTeamId,
+    screen: s.screen,
+    readNews: s.readNews,
+    activeSlot: s.activeSlot,
+    savesOpen: s.savesOpen,
+    pendingSave: s.pendingSave,
+    saveInfo: s.saveInfo,
+    saveError: s.saveError,
+    slots: s.slots,
+    match: s.match,
+    gameDay: s.gameDay,
+    scoutingPoints: s.scoutingPoints,
+    offers: s.offers,
+    modal: s.modal,
+    summary: s.summary,
+  }
+}
+
+/** Restore a snapshot after a failed claim, so the old runtime is untouched. */
+function applyRuntime(set: (partial: Partial<GameStore>) => void, snap: RuntimeSnapshot): void {
+  world = snap.world
+  statDb = snap.statDb
+  awards = snap.awards
+  set({
+    career: snap.career,
+    activeTeamId: snap.activeTeamId,
+    screen: snap.screen,
+    readNews: snap.readNews,
+    activeSlot: snap.activeSlot,
+    savesOpen: snap.savesOpen,
+    pendingSave: snap.pendingSave,
+    saveInfo: snap.saveInfo,
+    saveError: snap.saveError,
+    slots: snap.slots,
+    match: snap.match,
+    gameDay: snap.gameDay,
+    scoutingPoints: snap.scoutingPoints,
+    offers: snap.offers,
+    modal: snap.modal,
+    summary: snap.summary,
+  })
 }
 
 /** Put a validated payload's world/career into the store, clearing stale runtime. */

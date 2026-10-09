@@ -49,6 +49,8 @@ export type PersistenceErrorCode =
   | 'transaction'
   | 'validation'
   | 'notfound'
+  | 'occupied'
+  | 'migrated'
   | 'unknown'
 
 /** A failure the UI can explain honestly instead of pretending a save worked. */
@@ -107,6 +109,19 @@ export interface SaveSlotOptions {
   summary?: SlotSummaryPatch
   /** Make this the active slot in the shared pointer. */
   setActive?: boolean
+  /**
+   * Only write if the slot is empty (primary, backup and metadata all absent),
+   * checked INSIDE the write transaction. Rejects with code `occupied`
+   * otherwise. This is the authoritative protection for "start a new career" —
+   * even two tabs racing cannot both claim the same slot.
+   */
+  createOnly?: boolean
+  /**
+   * Overwrite the primary WITHOUT rotating the old primary into the backup.
+   * Used for the first save after a slot was recovered from its backup, so a
+   * damaged primary is never rotated onto the healthy backup.
+   */
+  noRotate?: boolean
 }
 
 export interface UnwrappedSave<T = unknown> {
@@ -136,6 +151,15 @@ function idbFactory(): IDBFactory {
   const factory = (globalThis as { indexedDB?: IDBFactory }).indexedDB
   if (!factory) throw new PersistenceError('unavailable', 'Saves are unavailable in this browser.')
   return factory
+}
+
+/**
+ * Whether durable storage exists in this environment. Node-side dev probes and
+ * calibration runs have no IndexedDB; callers use this to skip persistence
+ * entirely rather than treating "no storage" as a failed save.
+ */
+export function persistenceAvailable(): boolean {
+  return !!(globalThis as { indexedDB?: IDBFactory }).indexedDB
 }
 
 function mapError(e: unknown): PersistenceError {
@@ -210,12 +234,20 @@ function txReadAll(keys: string[]): Promise<Map<string, unknown>> {
   })
 }
 
+/** Controls a write from inside a (possibly async) request handler. */
+interface WriteControl {
+  /** Abort the transaction and reject with `e` (mapped through `mapError`). */
+  fail: (e: unknown) => void
+}
+
 /**
  * Run a write task. `task` issues its requests synchronously and may chain
  * further requests from an `onsuccess` handler (still inside the transaction).
- * Resolves only on COMMIT; rejects on error/abort.
+ * Resolves only on COMMIT; rejects on error/abort. A guard inside a request
+ * handler can call `ctl.fail(e)` to abort the whole transaction — used by the
+ * `createOnly` claim, whose occupancy check must be atomic.
  */
-function runWrite(task: (store: IDBObjectStore) => void): Promise<void> {
+function runWrite(task: (store: IDBObjectStore, ctl: WriteControl) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     openDb()
       .then((db) => {
@@ -226,18 +258,30 @@ function runWrite(task: (store: IDBObjectStore) => void): Promise<void> {
           reject(mapError(e))
           return
         }
-        tx.oncomplete = () => resolve()
-        tx.onerror = () => reject(mapError(tx.error))
-        tx.onabort = () => reject(mapError(tx.error))
+        let settled = false
+        const ctl: WriteControl = {
+          fail: (e: unknown) => {
+            if (settled) return
+            settled = true
+            try {
+              tx.abort()
+            } catch {
+              /* transaction already gone */
+            }
+            reject(mapError(e))
+          },
+        }
+        tx.oncomplete = () => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+        tx.onerror = () => ctl.fail(tx.error)
+        tx.onabort = () => ctl.fail(tx.error ?? new PersistenceError('transaction', 'The save could not be written.'))
         try {
-          task(tx.objectStore(STORE))
+          task(tx.objectStore(STORE), ctl)
         } catch (e) {
-          try {
-            tx.abort()
-          } catch {
-            /* transaction already gone */
-          }
-          reject(mapError(e))
+          ctl.fail(e)
         }
       })
       .catch(reject)
@@ -322,13 +366,17 @@ export function cleanLabel(label: string, fallback: string): string {
 /** Every slot row (occupied flag + small metadata) in one readonly read. */
 export async function readSlots(): Promise<SlotView[]> {
   const keys: string[] = []
-  for (const n of SLOT_IDS) keys.push(slotKey(n), slotMetaKey(n))
+  for (const n of SLOT_IDS) keys.push(slotKey(n), slotBackupKey(n), slotMetaKey(n))
   const values = await txReadAll(keys)
   return SLOT_IDS.map((slot) => {
     const raw = values.get(slotMetaKey(slot))
+    // A slot counts as occupied if ANY payload survives — a primary, a backup,
+    // or even just its metadata — so a damaged/backup-only slot is never
+    // presented as empty and can never be silently overwritten.
+    const occupied = values.has(slotKey(slot)) || values.has(slotBackupKey(slot)) || raw !== undefined
     return {
       slot,
-      occupied: values.has(slotKey(slot)),
+      occupied,
       meta: raw === undefined ? null : normalizeMeta(raw, `Slot ${slot}`),
     }
   })
@@ -426,29 +474,56 @@ export async function saveSlot<T>(slot: number, data: T, opts: SaveSlotOptions =
   const patch = opts.summary ?? {}
   return enqueue(async () => {
     if ((slotEpoch.get(slot) ?? 0) !== captured) return // slot deleted while queued
-    await runWrite((store) => {
+    await runWrite((store, ctl) => {
       const pk = slotKey(slot)
       const bk = slotBackupKey(slot)
       const mk = slotMetaKey(slot)
+      const applyMeta = (rawMeta: unknown, existingPrimary: unknown) => {
+        const meta = normalizeMeta(rawMeta, `Slot ${slot}`)
+        if (label !== undefined) meta.label = label
+        if (patch.managerName !== undefined) meta.managerName = patch.managerName
+        if (patch.roleTitle !== undefined) meta.roleTitle = patch.roleTitle
+        if (patch.teamName !== undefined) meta.teamName = patch.teamName
+        if (patch.season !== undefined) meta.season = patch.season
+        if (patch.week !== undefined) meta.week = patch.week
+        if (patch.tier !== undefined) meta.tier = patch.tier
+        meta.savedAt = savedAt
+        delete meta.recoveredAt // a fresh, healthy save clears the recovery flag
+        store.put(meta, mk)
+        // createOnly backfills a healthy rolling backup with the first payload.
+        if (existingPrimary !== undefined && !opts.noRotate) store.put(existingPrimary, bk)
+        else if (existingPrimary === undefined) store.put(envelope, bk)
+        store.put(envelope, pk)
+        if (opts.setActive) store.put(slot, ACTIVE_KEY)
+      }
       const getPrimary = store.get(pk)
       getPrimary.onsuccess = () => {
-        if (getPrimary.result !== undefined) store.put(getPrimary.result, bk)
-        store.put(envelope, pk)
-        const getMeta = store.get(mk)
-        getMeta.onsuccess = () => {
-          const meta = normalizeMeta(getMeta.result, `Slot ${slot}`)
-          if (label !== undefined) meta.label = label
-          if (patch.managerName !== undefined) meta.managerName = patch.managerName
-          if (patch.roleTitle !== undefined) meta.roleTitle = patch.roleTitle
-          if (patch.teamName !== undefined) meta.teamName = patch.teamName
-          if (patch.season !== undefined) meta.season = patch.season
-          if (patch.week !== undefined) meta.week = patch.week
-          if (patch.tier !== undefined) meta.tier = patch.tier
-          meta.savedAt = savedAt
-          delete meta.recoveredAt // a fresh, healthy save clears the recovery flag
-          store.put(meta, mk)
-          if (opts.setActive) store.put(slot, ACTIVE_KEY)
+        const existingPrimary = getPrimary.result
+        if (opts.createOnly && existingPrimary !== undefined) {
+          ctl.fail(new PersistenceError('occupied', `Slot ${slot} already holds a career.`))
+          return
         }
+        if (opts.createOnly) {
+          // Reserve atomically: primary, backup AND metadata must all be empty.
+          const getBackup = store.get(bk)
+          getBackup.onsuccess = () => {
+            if (getBackup.result !== undefined) {
+              ctl.fail(new PersistenceError('occupied', `Slot ${slot} already holds a career.`))
+              return
+            }
+            const getMeta = store.get(mk)
+            getMeta.onsuccess = () => {
+              if (getMeta.result !== undefined) {
+                ctl.fail(new PersistenceError('occupied', `Slot ${slot} already holds a career.`))
+                return
+              }
+              applyMeta(undefined, undefined)
+            }
+          }
+          return
+        }
+        const getMeta = store.get(mk)
+        getMeta.onsuccess = () => applyMeta(getMeta.result, existingPrimary)
       }
     })
   })
@@ -574,48 +649,131 @@ export interface LegacyMigrationResult {
   migrated: boolean
   slot: number | null
   error: string | null
+  /** True when legacy data exists but is in a format this build must not touch. */
+  unsupported?: boolean
+}
+
+/** Durable record of a completed migration (target slot + whether source is preserved). */
+interface MigrationMarker {
+  v: 1
+  done: true
+  target: number
+  preserveSource: boolean
+}
+
+function readMarker(raw: unknown): MigrationMarker | null {
+  if (raw === true) return { v: 1, done: true, target: 0, preserveSource: false }
+  if (raw && typeof raw === 'object' && (raw as MigrationMarker).done === true) {
+    const m = raw as MigrationMarker
+    return {
+      v: 1,
+      done: true,
+      target: typeof m.target === 'number' ? m.target : 0,
+      preserveSource: m.preserveSource === true,
+    }
+  }
+  return null
+}
+
+/** True when a stored/legacy envelope was written by a NEWER game schema. */
+function isFuture(u: UnwrappedSave | null): boolean {
+  return !!u && u.schemaVersion > SAVE_SCHEMA_VERSION
+}
+
+export interface MigrateLegacyOptions<T = unknown> {
+  /** Structural validation; only validated payloads are copied into a slot. */
+  validate?: (data: T) => boolean
 }
 
 /**
  * Move a pre-slots career (`career` + `career_backup`) into the first free
- * slot, exactly once. The primary AND backup are copied before the migration
- * flag is set; the legacy keys are only cleared after both copies commit. If
- * there is no free slot nothing is written and nothing is cleared, so the user
- * can free a slot and retry. Already-migrated data is never re-imported, so a
- * deleted migrated career cannot resurrect on reload.
+ * slot, exactly once, without ever destroying data it cannot safely migrate.
+ *
+ *  · The chosen slot's occupancy check and the copy (primary + backup +
+ *    metadata + the completion marker) happen in ONE committed transaction, so
+ *    a crash can neither duplicate the career nor half-claim a slot. Two tabs
+ *    racing for the same free slot are serialised by IndexedDB and the loser
+ *    retries the next free slot.
+ *  · The legacy source keys are only removed after that transaction commits,
+ *    and only when every present source envelope was actually migrated. A
+ *    corrupt primary or a backup-only source is preserved in place.
+ *  · A legacy envelope from a NEWER schema is never re-enveloped as this
+ *    build's format: migration is refused, nothing is written or deleted, and
+ *    the caller is told the data is unsupported.
  */
 export async function migrateLegacy<T>(
   summarize: (data: unknown, savedAt: number, label: string) => SlotMeta,
+  options: MigrateLegacyOptions<T> = {},
 ): Promise<LegacyMigrationResult> {
-  const slotKeys = SLOT_IDS.map((n) => slotKey(n))
-  const values = await txReadAll([MIGRATION_KEY, LEGACY_KEY, LEGACY_BACKUP_KEY, ...slotKeys])
-  const done = values.get(MIGRATION_KEY) === true
+  const readKeys = [MIGRATION_KEY, LEGACY_KEY, LEGACY_BACKUP_KEY]
+  for (const n of SLOT_IDS) readKeys.push(slotKey(n), slotBackupKey(n), slotMetaKey(n))
+  const values = await txReadAll(readKeys)
+  const marker = readMarker(values.get(MIGRATION_KEY))
   const legacyPrimary = values.get(LEGACY_KEY)
   const legacyBackup = values.get(LEGACY_BACKUP_KEY)
 
-  if (done) {
-    // A crash between setting the flag and clearing the source: finish the job.
+  if (marker) {
+    // A crash between the copy commit and clearing the source: finish the job,
+    // but never delete a preserved/source we deliberately kept or a future one.
     if (legacyPrimary !== undefined || legacyBackup !== undefined) {
-      await runWrite((store) => {
-        store.delete(LEGACY_KEY)
-        store.delete(LEGACY_BACKUP_KEY)
-      })
+      const primary = legacyPrimary === undefined ? null : unwrapEnvelope<T>(legacyPrimary)
+      const backup = legacyBackup === undefined ? null : unwrapEnvelope<T>(legacyBackup)
+      if (!marker.preserveSource && !isFuture(primary) && !isFuture(backup)) {
+        await runWrite((store) => {
+          store.delete(LEGACY_KEY)
+          store.delete(LEGACY_BACKUP_KEY)
+        })
+      }
     }
-    return { ran: false, migrated: false, slot: null, error: null }
+    return { ran: false, migrated: false, slot: marker.target || null, error: null }
   }
 
   const primary = legacyPrimary === undefined ? null : unwrapEnvelope<T>(legacyPrimary)
   const backup = legacyBackup === undefined ? null : unwrapEnvelope<T>(legacyBackup)
 
   if (!primary && !backup) {
-    await runWrite((store) => {
-      store.put(true, MIGRATION_KEY)
-    })
+    await writeMarker(0, false)
     return { ran: true, migrated: false, slot: null, error: null }
   }
 
-  const free = SLOT_IDS.find((n) => !values.has(slotKey(n)))
-  if (free === undefined) {
+  // Never relabel or accept a newer-format envelope: leave both in place.
+  if (isFuture(primary) || isFuture(backup)) {
+    return {
+      ran: true,
+      migrated: false,
+      slot: null,
+      error: 'Your existing save was made by a newer version of the game. It was left untouched — update the game to load it.',
+      unsupported: true,
+    }
+  }
+
+  const valid = options.validate ?? (() => true)
+  const primaryUsable = !!primary && valid(primary.data as T)
+  const backupUsable = !!backup && valid(backup.data as T)
+  // Anything present that we cannot migrate (corrupt/invalid) must be preserved.
+  const preserveSource = (!!primary && !primaryUsable) || (!!backup && !backupUsable)
+
+  if (!primaryUsable && !backupUsable) {
+    // Nothing usable: keep the source exactly as it is and stop retrying.
+    await writeMarker(0, true)
+    return {
+      ran: true,
+      migrated: false,
+      slot: null,
+      error: 'Your existing save could not be read, so it was left in place. Delete a save slot and reload to try again.',
+    }
+  }
+
+  const primaryTarget = primaryUsable ? primary! : backup!
+  const backupTarget = backupUsable ? backup! : null
+  const source = primaryTarget
+  const savedAt = source.savedAt || backupTarget?.savedAt || Date.now()
+  const label = cleanLabel(source.label ?? '', `Slot ${SLOT_IDS[0]}`)
+  const meta = summarize(primaryTarget.data, savedAt, label)
+  meta.label = label
+
+  const candidates = SLOT_IDS.filter((n) => !values.has(slotKey(n)) && !values.has(slotBackupKey(n)) && !values.has(slotMetaKey(n)))
+  if (!candidates.length) {
     return {
       ran: true,
       migrated: false,
@@ -624,33 +782,109 @@ export async function migrateLegacy<T>(
     }
   }
 
-  const primaryData = primary?.data ?? backup?.data
-  const source = primary ?? backup
-  const savedAt = source?.savedAt ?? Date.now()
-  const label = cleanLabel(source?.label ?? '', `Slot ${free}`)
-  const meta = summarize(primaryData, savedAt, label)
-  meta.label = label
-
-  // Copy primary + backup first (each write commits), then mark done, then clear.
-  await saveSlotPayload(free, 'primary', primaryData, savedAt)
-  if (backup) await saveSlotPayload(free, 'backup', backup.data, backup.savedAt)
-  await runWrite((store) => {
-    store.put(meta, slotMetaKey(free))
-    store.put(true, MIGRATION_KEY)
-  })
-  await runWrite((store) => {
-    store.delete(LEGACY_KEY)
-    store.delete(LEGACY_BACKUP_KEY)
-  })
-  return { ran: true, migrated: true, slot: free, error: null }
+  for (const candidate of candidates) {
+    try {
+      await claimMigratedSlot(candidate, primaryTarget, backupTarget, meta, preserveSource)
+      if (!preserveSource) {
+        await runWrite((store) => {
+          store.delete(LEGACY_KEY)
+          store.delete(LEGACY_BACKUP_KEY)
+        })
+      }
+      return {
+        ran: true,
+        migrated: true,
+        slot: candidate,
+        error: preserveSource
+          ? `Part of your existing save was unreadable and was left in place; the readable data was moved to slot ${candidate}.`
+          : null,
+      }
+    } catch (e) {
+      // Another tab claimed this slot first — try the next free one.
+      if (e instanceof PersistenceError && e.code === 'occupied') continue
+      // Another tab completed the whole migration while we were choosing.
+      if (e instanceof PersistenceError && e.code === 'migrated') {
+        return { ran: false, migrated: false, slot: readMarker((await txReadAll([MIGRATION_KEY])).get(MIGRATION_KEY))?.target || null, error: null }
+      }
+      throw e
+    }
+  }
+  return {
+    ran: true,
+    migrated: false,
+    slot: null,
+    error: 'Every save slot is full, so your existing career could not be moved. Delete a slot and reload to finish the upgrade.',
+  }
 }
 
-/** Low-level slot payload write used by the migration copy (no rotation). */
-async function saveSlotPayload<T>(slot: number, target: 'primary' | 'backup', data: T, savedAt: number): Promise<void> {
-  const envelope: SaveEnvelope<T> = { schemaVersion: SAVE_SCHEMA_VERSION, savedAt, data }
+/** Persist the completion marker on its own (used when there is nothing to copy). */
+async function writeMarker(target: number, preserveSource: boolean): Promise<void> {
+  const marker: MigrationMarker = { v: 1, done: true, target, preserveSource }
   return enqueue(async () => {
     await runWrite((store) => {
-      store.put(envelope, target === 'primary' ? slotKey(slot) : slotBackupKey(slot))
+      store.put(marker, MIGRATION_KEY)
+    })
+  })
+}
+
+/**
+ * Atomically claim `slot` for migrated data: verify it is empty, then write the
+ * primary payload, the backup payload (if any), the metadata and the completion
+ * marker in one transaction. Rejects with code `occupied` if another tab won.
+ */
+async function claimMigratedSlot(
+  slot: number,
+  primary: UnwrappedSave,
+  backup: UnwrappedSave | null,
+  meta: SlotMeta,
+  preserveSource: boolean,
+): Promise<void> {
+  const primaryEnvelope: SaveEnvelope = { schemaVersion: SAVE_SCHEMA_VERSION, savedAt: primary.savedAt, data: primary.data, ...(primary.label ? { label: primary.label } : {}) }
+  const backupEnvelope: SaveEnvelope = {
+    schemaVersion: SAVE_SCHEMA_VERSION,
+    savedAt: (backup ?? primary).savedAt,
+    data: (backup ?? primary).data,
+    ...((backup ?? primary).label ? { label: (backup ?? primary).label! } : {}),
+  }
+  const marker: MigrationMarker = { v: 1, done: true, target: slot, preserveSource }
+  return enqueue(async () => {
+    await runWrite((store, ctl) => {
+      const pk = slotKey(slot)
+      const bk = slotBackupKey(slot)
+      const mk = slotMetaKey(slot)
+      const getPrimary = store.get(pk)
+      getPrimary.onsuccess = () => {
+        if (getPrimary.result !== undefined) {
+          ctl.fail(new PersistenceError('occupied', `Slot ${slot} already holds a career.`))
+          return
+        }
+        const getBackup = store.get(bk)
+        getBackup.onsuccess = () => {
+          if (getBackup.result !== undefined) {
+            ctl.fail(new PersistenceError('occupied', `Slot ${slot} already holds a career.`))
+            return
+          }
+          const getMeta = store.get(mk)
+          getMeta.onsuccess = () => {
+            if (getMeta.result !== undefined) {
+              ctl.fail(new PersistenceError('occupied', `Slot ${slot} already holds a career.`))
+              return
+            }
+            // Cross-tab guard: if another tab completed the migration first, stop.
+            const getMarker = store.get(MIGRATION_KEY)
+            getMarker.onsuccess = () => {
+              if (getMarker.result !== undefined) {
+                ctl.fail(new PersistenceError('migrated', 'The legacy save was already migrated by another tab.'))
+                return
+              }
+              store.put(primaryEnvelope, pk)
+              store.put(backupEnvelope, bk)
+              store.put(meta, mk)
+              store.put(marker, MIGRATION_KEY)
+            }
+          }
+        }
+      }
     })
   })
 }

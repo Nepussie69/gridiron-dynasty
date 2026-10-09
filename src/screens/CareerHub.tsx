@@ -154,13 +154,13 @@ export function CareerHub() {
   const exportSlotText = useGame((s) => s.exportSlotText)
   const importSlotText = useGame((s) => s.importSlotText)
   const closeSaves = useGame((s) => s.closeSaves)
-  const flush = useGame((s) => s.flush)
   const career = useGame((s) => s.career)
   const slots = useGame((s) => s.slots)
   const activeSlot = useGame((s) => s.activeSlot)
   const saveInfo = useGame((s) => s.saveInfo)
   const saveError = useGame((s) => s.saveError)
   const slotError = useGame((s) => s.slotError)
+  const busy = useGame((s) => s.busy)
 
   const [name, setName] = useState('A. Reeves')
   const [path, setPath] = useState<CareerPath>('personnel')
@@ -208,10 +208,10 @@ export function CareerHub() {
   }
 
   async function begin() {
-    if (!selected || effectiveTargetSlot === null) return
-    // Make sure the current career has finished its autosave first.
-    await flush()
-    startCareer({
+    if (!selected || effectiveTargetSlot === null || busy) return
+    // startCareer commits the current career's autosave and claims the target
+    // slot atomically; it reports its own failure, so there is nothing to do here.
+    await startCareer({
       name,
       path,
       archetype,
@@ -451,6 +451,7 @@ export function CareerHub() {
                       <Button
                         variant="primary"
                         size="sm"
+                        disabled={busy}
                         onClick={() => (s.slot === activeSlot && career ? closeSaves() : void continueSlot(s.slot))}
                       >
                         <Play size={13} /> {s.slot === activeSlot && career ? 'Resume' : 'Continue'}
@@ -737,10 +738,10 @@ export function CareerHub() {
                 variant="primary"
                 size="lg"
                 className="w-full"
-                disabled={effectiveTargetSlot === null}
+                disabled={busy || effectiveTargetSlot === null}
                 onClick={() => void begin()}
               >
-                <Search size={16} /> Begin in Slot {effectiveTargetSlot ?? '—'} <ArrowRight size={15} />
+                <Search size={16} /> {busy ? 'Working…' : <>Begin in Slot {effectiveTargetSlot ?? '—'} <ArrowRight size={15} /></>}
               </Button>
 
               <button
