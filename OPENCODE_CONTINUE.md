@@ -13,6 +13,7 @@ _**Live state 2026-10-09 ~20:55 AEDT (Claude Opus 5.5, paused at 89% 5-hour usag
 - Merged to main since the last push (all verified): catch→YAC direction fix, Find by Position (30 players, rare stars, strength-based rebuilding), box-score REC/ALW header, stars7+8 (`b236d21`), realism R2 retune (points ~21 until returns), Run/Pass quick-call buttons (`quickCall.ts`; browser click-through still to do).
 - Running: **realism8** (wt-realism, returns + return/defensive TDs, prompt /private/tmp/gridiron-realism8.txt, wrapper pid 33216) and **ui3b** (wt-ui3b, command palette/density/data viz, pid 26531).
 - Auto-queue `/private/tmp/gridiron-queue.sh` (log /private/tmp/gridiron-queue.log): after realism8 → **realism9** (pressures+hurries, QB sacked, sim coverage stats) → **realism10** (two-high def call) in wt-realism; after ui3b → commits ui3b in its branch (unreviewed) → **ui4** in new wt-ui4 off wt-ui3b.
+- Also running: **fut18** (3-year cap planner, wt-fut18, prompt /private/tmp/gridiron-fut18.txt). Queue2 `/private/tmp/gridiron-queue2.sh`: after ui4 → **fut3** personnel packages (wt-fut3). GitHub/Pages now at `54ae13c` (TD-share fix pushed with the user's ok).
 - To resume: review each report + verify (build, lint 4, calib 3x500 --eq --smoke, anim probe; for UI a browser check light/dark/phone), merge realism (merge main into wt-realism first), merge ui3b then ui4. Probes: scratchpad yac-probe.mjs (receiver backward after catch), pos-probe.mjs (Find by Position), quick.mjs (quick calls).
 
 ## Your role and the user's standing instructions
