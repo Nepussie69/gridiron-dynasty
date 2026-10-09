@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react'
 import { ArrowLeftRight, Handshake, Plus, Search, Tag, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
@@ -68,6 +68,8 @@ export function Trades() {
   const request = peekTradeRequest()
 
   const [tab, setTab] = useState<TabId>('build')
+  // U4: the middle tray highlights while an asset is dragged over it.
+  const [dragOver, setDragOver] = useState(false)
   const [partnerId, setPartnerId] = useState(
     () => (request && league.byId[request.teamId] ? request.teamId : NFL_TEAMS.find((t) => t.id !== activeTeamId)!.id),
   )
@@ -126,6 +128,32 @@ export function Trades() {
   }
 
   const canTrade = give.length > 0 && get.length > 0
+
+  // U4: drag an asset row into the middle tray (click-to-add still works).
+  const addAsset = (a: Asset, kind: 'give' | 'get') => {
+    if (kind === 'give') setGive((list) => (list.some((x) => x.id === a.id) ? list : [...list, a]))
+    else setGet((list) => (list.some((x) => x.id === a.id) ? list : [...list, a]))
+  }
+
+  const onTrayDragOver = (e: DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDragOver(true)
+  }
+
+  const onTrayDrop = (e: DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const raw = e.dataTransfer.getData('application/gd-asset') || e.dataTransfer.getData('text/plain')
+    if (!raw) return
+    try {
+      const { id, kind } = JSON.parse(raw) as { id: string; kind: 'give' | 'get' }
+      const a = (kind === 'give' ? myAssets : theirAssets).find((x) => x.id === id)
+      if (a) addAsset(a, kind)
+    } catch {
+      /* ignore malformed payloads */
+    }
+  }
 
   return (
     <div>
@@ -229,6 +257,7 @@ export function Trades() {
           teamId={activeTeamId}
           assets={myAssets}
           selected={give}
+          dragKind="give"
           onToggle={(a) => toggle(give, setGive, a)}
           onFindDeals={(a) => onFindDeals(a, 'sell')}
           blockIds={blockIds}
@@ -236,7 +265,18 @@ export function Trades() {
           onTeamClick={() => viewTeam(activeTeamId)}
         />
 
-        <div className="flex flex-col items-center justify-center gap-3">
+        <div
+          onDragOver={onTrayDragOver}
+          onDragLeave={(e) => {
+            // Ignore dragleave events that fire when the pointer crosses into a child.
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false)
+          }}
+          onDrop={onTrayDrop}
+          className={cn(
+            'flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-3 transition-colors',
+            dragOver ? 'border-[var(--team)] bg-[var(--team-soft)]' : 'border-transparent',
+          )}
+        >
           <div className="grid h-14 w-14 place-items-center rounded-full bg-ink text-canvas">
             <ArrowLeftRight size={22} />
           </div>
@@ -271,6 +311,10 @@ export function Trades() {
             </div>
             {canTrade && <p className="mt-2 text-[11px] leading-snug text-muted">{verdict.reason}</p>}
 
+            <p className={cn('mt-2 text-[11px]', dragOver ? 'font-600 text-ink' : 'text-faint')}>
+              {dragOver ? 'Drop to add it to the deal' : 'Drag assets here — click still works.'}
+            </p>
+
             <Button variant="team" className="mt-3 w-full" disabled={!canTrade} onClick={onPropose}>
               <Handshake size={15} /> Propose Trade
             </Button>
@@ -285,6 +329,7 @@ export function Trades() {
           teamId={partnerId}
           assets={theirAssets}
           selected={get}
+          dragKind="get"
           onToggle={(a) => toggle(get, setGet, a)}
           onFindDeals={(a) => onFindDeals(a, 'buy')}
           showShadow={canScout}
@@ -811,6 +856,7 @@ function AssetColumn({
   teamId,
   assets,
   selected,
+  dragKind,
   onToggle,
   onFindDeals,
   showShadow,
@@ -823,6 +869,8 @@ function AssetColumn({
   teamId: string
   assets: Asset[]
   selected: Asset[]
+  /** U4: which side of the deal dragging from this column feeds. */
+  dragKind: 'give' | 'get'
   onToggle: (a: Asset) => void
   onFindDeals?: (a: Asset) => void
   showShadow?: boolean
@@ -966,8 +1014,15 @@ function AssetColumn({
                 )}
                 <div
                   onClick={() => onToggle(a)}
+                  draggable
+                  onDragStart={(e) => {
+                    const payload = JSON.stringify({ id: a.id, kind: dragKind })
+                    e.dataTransfer.effectAllowed = 'copy'
+                    e.dataTransfer.setData('application/gd-asset', payload)
+                    e.dataTransfer.setData('text/plain', payload)
+                  }}
                   className={cn(
-                    'flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left transition',
+                    'flex w-full cursor-grab items-center gap-3 px-4 py-2 text-left transition active:cursor-grabbing',
                     on ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
                   )}
                 >

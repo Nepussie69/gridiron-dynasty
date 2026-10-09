@@ -1,4 +1,5 @@
-import { CalendarClock, FastForward, Timer, Trophy } from 'lucide-react'
+import { CalendarClock, FastForward, LayoutGrid, List, Timer, Trophy } from 'lucide-react'
+import { useState } from 'react'
 import { cn } from '../lib/cn'
 import { gradeColor } from '../lib/format'
 import { DRAFT_ROUNDS, currentRound, currentTeamId, draftOpen, overallPick, rookieProjection, stageOf, stagesUntilDraft } from '../game/engine/draft'
@@ -7,6 +8,7 @@ import { readProspect, readRookieRanges } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { AccessBadge } from '../components/AccessBadge'
+import { RatingRing } from '../components/PlayerCard'
 import { Badge, Button, Card, PageHeader, RatingBar, RookieRangeBadges, Stat, TeamCrest } from '../ui/kit'
 
 export function Draft() {
@@ -17,6 +19,7 @@ export function Draft() {
   const toggleUserBoard = useGame((s) => s.toggleUserBoard)
   const simToMyPick = useGame((s) => s.simToMyPick)
   const finishDraft = useGame((s) => s.finishDraft)
+  const [boardView, setBoardView] = useState<'list' | 'cards'>('list')
 
   const teamId = currentTeamId(league)
   const onClock = teamId ? league.byId[teamId] : null
@@ -178,58 +181,143 @@ export function Draft() {
 
         <div className="space-y-4">
           <Card pad={false}>
-            <div className="flex items-center justify-between border-b border-line px-4 py-2">
+            <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2">
               <span className="label">Prospect Board · Best Available</span>
-              <Badge tone="team">{available.length} remaining</Badge>
+              <div className="flex items-center gap-2">
+                <Badge tone="team">{available.length} remaining</Badge>
+                <div className="flex rounded-lg bg-surface-2 p-0.5">
+                  {([['list', 'List', List], ['cards', 'Cards', LayoutGrid]] as const).map(([id, label, Icon]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      title={`${label} view`}
+                      onClick={() => setBoardView(id)}
+                      className={cn(
+                        'flex items-center gap-1 rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase tracking-wide transition',
+                        boardView === id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                      )}
+                    >
+                      <Icon size={12} /> {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-            <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
-              {available.map((p) => {
-                const read = readProspect(career, p)
-                const rank = board.indexOf(p.id)
-                const rr = readRookieRanges(career, p, league.draft)
-                return (
-                  <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
-                    <div className="flex w-[128px] shrink-0 flex-col items-center gap-0.5">
-                      <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} />
-                      <span className="font-cond text-[8px] font-700 uppercase tracking-wide text-muted">Now · Ceiling</span>
+            {boardView === 'cards' ? (
+              <div className="grid max-h-[560px] grid-cols-1 gap-3 overflow-y-auto p-3 sm:grid-cols-2">
+                {available.map((p) => {
+                  const read = readProspect(career, p)
+                  const rank = board.indexOf(p.id)
+                  const rr = readRookieRanges(career, p, league.draft)
+                  const ring = gradeColor(read.center)
+                  return (
+                    <div key={p.id} className="motion card-shadow relative rounded-2xl border border-line bg-surface p-3">
+                      {rank >= 0 && (
+                        <span className="absolute right-2 top-2 rounded bg-warn-soft px-1.5 py-0.5 font-cond text-[9px] font-700 uppercase tracking-wide text-warn">
+                          #{rank + 1} board
+                        </span>
+                      )}
+                      <div className="flex items-start gap-3">
+                        <span className="relative grid shrink-0 place-items-center">
+                          <RatingRing value={Math.round(read.center)} size={56} color={ring} />
+                          <span
+                            className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded px-1 font-cond text-[8px] font-700 uppercase tracking-wide"
+                            style={{ background: ring, color: '#fff' }}
+                          >
+                            {p.pos}
+                          </span>
+                        </span>
+                        <div className="min-w-0 flex-1 pt-0.5">
+                          <div className="truncate font-display text-lg font-700 uppercase leading-tight text-ink">
+                            {p.name}
+                          </div>
+                          <div className="truncate font-cond text-xs text-muted">{p.college}</div>
+                          <div className="mt-1.5">
+                            <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2 border-t border-line pt-2">
+                        <span className="font-cond text-[10px] font-700 uppercase tracking-wide tnum text-muted">
+                          Grade {p.grade} · {read.bandLabel}
+                        </span>
+                        {deciding ? (
+                          <Button
+                            size="sm"
+                            variant="team"
+                            disabled={!mine || !draftIsOpen}
+                            title={!draftIsOpen ? closedReason : undefined}
+                            className={cn((!mine || !draftIsOpen) && 'opacity-40')}
+                            onClick={() => draftProspect(p.id)}
+                          >
+                            Draft
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant={rank >= 0 ? 'team' : 'default'}
+                            disabled={!advising}
+                            className={cn(!advising && 'opacity-40')}
+                            onClick={() => toggleUserBoard(p.id)}
+                          >
+                            {rank >= 0 ? 'On Board' : 'Advise'}
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <span className="w-9 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate font-600 text-ink">{p.name}</span>
-                        {rank >= 0 && <Badge tone="warn">#{rank + 1} your board</Badge>}
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
+                {available.map((p) => {
+                  const read = readProspect(career, p)
+                  const rank = board.indexOf(p.id)
+                  const rr = readRookieRanges(career, p, league.draft)
+                  return (
+                    <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+                      <div className="flex w-[128px] shrink-0 flex-col items-center gap-0.5">
+                        <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} />
+                        <span className="font-cond text-[8px] font-700 uppercase tracking-wide text-muted">Now · Ceiling</span>
+                      </div>
+                      <span className="w-9 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate font-600 text-ink">{p.name}</span>
+                          {rank >= 0 && <Badge tone="warn">#{rank + 1} your board</Badge>}
+                        </span>
+                        <span className="block truncate text-xs text-muted">{p.college} · {read.bandLabel}</span>
                       </span>
-                      <span className="block truncate text-xs text-muted">{p.college} · {read.bandLabel}</span>
-                    </span>
-                    <div className="hidden w-24 md:block">
-                      <RatingBar value={read.center} height={5} color={gradeColor(read.center)} />
+                      <div className="hidden w-24 md:block">
+                        <RatingBar value={read.center} height={5} color={gradeColor(read.center)} />
+                      </div>
+                      {deciding ? (
+                        <Button
+                          size="sm"
+                          variant="team"
+                          disabled={!mine || !draftIsOpen}
+                          title={!draftIsOpen ? closedReason : undefined}
+                          className={cn((!mine || !draftIsOpen) && 'opacity-40')}
+                          onClick={() => draftProspect(p.id)}
+                        >
+                          Draft
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant={rank >= 0 ? 'team' : 'default'}
+                          disabled={!advising}
+                          className={cn(!advising && 'opacity-40')}
+                          onClick={() => toggleUserBoard(p.id)}
+                        >
+                          {rank >= 0 ? 'On Board' : 'Advise'}
+                        </Button>
+                      )}
                     </div>
-                    {deciding ? (
-                      <Button
-                        size="sm"
-                        variant="team"
-                        disabled={!mine || !draftIsOpen}
-                        title={!draftIsOpen ? closedReason : undefined}
-                        className={cn((!mine || !draftIsOpen) && 'opacity-40')}
-                        onClick={() => draftProspect(p.id)}
-                      >
-                        Draft
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant={rank >= 0 ? 'team' : 'default'}
-                        disabled={!advising}
-                        className={cn(!advising && 'opacity-40')}
-                        onClick={() => toggleUserBoard(p.id)}
-                      >
-                        {rank >= 0 ? 'On Board' : 'Advise'}
-                      </Button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+                  )
+                })}
+              </div>
+            )}
           </Card>
 
           <Card pad={false}>

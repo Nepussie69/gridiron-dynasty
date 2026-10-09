@@ -3,7 +3,7 @@ import { useMemo } from 'react'
 import { gradeColor, inkOn, money } from '../lib/format'
 import { cn } from '../lib/cn'
 import { depthGroup } from '../game/engine/depth'
-import type { World } from '../game/engine/generate'
+import { teamStrength, type World } from '../game/engine/generate'
 import type { Position } from '../game/types'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import {
@@ -23,7 +23,9 @@ import { ownerPersonality, ownerPersonalityLabel, rivalTitle } from '../game/eng
 import { rivalFor } from '../game/engine/rivalry'
 import { hasRoom } from '../game/engine/room'
 import { CulturePanel } from '../components/CulturePanel'
+import { KeysCard } from '../components/KeysCard'
 import { OfficeScene } from '../components/OfficeScene'
+import { PracticeCard } from '../components/PracticeCard'
 import { RoomCard } from '../components/RoomCard'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { WeeklyDecision } from '../components/WeeklyDecision'
@@ -55,6 +57,19 @@ export function Dashboard() {
   const next = schedule.find((g) => g.week >= career.week)
   const opp = next ? league.byId[next.opponentId] : null
   const rival = opp ? rivalFor(league, opp.id) : undefined
+
+  // U4: a broadcast-style win probability for the hero card. Reads the same
+  // strength model the ghost-GM projection uses (home field worth ~0.5).
+  const winProb =
+    next && opp
+      ? Math.min(
+          0.92,
+          Math.max(
+            0.08,
+            0.5 + (teamStrength(roster) + (next.home ? 0.5 : -0.5) - teamStrength(rosterOf(league, opp.id))) / 20,
+          ),
+        )
+      : 0.5
 
   const stars = [...roster].sort((a, b) => b.ovr - a.ovr).slice(0, 5)
   const news = league.news.slice(0, 5)
@@ -153,57 +168,91 @@ export function Dashboard() {
               </div>
             </Card>
           )}
-          {/* Next game */}
+          {/* Next game — U4 broadcast hero matchup */}
           {next && opp && (
-            <Card pad={false} className="overflow-hidden">
-              <div className="hatch flex items-center justify-between border-b border-line px-4 py-2">
-                <div className="label">Up Next · Week {next.week}</div>
-                <div className="label">{next.home ? 'Home' : 'Away'}</div>
-              </div>
-              <div className="flex items-center gap-4 p-5">
-                <button
-                  type="button"
-                  onClick={() => viewTeam(team.id)}
-                  className="flex flex-1 items-center gap-3 text-left transition hover:opacity-80"
-                >
-                  <TeamCrest team={team} size={52} />
-                  <div>
-                    <div className="font-display text-xl font-700 uppercase leading-none">
-                      {isNFL ? team.name : team.name}
-                    </div>
-                    <div className="mt-1 font-cond text-sm text-muted">{recordStr(rec)}</div>
+            <>
+              <Card pad={false} className="overflow-hidden">
+                <div className="hatch flex items-center justify-between border-b border-line px-4 py-2">
+                  <div className="label">Up Next · Week {next.week}</div>
+                  <div className="label">
+                    {next.home ? `Home · ${team.stadium}` : `Away · ${opp.stadium}`}
                   </div>
-                </button>
-                <div className="text-center">
-                  <div className="font-display text-2xl font-700 uppercase text-faint">vs</div>
-                  <Badge tone="info" className="mt-1">{team.abbr && isNFL ? `${team.abbr} - ${opp.abbr}` : 'Matchup'}</Badge>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => viewTeam(opp.id)}
-                  className="flex flex-1 items-center justify-end gap-3 text-right transition hover:opacity-80"
-                >
-                  <div className="text-right">
-                    <div className="font-display text-xl font-700 uppercase leading-none hover:underline">{opp.name}</div>
-                    <div className="mt-1 font-cond text-sm text-muted">
-                      {recordStr(recordOf(league, opp.id))}
+
+                <div className="relative grid grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => viewTeam(team.id)}
+                    className="motion relative flex min-h-[148px] flex-col justify-between overflow-hidden p-4 text-left hover:brightness-105 sm:p-5"
+                    style={{ background: `linear-gradient(135deg, ${team.primary}, ${team.secondary})` }}
+                  >
+                    <TeamCrest team={team} size={50} />
+                    <div className="relative text-white">
+                      <div className="label !text-white/70">{team.conference} {team.division ?? ''}</div>
+                      <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">
+                        {isNFL ? team.name : team.name}
+                      </div>
+                      <div className="mt-1 font-cond text-sm font-600 text-white/85">{recordStr(rec)}</div>
                     </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => viewTeam(opp.id)}
+                    className="motion relative flex min-h-[148px] flex-col items-end justify-between overflow-hidden p-4 text-right hover:brightness-105 sm:p-5"
+                    style={{ background: `linear-gradient(225deg, ${opp.primary}, ${opp.secondary})` }}
+                  >
+                    <TeamCrest team={opp} size={50} />
+                    <div className="relative text-white">
+                      <div className="label !text-white/70">{opp.conference} {opp.division ?? ''}</div>
+                      <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">{opp.name}</div>
+                      <div className="mt-1 font-cond text-sm font-600 text-white/85">
+                        {recordStr(recordOf(league, opp.id))}
+                      </div>
+                    </div>
+                  </button>
+
+                  <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
+                    <span className="grid h-12 w-12 place-items-center rounded-full border-4 border-surface bg-ink font-display text-lg font-700 uppercase text-canvas shadow-lg">
+                      vs
+                    </span>
                   </div>
-                  <TeamCrest team={opp} size={52} />
-                </button>
+                </div>
+
+                {/* Win probability */}
+                <div className="border-t border-line px-4 py-3">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="label !mb-0">Win probability</span>
+                    <span className="font-cond text-[11px] tnum text-muted">
+                      {team.abbr || team.name} {Math.round(winProb * 100)}% · {opp.abbr || opp.name}{' '}
+                      {Math.round((1 - winProb) * 100)}%
+                    </span>
+                  </div>
+                  <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3">
+                    <span className="transition-[width] duration-500" style={{ width: `${winProb * 100}%`, background: team.primary }} />
+                    <span className="flex-1" style={{ background: opp.primary }} />
+                  </div>
+                </div>
+
+                {/* L12.8 V2: the opponent's best three on each side (hover for ratings). */}
+                <div className="space-y-2 border-t border-line px-4 py-3">
+                  <TopPlayers teamId={opp.id} side="off" n={3} label="Their offense" />
+                  <TopPlayers teamId={opp.id} side="def" n={3} label="Their defense" />
+                </div>
+                <div className="flex items-center justify-between border-t border-line bg-surface-2 px-4 py-2.5">
+                  <span className="text-xs text-muted">Vegas line: {team.abbr} -3.5 · O/U 44.5</span>
+                  <Button size="sm" variant="team" onClick={() => setScreen('schedule')}>
+                    Game Plan <ChevronRight size={14} />
+                  </Button>
+                </div>
+              </Card>
+
+              {/* Keys + practice, promoted onto the dashboard for game week. */}
+              <div className="grid gap-5 lg:grid-cols-2">
+                <KeysCard oppId={opp.id} />
+                <PracticeCard />
               </div>
-              {/* L12.8 V2: the opponent's best three on each side (hover for ratings). */}
-              <div className="space-y-2 border-t border-line px-4 py-3">
-                <TopPlayers teamId={opp.id} side="off" n={3} label="Their offense" />
-                <TopPlayers teamId={opp.id} side="def" n={3} label="Their defense" />
-              </div>
-              <div className="flex items-center justify-between border-t border-line bg-surface-2 px-4 py-2.5">
-                <span className="text-xs text-muted">Vegas line: {team.abbr} -3.5 · O/U 44.5</span>
-                <Button size="sm" variant="team" onClick={() => setScreen('schedule')}>
-                  Game Plan <ChevronRight size={14} />
-                </Button>
-              </div>
-            </Card>
+            </>
           )}
 
           {/* Ratings */}

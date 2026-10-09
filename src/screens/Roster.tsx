@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
+import { LayoutGrid, List, Search } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { capUsed, rosterOf, teamAvgOvr } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
+import { PlayerCard } from '../components/PlayerCard'
 import { PlayerTable } from '../components/PlayerTable'
 import { RatingsTable } from '../components/RatingsTable'
 import { StatsTable } from '../components/StatsTable'
@@ -32,11 +33,13 @@ const RATING_POSITIONS = ['ALL', ...RATING_GROUPS.map((g) => g.id)]
 export function Roster() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
+  const selectPlayer = useGame((s) => s.selectPlayer)
   const [tab, setTab] = useState<(typeof TABS)[number]['id']>('overview')
   const [side, setSide] = useState<(typeof SIDES)[number]['id']>('ALL')
   const [pos, setPos] = useState('ALL')
   const [q, setQ] = useState('')
   const [sort, setSort] = useState<'ovr' | 'pot' | 'age' | 'name' | 'cap' | 'stats'>('ovr')
+  const [view, setView] = useState<'table' | 'cards'>('table')
 
   const roster = rosterOf(league, activeTeamId)
   const level: StatLevel = league.byId[activeTeamId].tier === 'NFL' ? 'NFL' : 'CFB'
@@ -166,6 +169,22 @@ export function Roster() {
           <div className="ml-auto flex items-center gap-2">
             {tab === 'overview' && (
               <>
+                <div className="flex rounded-lg bg-surface-2 p-0.5">
+                  {([['table', 'Table', List], ['cards', 'Cards', LayoutGrid]] as const).map(([id, label, Icon]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      title={`${label} view`}
+                      onClick={() => setView(id)}
+                      className={cn(
+                        'flex items-center gap-1 rounded-md px-2 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
+                        view === id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                      )}
+                    >
+                      <Icon size={13} /> {label}
+                    </button>
+                  ))}
+                </div>
                 <span className="label">Sort</span>
                 <select
                   value={sort}
@@ -186,18 +205,29 @@ export function Roster() {
         </div>
 
         {tab === 'overview' ? (
-          <div className="p-2">
-            <PlayerTable
-              players={filtered}
-              showPhysicals
-              showFit
-              showDeadMoney
-              scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
-              defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
-              inlinePos={pos !== 'ALL' ? (pos as Position) : undefined}
-              emptyText="No players match these filters."
-            />
-          </div>
+          view === 'cards' ? (
+            <div className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">
+              {filtered.map((p) => (
+                <PlayerCard key={p.id} player={p} team={league.byId[activeTeamId]} onClick={() => selectPlayer(p.id)} />
+              ))}
+              {!filtered.length && (
+                <p className="col-span-full px-2 py-6 text-center text-sm text-muted">No players match these filters.</p>
+              )}
+            </div>
+          ) : (
+            <div className="p-2">
+              <PlayerTable
+                players={filtered}
+                showPhysicals
+                showFit
+                showDeadMoney
+                scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
+                defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
+                inlinePos={pos !== 'ALL' ? (pos as Position) : undefined}
+                emptyText="No players match these filters."
+              />
+            </div>
+          )
         ) : tab === 'ratings' ? (
           <RatingsTable
             players={filtered}

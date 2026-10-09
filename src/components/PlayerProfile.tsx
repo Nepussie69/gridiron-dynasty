@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { money } from '../lib/format'
+import { gradeColor, money } from '../lib/format'
 import { attributesFor, playerAttrs, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
 import { COMPOSITES, RATING_INFO, groupForPosition, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel, schemeFit } from '../game/engine/style'
@@ -9,8 +9,9 @@ import { canAskGm, gmAskCovers } from '../game/engine/gmAsk'
 import { gmTargetNeed, monthKeyOf } from '../game/engine/gmDesk'
 import { useGame, useWorld } from '../store/gameStore'
 import { ContractExplainer } from './ContractExplainer'
+import { PlayerSilhouette } from './PlayerCard'
 import { Badge, Button, DevBadge, MiniBars, OvrBadge, RadarChart, RatingBar, Sparkline, TeamCrest } from '../ui/kit'
-import type { Player } from '../game/types'
+import type { Contract, Player, Team } from '../game/types'
 
 export function PlayerProfile() {
   const selectedPlayerId = useGame((s) => s.selectedPlayerId)
@@ -77,6 +78,10 @@ export function PlayerProfile() {
       ? `Ceiling ${player.pot} · grew ${g.to - g.from >= 0 ? '+' : ''}${g.to - g.from} last season (${experienceLabel(g.experience)}, ${devGames} games)`
       : `Ceiling ${player.pot} · needs snaps to grow`
 
+  // U4: an OVR-history sparkline from the last season-end development step. We do
+  // not store a full rating history, so this is the honest last-step trend.
+  const ovrTrend = g ? [g.from, g.to] : []
+
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/40 backdrop-blur-[1px]" onClick={close}>
       <div
@@ -85,20 +90,23 @@ export function PlayerProfile() {
       >
         {/* Header */}
         <div
-          className="relative p-5"
+          className="relative overflow-hidden p-5"
           style={{
             background: team
               ? `linear-gradient(120deg, ${team.primary}, ${team.secondary})`
               : 'linear-gradient(120deg, #0a1626, #26374b)',
           }}
         >
+          <div className="pointer-events-none absolute -bottom-6 right-2 h-44 w-44 opacity-[0.13]" aria-hidden>
+            <PlayerSilhouette className="h-full w-full" fill="#ffffff" />
+          </div>
           <button
             onClick={close}
-            className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-lg bg-black/25 text-white hover:bg-black/40"
+            className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-lg bg-black/25 text-white hover:bg-black/40"
           >
             <X size={16} />
           </button>
-          <div className="flex items-start gap-4">
+          <div className="relative flex items-start gap-4">
             <OvrBadge value={player.ovr} pot={player.pot} size={76} />
             <div className="min-w-0 text-white">
               <div className="label !text-white/70">
@@ -159,10 +167,31 @@ export function PlayerProfile() {
             </div>
           )}
 
-          {player.age <= 26 && (
+          {(player.age <= 26 || ovrTrend.length) && (
             <div className="rounded-xl border border-line bg-surface p-4">
               <div className="label mb-1">Development</div>
               <div className="font-cond text-sm font-600 text-ink">{devLine}</div>
+              {ovrTrend.length >= 2 && (
+                <div className="mt-3 flex items-center gap-4 border-t border-line pt-3">
+                  <Sparkline data={ovrTrend} width={150} height={44} color={gradeColor(player.ovr)} />
+                  <div>
+                    <div className="label !text-[9px]">OVR history</div>
+                    <div className="font-display text-lg font-700 tnum leading-none text-ink">
+                      {ovrTrend[0]} <span className="text-faint">→</span> {ovrTrend[ovrTrend.length - 1]}
+                    </div>
+                    <div
+                      className={
+                        ovrTrend[ovrTrend.length - 1] >= ovrTrend[0]
+                          ? 'text-[11px] font-600 text-win'
+                          : 'text-[11px] font-600 text-loss'
+                      }
+                    >
+                      {ovrTrend[ovrTrend.length - 1] - ovrTrend[0] >= 0 ? '+' : ''}
+                      {ovrTrend[ovrTrend.length - 1] - ovrTrend[0]} last season
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -240,6 +269,7 @@ export function PlayerProfile() {
               <Stat label="Through" value={player.contract.signedThrough} />
               <Stat label="Dev" value={player.dev} />
             </div>
+            <ContractTimeline contract={player.contract} team={team} />
           </div>
 
           <GmRequestPanel player={player} />
@@ -434,6 +464,79 @@ function CareerStats({ player }: { player: Player }) {
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * U4 — a per-season contract timeline. Each column is one remaining year: the
+ * bar height is that year's cap hit (base + prorated bonus), the club colour
+ * marks the guaranteed years, and the gold foot is the prorated signing bonus.
+ */
+function ContractTimeline({ contract, team }: { contract: Contract; team?: Team | null }) {
+  const years = Math.max(1, contract.years)
+  const start = contract.signedThrough - years + 1
+  const rows = Array.from({ length: years }, (_, i) => {
+    const base = contract.base[i] ?? contract.base[contract.base.length - 1] ?? 0
+    return { year: start + i, base, cap: base + contract.proration }
+  })
+  const max = Math.max(...rows.map((r) => r.cap), 1)
+  let cum = 0
+  const guaranteedRows = rows.map((r) => {
+    cum += r.base
+    return cum <= contract.guaranteed + 1
+  })
+  const color = team?.primary ?? 'var(--team)'
+
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="label !mb-0">Contract timeline</span>
+        <span className="font-cond text-[10px] text-muted">cap hit per remaining season</span>
+      </div>
+      <div className="flex items-end gap-1.5">
+        {rows.map((r, i) => {
+          const h = Math.max(6, Math.round((r.cap / max) * 62))
+          const bonusH = Math.round((contract.proration / max) * 62)
+          return (
+            <div
+              key={r.year}
+              className="flex min-w-0 flex-1 flex-col items-center gap-1"
+              title={`${r.year}: ${money(r.cap)} cap hit (${money(r.base)} base + ${money(contract.proration)} prorated bonus)`}
+            >
+              <span className="font-cond text-[9px] tnum text-muted">{money(r.cap)}</span>
+              <span className="relative flex w-full items-end justify-center rounded-sm bg-surface-2" style={{ height: 62 }}>
+                <span
+                  className="w-full rounded-sm"
+                  style={{
+                    height: h,
+                    background: guaranteedRows[i] ? color : 'var(--color-line-strong)',
+                    boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.06)',
+                  }}
+                />
+                {contract.proration > 0 && (
+                  <span
+                    className="absolute bottom-0 w-full rounded-b-sm"
+                    style={{ height: Math.max(3, bonusH), background: 'var(--color-gold)', opacity: 0.9 }}
+                  />
+                )}
+              </span>
+              <span className="font-cond text-[10px] font-700 tnum text-ink-2">{r.year}</span>
+            </div>
+          )
+        })}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-muted">
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm" style={{ background: color }} /> guaranteed
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm bg-[var(--color-line-strong)]" /> unguaranteed
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm" style={{ background: 'var(--color-gold)' }} /> prorated bonus
+        </span>
       </div>
     </div>
   )

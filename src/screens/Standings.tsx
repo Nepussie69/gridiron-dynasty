@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ChevronRight, Trophy } from 'lucide-react'
 import { cn } from '../lib/cn'
 import type { Team } from '../game/types'
 import {
@@ -13,7 +14,7 @@ import {
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
 
-type Tab = 'divisions' | 'picture' | 'conference'
+type Tab = 'divisions' | 'picture' | 'bracket' | 'conference'
 
 const CONF_COLOR: Record<string, string> = { AFC: '#dc2937', NFC: '#0b62ff' }
 
@@ -32,6 +33,7 @@ export function Standings() {
   const tabs: { id: Tab; label: string }[] = [
     { id: 'divisions', label: 'Divisions' },
     { id: 'picture', label: 'Playoff picture' },
+    { id: 'bracket', label: 'Bracket' },
     { id: 'conference', label: 'Conference' },
   ]
 
@@ -61,6 +63,7 @@ export function Standings() {
       />
 
       {tab === 'picture' && <PlayoffPicture activeTeamId={activeTeamId} />}
+      {tab === 'bracket' && <BracketView activeTeamId={activeTeamId} />}
       {tab === 'divisions' && <Divisions activeTeamId={activeTeamId} />}
       {tab === 'conference' && <Conference activeTeamId={activeTeamId} />}
     </div>
@@ -240,6 +243,169 @@ function MatchupLine({ matchup, activeTeamId }: { matchup: ConferencePicture['wi
           <span className="truncate font-cond text-xs font-700 text-ink">{low?.abbr ?? matchup.low.teamId}</span>
         </span>
       </div>
+    </div>
+  )
+}
+
+// ── Playoff bracket ───────────────────────────────────────────────────────────
+
+interface BracketGame {
+  label: string
+  highId: string | null
+  lowId: string | null
+  highPh: string
+  lowPh: string
+}
+
+function BracketView({ activeTeamId }: { activeTeamId: string }) {
+  return (
+    <div>
+      <p className="mb-4 text-xs text-muted">
+        Projected bracket from today&apos;s seeds. The No. 1 seed gets a first-round bye and the winners advance —
+        later rounds fill in as the postseason is played.
+      </p>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <ConferenceBracket conf="AFC" activeTeamId={activeTeamId} />
+        <ConferenceBracket conf="NFC" activeTeamId={activeTeamId} />
+      </div>
+      <div className="mx-auto mt-6 max-w-md">
+        <div className="card-shadow rounded-2xl border border-gold/40 bg-gold/10 p-4 text-center">
+          <div className="mb-1 flex items-center justify-center gap-2 text-gold-ink">
+            <Trophy size={16} />
+            <span className="font-display text-lg font-700 uppercase tracking-wide">Super Bowl</span>
+          </div>
+          <div className="font-cond text-sm text-muted">AFC champion vs NFC champion</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ConferenceBracket({ conf, activeTeamId }: { conf: string; activeTeamId: string }) {
+  const world = useWorld()
+  const picture = playoffPicture(world, conf)
+  const standingById = new Map<string, TeamStanding>()
+  for (const s of [...picture.seeds, ...picture.inTheHunt, ...picture.eliminated]) standingById.set(s.teamId, s)
+  const seedId = (n: number) => picture.seeds.find((s) => s.seed === n)?.teamId ?? null
+
+  const wildCard: BracketGame[] = picture.wildCard.length
+    ? picture.wildCard.map((m) => ({
+        label: `Wild card · ${m.label}`,
+        highId: m.high.teamId,
+        lowId: m.low.teamId,
+        highPh: '—',
+        lowPh: '—',
+      }))
+    : [
+        { label: 'Wild card · 2 vs 7', highId: null, lowId: null, highPh: 'No. 2', lowPh: 'No. 7' },
+        { label: 'Wild card · 3 vs 6', highId: null, lowId: null, highPh: 'No. 3', lowPh: 'No. 6' },
+        { label: 'Wild card · 4 vs 5', highId: null, lowId: null, highPh: 'No. 4', lowPh: 'No. 5' },
+      ]
+
+  const divisional: BracketGame[] = [
+    { label: 'Divisional · No. 1 seed', highId: seedId(1), lowId: null, highPh: 'No. 1', lowPh: 'Winner 4/5' },
+    { label: 'Divisional', highId: null, lowId: null, highPh: 'Winner 2/7', lowPh: 'Winner 3/6' },
+  ]
+  const championship: BracketGame[] = [
+    { label: `${conf} Championship`, highId: null, lowId: null, highPh: 'Divisional winner', lowPh: 'Divisional winner' },
+  ]
+
+  return (
+    <div className="rounded-2xl border border-line bg-surface-2/50 p-4">
+      <div className="mb-3 flex items-center gap-3">
+        <span className="h-5 w-1.5 rounded-full" style={{ background: CONF_COLOR[conf] }} />
+        <h2 className="font-display text-2xl font-700 uppercase tracking-wide">{conf}</h2>
+      </div>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
+        <BracketRound title="Wild Card" games={wildCard} standingById={standingById} activeTeamId={activeTeamId} />
+        <BracketChevron />
+        <BracketRound title="Divisional" games={divisional} standingById={standingById} activeTeamId={activeTeamId} />
+        <BracketChevron />
+        <BracketRound title="Championship" games={championship} standingById={standingById} activeTeamId={activeTeamId} />
+      </div>
+    </div>
+  )
+}
+
+function BracketChevron() {
+  return (
+    <div className="hidden items-center justify-center lg:flex">
+      <ChevronRight size={18} className="text-faint" />
+    </div>
+  )
+}
+
+function BracketRound({
+  title,
+  games,
+  standingById,
+  activeTeamId,
+}: {
+  title: string
+  games: BracketGame[]
+  standingById: Map<string, TeamStanding>
+  activeTeamId: string
+}) {
+  return (
+    <div className="flex-1">
+      <div className="label mb-2 text-center">{title}</div>
+      <div className="flex h-full flex-col justify-around gap-3">
+        {games.map((g, i) => (
+          <BracketMatchup key={i} game={g} standingById={standingById} activeTeamId={activeTeamId} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function BracketMatchup({
+  game,
+  standingById,
+  activeTeamId,
+}: {
+  game: BracketGame
+  standingById: Map<string, TeamStanding>
+  activeTeamId: string
+}) {
+  return (
+    <div className="card-shadow rounded-xl border border-line bg-surface p-2">
+      <div className="label mb-1 !text-[9px]">{game.label}</div>
+      <BracketSide teamId={game.highId} placeholder={game.highPh} standingById={standingById} activeTeamId={activeTeamId} />
+      <div className="my-1 flex items-center gap-1.5 px-1">
+        <span className="h-px flex-1 bg-line" />
+        <span className="font-cond text-[8px] font-700 uppercase text-faint">vs</span>
+        <span className="h-px flex-1 bg-line" />
+      </div>
+      <BracketSide teamId={game.lowId} placeholder={game.lowPh} standingById={standingById} activeTeamId={activeTeamId} />
+    </div>
+  )
+}
+
+function BracketSide({
+  teamId,
+  placeholder,
+  standingById,
+  activeTeamId,
+}: {
+  teamId: string | null
+  placeholder: string
+  standingById: Map<string, TeamStanding>
+  activeTeamId: string
+}) {
+  const world = useWorld()
+  const team = teamId ? world.byId[teamId] : null
+  const standing = teamId ? standingById.get(teamId) : undefined
+  const mine = !!teamId && teamId === activeTeamId
+  return (
+    <div className={cn('flex items-center gap-2 rounded-md px-1.5 py-1', mine && 'bg-[var(--team-soft)]')}>
+      <span className="w-4 shrink-0 text-center font-cond text-[10px] font-700 tnum text-muted">
+        {standing?.seed ?? ''}
+      </span>
+      {team ? <TeamCrest team={team} size={20} /> : <span className="h-5 w-5 shrink-0 rounded bg-surface-3" />}
+      <span className={cn('min-w-0 flex-1 truncate font-cond text-xs font-700', team ? 'text-ink' : 'text-faint')}>
+        {team ? team.abbr : placeholder}
+      </span>
+      <span className="font-cond text-[10px] tnum text-muted">{standing ? record(standing) : ''}</span>
     </div>
   )
 }
