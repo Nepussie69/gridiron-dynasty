@@ -25,6 +25,7 @@ import type { Player, Position } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
+import { DeadlinePanel } from '../components/DeadlinePanel'
 import { GmAskButton } from '../components/GmAskButton'
 import { HoverCard } from '../components/HoverCard'
 import { PlayerHoverCard } from '../components/PlayerHoverCard'
@@ -47,10 +48,11 @@ const toRef = (a: Asset): TradeAsset => ({ kind: a.kind, id: a.id })
 /** Which way the deal card reads: selling one of your players, or buying theirs. */
 type DealMode = 'sell' | 'buy'
 
-/** L12.5 T5: the Trade Center's three tabs. */
-type TabId = 'build' | 'block' | 'position'
+/** L12.5 T5: the Trade Center's tabs (L14 adds the deadline board). */
+type TabId = 'deadline' | 'build' | 'block' | 'position'
 
 const TABS: [TabId, string][] = [
+  ['deadline', 'Deadline'],
   ['build', 'Build a trade'],
   ['block', 'Trade block'],
   ['position', 'Find by position'],
@@ -90,6 +92,10 @@ export function Trades() {
   const partner = league.byId[partnerId]
   const canScout = !!career && canShadow(career)
   const blockIds = career?.tradeBlock ?? []
+  // L14: how many deadline offers are still unanswered this week (tab badge).
+  const dl = career?.deadline
+  const deadlineLive = !!dl && dl.season === league.season && dl.week === league.week
+  const deadlineOpen = deadlineLive ? dl!.offers.filter((o) => !dl!.resolved.includes(o.id)).length : 0
 
   const myAssets = useMemo(() => assetsFor(league, activeTeamId), [league, activeTeamId])
   const theirAssets = useMemo(() => assetsFor(league, partnerId), [league, partnerId])
@@ -179,21 +185,24 @@ export function Trades() {
         }
       />
 
-      <div className="mb-4 flex rounded-lg bg-surface-2 p-0.5">
+      <div className="mb-4 flex flex-wrap rounded-lg bg-surface-2 p-0.5">
         {TABS.map(([id, label]) => (
           <button
             key={id}
             type="button"
             onClick={() => setTab(id)}
             className={cn(
-              'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
+              'flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
               tab === id ? 'bg-surface text-ink shadow-sm' : 'text-muted',
             )}
           >
             {label}
+            {id === 'deadline' && deadlineOpen > 0 && <Badge tone="team">{deadlineOpen}</Badge>}
           </button>
         ))}
       </div>
+
+      {tab === 'deadline' && <DeadlinePanel className="mb-4" />}
 
       {tab === 'build' && (
         <>

@@ -127,8 +127,9 @@ import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKe
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
-import { evaluateTrade, executeTrade, findDeals, findPackagesFor, type TradeAsset } from '../game/engine/trade'
+import { evaluateTrade, executeTrade, findDeals, findPackagesFor, isTradeablePick, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
+import { DEADLINE_WEEK, buildDeadlineOffers, deadlineNewsItem, runDeadlineAI } from '../game/engine/deadline'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
@@ -599,6 +600,12 @@ interface GameStore {
   proposeTrade: (partnerId: string, give: TradeAsset[], get: TradeAsset[]) => { accepted: boolean; message: string }
   /** L12.5 T5: add/remove a player from your trade block (max 5). */
   toggleTradeBlock: (playerId: string) => void
+  /** L14: accept one of the deadline offers the league sent your club. */
+  acceptDeadlineOffer: (id: string) => void
+  /** L14: turn down a deadline offer. */
+  declineDeadlineOffer: (id: string) => void
+  /** L14: let AI clubs make their own deadline trades (off by default; changes league rosters). */
+  setDeadlineAI: (v: boolean) => void
 
   markRead: (id: string) => void
   /** L11.5 Q12: mark every current news item read. */
@@ -1139,6 +1146,10 @@ export const useGame = create<GameStore>((set, get) => ({
         })
       }
     }
+    // L14: the midseason trade deadline opens for one week (week 8).
+    if (world.phase === 'regular' && world.week === DEADLINE_WEEK && nextCareer.deadline?.season !== world.season) {
+      nextCareer = openTradeDeadline(world, nextCareer)
+    }
     set({ career: nextCareer, match: sim, matchSeq: get().matchSeq + 1, tick: get().tick + 1 })
     setLivePlan(null)
     get().save()
@@ -1467,6 +1478,8 @@ export const useGame = create<GameStore>((set, get) => ({
       seasonHits: 0,
       seasonMoments: [],
       ambitions: [],
+      // L14: last season's deadline board does not carry over.
+      deadline: undefined,
     }
     seasonCareer.seasonQuestion = makeSeasonQuestion(world, seasonCareer)
     seasonCareer.devBaseline = snapshotDevBaseline(world, seasonCareer)
@@ -2710,6 +2723,84 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  // L14: deadline day — take or turn down an offer the league sent you.
+  acceptDeadlineOffer: (id) => {
+    const career = get().career
+    const dl = career?.deadline
+    if (!career || !dl) return
+    if (dl.season !== world.season || dl.week !== world.week) {
+      get().showToast('The deadline has passed.')
+      return
+    }
+    const offer = dl.offers.find((o) => o.id === id)
+    if (!offer || dl.resolved.includes(id)) return
+    if (accessFor(career, 'trades') !== 'decide') {
+      get().showToast('You do not have trade authority yet — keep climbing.')
+      return
+    }
+    // The offer was built from this week's rosters; make sure nothing moved.
+    const owns = (a: TradeAsset, teamId: string) => {
+      if (a.kind === 'player') return world.players.find((p) => p.id === a.id)?.teamId === teamId
+      const pk = world.draftPicks.find((p) => p.id === a.id)
+      return !!pk && pk.ownerTeam === teamId && isTradeablePick(world, pk)
+    }
+    if (!offer.give.every((a) => owns(a, career.teamId)) || !offer.get.every((a) => owns(a, offer.partnerId))) {
+      get().showToast('That deal is no longer available — the rosters have moved.')
+      return
+    }
+    const verdict = evaluateTrade(world, offer.partnerId, career.teamId, offer.give, offer.get, career.skills.negotiation)
+    if (!verdict.accepted) {
+      get().showToast(verdict.reason)
+      return
+    }
+    const rec = recordTrade(world, career, offer.partnerId, offer.give, offer.get)
+    const log = executeTrade(world, career.teamId, offer.partnerId, offer.give, offer.get)
+    for (const a of offer.get) {
+      if (a.kind !== 'player') continue
+      const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
+      if (p) p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: offer.partnerId }
+    }
+    const trades = [...(career.trades ?? []), rec].slice(-60)
+    set({
+      career: { ...career, trades, deadline: { ...dl, resolved: [...dl.resolved, id] } },
+    })
+    bump(set, get)
+    get().showToast(`Deadline deal with the ${world.byId[offer.partnerId].name} — ${log.join(', ')}.`)
+    get().save()
+  },
+
+  declineDeadlineOffer: (id) => {
+    const career = get().career
+    const dl = career?.deadline
+    if (!career || !dl || dl.resolved.includes(id)) return
+    set({ career: { ...career, deadline: { ...dl, resolved: [...dl.resolved, id] } } })
+    bump(set, get)
+    get().showToast('Offer turned down.')
+    get().save()
+  },
+
+  setDeadlineAI: (v) => {
+    const career = get().career
+    if (!career) return
+    let next: CareerState = { ...career, deadlineAI: v }
+    // Turning it on during a live deadline runs the league's flurry right away.
+    const dl = career.deadline
+    if (v && dl && dl.season === world.season && dl.week === world.week && !dl.aiRan) {
+      const made = runDeadlineAI(world, career.teamId)
+      next = { ...next, deadline: { ...dl, aiRan: true, aiTrades: made } }
+      get().showToast(
+        made
+          ? `League deadline: ${made} trade${made === 1 ? '' : 's'} went through around the league.`
+          : 'The league stood pat at the deadline.',
+      )
+    } else {
+      get().showToast(v ? 'AI deadline trades ON for future deadlines.' : 'AI deadline trades OFF.')
+    }
+    set({ career: next })
+    bump(set, get)
+    get().save()
+  },
+
   hireStaff: (candidateId, salary, scheme) => {
     const career = get().career
     if (!career) return
@@ -3048,6 +3139,23 @@ function pushCareerNews(world: World, career: CareerState, item: { category: New
     teamId: career.teamId,
     read: false,
   })
+}
+
+/**
+ * L14: open the midseason trade deadline for one week. Only clubs with real
+ * trade authority (GM / Asst GM) get offers — the same gate as `proposeTrade`.
+ * The league-wide AI flurry is opt-in and never runs unless `deadlineAI` is on,
+ * so the default sim is untouched.
+ */
+function openTradeDeadline(world: World, career: CareerState): CareerState {
+  const offers = accessFor(career, 'trades') === 'decide' ? buildDeadlineOffers(world, career.teamId) : []
+  const aiOn = career.deadlineAI === true
+  const aiTrades = aiOn ? runDeadlineAI(world, career.teamId) : 0
+  deadlineNewsItem(world, career, offers)
+  return {
+    ...career,
+    deadline: { season: world.season, week: world.week, offers, resolved: [], aiRan: aiOn, aiTrades },
+  }
 }
 
 /** Ping the inbox whenever one of your guys comes off the board (#20). */
@@ -4448,6 +4556,34 @@ export function aiManagerProbe() {
     freeAgentsAfter: clone.freeAgents.length,
     aiTrades: tradeNews.length,
     sample: tradeNews.slice(0, 3).map((n) => n.headline),
+  }
+}
+
+/**
+ * Dev-only probe: L14 trade deadline day. Reports the offers the league would
+ * send your club (each re-checked against `evaluateTrade`) and, on a throwaway
+ * clone, how many league-wide AI deals the opt-in flurry would make.
+ */
+export function deadlineProbe() {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  const clone = structuredClone(world) as World
+  clone.week = DEADLINE_WEEK
+  clone.phase = 'regular'
+  const offers = buildDeadlineOffers(clone, career.teamId)
+  const checked = offers.map((o) => {
+    const v = evaluateTrade(clone, o.partnerId, career.teamId, o.give, o.get, career.skills.negotiation)
+    return { id: o.id, kind: o.kind, partner: o.partnerId, accepted: v.accepted, ratio: +v.ratio.toFixed(3) }
+  })
+  const aiClone = structuredClone(world) as World
+  aiClone.week = DEADLINE_WEEK
+  aiClone.phase = 'regular'
+  const aiTrades = runDeadlineAI(aiClone, career.teamId)
+  return {
+    offers: offers.length,
+    checked,
+    aiTrades,
+    aiSample: aiClone.news.filter((n) => n.id.startsWith('deadlineai_')).slice(0, 2).map((n) => n.headline),
   }
 }
 
