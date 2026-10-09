@@ -12,6 +12,7 @@ import { teamStrength } from './generate'
 import { depthAt, STARTERS } from './depth'
 import { fitLabel } from './style'
 import { hash32 } from './rng'
+import { unscaleOvr } from './ovrScale'
 
 export interface TradeBlockEntry {
   playerId: string
@@ -87,16 +88,16 @@ function blockReason(
   ctx: { rebuilding: boolean; playoff: boolean },
 ): string | null {
   // Surplus — buried below the starters plus the first backup.
-  if (p.ovr >= 70) {
+  if (unscaleOvr(p.ovr) >= 70) {
     const idx = depthAt(world, teamId, p.pos).findIndex((x) => x.id === p.id)
     if (idx >= (STARTERS[p.pos] ?? 1) + 1) return `Surplus at ${p.pos}`
   }
   // Rebuilding veteran.
-  if (ctx.rebuilding && p.age >= 29 && p.ovr >= 75) return 'Rebuilding — veteran'
+  if (ctx.rebuilding && p.age >= 29 && unscaleOvr(p.ovr) >= 75) return 'Rebuilding — veteran'
   // Expiring deal on a club outside the playoff picture.
-  if (p.contract.years === 1 && !ctx.playoff && p.ovr >= 72) return 'Expiring deal'
+  if (p.contract.years === 1 && !ctx.playoff && unscaleOvr(p.ovr) >= 72) return 'Expiring deal'
   // Scheme misfit.
-  if (p.ovr >= 72) {
+  if (unscaleOvr(p.ovr) >= 72) {
     const scheme = schemeFor(world, teamId, p)
     if (scheme && fitLabel(p, scheme, p.side === 'DEF' ? 'DEF' : 'OFF') === 'Poor') return 'Scheme misfit'
   }
@@ -127,11 +128,11 @@ export function tradeBlock(world: World, userTeamId?: string): TradeBlockEntry[]
       // A star only hits the block when the club is really moving on (rebuilding
       // vet or an old expiring deal), and even then only some months: the draw
       // changes every 4 weeks (deterministic hash, no rng).
-      if (p.ovr >= STAR_OVR) {
+      if (unscaleOvr(p.ovr) >= STAR_OVR) {
         const movingOn = (rebuilding && p.age >= 30) || (p.contract.years === 1 && p.age >= 32)
         const month = Math.floor(world.week / 4)
         if (!movingOn || (hash32(p.id, world.season * 13 + month) >>> 0) % 100 >= 25) continue
-      } else if (p.ovr >= HIGH_OVR) {
+      } else if (unscaleOvr(p.ovr) >= HIGH_OVR) {
         const month = Math.floor(world.week / 4)
         if ((hash32(p.id, world.season * 17 + month) >>> 0) % 100 >= 40) continue
       }
@@ -139,7 +140,7 @@ export function tradeBlock(world: World, userTeamId?: string): TradeBlockEntry[]
     }
     eligible.sort((a, b) => b.player.ovr - a.player.ovr || a.player.id.localeCompare(b.player.id))
     for (const e of eligible.slice(0, 3)) {
-      out.push({ entry: { playerId: e.player.id, teamId: team.id, reason: e.reason }, ovr: e.player.ovr })
+      out.push({ entry: { playerId: e.player.id, teamId: team.id, reason: e.reason }, ovr: unscaleOvr(e.player.ovr) })
     }
   }
 

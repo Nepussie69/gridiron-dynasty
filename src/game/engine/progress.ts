@@ -5,6 +5,7 @@ import { generateProspectClass, indexPlayers, type World } from './generate'
 import { depthAt, STARTERS } from './depth'
 import { coverageGrade, passerRating } from './stats'
 import { ledgerFreeAgent } from './picks'
+import { unscaleOvr } from './ovrScale'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
@@ -94,15 +95,25 @@ export function developPlayers(world: World, user?: { teamId: string; growth: nu
     const experience = p.age <= 26 ? experienceScore(world, p, psIds) : 0
     // L12.11: Player Development skill speeds up the young players on your club.
     const clubGrowth = user && p.teamId === user.teamId ? user.growth : 1
+    // L12.15 S4: with a deliberately thin elite pipeline, young players need to
+    // reach their ceilings sooner or the opening star cohort ages out into a
+    // multi-year trough. Faster maturation moves the (unchanged) ceiling supply
+    // forward without raising the long-run level.
     if (p.age <= 24) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.1 + 0.4 * experience + rng() * 0.12) * dev * clubGrowth)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.22 + 0.42 * experience + rng() * 0.18) * dev * clubGrowth)), 40, 99)
     } else if (p.age <= 26) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.06 + 0.26 * experience + rng() * 0.08) * dev * clubGrowth)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.15 + 0.28 * experience + rng() * 0.12) * dev * clubGrowth)), 40, 99)
     } else if (p.age <= 29) {
       p.ovr = clamp(p.ovr + (rng() < 0.45 ? 1 : 0) - (rng() < 0.25 ? 1 : 0), 40, p.pot)
     } else {
-      const decline = p.age >= 34 ? 3 : p.age >= 32 ? 2 : 1
-      p.ovr = clamp(p.ovr - (rng() < 0.7 ? decline : 0), 40, 99)
+      // L12.15 S4: on the compressed new scale a single point costs a star far
+      // more, so the league's best age out more slowly — this preserves the rare
+      // top band while the (deliberately thin) rookie pipeline matures to replace
+      // the opening, mostly-28-to-33-star cohort.
+      const elite = p.ovr >= 90
+      const decline = p.age >= 34 ? (elite ? 2 : 3) : p.age >= 32 ? (elite ? 1 : 2) : 1
+      const rate = p.age <= 33 ? (p.ovr >= 93 ? 0.25 : elite ? 0.35 : 0.7) : elite ? 0.5 : 0.7
+      p.ovr = clamp(p.ovr - (rng() < rate ? decline : 0), 40, 99)
     }
     if (p.age <= 26) p.lastGrowth = { season: world.season, from: ovrBefore, to: p.ovr, experience }
 
@@ -112,9 +123,9 @@ export function developPlayers(world: World, user?: { teamId: string; growth: nu
       p.ovr = clamp(p.ovr - 1, 40, 99)
     }
 
-    if (p.age >= 39 || (p.age >= 36 && p.ovr < 62 && rng() < 0.4)) retired.push(p)
+    if (p.age >= 39 || (p.age >= 36 && unscaleOvr(p.ovr) < 62 && rng() < 0.4)) retired.push(p)
     // Fringe unsigned veterans retire out of the league, keeping the FA pool sane.
-    else if (!p.teamId && (p.age >= 34 || (p.age >= 30 && p.ovr < 72 && rng() < 0.4))) retired.push(p)
+    else if (!p.teamId && (p.age >= 34 || (p.age >= 30 && unscaleOvr(p.ovr) < 72 && rng() < 0.4))) retired.push(p)
   }
 
   if (retired.length) {
@@ -295,7 +306,7 @@ export function runAIResign(world: World, skipTeamId?: string, db?: CareerDataba
     if (t.id === skipTeamId) continue
     const roster = world.roster[t.id] ?? []
     const used = () => roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
-    const expiring = roster.filter((p) => p.contract.years <= 1 && p.ovr >= 72).sort((a, b) => b.ovr - a.ovr)
+    const expiring = roster.filter((p) => p.contract.years <= 1 && unscaleOvr(p.ovr) >= 72).sort((a, b) => b.ovr - a.ovr)
     let resigned = 0
     for (const p of expiring) {
       if (resigned >= 4) break
@@ -374,10 +385,10 @@ export function runAITrades(world: World) {
     if (a.id === b.id) continue
     const ra = world.roster[a.id] ?? []
     const rb = world.roster[b.id] ?? []
-    const pa = [...ra].filter((p) => p.ovr >= 70 && p.ovr <= 84).sort(() => rng() - 0.5)[0]
-    const pb = [...rb].filter((p) => p.ovr >= 70 && p.ovr <= 84).sort(() => rng() - 0.5)[0]
+    const pa = [...ra].filter((p) => unscaleOvr(p.ovr) >= 70 && unscaleOvr(p.ovr) <= 84).sort(() => rng() - 0.5)[0]
+    const pb = [...rb].filter((p) => unscaleOvr(p.ovr) >= 70 && unscaleOvr(p.ovr) <= 84).sort(() => rng() - 0.5)[0]
     if (!pa || !pb) continue
-    if (Math.abs(pa.ovr - pb.ovr) > 7 || pa.pos === pb.pos) continue
+    if (Math.abs(unscaleOvr(pa.ovr) - unscaleOvr(pb.ovr)) > 7 || pa.pos === pb.pos) continue
     world.roster[a.id] = ra.filter((x) => x.id !== pa.id)
     pa.teamId = b.id
     world.roster[b.id].push(pa)

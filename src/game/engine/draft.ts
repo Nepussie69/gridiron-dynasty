@@ -10,6 +10,7 @@ import { redFlagIds } from './redflag'
 import { makeCharacter } from './character'
 import { type World, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
+import { rescaleOvr, unscaleOvr } from './ovrScale'
 
 export const DRAFT_ROUNDS = 7
 export const DRAFT_TEAMS = 32
@@ -230,7 +231,10 @@ export function rescaleLegacyRookies(world: World): number {
     const start = Math.round(rookieOvrCurve(rank) + jitter)
     p.pot = pot
     p.ovr = Math.max(50, Math.min(pot, Math.min(start, pot - 3) + seasons * 3))
-    p.dev = devFor(pot)
+    // `pot` is still on the old scale here (the L12.15 S3 migration rescales the
+    // whole world right after this), so pick the tier straight from it instead of
+    // through `devFor`, which now converts a new-scale pot back to the old scale.
+    p.dev = pot >= 95 ? 'X-Factor' : pot >= 89 ? 'Superstar' : pot >= 83 ? 'Star' : pot >= 76 ? 'Starter' : 'Depth'
     n += 1
   }
   world.rookieScaleV2 = true
@@ -259,14 +263,41 @@ export function rookieRatings(
   classRank: number,
   classSize: number,
 ): { ovr: number; pot: number } {
-  void classSize
   const real = !prospect.generated
   const pot = real ? clamp(Math.round(58 + (prospect.pot - 60) * 0.95), 60, 97) : prospect.pot
   const jitter = (hash32(prospect.id, 13) % 3) - 1
   const curve = Math.round(rookieOvrCurve(classRank) + jitter)
   const today = Math.min(prospect.pot, Math.round(prospect.ovr + 3))
   const base = real ? curve : Math.min(today, curve)
-  return { ovr: Math.max(50, Math.min(base, pot - 3)), pot }
+  // L12.15 S1: the L12.7 curve was tuned on the old scale — map it through the
+  // same remap so a rookie enters on the new scale, with no one over 76.
+  const frac = 0.5
+  const ovr = Math.min(76, rescaleOvr(Math.max(50, Math.min(base, pot - 3)), frac))
+  // L12.15 S4: real prospects keep the L12.7 compressed ceiling (topping out near
+  // 90 new-scale). Generated prospects also take a new-scale ceiling from their
+  // class standing, so only a small rank-ordered funnel can ever reach 90+.
+  const mapped = Math.max(ovr, rescaleOvr(pot, frac))
+  const ceiling = real ? mapped : Math.max(mapped, generatedCeiling(classRank, classSize))
+  return { ovr, pot: ceiling }
+}
+
+/**
+ * L12.15 S4: the new-scale pro ceiling for a generated prospect, by true-grade
+ * class standing (`rank/size`, 1 = best). A static, monotone funnel: the best
+ * prospect can become a 98 face, the next few a franchise player, a small
+ * handful a quality starter — and everyone past the top ~10% is left to the
+ * ordinary formula (≤ ~83). This replaces the old flat +15 ceiling bonus, which
+ * put 13–25 players a class at 95–99 and inflated the league over long horizons.
+ */
+function generatedCeiling(rank: number, size: number): number {
+  const q = rank / Math.max(1, size)
+  if (q <= 0.003) return 98
+  if (q <= 0.005) return 96
+  if (q <= 0.008) return 94
+  if (q <= 0.024) return 89
+  if (q <= 0.05) return 87
+  if (q <= 0.09) return 85
+  return 0
 }
 
 /**
@@ -296,10 +327,11 @@ function posSide(pos: Position): Player['side'] {
   return 'DEF'
 }
 function devFor(pot: number): Player['dev'] {
-  if (pot >= 95) return 'X-Factor'
-  if (pot >= 89) return 'Superstar'
-  if (pot >= 83) return 'Star'
-  if (pot >= 76) return 'Starter'
+  const raw = unscaleOvr(pot)
+  if (raw >= 95) return 'X-Factor'
+  if (raw >= 89) return 'Superstar'
+  if (raw >= 83) return 'Star'
+  if (raw >= 76) return 'Starter'
   return 'Depth'
 }
 function heightFor(p: DraftProspect) {

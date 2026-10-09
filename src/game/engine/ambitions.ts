@@ -17,6 +17,7 @@ import { summarizeCap } from './cap'
 import { capabilities } from './capabilities'
 import { hash32, makeRng, rpick } from './rng'
 import { unitRanks, type Reputation } from './career'
+import { unscaleOvr } from './ovrScale'
 
 export const MAX_AMBITIONS = 3
 
@@ -188,7 +189,7 @@ export function gradeAmbitions(
         done = cap.space >= 8_000_000
         break
       case 'developYoung':
-        done = roster.some((p) => p.age <= 25 && p.ovr >= 80 && p.origin?.by === career.gmName)
+        done = roster.some((p) => p.age <= 25 && unscaleOvr(p.ovr) >= 80 && p.origin?.by === career.gmName)
         break
       case 'winRecord':
         done = ctx.wins >= (a.meta?.target ?? 9)

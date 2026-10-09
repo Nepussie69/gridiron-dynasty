@@ -11,6 +11,7 @@ import type { World } from './generate'
 import { hash32 } from './rng'
 import { onTeamChange } from './playbook'
 import { negotiationTradeMargin } from './skills'
+import { unscaleOvr } from './ovrScale'
 
 export interface TradeAsset {
   kind: 'player' | 'pick'
@@ -44,7 +45,11 @@ const DECLINE: Record<string, { start: number; rate: number }> = {
  */
 export function playerTradeValue(p: Player): number {
   const grow = p.age <= 22 ? 0.6 : p.age === 23 ? 0.45 : p.age === 24 ? 0.3 : p.age === 25 ? 0.15 : 0
-  const eff = p.ovr + Math.max(0, p.pot - p.ovr) * grow
+  // L12.15 S2: value the player on the old (rank) scale so the same rank keeps
+  // the same trade value after the OVR remap.
+  const ovrRaw = unscaleOvr(p.ovr)
+  const potRaw = unscaleOvr(p.pot)
+  const eff = ovrRaw + Math.max(0, potRaw - ovrRaw) * grow
   const curve = Math.pow(Math.max(eff - 50, 1) / 10, 3.5)
   const d = DECLINE[p.pos] ?? { start: 29, rate: 0.14 }
   const prime = p.age <= 24 ? 1.15 : Math.max(1, 1.15 - 0.05 * (p.age - 24))
@@ -140,7 +145,7 @@ function partnerValue(world: World, partnerId: string, a: TradeAsset, rebuild: b
   let qbPremium = 1
   if (p.pos === 'QB') {
     const qbs = roster.filter((x) => x.pos === 'QB').sort((x, y) => y.ovr - x.ovr)
-    if (qbs[0]?.id === p.id) qbPremium = p.ovr >= 85 ? 1.7 : p.ovr >= 78 ? 1.4 : 1.15
+    if (qbs[0]?.id === p.id) qbPremium = unscaleOvr(p.ovr) >= 85 ? 1.7 : unscaleOvr(p.ovr) >= 78 ? 1.4 : 1.15
   }
   return base * ageMul * need * Math.max(starPremium, qbPremium)
 }

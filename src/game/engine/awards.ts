@@ -8,6 +8,7 @@
 import type { Player, SeasonStats, StatLevel } from '../types'
 import type { World } from './generate'
 import type { CareerDatabase, DbPlayer } from './statsDb'
+import { unscaleOvr } from './ovrScale'
 
 export interface AwardWinner {
   award: string
@@ -380,7 +381,11 @@ function scoreEntry(pid: string, entry: DbPlayer, awards: AwardHistory, champion
     0,
   )
   const honourPts = h.mvp * HONOUR_POINTS.mvp + (h.opoy + h.dpoy) * HONOUR_POINTS.poy + h.roy * HONOUR_POINTS.roy + h.first * HONOUR_POINTS.first + h.second * HONOUR_POINTS.second
-  const fair = Math.max(0, (entry.peakOvr ?? 0) - 85) * 6
+  // L12.15 S2: peakOvr is now stored on the compressed scale; re-key the old
+  // "peak above 85" bonus through the inverse so the same career keeps the same
+  // Hall-of-Fame score as before the remap.
+  const peak = entry.peakOvr ?? 0
+  const fair = peak > 0 ? Math.max(0, unscaleOvr(peak) - 85) * 6 : 0
   ind.score = Math.round(volume + honourPts + h.titles * HONOUR_POINTS.title + fair)
   return ind
 }

@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { DraftPick } from '../types'
+import { unscaleOvr } from './ovrScale'
 import { NFL_TEAMS } from '../data/nflTeams'
 
 export const PICK_ROUNDS = 7
@@ -74,7 +75,7 @@ export function ledgerFreeAgent(
   kind: 'lost' | 'gained',
   ovr: number,
 ) {
-  if (ovr < COMP_QUALIFY_OVR) return
+  if (unscaleOvr(ovr) < COMP_QUALIFY_OVR) return
   const ledger = (world.compLedger ??= {})
   const row = (ledger[teamId] ??= { lost: 0, gained: 0 })
   row[kind] += 1

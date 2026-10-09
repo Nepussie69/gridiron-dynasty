@@ -13,6 +13,7 @@ import type { CareerState, LedgerEntry, LedgerKind, Player, Recommendation } fro
 import type { World } from './generate'
 import { tierFor } from './career'
 import { STARTERS, depthAt } from './depth'
+import { unscaleOvr } from './ovrScale'
 import type { GameSim } from './playsim'
 import { fourthDownEV, twoPointChoice, type Situation } from './decisions'
 import { kickPowerFor, playIndexOf, type FilmGrade } from './film'
@@ -76,8 +77,8 @@ function gradeEntry(world: World, e: LedgerEntry): boolean | undefined {
     const proSeasons = (p.stats ?? []).filter((s) => s.level === 'NFL').length
     if (proSeasons < PICK_EVAL_SEASONS) return undefined
     // K4: a red flag is a bet that he busts, so the hit test flips.
-    if (e.redFlag) return p.ovr < RED_FLAG_BUST_OVR
-    return p.ovr >= PICK_HIT_OVR
+    if (e.redFlag) return unscaleOvr(p.ovr) < RED_FLAG_BUST_OVR
+    return unscaleOvr(p.ovr) >= PICK_HIT_OVR
   }
   if (e.kind === 'pitch') {
     // L12.9 L1: an accepted starter pitch is graded at season end by whether the
@@ -167,7 +168,7 @@ export function gradeLedger(world: World, career: CareerState): { graded: number
         else if (result === false) e.outcome = `Red flag missed: ${p.name} became a ${p.ovr}.`
       } else {
         const tag = e.kind === 'pick' ? `Pick ${e.round ? `Rd ${e.round}` : ''}`.trim() : 'Your call'
-        if (result === true) e.outcome = `${tag}: ${p.name} is a ${p.ovr} OVR${p.ovr >= 88 ? ' star' : ' contributor'} — that one landed.`
+        if (result === true) e.outcome = `${tag}: ${p.name} is a ${p.ovr} OVR${unscaleOvr(p.ovr) >= 88 ? ' star' : ' contributor'} — that one landed.`
         else if (result === false) e.outcome = `${tag}: ${p.name} stalled at ${p.ovr} OVR.`
       }
     }

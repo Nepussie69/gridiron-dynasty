@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Position } from '../types'
+import { unscaleOvr } from '../engine/ovrScale'
 
 /**
  * Per-position attribute schema, matching the fields Madden/CFB expose.
@@ -133,8 +134,23 @@ export function rated(name: string, fallback: number): number {
  * Assign Madden/CFB-style attributes to a player. Until the full pipeline lands,
  * we derive a plausible spread from overall rating + a stable per-player hash,
  * weighted by position so the numbers "look right" for each spot.
+ *
+ * L12.15 S1: every caller passes a canonical `Player` (already remapped onto the
+ * compressed "stars are rare" scale), so the fallback attributes are derived from
+ * the rank-equivalent raw OVR — this keeps a player's derived ratings (and the
+ * play sim) identical to before the remap. A caller holding a raw, pre-remap OVR
+ * (a college/generator value that has NOT been through `rescaleOvr`) must pass
+ * `ovrIsRaw = true` so it is not un-scaled a second time. No current caller does
+ * this — prospects and CFB players are remapped before they become `Player`s —
+ * but the flag keeps the conversion explicit rather than silent.
  */
-export function attributesFor(playerId: string, pos: Position, ovr: number): Record<string, number> {
+export function attributesFor(
+  playerId: string,
+  pos: Position,
+  ovr: number,
+  ovrIsRaw = false,
+): Record<string, number> {
+  if (!ovrIsRaw) ovr = unscaleOvr(ovr)
   const keys = ATTRIBUTE_SCHEMA[pos] ?? ATTRIBUTE_SCHEMA.LB
   const out: Record<string, number> = {}
   let h = 2166136261
