@@ -149,7 +149,9 @@ export function allocateTeamGame(
     const att = Math.round(passYds / (isNFL ? 7.1 : 7.9))
     const compPct = clamp((isNFL ? 0.645 : 0.616) + (eff.offEdge * 0.004), 0.5, 0.78)
     const comp = Math.round(att * compPct)
-    const td = Math.max(0, Math.round((points / 7) * 0.72 * (0.7 + rng() * 0.6)))
+    // ~73% of NFL points come from offensive TDs (FGs, defense/ST score the rest),
+    // ~66% of those through the air: 22.6 pts -> ~1.55 passing TDs (2015-2024).
+    const td = Math.max(0, Math.round((points / 7) * 0.48 * (0.7 + rng() * 0.6)))
     const ints = rng() < 0.42 ? (rng() < 0.7 ? 1 : 2) : 0
     addOff(qb.id, {
       playerId: qb.id, passAtt: att, passComp: comp, passYds, passTD: td, ints,
@@ -181,7 +183,8 @@ export function allocateTeamGame(
     }
     const split_ = split(rng, carries - qbCarries, shares)
     const yardsSplit = split(rng, rushYds - qbYds, shares)
-    const rushTd = Math.max(0, Math.round((points / 7) * 0.28 * (0.6 + rng() * 0.8)))
+    // ~34% of offensive TDs on the ground: 22.6 pts -> ~0.8 rushing TDs.
+    const rushTd = Math.max(0, Math.round((points / 7) * 0.25 * (0.6 + rng() * 0.8)))
     const qbTd = qb && carries > 0 ? Math.min(rushTd, Math.round((rushTd * qbCarries) / carries)) : 0
     const tdSplit = split(rng, rushTd - qbTd, shares)
     rbs.items.forEach((p, i) => addOff(p.id, {
@@ -211,7 +214,7 @@ export function allocateTeamGame(
     const shares = recvs.weights
     const recSplit = split(rng, completions, shares)
     const yardSplit = split(rng, passYds, shares)
-    const td = Math.max(0, Math.round((points / 7) * 0.72 * 0.9))
+    const td = Math.max(0, Math.round((points / 7) * 0.48))
     const tdSplit = split(rng, td, shares)
     recvs.items.forEach((p, i) => {
       const rec = recSplit[i] ?? 0
