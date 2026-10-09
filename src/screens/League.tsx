@@ -200,7 +200,7 @@ export function League() {
             <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Head Coach</h3>
             {league.staff[selected]?.[0] && (
               <div className="flex items-center gap-3">
-                <div className="grid h-10 w-10 place-items-center rounded-lg bg-ink font-display text-base font-700 text-white">
+                <div className="grid h-10 w-10 place-items-center rounded-lg bg-ink font-display text-base font-700 text-canvas">
                   {league.staff[selected][0].name.split(' ').map((n) => n[0]).join('')}
                 </div>
                 <div>

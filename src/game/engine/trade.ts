@@ -122,8 +122,28 @@ function needFactor(world: World, teamId: string, pos: Position): number {
 }
 
 /** Is this club rebuilding (values youth/picks) or win-now (values veterans)? */
-function isRebuilding(partnerId: string): boolean {
-  return hash32(partnerId, 11) % 100 >= 50
+/**
+ * A club is rebuilding when its roster is in the league's weakest third (top-22
+ * average on the old/sim scale) — not by a coin flip on its name, so a strong
+ * club never sells its stars like a rebuilder. Cached per world and week.
+ */
+const rebuildCache = new WeakMap<World, { stamp: string; ids: Set<string> }>()
+function isRebuilding(world: World, partnerId: string): boolean {
+  const stamp = `${world.season}:${world.week}:${world.phase}`
+  let c = rebuildCache.get(world)
+  if (!c || c.stamp !== stamp) {
+    const strength = (id: string) => {
+      const top = [...(world.roster[id] ?? [])].sort((a, b) => b.ovr - a.ovr).slice(0, 22)
+      return top.length ? top.reduce((t, p) => t + unscaleOvr(p.ovr), 0) / top.length : 0
+    }
+    const ranked = world.teams
+      .filter((t) => (world.roster[t.id]?.length ?? 0) > 0)
+      .map((t) => ({ id: t.id, s: strength(t.id) }))
+      .sort((a, b) => a.s - b.s || a.id.localeCompare(b.id))
+    c = { stamp, ids: new Set(ranked.slice(0, Math.round(ranked.length / 3)).map((t) => t.id)) }
+    rebuildCache.set(world, c)
+  }
+  return c.ids.has(partnerId)
 }
 
 /** Adjust a raw value by how the partner reads that asset. */
@@ -147,7 +167,13 @@ function partnerValue(world: World, partnerId: string, a: TradeAsset, rebuild: b
     const qbs = roster.filter((x) => x.pos === 'QB').sort((x, y) => y.ovr - x.ovr)
     if (qbs[0]?.id === p.id) qbPremium = unscaleOvr(p.ovr) >= 85 ? 1.7 : unscaleOvr(p.ovr) >= 78 ? 1.4 : 1.15
   }
-  return base * ageMul * need * Math.max(starPremium, qbPremium)
+  // Elite players are rare on the trade market (user, 2026-10-09): a club's
+  // 97-99 cornerstone is effectively off the table unless it is rebuilding and
+  // he is 29+; 93-96 and 90-92 carry steep premiums on top of the rest.
+  // Only for the club's OWN stars — what it is asked to give up, not what it receives.
+  const own = p.teamId === partnerId
+  const elitePremium = !own ? 1 : p.ovr >= 97 ? (rebuild && p.age >= 29 ? 2.4 : 6) : p.ovr >= 93 ? 2.0 : p.ovr >= 90 ? 1.6 : 1
+  return base * ageMul * need * Math.max(starPremium, qbPremium, elitePremium)
 }
 
 export interface TradeVerdict {
@@ -174,7 +200,7 @@ export function evaluateTrade(
   get: TradeAsset[],
   userNegotiation?: number,
 ): TradeVerdict {
-  const rebuild = isRebuilding(partnerId)
+  const rebuild = isRebuilding(world, partnerId)
   const theyReceive = give.reduce((s, a) => s + partnerValue(world, partnerId, a, rebuild), 0)
   const theyGive = get.reduce((s, a) => s + partnerValue(world, partnerId, a, rebuild), 0)
   const rawRatio = theyGive > 0 ? theyReceive / theyGive : theyReceive > 0 ? 99 : 1
@@ -227,12 +253,13 @@ function dealSummary(world: World, partnerId: string, get: TradeAsset[]): string
 }
 
 /**
- * Shop one of your players around the league: the best acceptable package from
+ * Shop one of your players (or picks) around the league: the best acceptable package from
  * each club, best first (max 6). Deterministic. Every offer is a deal
  * `evaluateTrade` already accepts by hand — this only searches.
  */
-export function findDeals(world: World, userTeamId: string, playerId: string, userNegotiation?: number): DealOffer[] {
-  const give: TradeAsset[] = [{ kind: 'player', id: playerId }]
+export function findDeals(world: World, userTeamId: string, assetId: string, userNegotiation?: number): DealOffer[] {
+  // Shop a player or one of your draft picks (pick ids live in world.draftPicks).
+  const give: TradeAsset[] = [{ kind: findPick(world, assetId) ? 'pick' : 'player', id: assetId }]
   const shoppedValue = assetValue(world, give[0])
   const offers: DealOffer[] = []
 
@@ -300,11 +327,14 @@ function packageCost(world: World, assets: TradeAsset[]): number {
  * `evaluateTrade(world, X, userTeamId, give, [target])` already accepts. Greedy,
  * deterministic, no rng. Sorted by least total value given, at most five.
  */
-export function findPackagesFor(world: World, userTeamId: string, playerId: string): DealOffer[] {
-  const targetPlayer = findPlayer(world, playerId)
-  if (!targetPlayer || !targetPlayer.teamId || targetPlayer.teamId === userTeamId) return []
-  const partnerId = targetPlayer.teamId
-  const target: TradeAsset = { kind: 'player', id: playerId }
+export function findPackagesFor(world: World, userTeamId: string, assetId: string): DealOffer[] {
+  // The target is another club's player or one of its draft picks.
+  const targetPick = findPick(world, assetId)
+  const targetPlayer = targetPick ? undefined : findPlayer(world, assetId)
+  const partnerId = targetPick ? targetPick.ownerTeam : targetPlayer?.teamId
+  if (!partnerId || partnerId === userTeamId) return []
+  if (targetPick && !isTradeablePick(world, targetPick)) return []
+  const target: TradeAsset = { kind: targetPick ? 'pick' : 'player', id: assetId }
   const up = upcomingDraftSeason(world)
 
   const roster = world.roster[userTeamId] ?? []
@@ -312,10 +342,10 @@ export function findPackagesFor(world: World, userTeamId: string, playerId: stri
   // Don't hand back a player at the target's own position unless he's clearly
   // the lesser player (under 60% of the target's value): nobody swaps one star
   // edge rusher for another.
-  const targetValue = playerTradeValue(targetPlayer)
+  const targetValue = targetPlayer ? playerTradeValue(targetPlayer) : 0
   const players = [...roster]
     .filter((p) => roster.filter((x) => x.pos === p.pos).length > 1)
-    .filter((p) => p.pos !== targetPlayer.pos || playerTradeValue(p) < targetValue * 0.6)
+    .filter((p) => !targetPlayer || p.pos !== targetPlayer.pos || playerTradeValue(p) < targetValue * 0.6)
     .sort((a, b) => playerTradeValue(a) - playerTradeValue(b) || a.id.localeCompare(b.id))
   const picks = world.draftPicks
     .filter((pk) => pk.ownerTeam === userTeamId && isTradeablePick(world, pk))
@@ -335,7 +365,7 @@ export function findPackagesFor(world: World, userTeamId: string, playerId: stri
       const verdict = evaluateTrade(world, partnerId, userTeamId, pkg, [target])
       const gap = verdict.theyGive - verdict.theyReceive
       // Read pick values the way this partner does (rebuilders like picks more).
-      const val = (pk: DraftPick) => partnerValue(world, partnerId, { kind: 'pick', id: pk.id }, isRebuilding(partnerId))
+      const val = (pk: DraftPick) => partnerValue(world, partnerId, { kind: 'pick', id: pk.id }, isRebuilding(world, partnerId))
       let idx = pool.findIndex((pk) => val(pk) >= gap)
       if (idx < 0) idx = pool.length - 1
       pkg.push({ kind: 'pick', id: pool[idx].id })
@@ -427,11 +457,12 @@ export function findTargetsAtPosition(
   )
 
   const out: { player: Player; teamId: string; offer: DealOffer }[] = []
-  for (const c of candidates.slice(0, 12)) {
+  // A full market, not just the stars: up to 30 gettable players from the top 60.
+  for (const c of candidates.slice(0, 60)) {
     const offers = findPackagesFor(world, userTeamId, c.player.id)
     if (!offers.length) continue
     out.push({ player: c.player, teamId: c.teamId, offer: offers[0] })
-    if (out.length >= 8) break
+    if (out.length >= 30) break
   }
   return out
 }

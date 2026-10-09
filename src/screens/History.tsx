@@ -151,7 +151,7 @@ export function History() {
                 onClick={() => setTab(t.id)}
                 className={cn(
                   'rounded-md px-4 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {t.label}
@@ -477,7 +477,7 @@ function TeamTab({ world, db, defaultClub }: { world: World; db: CareerDatabase;
               onClick={() => setView(v)}
               className={cn(
                 'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-                view === v ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                view === v ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
               )}
             >
               {v === 'off' ? 'Offense' : v === 'def' ? 'Defense' : 'Both'}
@@ -504,7 +504,7 @@ function TeamTab({ world, db, defaultClub }: { world: World; db: CareerDatabase;
                   <HdrCell className="sticky top-0 z-30" active={sortKey === 'pa'} dir={dir} onClick={() => toggleSort('pa')}>PA</HdrCell>
                   <HdrCell className="sticky top-0 z-30" active={sortKey === 'diff'} dir={dir} onClick={() => toggleSort('diff')}>Diff</HdrCell>
                   <HdrCell className="sticky top-0 z-30" active={sortKey === 'ovr'} dir={dir} onClick={() => toggleSort('ovr')}>OVR</HdrCell>
-                  <th className="sticky top-0 z-30 border-b border-line bg-surface-2 px-2 py-2" />
+                  <th className="sticky top-0 z-30 border-b border-line glass-2 px-2 py-2" />
                   {cols.map((c) => (
                     <HdrCell key={c.id} className="sticky top-0 z-30 text-center" title={c.title} active={sortKey === c.id} dir={dir} onClick={() => toggleSort(c.id)}>
                       {c.label}
@@ -619,10 +619,10 @@ function YearTab({ world, db, career }: { world: World; db: CareerDatabase; care
             <table className="min-w-full border-collapse text-sm tnum">
               <thead>
                 <tr className="text-left">
-                  <th className="sticky top-0 z-10 border-b border-line bg-surface-2 px-3 py-2 label">Team</th>
-                  <th className="sticky top-0 z-10 border-b border-line bg-surface-2 px-3 py-2 label">W-L</th>
-                  <th className="sticky top-0 z-10 border-b border-line bg-surface-2 px-3 py-2 label text-right">PF</th>
-                  <th className="sticky top-0 z-10 border-b border-line bg-surface-2 px-3 py-2 label text-right">PA</th>
+                  <th className="sticky top-0 z-10 border-b border-line glass-2 px-3 py-2 label">Team</th>
+                  <th className="sticky top-0 z-10 border-b border-line glass-2 px-3 py-2 label">W-L</th>
+                  <th className="sticky top-0 z-10 border-b border-line glass-2 px-3 py-2 label text-right">PF</th>
+                  <th className="sticky top-0 z-10 border-b border-line glass-2 px-3 py-2 label text-right">PA</th>
                 </tr>
               </thead>
               <tbody>
@@ -715,7 +715,7 @@ function HdrCell({
       title={title}
       onClick={onClick}
       className={cn(
-        'label cursor-pointer select-none whitespace-nowrap border-b border-line bg-surface-2 px-2 py-2 font-700 hover:text-ink-2',
+        'label cursor-pointer select-none whitespace-nowrap border-b border-line glass-2 px-2 py-2 font-700 hover:text-ink-2',
         active && 'text-ink',
         className,
       )}

@@ -110,7 +110,8 @@ export function animProbe(world: World, games = 2, seeds?: number[]) {
         const path = anim.actors.find((a) => a.key === key)?.path
         const got = path ? posAt(path, 1).x : NaN
         endTotal++
-        if (Math.abs(got - want) < 1e-3) endMatch++
+        // A touchdown may finish anywhere in the end zone (caught there, not walked back).
+        if (Math.abs(got - want) < 1e-3 || (want >= 110 && got >= want)) endMatch++
       }
       plays++
     }

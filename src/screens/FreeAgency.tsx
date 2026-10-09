@@ -77,7 +77,7 @@ export function FreeAgency() {
       />
 
       {!canSign && (
-        <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
+        <div className="mb-4 rounded-xl border border-warn/30 bg-warn-soft p-3 text-sm text-warn">
           {access === 'advise'
             ? 'Roster building is the GM\u2019s call. You influence who the club targets \u2014 the GM signs the deal.'
             : <>You don't have roster control yet. Reach <strong>Director of Player Personnel</strong> or higher to sign free agents.</>}
@@ -85,7 +85,7 @@ export function FreeAgency() {
       )}
 
       {faClosed && (
-        <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
+        <div className="mb-4 rounded-xl border border-warn/30 bg-warn-soft p-3 text-sm text-warn">
           Free agency opens in March. February is the re-sign window \u2014 extend your own expiring players first.
           The pool below is a preview.
         </div>

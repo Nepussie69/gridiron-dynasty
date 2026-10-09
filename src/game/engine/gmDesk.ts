@@ -33,6 +33,7 @@ import { installSides } from './install'
 import { mainStatValue, seasonLine } from './stats'
 import { canAskGm, gmAskCovers, gmExtendDecision, gmOffer, type GmAskResult } from './gmAsk'
 import { unscaleOvr } from './ovrScale'
+import { snapAsset } from './tradeTree'
 
 export type GmRequestKind = 'extend' | 'restructure' | 'trade' | 'sign' | 'release'
 export type GmRequestOutcome = 'done' | 'notNow' | 'declined'
@@ -349,6 +350,17 @@ export function gmRestructureDecision(
   }
 }
 
+/** "Deal agreed" with the full package, so the coach can see what it cost. */
+function dealMessage(world: World, target: Player, offer: DealOffer): string {
+  const list = (labels: string[]) =>
+    labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
+  const partner = world.byId[offer.partnerId]
+  const club = partner ? `${partner.city} ${partner.name}`.trim() : offer.partnerId
+  const gave = list(offer.give.map((a) => snapAsset(world, a).label))
+  const got = list(offer.get.map((a) => snapAsset(world, a).label))
+  return `Deal agreed for ${target.name} (${target.pos}, ${target.ovr}). We send ${gave || 'nothing'} to the ${club}; we get ${got}.`
+}
+
 /** Go get this player. The GM searches packages, protects the coach's core, and executes the best one that fits. */
 export function gmTradeDecision(world: World, career: CareerState, playerId: string): GmRequestResult {
   const target = world.players.find((p) => p.id === playerId)
@@ -389,7 +401,7 @@ export function gmTradeDecision(world: World, career: CareerState, playerId: str
       offer,
       playerId: target.id,
       playerName: target.name,
-      message: `Deal agreed for ${target.name} (${target.pos}, ${target.ovr}).`,
+      message: dealMessage(world, target, offer),
     }
   }
   if (blockedByCap) {

@@ -186,7 +186,7 @@ export function Staff() {
                 onClick={() => setTab(t.id)}
                 className={cn(
                   'rounded-md px-4 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {t.label}
@@ -277,7 +277,7 @@ export function Staff() {
                     onClick={() => pickView(v.id)}
                     className={cn(
                       'inline-flex items-center gap-1.5 rounded-md px-3 py-1 font-cond text-[11px] font-700 uppercase tracking-wide transition',
-                      view === v.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                      view === v.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                     )}
                   >
                     <Icon size={12} />
@@ -295,7 +295,7 @@ export function Staff() {
                     className={cn(
                       'rounded-md border px-3 py-1 font-cond text-[11px] font-700 uppercase tracking-wide transition',
                       roleGroup === g.id
-                        ? 'border-transparent bg-ink text-white'
+                        ? 'border-transparent bg-ink text-canvas'
                         : 'border-line text-muted hover:bg-surface-2',
                     )}
                   >
@@ -346,7 +346,7 @@ export function Staff() {
                   className={cn(
                     'rounded-md border px-2.5 py-1 font-cond text-[11px] font-700 uppercase tracking-wide transition',
                     marketRole === r.id
-                      ? 'border-transparent bg-ink text-white'
+                      ? 'border-transparent bg-ink text-canvas'
                       : 'border-line text-muted hover:bg-surface-2',
                   )}
                 >
@@ -402,7 +402,7 @@ export function Staff() {
                 onClick={() => setFitsOnly((v) => !v)}
                 className={cn(
                   'rounded-md border px-2.5 py-1 font-cond text-[11px] font-700 uppercase tracking-wide transition',
-                  fitsOnly ? 'border-transparent bg-ink text-white' : 'border-line text-muted hover:bg-surface-2',
+                  fitsOnly ? 'border-transparent bg-ink text-canvas' : 'border-line text-muted hover:bg-surface-2',
                 )}
               >
                 Fits my scheme
@@ -778,7 +778,7 @@ function ChartChip({
               onClick={() => onFocusChange(member.id, f)}
               className={cn(
                 'rounded border px-1.5 py-0.5 font-cond text-[9px] font-700 uppercase tracking-wide transition disabled:opacity-40',
-                f === member.focus ? 'border-transparent bg-ink text-white' : 'border-line text-muted hover:bg-surface-2',
+                f === member.focus ? 'border-transparent bg-ink text-canvas' : 'border-line text-muted hover:bg-surface-2',
               )}
             >
               {f}
@@ -944,7 +944,7 @@ function FocusMenu({
             }}
             className={cn(
               'rounded border px-1.5 py-0.5 font-cond text-[10px] font-700 uppercase tracking-wide transition disabled:opacity-40',
-              f === member.focus ? 'bg-ink text-white' : 'border-line text-muted hover:bg-surface-2',
+              f === member.focus ? 'bg-ink text-canvas' : 'border-line text-muted hover:bg-surface-2',
             )}
           >
             {f}
@@ -1101,7 +1101,7 @@ function MarketCard({
                     onClick={() => setScheme(s)}
                     className={cn(
                       'rounded-md border px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
-                      scheme === s ? 'border-transparent bg-ink text-white' : 'border-line text-muted hover:bg-surface-2',
+                      scheme === s ? 'border-transparent bg-ink text-canvas' : 'border-line text-muted hover:bg-surface-2',
                     )}
                   >
                     {s}

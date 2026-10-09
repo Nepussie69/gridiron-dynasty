@@ -433,6 +433,19 @@ const POS_NOTES = [
   'Plays with a nasty streak; penalty-prone.',
 ]
 
+/**
+ * L12.15 S4: the new-scale ceiling target for a generated prospect, by his
+ * hidden true-grade quantile. The body of the class is a deliberate 60–79
+ * depth layer (none of it sub-60), and the top few percent are the scarce
+ * 80+ ceilings that `generatedCeiling` then sharpens by class standing.
+ */
+function prospectNewPot(trueGrade: number): number {
+  const u = Math.min(1, Math.max(0, (trueGrade - 58) / 34))
+  if (u < 0.36) return 60 + (u / 0.36) * 9
+  if (u < 0.96) return 70 + ((u - 0.36) / 0.6) * 9
+  return 80 + ((u - 0.96) / 0.04) * 4
+}
+
 export function generateProspectClass(rng: Rng, season: number, count = 170): DraftProspect[] {
   return Array.from({ length: count }, (_, i) => {
     const pos = rpick(rng, PROSPECT_POS)
@@ -449,13 +462,12 @@ export function generateProspectClass(rng: Rng, season: number, count = 170): Dr
       college: rpick(rng, CFB_TEAMS).name,
       age: rint(rng, 20, 23),
       ovr: Math.round(48 + grade * 0.24),
-      // L12.15 S4: the raw (old-scale) formula ceiling stays capped as it was
-      // before the remap, so the body of every class tops out around 93 → 88 on
-      // the new scale. The handful of prospects who can grow into the league's
-      // top bands are assigned a new-scale ceiling by *class standing* in
-      // `rookieRatings` (a static, rank-ordered funnel), not by a fat +15 bonus
-      // that used to put 13–25 players a class at 95–99.
-      pot: Math.round(Math.min(93, 56 + trueGrade * 0.32)),
+      // L12.15 S4: the ceiling is drawn on the *new* scale (a deliberate 60–79
+      // depth layer with a thin 80–84 tail), then inverted through the same map
+      // so `rookieRatings`' `rescaleOvr` lands it back where intended. The
+      // handful of prospects who can grow into the league's top bands are
+      // assigned a new-scale ceiling by *class standing* in `rookieRatings`.
+      pot: Math.round(unscaleOvr(prospectNewPot(trueGrade))),
       grade,
       trueGrade,
       myGrade: null,

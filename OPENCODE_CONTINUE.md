@@ -4,6 +4,10 @@ _Updated 2026-10-08 ~22:05 AEDT by Claude Opus 5.5 (stopped at 5-hour usage ~93%
 
 _Latest handover 2026-10-09: the user requested transfer back to Claude; read `CLAUDE_HANDOVER.md`. Codex ends orchestration after this documentation commit. Stable4173 remains90508fd, HTTP verified today. stars5/realism4 timed out overnight and exhausted retries, preserving edits. Fresh stars6(`/private/tmp/gridiron-stars6.txt`, execsession42211) and realism5(`/private/tmp/gridiron-realism5.txt`, execsession25712) are running in the same worktrees. Do not duplicate them. Stars candidateL is applied but unverified; realism last checked build fails TS6133/lint5 from an unfinished import, plus speed/synthetic-drop/tackle defects. No stars/realism merge is accepted. Detailed paths, review findings and exact next steps are in `CLAUDE_HANDOVER.md`._
 
+**⚠ 2026-10-09: the user asked to HOLD stable-build rebuilds. Keep merging verified pushes to main, but do NOT rebuild 4173 until the user says so (stable stays 4377982). Report what has piled up on main instead.**
+
+**GitHub Pages (2026-10-09): serves 124bff0 (pushed with the user's ok); 4173 still held at 4377982.** the stable build is also published at https://nepussie69.github.io/gridiron-dynasty/ from the `gh-pages` branch (repo made public by the user). Republish with `scripts/publish-pages.sh [commit]` — **but only after the user says ok: no git push of any kind (main or gh-pages) without the user's explicit ok (2026-10-09).** Pages saves live in that site's browser storage — use Export/Import save to move a career between 4173 and Pages.
+
 ## Your role and the user's standing instructions
 - You are the **orchestrator**: spec → send to DeepSeek Flash → verify → merge → rebuild the stable build → tell the user. Small UI fixes you do yourself.
 - "Keep going through all the pushes." "Get DeepSeek doing updates in the background so we can move fast" → run **several pushes in parallel, one git worktree each**.

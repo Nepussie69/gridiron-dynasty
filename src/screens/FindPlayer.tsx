@@ -162,7 +162,7 @@ export function FindPlayer() {
               onClick={() => apply(setView)(v)}
               className={cn(
                 'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                view === v ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                view === v ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
               )}
             >
               {v === 'ratings' ? 'Ratings' : 'Stats'}

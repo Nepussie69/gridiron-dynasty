@@ -344,7 +344,7 @@ function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
             </p>
           )}
 
-          {read.disagreement && <div className="mt-2 rounded-lg bg-[#fdf0dc] p-2.5 text-xs text-warn">{read.disagreement}</div>}
+          {read.disagreement && <div className="mt-2 rounded-lg bg-warn-soft p-2.5 text-xs text-warn">{read.disagreement}</div>}
 
           <div className="mt-3 flex flex-wrap gap-1.5">
             {open.traits.map((t) => <Badge key={t} tone="team">{t}</Badge>)}
@@ -411,7 +411,7 @@ function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
                   onClick={() => setRecommendation(open.id, r.id)}
                   className={cn(
                     'rounded-lg border px-2 py-2 font-cond text-xs font-700 uppercase tracking-wide transition disabled:opacity-40',
-                    open.recommendation === r.id ? 'border-transparent bg-ink text-white' : 'border-line hover:bg-surface-2',
+                    open.recommendation === r.id ? 'border-transparent bg-ink text-canvas' : 'border-line hover:bg-surface-2',
                   )}
                 >
                   {r.label}

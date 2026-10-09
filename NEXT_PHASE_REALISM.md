@@ -47,6 +47,33 @@ User: "make sure missed tackles are involved in the gameplay … toughness → m
 - Re-check the rating table claims with the probe: TGH injury rate (NFL ~6–8 injuries per club per month of season, TGH 60 vs 95 ~1.5× difference), SPD on long runs (20+ yd runs share), TAK on missed tackles, CTH on drops (NFL drop rate ~3–5% of targets).
 - `__ratingSpread` re-run after R1–R5; report each rating's effect.
 
+## R6 — Punt and kick returns with a real returner (user request, 2026-10-09: "also for punt and kick returns so they player returning")
+Today every kickoff is a touchback (playsim `pushPlay(... 'Touchback')`) and punts only record a net distance; the animation invents a return by whoever stands at the `s0` spot, unnamed, with no stats.
+- **Returner:** each club gets a KR and a PR picked automatically from WR/RB/CB (not starting QB, not the top-2 WR/top RB if a comparable backup exists) by a return score from SPD, ACC, AGI, BCV, CAR (Madden has no return rating). Optional depth-chart override slots `KR`/`PR` (optional save field, defaults to auto). Injured players skipped.
+- **Kickoffs:** touchback vs return by kicker KPW and returner; return yards from returner score vs coverage (kicking team's ST tacklers: LB/S/CB backups by TAK/PUR/SPD) with the existing yard-sampling style; rare return TD and rare fumble. Targets (approx. NFL 2015–2023, before the 2024 kickoff rule): touchback ~55–60% of kickoffs, average kick return ~22–23 yds, return TD ~0.3% of returns.
+- **Punts:** gross distance (existing net formula split into gross − return), fair catch / downed / out of bounds / touchback vs return; return yards from PR vs coverage; rare muff and return TD. Targets: ~45% of punts returned, ~9 yds per return, net ~40–41.
+- **Determinism:** no new rng() draws in the sim — derive the extra randomness from a deterministic per-play hash (as drops do), so seeds and equivalence stay stable.
+- **Show it:** PlayEvent gains optional `returnerId` + `returnYards`; play text "Punt 47 yds, returned 11 by #84 D. Smith" / "Kickoff returned 27 yds by …"; animation uses the real returner (his jersey number and pace from his ratings) for both punts and kickoffs; box score / season / career stats get KR / KR yds / PR / PR yds / return TD columns (optional fields).
+- **Calibration:** re-run the 3-seed SIM after: field position changes will move points — fold into the R2 bands (do not inflate TDs elsewhere).
+
+## R7 — QB pressures as a stat (user request, 2026-10-09: "include pressures in statistics in the game and box score")
+Today `PlayOutcome.pressure` is a boolean set on every sack and on incompletions when `pressureEdge > 6`; nobody is credited and the rate is not realistic.
+- **Model:** on every dropback (sacks, completions, incompletions, INTs, scrambles if any) decide pressure from the existing `pressureEdge` with a deterministic per-play hash (no new rng draws): league rate ~30–35% of dropbacks (NFL Next Gen/PFF style), higher vs weak pass protection / on blitzes, lower vs elite OL; every sack is a pressure. **Stats only — do not change completion, sack or INT outcomes** (calibration must not move).
+- **Types (user, 2026-10-09: "include hurries in PRS"):** every pressure is exactly one of **sack**, **QB hit** (non-sack, QB knocked down as/after he throws; ~20–25% of non-sack pressures) or **hurry** (QB forced to throw/move early; the rest). **PRS = SCK + QBH + HUR**. Box score shows PRS and HUR next to SCK; season/career/Stats Hub show PRS, HUR and QBH; glossary explains the split.
+- **Credit:** one rusher per pressure — DL weighted by max(PMV, FMV) (and LBs on blitzes, as sack credit does) via the same hash; the sacker is credited on sacks.
+- **Stats:** optional `pressureId` on the play; defensive `PRS` (pressures) in box score, season, career (optional fields, old saves default 0), Stats Hub column + glossary, QB "pressured %" (pressures faced / dropbacks) on the passing side. Fast-sim allocation (`statAlloc`) gives rushers a matching deterministic share so simmed seasons show them too.
+- **Checks:** league pressure rate 30–35% of dropbacks on 3 seeds; top edge rushers ~50–80 pressures per 17 games; elite PMV/FMV rusher > average; SIM/eq unchanged vs the pre-change branch.
+
+## R8 — QB sacked in the passing line (user request, 2026-10-09: "include qb sacked in game and statistics")
+Team `sacksTaken` exists, and sack plays carry `qbId`, but the QB's own line has no sacks.
+- Passing line gets **SK** (times sacked) and **SKY** (sack yards lost): game box score (`C/ATT YDS TD INT SK RTG`), season, career, Stats Hub columns + glossary. Optional fields; old saves default 0.
+- Game day / play-by-play: counted from sack plays by `qbId` (yards = |play.yards|).
+- Fast-sim (`statAlloc`): the team's existing `sacksTaken` and sack yards go to the QBs by dropback share (deterministic, no rng), so simmed seasons match.
+- Keep NFL convention: sacks are not pass attempts and sack yards are not subtracted from the QB's passing yards (team net passing already handles it). Check: league QB SK/game ≈ team sacks taken (2.2–2.6), box totals == play-level counts.
+
+## R9 — Coverage stats in simmed games (2026-10-09, with "include receptions allowed")
+Game-day box score now shows REC/TGT and YDS ALW (Claude, main). But fast-sim `statAlloc` allocates no coverage stats (defTargets/defComp/defYdsAllowed/defTDAllowed/defIntsCov), so simmed seasons show zero. Allocate them deterministically (no rng) from the team's passing allowed to its CBs/S/LBs by coverage role and MCV/ZCV, consistent with PBP coverage shares, so season REC allowed / YDS ALW / COV grades exist for every game.
+
 ## Progress
 | Task | Current state |
 |---|---|
@@ -63,3 +90,4 @@ User: "make sure missed tackles are involved in the gameplay … toughness → m
 - Codex review of realism3: measured injury6.47–6.50 events/club-month and TGH60/95 ratio1.478; PBP drops3.48–3.54%/target, CTH direction correct. Eq20/20; animation endspots100%, syntheticSPD1.33; 3-game frame spike4.575 identical without stumble. Independent final build fails TS6133 and lint5 due unfinished POS_MEAN import. Review also finds synthetic drops always round to0, paired highSPD yields fewer20+ runs, and team/average-RB/elusive tackle bands still fail. Not accepted or merged; realism4(`/private/tmp/gridiron-realism4.txt`, execsession84520) fixes these before final R2 retune. Measurements `/private/tmp/realism3-*.out`.
 
 - Handover2026-10-09: realism4 exhausted retries after overnight interruption before implementing the requested fixes. realism5(`/private/tmp/gridiron-realism5.txt`) continues in the preserved worktree; Claude receives ownership via CLAUDE_HANDOVER.md. No final acceptance or merge.
+- Claude 2026-10-09: realism5 reviewed (SPD tilt positive 3 seeds, tackles 7.1-7.7/team elite 3.2-3.6% poor 24.7-25.3%, PBP drops 3.6-3.9% CTH60 6.5% / CTH95 2.4%, audits 0, eq 20/20, build/lint 4). Not merged: points 18.1-19.1 vs 22-23.2. Committed on wt-realism, main (stars 2262df2) merged in cleanly; realism6 (/private/tmp/gridiron-realism6.txt) runs the R2 retune + fast-sim drop reconcile (1.3% vs PBP 3.7%).

@@ -44,7 +44,7 @@ export function LegacyCard({ className }: { className?: string }) {
               {p.title.replace('The ', '')}
             </span>
             <div className="flex-1">
-              <RatingBar value={p.score} color={p.id === leader.id ? 'var(--team)' : '#c7d2e0'} />
+              <RatingBar value={p.score} color={p.id === leader.id ? 'var(--team)' : 'var(--color-line)'} />
             </div>
             <span className="w-6 text-right font-cond text-[10px] font-700 tnum text-muted">{p.score}</span>
           </div>

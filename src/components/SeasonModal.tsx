@@ -31,8 +31,8 @@ export function SeasonModal() {
     return (
       <Shell onClose={dismiss}>
         <div className="mb-4 flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-gold/20 text-gold" style={{ background: '#fbf3de' }}>
-            <Trophy size={22} className="text-[#9a7418]" />
+          <div className="grid h-11 w-11 place-items-center rounded-xl bg-gold-soft text-gold-ink">
+            <Trophy size={22} className="text-gold-ink" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="label">Season Complete · {summary.season}</div>
@@ -91,7 +91,7 @@ export function SeasonModal() {
                   <span
                     className={cn(
                       'grid h-4 w-4 shrink-0 place-items-center rounded-full text-[10px]',
-                      a.done ? 'bg-win text-white' : 'bg-surface-3 text-faint',
+                      a.done ? 'bg-win text-on-accent' : 'bg-surface-3 text-faint',
                     )}
                   >
                     {a.done ? '✓' : ''}
@@ -199,7 +199,7 @@ export function SeasonModal() {
             <div className="space-y-1.5">
               {summary.objectives.map((o) => (
                 <div key={o.id} className="flex items-center gap-2 text-xs">
-                  <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded-full', o.done ? 'bg-win text-white' : 'bg-surface-3 text-faint')}>
+                  <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded-full', o.done ? 'bg-win text-on-accent' : 'bg-surface-3 text-faint')}>
                     {o.done ? '✓' : ''}
                   </span>
                   <span className="flex-1 font-600 text-ink-2">{o.label}</span>
@@ -331,7 +331,7 @@ export function SeasonModal() {
 
 function Shell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/50 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm">
       <div className="relative max-h-[90vh] w-full max-w-[640px] overflow-y-auto rounded-2xl border border-line bg-canvas p-5 shadow-2xl">
         <button onClick={onClose} className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-lg bg-surface-2 text-muted hover:text-ink">
           <X size={16} />

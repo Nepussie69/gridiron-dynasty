@@ -171,11 +171,11 @@ export function Career() {
             onClick={() => setTab(t.id)}
             className={cn(
               'flex items-center gap-1.5 rounded-lg px-3.5 py-2 font-cond text-sm font-700 uppercase tracking-wide transition',
-              tab === t.id ? 'bg-ink text-white' : 'text-ink-2 hover:bg-surface-2',
+              tab === t.id ? 'bg-ink text-canvas' : 'text-ink-2 hover:bg-surface-2',
             )}
           >
             {t.label}
-            {t.badge ? <span className="rounded-full bg-gold px-1.5 text-[10px] text-ink">{t.badge}</span> : null}
+            {t.badge ? <span className="rounded-full bg-gold px-1.5 text-[10px] text-on-accent">{t.badge}</span> : null}
           </button>
         ))}
         <button
@@ -398,7 +398,7 @@ export function Career() {
                           </Button>
                         </div>
                         <div className="mt-1.5">
-                          <RatingBar value={value} color={active ? '#c99a2e' : '#9aa0a6'} height={6} />
+                          <RatingBar value={value} color={active ? '#c99a2e' : 'var(--color-faint)'} height={6} />
                         </div>
                         <p className="mt-1 text-[10px] text-muted">{SKILL_BLURBS[key]}</p>
                         <p className="mt-0.5 text-[10px] text-faint">

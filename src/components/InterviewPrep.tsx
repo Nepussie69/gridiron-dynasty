@@ -42,7 +42,7 @@ export function InterviewPrep({ offer, onCancel }: { offer: JobOffer; onCancel: 
   }
 
   return (
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-ink/60 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
       <div className="relative max-h-[90vh] w-full max-w-[600px] overflow-y-auto rounded-2xl border border-line bg-canvas p-5 shadow-2xl">
         <button
           onClick={onCancel}

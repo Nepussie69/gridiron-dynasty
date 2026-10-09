@@ -36,7 +36,7 @@ export function Roster() {
   const [side, setSide] = useState<(typeof SIDES)[number]['id']>('ALL')
   const [pos, setPos] = useState('ALL')
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState<'ovr' | 'age' | 'name' | 'cap' | 'stats'>('ovr')
+  const [sort, setSort] = useState<'ovr' | 'pot' | 'age' | 'name' | 'cap' | 'stats'>('ovr')
 
   const roster = rosterOf(league, activeTeamId)
   const level: StatLevel = league.byId[activeTeamId].tier === 'NFL' ? 'NFL' : 'CFB'
@@ -60,6 +60,7 @@ export function Roster() {
         return vb - va
       }
       if (sort === 'ovr') return b.ovr - a.ovr
+      if (sort === 'pot') return b.pot - a.pot || b.ovr - a.ovr
       if (sort === 'age') return a.age - b.age
       if (sort === 'cap') return b.contract.capHit - a.contract.capHit
       return a.name.localeCompare(b.name)
@@ -81,7 +82,7 @@ export function Roster() {
             ? `${filtered.length} shown · click a column header to sort`
             : tab === 'stats'
               ? `${filtered.length} shown · ${league.season} season stats`
-              : `${roster.length} players · sorted by ${sort === 'ovr' ? 'overall' : sort}`
+              : `${roster.length} players · sorted by ${sort === 'ovr' ? 'overall' : sort === 'pot' ? 'potential' : sort}`
         }
         right={
           <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
@@ -123,7 +124,7 @@ export function Roster() {
                 }}
                 className={cn(
                   'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {t.label}
@@ -138,7 +139,7 @@ export function Roster() {
                 onClick={() => setSide(s.id)}
                 className={cn(
                   'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  side === s.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  side === s.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {s.label}
@@ -172,6 +173,7 @@ export function Roster() {
                   className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
                 >
                   <option value="ovr">Overall</option>
+                  <option value="pot">Potential</option>
                   <option value="age">Age</option>
                   <option value="cap">Cap Hit</option>
                   <option value="name">Name</option>

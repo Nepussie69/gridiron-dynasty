@@ -208,8 +208,8 @@ export const COL_COV_TGT: StatCol = {
 
 export const COL_COV_CMP: StatCol = {
   id: 'covCmp',
-  label: 'CMP',
-  title: 'Completions allowed',
+  label: 'REC',
+  title: 'Receptions allowed (completions when he was the defender in coverage)',
   get: (s) => s?.defComp ?? null,
   fmt: (s) => num(s?.defComp),
 }

@@ -78,7 +78,7 @@ export function DataTable<T>({
   return (
     <div className="overflow-auto" style={{ maxHeight }}>
       <table className="w-full border-collapse text-sm tnum">
-        <thead className="sticky top-0 z-10 bg-surface">
+        <thead className="sticky top-0 z-10 glass">
           <tr className="border-b border-line text-left">
             {rank && <th className="label w-9 px-2 py-1.5">#</th>}
             {columns.map((c) => {
