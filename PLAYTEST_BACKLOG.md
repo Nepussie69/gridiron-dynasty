@@ -80,3 +80,5 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 74 | 2026-10-09 | Update the stable build and keep pushing | Claude: stable4173 rebuilt at e841299 (docs only, same JS); ui1 (UI U1 TV field) launched in parallel with stars6/realism5 | 🔨 |
 | 75 | 2026-10-09 | Sort OVR and potential ascending and descending | Claude: Ratings/Stats tables split the OVR/POT header into separate OVR and POT sort buttons (click again flips ▲/▼); roster Overview dropdown gains Potential | ✅ main (not on stable yet) |
 | 76 | 2026-10-09 | Hold off updating the stable build; pile up changes so I can find more bugs | Claude: keep merging verified pushes to main; NO stable 4173 rebuild until the user asks (stable stays 4377982) | ✅ standing |
+| 77 | 2026-10-09 | Show what deal was made when the GM lands a trade target | Claude: 'GM: Agreed' message lists what we sent (players/picks), to which club, and what we got (gmDesk dealMessage) | ✅ main (not on stable yet) |
+| 78 | 2026-10-09 | Put a stable build on GitHub Pages so I don't get kicked out of the game | Claude: in progress | 🔨 |
