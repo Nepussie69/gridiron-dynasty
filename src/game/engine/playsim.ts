@@ -12,7 +12,7 @@ import { unscaleOvr } from './ovrScale'
 import { POS_MEAN } from './ratingMeans'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
 import { coachEffect } from './coaching'
-import { depthGroup } from './depth'
+import { depthAt, depthGroup } from './depth'
 import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, coachTendency, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
@@ -32,6 +32,10 @@ export function setUserCoaching(ctx: typeof USER_COACH) {
 let STAMINA_ON = true
 export function setStamina(on: boolean) {
   STAMINA_ON = on
+}
+/** R15: read the current stamina toggle so a probe can restore it exactly. */
+export function getStamina(): boolean {
+  return STAMINA_ON
 }
 function ocEffect(world: World, teamId: string) {
   const base = coachEffect(world, teamId)
@@ -109,7 +113,7 @@ export const R2 = {
   /** Base interception chance. */
   intBase: 0.0118,
   /** Multiplier on a positive run gain after the real distribution is sampled. */
-  runGainCal: 0.69,
+  runGainCal: 0.74,
   /** Multiplier on the yards-after-catch / style bonus on completions. */
   yacCal: 1,
   /** Multiplier on a positive pass gain after the real distribution is sampled. */
@@ -894,7 +898,9 @@ function offenseOnField(world: World, offId: string, concept: Concept, qbOverrid
     list.push(...fieldGroup(world, offId, ['RB'], c.rb, fat))
   } else if (c.rb === 1) {
     const pool = topGroup(world, offId, ['RB'], 2)
-    const repped = reppedId ? pool.find((p) => p.id === reppedId) : undefined
+    // R15: always field the back who actually took the rep, even if he is deeper
+    // on the chart than the top two (a one-back set is his rep, not the starter's).
+    const repped = reppedId ? (world.roster[offId] ?? []).find((p) => p.id === reppedId && !p.injured) : undefined
     const man = repped ?? (fat ? fieldGroup(world, offId, ['RB'], 1, fat)[0] : pool[0])
     if (man) list.push(man)
   }
@@ -913,6 +919,31 @@ function defenseOnField(world: World, defId: string, personnel: Personnel | unde
     ...topGroup(world, defId, ['CB'], pkg.cb),
     ...topGroup(world, defId, ['S'], pkg.s),
   ]
+}
+
+/**
+ * R15: top a short on-field unit up to 11 with the best remaining healthy players.
+ * A club always fields 11 when its roster allows — a missing fullback, a thinned
+ * linebacker corps or an injured corner is backfilled by the next man up (NFL
+ * teams use a second back for a fullback, an extra DB for a short LB group, etc.).
+ * This only shapes the snap/fatigue participant list; the resolver's rated groups
+ * are untouched, so no rng() draw is added or removed.
+ */
+const OFF_FILL: Position[] = ['RB', 'TE', 'WR', 'FB', 'OT', 'OG', 'C']
+const DEF_FILL: Position[] = ['CB', 'S', 'LB', 'DE', 'DT']
+function fillToEleven(world: World, teamId: string, list: Player[], preference: Position[]): Player[] {
+  if (list.length >= 11) return list.slice(0, 11)
+  const out = [...list]
+  const have = new Set(out.map((p) => p.id))
+  for (const pos of preference) {
+    for (const p of depthAt(world, teamId, pos)) {
+      if (out.length >= 11) return out
+      if (p.injured || have.has(p.id)) continue
+      have.add(p.id)
+      out.push(p)
+    }
+  }
+  return out
 }
 
 /** Charge one snap of fatigue to a player, at most once per play. */
@@ -1571,9 +1602,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const saf = defUnits.filter((p) => p.pos === 'S')
   // R15: the exact participant id lists the snap/fatigue charge uses. A back who
   // actually took the rep replaces the nominal starter in a one-back grouping.
-  const onFieldDefIds = defUnits.map((p) => p.id)
+  const onFieldDefIds = fillToEleven(world, defId, defUnits, DEF_FILL).map((p) => p.id)
   const onFieldOffIds = (reppedId?: string) =>
-    offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat).map((p) => p.id)
+    fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat), OFF_FILL).map((p) => p.id)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
   // R15: the offence's and defence's average in-game fatigue. Effects use the
@@ -1963,9 +1994,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const lbs = defUnits.filter((p) => p.pos === 'LB')
   const saf = defUnits.filter((p) => p.pos === 'S')
   const cbs = defUnits.filter((p) => p.pos === 'CB')
-  const onFieldDefIds = defUnits.map((p) => p.id)
+  const onFieldDefIds = fillToEleven(world, defId, defUnits, DEF_FILL).map((p) => p.id)
   const onFieldOffIds = (reppedId?: string) =>
-    offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat).map((p) => p.id)
+    fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat), OFF_FILL).map((p) => p.id)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
   // R15: offence-vs-defence average in-game fatigue (difference only).

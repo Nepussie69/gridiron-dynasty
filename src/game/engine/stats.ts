@@ -115,7 +115,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     // A deflected/muffed INTERCEPTION keeps `reception` unset, so it is never
     // credited as a completion; metadata alone distinguishes the two. The result
     // text is only a legacy fallback for play logs without the flag.
-    const isComp = play.reception ?? (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || (!!play.fumbleId && !play.intId) || (!!play.muffedCatch && !play.intId))
+    const isComp = play.reception ?? (!play.intId && (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId || !!play.muffedCatch))
     if (play.type === 'pass') {
       const qb = play.qbId
       if (qb) {
@@ -125,9 +125,9 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         if (isComp) {
           add(qb, off, 'passComp', 1)
           add(qb, off, 'passYds', play.yards)
-          if (play.result === 'TOUCHDOWN!') add(qb, off, 'passTD', 1)
+          if (play.result === 'TOUCHDOWN!' && !play.defTD) add(qb, off, 'passTD', 1)
         }
-        if (play.result.startsWith('Interception')) add(qb, off, 'ints', 1)
+        if (play.intId || play.result.startsWith('Interception')) add(qb, off, 'ints', 1)
         // R8: sacks taken by the QB (SK) and sack yards lost (SKY). A sack is not
         // a pass attempt and its yards are not subtracted from passing yards.
         if (/^Sack/.test(play.result)) {
@@ -159,7 +159,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       if (play.carrierId && isComp && play.targetId === play.carrierId) {
         add(play.carrierId, off, 'rec', 1)
         add(play.carrierId, off, 'recYds', play.yards)
-        if (play.result === 'TOUCHDOWN!') add(play.carrierId, off, 'recTD', 1)
+        if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'recTD', 1)
       }
       // L12 S3: a completion is stopped by one defender (no credit on a score —
       // the resolver already withholds tackleIds there).
@@ -174,17 +174,17 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         if (isComp) {
           add(play.coverId, def, 'defComp', 1)
           add(play.coverId, def, 'defYdsAllowed', Math.max(0, play.yards))
-          // R4b: a pass TD caught on this defender.
-          if (play.result === 'TOUCHDOWN!') add(play.coverId, def, 'defTDAllowed', 1)
+          // R4b: a pass TD caught on this defender (not a takeaway return TD).
+          if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.coverId, def, 'defTDAllowed', 1)
         }
         // R4b: INTs credited to the coverage defender (distinct from the ball hawk).
-        if (play.result.startsWith('Interception')) add(play.coverId, def, 'defIntsCov', 1)
+        if (play.intId || play.result.startsWith('Interception')) add(play.coverId, def, 'defIntsCov', 1)
       }
     } else if (play.type === 'run') {
       if (play.carrierId) {
         add(play.carrierId, off, 'rushAtt', 1)
         add(play.carrierId, off, 'rushYds', Math.max(0, play.yards))
-        if (play.result === 'TOUCHDOWN!') add(play.carrierId, off, 'rushTD', 1)
+        if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'rushTD', 1)
       }
       // One tackler per run — the defense shares stops across the front seven.
       const t = play.tackleIds ?? []

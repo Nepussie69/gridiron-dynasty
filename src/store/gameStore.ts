@@ -11,7 +11,7 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecovery } from '../game/engine/sim'
-import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
+import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, getStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills } from '../game/engine/coaching'
@@ -5821,7 +5821,7 @@ export function statAudit(games = 150) {
       if (p.qbId && /^Sack/.test(p.result)) plSk++
       if (p.coverId && p.targetId) {
         plTgt++
-        const comp = p.reception ?? (p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || (!!p.fumbleId && !p.intId) || (!!p.muffedCatch && !p.intId))
+        const comp = p.reception ?? (!p.intId && (p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || !!p.fumbleId || !!p.muffedCatch))
         if (comp) { plComp++; plYds += Math.max(0, p.yards) }
       }
     }
@@ -6193,8 +6193,8 @@ export function staminaProbe(games = 150) {
       for (const [id, n] of Object.entries(snaps)) {
         const p = pmap.get(id)
         if (!p || p.teamId !== t || !n) continue
-        if (p.side === 'OFF') { offPlayers += n; if (off) add(buckets.qb, 0) }
-        else if (p.side === 'DEF') { defPlayers += n; if (def) add(buckets.qb, 0) }
+        if (p.side === 'OFF') offPlayers += n
+        else if (p.side === 'DEF') defPlayers += n
         if (p.pos === 'QB' && off) add(buckets.qb, (n / off) * 100)
         else if (rb1 && p.id === rb1.id && off) add(buckets.rb1, (n / off) * 100)
         else if (rb2 && p.id === rb2.id && off) add(buckets.rb2, (n / off) * 100)
@@ -6208,7 +6208,10 @@ export function staminaProbe(games = 150) {
       if (rotated) rotateTeams++
     }
     for (const f of Object.values(sim.fatigue ?? {})) { endFat += f; endFatN++ }
-    // A/B: identical seed with the stamina effect off. Always restored.
+    // A/B: identical seed with the stamina effect off. Restore the exact prior
+    // toggle (not a hard-coded true) in a finally so an exception cannot leave it
+    // flipped and any caller's setting survives.
+    const priorStamina = getStamina()
     try {
       setStamina(false)
       const base = simulatePlayByPlay(world, h.id, a.id, seed)
@@ -6218,7 +6221,7 @@ export function staminaProbe(games = 150) {
       bComp += base.stats.home.passComp + base.stats.away.passComp
       bAtt += base.stats.home.passAtt + base.stats.away.passAtt - base.stats.home.sacksTaken - base.stats.away.sacksTaken
     } finally {
-      setStamina(true)
+      setStamina(priorStamina)
     }
     ePoints += sim.homeScore + sim.awayScore
     eSacks += sim.stats.home.sacksTaken + sim.stats.away.sacksTaken
@@ -6250,7 +6253,7 @@ export function staminaProbe(games = 150) {
     fatigue: { max: +maxFat.toFixed(3), meanEnd: +(endFat / (endFatN || 1)).toFixed(3) },
     ab: {
       // Per-game totals for both clubs; divide by two for a team-game figure.
-      pointsPerGame: perTeamGame(ePoints - bPoints) [0] ?? 0,
+      pointsPerGame: perTeamGame(ePoints - bPoints),
       sacksPerGame: perTeamGame(eSacks - bSacks),
       passYdsPerGame: perTeamGame(ePass - bPass),
       pointsPerTeamGame: perTeamGame(ePoints - bPoints),

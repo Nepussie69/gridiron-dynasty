@@ -150,15 +150,21 @@ function snapShare(world: World, teamId: string, p: Player): number {
   const r = rank < 0 ? 9 : rank
   switch (p.pos) {
     case 'QB': return r === 0 ? 1 : 0.06
-    case 'OT': case 'OG': case 'C': return r < 5 ? 1 : 0.12
+    // OL start 2 OT + 2 OG + 1 C; only those ranks are full-time. A reserve who
+    // is merely high on a positional depth chart (rank < 5) is NOT a starter.
+    case 'OT': case 'OG': return r < 2 ? 1 : 0.12
+    case 'C': return r < 1 ? 1 : 0.12
     case 'RB': return r === 0 ? 0.6 : r === 1 ? 0.3 : 0.1
     case 'FB': return 0.22
     case 'WR': return [0.85, 0.78, 0.64, 0.22, 0.1][r] ?? 0.08
     case 'TE': return r === 0 ? 0.75 : r === 1 ? 0.3 : 0.1
-    case 'DE': case 'DT': return r < 2 ? 0.8 : 0.45
-    case 'LB': return r < 3 ? 0.8 : 0.35
-    case 'CB': return r < 2 ? 0.85 : 0.5
-    case 'S': return r < 2 ? 0.9 : 0.35
+    // Defence: the base 11 are 4 DL + 2–3 LB + 3 CB + 2 S. Only the starters and
+    // the first rotational sub are full-time; the rest sit below FAST_SNAP_MIN, so
+    // a side's snap shares sum to ~11 rather than every backup drawing a share.
+    case 'DE': case 'DT': return r < 2 ? 0.82 : r === 2 ? 0.35 : 0.1
+    case 'LB': return r < 2 ? 0.85 : r === 2 ? 0.5 : 0.12
+    case 'CB': return r < 2 ? 0.85 : r === 2 ? 0.45 : 0.1
+    case 'S': return r < 2 ? 0.9 : r === 2 ? 0.2 : 0.08
     default: return 0
   }
 }
