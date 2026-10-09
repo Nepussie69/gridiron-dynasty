@@ -85,3 +85,5 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 79 | 2026-10-09 | Punt and kick returns with the player returning | Claude: spec NEXT_PHASE_REALISM.md R6 (real KR/PR from SPD/ACC/AGI/BCV, kickoff returns vs touchbacks, punt returns, returner shown in play text + animation + stats); runs as realism7 right after realism6 merges | ⏳ queued |
 | 80 | 2026-10-09 | Be able to ask for deals for draft picks too | Claude: Find deals (🔍) now on pick rows: shop your pick around the league, or see what it costs to land another club's pick (findDeals/findPackagesFor accept pick ids) | ✅ main (not on stable yet) |
 | 81 | 2026-10-09 | Only push to GitHub when I say ok, so I can keep playing before updates | Claude: no git push / Pages publish without an explicit ok per push | ✅ standing |
+| 82 | 2026-10-09 | Next play flashes/replays the previous play before the next one | Claude: a finished play no longer restarts when the coached game appends the next plays (MatchView anim effect + auto-advance); next play shows in ~75 ms | ✅ main |
+| 83 | 2026-10-09 | Push to GitHub | Claude: user ok — main pushed, Pages republished from main | 🔨 |
