@@ -16,6 +16,7 @@ import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
 import { buildPlayAnim, holderAt, liftAt, posAt, snapYard, targetKey, actorWhy } from './playAnim'
 import { RouteDiagram } from './RouteDiagram'
+import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { Badge, Button, TeamCrest } from '../ui/kit'
@@ -787,7 +788,12 @@ export function MatchView() {
             <div className="sticky bottom-0 z-30 shrink-0 border-t border-white/10 bg-[#0d1a2b]/95 px-3 py-2 backdrop-blur-md">
               {showMoment && moment ? (
                 <div className="gd-slide-up">
-                  <MomentCard moment={moment} fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)} onAnswer={answer} />
+                  <MomentCard
+                    moment={moment}
+                    fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)}
+                    onAnswer={answer}
+                    quick={(lean) => quickOffCall(world, moment.teamId === match.homeId ? match.awayId : match.homeId, moment, lean)}
+                  />
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -1221,7 +1227,7 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   )
 }
 
-function MomentCard({ moment, fieldPos, onAnswer }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void }) {
+function MomentCard({ moment, fieldPos, onAnswer, quick }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void; quick?: (lean: 'run' | 'pass') => string | null }) {
   return (
     <div className="rounded-2xl border border-[#c99a2e]/70 bg-black/40 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1245,6 +1251,7 @@ function MomentCard({ moment, fieldPos, onAnswer }: { moment: Moment; fieldPos: 
           <span>{moment.staffRead}</span>
         </div>
       )}
+      {moment.kind === 'call' && quick && <QuickCallBar quick={quick} onAnswer={onAnswer} />}
       {moment.kind === 'call' ? (
         <CallPicker moment={moment} onAnswer={onAnswer} />
       ) : (
@@ -1310,6 +1317,34 @@ function optionEv(o: Moment['options'][number]): number | null {
  * The picked play is a playbook play; the sim runs its concept/class exactly as
  * the standing order would, so the result path and rng draws are unchanged.
  */
+/**
+ * "Just run" / "just pass": the staff picks the concept from this opponent's
+ * tendencies and NFL situational norms (src/game/engine/quickCall.ts).
+ */
+function QuickCallBar({ quick, onAnswer }: { quick: (lean: 'run' | 'pass') => string | null; onAnswer: (id: string) => void }) {
+  const picks = { run: quick('run'), pass: quick('pass') }
+  return (
+    <div className="mb-2 grid grid-cols-2 gap-2">
+      {(['run', 'pass'] as const).map((lean) => {
+        const id = picks[lean]
+        return (
+          <button
+            key={lean}
+            type="button"
+            disabled={!id}
+            onClick={() => id && onAnswer(id)}
+            title={id ? `Staff call: ${id}` : 'No play of this type in the book'}
+            className="flex items-center justify-between gap-2 rounded-xl border border-[#ffd34d]/50 bg-[#ffd34d]/10 px-3 py-2 text-left transition hover:bg-[#ffd34d]/20 disabled:opacity-40"
+          >
+            <span className="font-display text-lg font-700 uppercase text-white">{lean === 'run' ? 'Run' : 'Pass'}</span>
+            <span className="truncate font-cond text-[11px] font-600 uppercase tracking-wide text-white/60">{id ?? '—'}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: string) => void }) {
   const groups = useMemo(() => {
     const m = new Map<string, Moment['options']>()

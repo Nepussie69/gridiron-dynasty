@@ -74,6 +74,9 @@ Team `sacksTaken` exists, and sack plays carry `qbId`, but the QB's own line has
 ## R9 — Coverage stats in simmed games (2026-10-09, with "include receptions allowed")
 Game-day box score now shows REC/TGT and YDS ALW (Claude, main). But fast-sim `statAlloc` allocates no coverage stats (defTargets/defComp/defYdsAllowed/defTDAllowed/defIntsCov), so simmed seasons show zero. Allocate them deterministically (no rng) from the team's passing allowed to its CBs/S/LBs by coverage role and MCV/ZCV, consistent with PBP coverage shares, so season REC allowed / YDS ALW / COV grades exist for every game.
 
+## R10 — Two-high defensive call (user request, 2026-10-09)
+Add DefCall `twoHigh` (Cover 2/4 two-deep shell) to DEF_CALLS, CALL_MATRIX (suggested: run +2, short +1, deep -3 — between zone and stack), labels/descriptions, `aiTendency` defRaw weight (from coverage style), user tendency book (`emptyBook` def keys), film/ledger summaries and the defCall moment cards; keep old saves valid (optional book keys default 0). Re-run calib/eq after.
+
 ## Progress
 | Task | Current state |
 |---|---|
