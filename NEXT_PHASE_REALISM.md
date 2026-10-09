@@ -94,8 +94,13 @@ Each push: no new/removed rng() draws (hash), optional save fields, build + lint
 | R3 | Pending final calibration, player shape and six-season checks |
 | R4 | Glossary changes drafted; final anchors pending |
 | R5 | Tackle accounting/formula reviewed; toughness/drop measurements pass; speed and synthetic-stat bugs in realism4 |
+| R15 | Codex rejected 5b8a832: build/lint 4 and animation 216/216 pass; calibration points 22.0/21.7/22.0, seed 2222 outside 22–23.2; no DL rotation, inaccurate PBP snaps, duplicated fast-sim snaps, missing OL snap lines, broken probe percentages. Focused repair queued after existing R16–R18 chain; no merge. |
+| R16 | Existing realism16 DeepSeek job active in wt-realism; do not duplicate. Independent verification pending. |
+| R17 | Existing queue5 runs realism17 after realism16. Independent verification pending. |
+| R18 | Existing queue5 runs realism18 after realism17. Independent verification pending. |
 
 ## Verification log
+- Codex 2026-10-09 realism15 5b8a832: build passes; lint exactly 4; 3×500 SIM points 22.0/21.7/22.0 (seed 2222 fails scoring band), eq 20/20, 4-season coach/personnel 0 errors/0 violations, anim 216/216. Rejected on calibration and feature audit: DL rotation 0/100 games, RB1 100% plus backups, inconsistent on-field snap totals, fast-sim duplicate snap counts/missing OL, probe arithmetic defects. Repair queued after untouched realism16–18 queue. Logs /private/tmp/codex-realism15-{build,lint,calib,anim-independent,feature}.log.
 - Codex review of realism2: build passes, lint exactly4, equivalence20/20. Three seeds500 games in `/private/tmp/realism2-verify.out`: points21.2–21.6 and true completion69.6–70.1% fail specified targets. Miss rates12.34–12.79%, elite3.31–4.70%, poor21.07–21.52%; audit400games found no phantom miss/finisher double credit. TGH ratio~1.25 versus1.5 and explicit drops absent; not accepted or merged. Integrated main ab988b1, preserving rating-timed animation and R5 stumble; build/lint4 pass. realism3 addresses remaining R5 requirements before final R2 retune.
 
 
