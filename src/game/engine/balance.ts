@@ -58,6 +58,7 @@ import {
   type Skills,
 } from './career'
 import { clamp, makeRng, type Rng } from './rng'
+import { ownerFiringLine } from './owner'
 import type { RealData } from '../data/realData'
 
 export interface BalanceSeason {
@@ -266,7 +267,8 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
 
     let jobSecurity = clamp(career.jobSecurity + review.securityDelta, 0, 100)
     let demotedNow = false
-    if (jobSecurity <= 0 && career.level > 0) demotedNow = true
+    // FUTURES 22: use the club owner's own firing line, same as the store.
+    if (jobSecurity <= ownerFiringLine(career.teamId) && career.level > 0) demotedNow = true
 
     // A real player spends the weekly budget, does set pieces, and works the
     // phones — the harness models a diligent, strong career (the tuning target).

@@ -19,7 +19,8 @@ import {
 } from '../game/selectors'
 import { useGame, useWorld, type ScreenId } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
-import { ownerPersonality, ownerPersonalityLabel, rivalTitle } from '../game/engine/people'
+import { rivalTitle } from '../game/engine/people'
+import { ownerFiringLine, ownerName, ownerPersonalityLabel, ownerProfile } from '../game/engine/owner'
 import { rivalFor } from '../game/engine/rivalry'
 import { hasRoom } from '../game/engine/room'
 import { CulturePanel } from '../components/CulturePanel'
@@ -407,7 +408,17 @@ export function Dashboard() {
             <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Era & Mandate</h3>
             <div className="mb-2 flex items-center gap-2">
               <Badge tone="gold">{league.era?.label ?? 'Modern Era'}</Badge>
-              <span className="text-xs text-muted">{ownerPersonalityLabel(ownerPersonality(activeTeamId))} owner</span>
+              <span className="text-xs text-muted">
+                {ownerPersonalityLabel(ownerProfile(career.teamId).personality)} owner
+              </span>
+            </div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="truncate font-cond text-sm font-700 uppercase text-ink">{ownerName(career.teamId)}</span>
+              <span className="shrink-0 font-cond text-[10px] uppercase text-faint">
+                {ownerFiringLine(career.teamId) > 0
+                  ? `Fired at ≤ ${ownerFiringLine(career.teamId)}% security`
+                  : 'Never fires early'}
+              </span>
             </div>
             <p className="text-xs leading-relaxed text-muted">{career.ownerExpectation}</p>
             <p className="mt-2 text-[11px] leading-snug text-faint">

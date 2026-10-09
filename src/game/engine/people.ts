@@ -8,13 +8,27 @@
 // #14 bosses with agendas
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CareerState, Contact, LeagueTier, NewsItem, Rival } from '../types'
+import type { CareerState, Contact, NewsItem, Rival } from '../types'
 import type { World } from './generate'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { FIRST, LAST } from './names'
 import { ladderFor, overallRep } from './career'
 import { clamp, hash32, rint, rpick, type Rng } from './rng'
 import { REGIONS } from './evaluation'
+
+// FUTURES 22: owner personalities now live in `owner.ts` (a pure module), so
+// the review logic and the store can read them without an import cycle. They
+// are re-exported here so the existing `people` import path keeps working.
+export {
+  ownerFiringLine,
+  ownerMandate,
+  ownerName,
+  ownerPersonality,
+  ownerPersonalityLabel,
+  ownerProfile,
+  type OwnerPersonality,
+  type OwnerProfile,
+} from './owner'
 
 // ── Contacts (#9) ────────────────────────────────────────────────────────────
 const CONTACT_KINDS: Contact['kind'][] = ['High School Coach', 'Trainer', 'NFL Scout', 'Agent']
@@ -51,28 +65,8 @@ export function contactIntel(c: Contact): string {
   return 'Distant — invest time here.'
 }
 
-// ── Owner personality & mandate (#14) ────────────────────────────────────────
-export type OwnerPersonality = 'meddling' | 'patient' | 'cheap' | 'win-now'
-const PERSONALITIES: OwnerPersonality[] = ['meddling', 'patient', 'cheap', 'win-now']
-
-export function ownerPersonality(teamId: string): OwnerPersonality {
-  return PERSONALITIES[hash32(teamId, 61) % PERSONALITIES.length]
-}
-
-export function ownerPersonalityLabel(p: OwnerPersonality): string {
-  return p === 'meddling' ? 'Meddling' : p === 'patient' ? 'Patient' : p === 'cheap' ? 'Cost-conscious' : 'Win-now'
-}
-
-export function ownerMandate(teamId: string, _tier: LeagueTier): string {
-  const p = ownerPersonality(teamId)
-  return p === 'win-now'
-    ? 'The owner expects a playoff push now — no rebuilding.'
-    : p === 'cheap'
-      ? 'The owner wants value: build through the draft, stay flexible.'
-      : p === 'meddling'
-        ? 'The owner has opinions on your lineup. Manage up.'
-        : 'The owner will give you time — but wants visible progress.'
-}
+// ── Owner personality & mandate (#14, FUTURES 22) ────────────────────────────
+// Implemented in `owner.ts` and re-exported above.
 
 // ── Rivals (#12) ─────────────────────────────────────────────────────────────
 /** Each rival climbs on their own track a bit each season. */

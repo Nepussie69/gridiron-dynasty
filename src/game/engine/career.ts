@@ -12,6 +12,7 @@ import type { World } from './generate'
 import { clamp, hash32, makeRng, rpick } from './rng'
 import { capHealth, developedCount } from './objectives'
 import { pitchBonus, portfolioItems } from './portfolio'
+import { ownerMandate } from './owner'
 
 // ── Reputation dimensions ────────────────────────────────────────────────────
 export interface Reputation {
@@ -420,6 +421,9 @@ export function promote(career: CareerState, offer: JobOffer): CareerState {
     tier: offer.tier,
     salary: offer.salary,
     jobSecurity: 72,
+    // FUTURES 22: the mandate belongs to the club, so a new job means the new
+    // owner's expectations — not the old club's.
+    ownerExpectation: ownerMandate(offer.teamId, offer.tier),
     reputation: rep,
     history: [
       ...career.history,
@@ -440,6 +444,8 @@ export function demote(world: World, career: CareerState): CareerState {
     tier: 'NFL',
     salary: salaryFor(career.path, newLevel),
     jobSecurity: 55,
+    // FUTURES 22: land with a new club — learn its owner's mandate.
+    ownerExpectation: ownerMandate(teamId, 'NFL'),
     reputation: { ...career.reputation, profile: clamp(career.reputation.profile - 10, 0, 100), results: clamp(career.reputation.results - 6, 0, 100) },
     history: [
       ...career.history,

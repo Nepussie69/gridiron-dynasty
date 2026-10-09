@@ -15,6 +15,7 @@ import { NFL_TEAMS } from '../data/nflTeams'
 import type { World } from './generate'
 import { FIRST, LAST } from './names'
 import { ownerPersonality } from './people'
+import { ownerFiringLine, ownerProfile } from './owner'
 import { hash32, makeRng, rpick, type Rng } from './rng'
 
 export interface Voice {
@@ -46,18 +47,22 @@ export function careerVoices(world: World, career: CareerState): Voice[] {
   const ghost = career.ghostHistory?.[career.ghostHistory.length - 1]
 
   // ── Owner ─────────────────────────────────────────────────────────────────
+  // FUTURES 22: the owner's mood now tracks his own firing line, not a fixed 45.
+  const ownerLine = ownerFiringLine(career.teamId)
   const ownerQuote =
-    security >= 70
-      ? owner === 'win-now'
-        ? "You have my backing. But I don't hand out trophies for participation."
-        : owner === 'patient'
-          ? 'I believe in what you are building. The wins will come.'
-          : owner === 'cheap'
-            ? 'Good work keeping the books healthy. Keep it that way.'
-            : "I like it. But let's talk about that depth chart — over lunch."
-      : security >= 45
-        ? 'I see progress. Now I need to see it in January.'
-        : "This isn't what I paid for. Turn it around."
+    security <= ownerLine + 10
+      ? ownerProfile(career.teamId).ultimatum
+      : security >= 70
+        ? owner === 'win-now'
+          ? "You have my backing. But I don't hand out trophies for participation."
+          : owner === 'patient'
+            ? 'I believe in what you are building. The wins will come.'
+            : owner === 'cheap'
+              ? 'Good work keeping the books healthy. Keep it that way.'
+              : "I like it. But let's talk about that depth chart — over lunch."
+        : security >= 45
+          ? 'I see progress. Now I need to see it in January.'
+          : "This isn't what I paid for. Turn it around."
   const ownerTone: Voice['tone'] = security >= 70 ? 'win' : security >= 45 ? 'info' : 'loss'
 
   // ── Veteran player ────────────────────────────────────────────────────────

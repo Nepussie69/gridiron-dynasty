@@ -161,6 +161,7 @@ import {
   mentorFor,
   ownerMandate,
 } from '../game/engine/people'
+import { ownerFiringLine, ownerName, ownerProfile } from '../game/engine/owner'
 import { evaluateTraits } from '../game/engine/earnedTraits'
 import { applyWilderness, makeSuccessor } from '../game/engine/legacy'
 import { pushLedger, gradeLedger, logCoachCalls } from '../game/engine/ledger'
@@ -4417,9 +4418,12 @@ function runEndOfRegularSeason(
     if (wonTitle) rep.profile = clamp(rep.profile + 8, 0, 100)
 
     let nextSecurity = clamp(career.jobSecurity + review.securityDelta, 0, 100)
-    // Fired if security bottoms out in a meaningful role.
+    // FUTURES 22: each owner has his own firing line. A win-now owner makes a
+    // change while there is still security left (25); a patient builder only
+    // when it bottoms out (0).
+    const ownerLine = ownerFiringLine(career.teamId)
     let demoted = false
-    if (nextSecurity <= 0 && career.level > 0) {
+    if (nextSecurity <= ownerLine && career.level > 0) {
       demoted = true
     }
 
@@ -4598,6 +4602,16 @@ function runEndOfRegularSeason(
         body: `Your team reached the postseason. League decision-makers are taking notice of your work.`,
       })
     } else {
+      // FUTURES 22: the owner's firing line. If you are drifting toward it, he
+      // says so — in his own words — before he acts.
+      if (nextSecurity <= ownerLine + 10) {
+        const profile = ownerProfile(career.teamId)
+        pushCareerNews(world, careerNext, {
+          category: 'Career',
+          headline: `${ownerName(career.teamId)} (${profile.label}): a warning from the owner`,
+          body: profile.ultimatum,
+        })
+      }
       // Every season produces a review note, so the inbox always reflects your climb.
       const met = graded.doneCount
       const totalObjs = objs.length
@@ -5734,6 +5748,42 @@ export function adviceProbe() {
 export function balanceProbe(seasons = 10, path: 'coach' | 'personnel' = 'personnel') {
   return runBalance({ seasons, path, seed: world.seed, data: getRealData() })
 }
+
+/**
+ * FUTURES 22 dev probe: the league's owner personalities, mandates and firing
+ * lines, plus how the active career's owner compares to the security you hold.
+ * Pure read — it never mutates the world.
+ */
+export function ownerProbe() {
+  const rows = NFL_TEAMS.map((t) => {
+    const p = ownerProfile(t.id)
+    return {
+      team: t.id,
+      abbr: t.abbr,
+      owner: ownerName(t.id),
+      label: p.label,
+      mandate: p.mandate,
+      fireLine: p.fireLine,
+    }
+  })
+  const career = useGame.getState().career
+  const me = career
+    ? (() => {
+        const p = ownerProfile(career.teamId)
+        return {
+          team: career.teamId,
+          owner: ownerName(career.teamId),
+          label: p.label,
+          fireLine: p.fireLine,
+          jobSecurity: career.jobSecurity,
+          safe: career.jobSecurity > p.fireLine,
+          ultimatum: p.ultimatum,
+        }
+      })()
+    : null
+  return { owners: rows, me }
+}
+
 
 /** L12.14 C2: 2025 top-of-market bands by position (dollars). */
 const MARKET_BANDS: Record<string, [number, number]> = {

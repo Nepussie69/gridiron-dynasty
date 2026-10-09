@@ -14,6 +14,7 @@ import type { CareerDatabase } from './statsDb'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { clamp, makeRng, rpick } from './rng'
 import { ladderFor, minNflLevel, salaryFor, tierFor, type Reputation } from './career'
+import { ownerMandate } from './owner'
 
 export interface WildernessPath {
   id: string
@@ -57,6 +58,8 @@ export function applyWilderness(world: World, career: CareerState, pathId: strin
     teamId,
     salary: salaryFor(career.path, level),
     jobSecurity: 55,
+    // FUTURES 22: a new landing spot means a new owner with a new mandate.
+    ownerExpectation: ownerMandate(teamId, 'NFL'),
     reputation: rep,
     wilderness: null,
     history: [
