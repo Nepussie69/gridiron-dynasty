@@ -1497,7 +1497,8 @@ export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClic
   // Index once per render: the viewer re-renders every playback tick, so a
   // linear scan per box-score row would add up fast.
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
-  const fp = { gmName, myTeamId, byId }
+  const jerseyNumbers = useMemo(() => teamJerseys(world, teamId), [world, teamId])
+  const fp = { gmName, myTeamId, byId, jerseyNumbers }
   return (
     <div className="rounded-lg bg-black/30 p-2">
       <div className="mb-2">
@@ -1566,7 +1567,7 @@ export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClic
   )
 }
 
-interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player> }
+interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player>; jerseyNumbers: Map<string, number> }
 interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string; w?: string; title?: string }
 function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx }) {
   // Lead with the volume stat: yards for offense, tackles for defense.
@@ -1591,10 +1592,12 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
         <tbody>
           {sorted.slice(0, 8).map((b) => {
             const p = fp.byId.get(b.playerId)
+            const jersey = fp.jerseyNumbers.get(b.playerId)
             const tag = fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null
             return (
               <tr key={b.playerId} className="text-white/85">
-                <td className="truncate pr-1" title={b.name}>
+                <td className="truncate pr-1" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
+                  {jersey != null && <span className="mr-1 inline-block min-w-6 text-white/50">#{jersey}</span>}
                   {b.name}
                   {tag && (
                     <span className="ml-1 rounded bg-[var(--team-soft)] px-1 py-px font-cond text-[9px] font-700 uppercase tracking-wide text-[var(--team)]">
