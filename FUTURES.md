@@ -11,7 +11,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 1b | **Real NFL numbers retune** (`NEXT_PHASE_REALISM.md`) | Every team stat to the 2015–2024 NFL averages (passing ~241, comp 64%, sacks 2.4, ypc 4.3, red-zone TD 56% …) | playbook, culture | 🔨 realism calibration |
 | 2 | **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`) | TV field (yard numbers, blue LOS + yellow 1st-down line, end zones, camera follow, result toasts), scorebug/dock, dark mode, ⌘K, screen passes | current batch merged | ⏳ |
 | 3 | **Personnel packages** (L13) | 11/12/21/22 personnel vs Base/Nickel/Dime; who's on the field and the matchups that follow | 1 | ✅ merged |
-| 4 | **Special-teams calls** (L13) | Onside kick, fake punt/FG, return strategy; fakes get scouted (tendency memory) | — | ⏳ |
+| 4 | **Special-teams calls** (L13) | Onside kick, fake punt/FG, return strategy; fakes get scouted (tendency memory) | R17 unmerged overlap: AI onside + user/AI fakes; user onside, return strategy and tendency memory remain | ⏳ |
 | 5 | **Challenges & replay** | Throw the red flag on close spots, catches, fumbles; lose a timeout if wrong; booth reviews in the last 2 minutes | — | ⏳ |
 | 6 | **Weather & stadiums** | Wind (deep balls, kicks), rain/snow (fumbles, footing), cold, domes; crowd noise → false starts on the road; forecast on Game Plan | — | ⏳ |
 | 7 | **Halftime speech** | Fire up / calm / challenge a star / stay the course → morale and second-half edge, can backfire | — | ⏳ |
