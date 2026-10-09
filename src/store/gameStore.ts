@@ -197,6 +197,8 @@ import {
   skillEffectText,
 } from '../game/engine/skills'
 import { applyCombine, combineOpen, type CombineKind } from '../game/engine/combine'
+import { applyTravel, autoTravel, travelOpen, coverageOf, travelState, TRAVEL_BUDGET, type TravelKind } from '../game/engine/scoutTravel'
+import { readProspect } from '../game/engine/evaluation'
 import {
   weeklyActions,
   currentSetPiece,
@@ -612,6 +614,10 @@ interface GameStore {
   fileCapMemo: (bucket: 'tight' | 'comfortable' | 'flush', priorityIds: string[], note: string) => void
   /** G4: spend combine-week hours on a prospect (interview / workout / film). */
   combineAction: (prospectId: string, kind: CombineKind) => void
+  /** L15 (FUTURES 14): spend travel trips on a prospect (campus / pro day / all-star). */
+  scoutTravel: (prospectId: string, kind: TravelKind) => void
+  /** L15 (FUTURES 14): spread this season's travel budget by the board's top needs. */
+  autoScoutTravel: () => void
 
   // Practice squad & injured reserve
   signToPracticeSquad: (id: string) => void
@@ -2784,6 +2790,41 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career) return
     const rng = makeRng(world.seed + world.season * 433 + hash32(prospectId + kind, 3))
     const result = applyCombine(world, career, prospectId, kind, rng)
+    if ('error' in result) {
+      get().showToast(result.error)
+      return
+    }
+    set({ career: result.career })
+    get().showToast(result.message)
+    bump(set, get)
+    get().save()
+  },
+
+  scoutTravel: (prospectId, kind) => {
+    const career = get().career
+    if (!career) return
+    // Deterministic hash for any randomness — never the sim's RNG stream.
+    const rng = makeRng(world.seed + world.season * 509 + hash32(prospectId + kind, 7))
+    const result = applyTravel(world, career, prospectId, kind, rng)
+    if ('error' in result) {
+      get().showToast(result.error)
+      return
+    }
+    set({ career: result.career })
+    get().showToast(result.message)
+    bump(set, get)
+    get().save()
+  },
+
+  autoScoutTravel: () => {
+    const career = get().career
+    if (!career) return
+    if (!travelOpen(world, career)) {
+      get().showToast('Scouting travel is not yours at this rung.')
+      return
+    }
+    const rng = makeRng(world.seed + world.season * 509 + 991)
+    const result = autoTravel(world, career, rng)
     if ('error' in result) {
       get().showToast(result.error)
       return
@@ -5231,6 +5272,59 @@ export function scoutBiasProbe() {
   }
 }
 
+/** Dev-only probe: scouting travel budget — Auto spends it, coverage tightens the read. */
+export function scoutTravelProbe() {
+  const clone = structuredClone(world) as World
+  const board = [...clone.draft].sort((a, b) => b.grade - a.grade).slice(0, 10).map((p) => p.id)
+  const career: CareerState = {
+    gmName: 'Travel Bot',
+    path: 'personnel',
+    archetype: 'scout',
+    teamId: 'BUF',
+    season: clone.season,
+    week: clone.week,
+    reputation: { ...ZERO_REP, evaluation: 60 },
+    skills: { ...ZERO_SKILLS, evaluation: 55 },
+    level: 3,
+    salary: 0,
+    jobSecurity: 70,
+    ownerExpectation: '',
+    tier: 'NFL',
+    recommendationsMade: 0,
+    hits: 0,
+    misses: 0,
+    seasonRecs: 0,
+    seasonHits: 0,
+    ledger: [],
+    userBoard: board,
+    history: [],
+  }
+  const widths = new Map(clone.draft.map((p) => [p.id, +readProspect(career, p).width.toFixed(2)]))
+  const rng = makeRng(clone.seed + 1)
+  const res = autoTravel(clone, career, rng)
+  if ('error' in res) return { error: res.error }
+  const coveredIds = Object.keys(travelState(res.career, clone.season).visits)
+  const covered = coveredIds.map((id) => {
+    const p = clone.draft.find((x) => x.id === id)!
+    return {
+      id,
+      name: p.name,
+      pos: p.pos,
+      cov: coverageOf(res.career, id),
+      widthBefore: widths.get(id),
+      widthAfter: +readProspect(res.career, p).width.toFixed(2),
+      conf: p.confidence,
+    }
+  })
+  return {
+    budget: TRAVEL_BUDGET,
+    tripsLeft: travelState(res.career, clone.season).tripsLeft,
+    spent: res.spent,
+    coveredProspects: res.covered,
+    allCoveredTightened: covered.length > 0 && covered.every((c) => (c.widthAfter ?? 99) < (c.widthBefore ?? 0)),
+    covered,
+  }
+}
 /** Dev-only probe: hidden character generation and development spread. */
 export function characterProbe() {
   const sample = world.draft.slice(0, 5).map((p) => ({

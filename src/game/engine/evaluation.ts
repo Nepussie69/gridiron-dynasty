@@ -12,6 +12,7 @@
 import type { CareerState, DraftProspect } from '../types'
 import { clamp, hash32 } from './rng'
 import { traitRangeFactor } from './earnedTraits'
+import { coverageFactor } from './scoutTravel'
 import { rookieProjection, rookieRatings } from './draft'
 
 export const REGIONS = ['Northeast', 'Southeast', 'Midwest', 'West'] as const
@@ -87,7 +88,11 @@ export function readProspect(career: CareerState, p: DraftProspect): ProspectRea
   // Scouting the prospect and having a good eye both tighten the range.
   const confFactor = 1 - Math.min(1, p.confidence / 100) * 0.6
   const skillFactor = 1 - Math.min(1, skill / 99) * 0.4
-  const width = Math.max(1, base * confFactor * skillFactor * traitRangeFactor(career, p.myGrade ?? p.grade))
+  // L15 (FUTURES 14): travel coverage tightens the read on top of the above.
+  const width = Math.max(
+    1,
+    base * confFactor * skillFactor * traitRangeFactor(career, p.myGrade ?? p.grade) * coverageFactor(career, p.id),
+  )
 
   const center = Math.round(p.myGrade ?? p.grade)
   const lo = clamp(Math.round(center - width), 40, 99)
