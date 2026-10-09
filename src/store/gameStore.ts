@@ -202,7 +202,8 @@ import {
 } from '../game/engine/cap'
 import { makeRng } from '../game/engine/rng'
 import { applyScenario, scenarioById } from '../game/engine/scenarios'
-import type { CapMemo, CareerPath, CareerState, Contract, GameStatLine, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet, SeasonStats } from '../game/types'
+import type { CapMemo, CareerPath, CareerState, Contract, GameStatLine, JobOffer, LeagueTier, MatchupSet, NewsItem, Player, PersonnelSet, Position, ScenarioId, SeasonMoment, SeasonQuestion, UsageSet, SeasonStats } from '../game/types'
+import { OFF_PERSONNEL, DEF_PACKAGES, normalizeOffPersonnel, normalizeDefPackage, type OffPersonnel, type DefPackage } from '../game/engine/personnel'
 import { loadGame, loadBackup, saveGame, clearSave, exportSave, importSave } from '../game/persistence'
 import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
@@ -256,6 +257,8 @@ export interface GameDay {
   moment: Moment | null
   /** L11.5 Q3: the live plan for the rest of this game (next week uses defaultPlan). */
   plan: { off: GamePlan; def: GamePlan }
+  /** L13: the live personnel packages for this game (next week uses career.personnel). */
+  personnel: PersonnelSet
   /** L11.5 Q3: every mid-game plan switch, shown in the post-game film card. */
   changes: PlanChange[]
   /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. */
@@ -463,6 +466,10 @@ interface GameStore {
   setMatchups: (matchups: MatchupSet) => void
   /** L10 G12: running-back workload and defensive-line rotation. */
   setUsage: (usage: UsageSet) => void
+  /** L13: the personnel packages you send onto the field (saved and reused every week). */
+  setPersonnel: (personnel: PersonnelSet) => void
+  /** L13: change one side's package mid-game; applies from the next snap. */
+  setGameDayPersonnel: (side: 'off' | 'def', value: OffPersonnel | DefPackage | undefined) => void
   /** Opt-in: run the whole league's games through true play-by-play (Web Worker). */
   leaguePbp: boolean
   setLeaguePbp: (v: boolean) => void
@@ -1224,7 +1231,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // L11.5 Q2: run out the first drive so the user sees the game start.
     const moment = runUntil(world, state, 'drive')
     set({
-      gameDay: { gameId: game.id, state, moment, plan, changes: [], callStart: career.callMode, callSwitches: [] },
+      gameDay: { gameId: game.id, state, moment, plan, personnel: career.personnel ?? {}, changes: [], callStart: career.callMode, callSwitches: [] },
       match: finishGame(state),
       matchSeq: get().matchSeq + 1,
       tick: get().tick + 1,
@@ -1335,6 +1342,30 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career) return
     set({ career: withFlag({ ...career, usage }, 'gameplan'), tick: get().tick + 1 })
     get().save()
+  },
+
+  setPersonnel: (personnel) => {
+    const career = get().career
+    if (!career) return
+    const clean: PersonnelSet = { off: normalizeOffPersonnel(personnel.off), def: normalizeDefPackage(personnel.def) }
+    set({ career: withFlag({ ...career, personnel: clean }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  setGameDayPersonnel: (side, value) => {
+    const gd = get().gameDay
+    if (!gd) return
+    const next: PersonnelSet = side === 'off'
+      ? { ...gd.personnel, off: normalizeOffPersonnel(value) }
+      : { ...gd.personnel, def: normalizeDefPackage(value) }
+    // Apply from the next snap. The resolver reads the ctx each play, so mutating
+    // the live ctx is enough (and never touches next week's saved packages).
+    if (gd.state.ctx) gd.state.ctx.personnel = { ...next }
+    const label = side === 'off'
+      ? OFF_PERSONNEL.find((p) => p.id === next.off)?.name ?? 'Auto personnel'
+      : DEF_PACKAGES.find((p) => p.id === next.def)?.name ?? 'Auto package'
+    const changes: PlanChange[] = [...gd.changes, { qtr: gd.state.qtr, clock: clockText(gd.state.clock), side, preset: label }]
+    set({ gameDay: { ...gd, personnel: next, changes }, tick: get().tick + 1 })
   },
 
   setLeaguePbp: (v) => {
@@ -2886,12 +2917,13 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const oppRead = career.oppRead
   const matchups = career.matchups
   const usage = career.usage
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage }
+  const personnel = career.personnel
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead, matchups, usage,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel,
   }
 }
 
@@ -3260,6 +3292,11 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   // L10 G11/G12: matchup and workload defaults (optional on legacy saves).
   base.matchups ??= {}
   base.usage ??= { rb: 'normal', dl: 'starters' }
+  // L13: personnel packages stay optional (no packages = the old behaviour). Guard
+  // an unknown value from a hand-edited save.
+  if (base.personnel) {
+    base.personnel = { off: normalizeOffPersonnel(base.personnel.off), def: normalizeDefPackage(base.personnel.def) }
+  }
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
     const sheet = base.callSheet ?? DEFAULT_CALL_SHEET
@@ -4180,7 +4217,7 @@ export function dominanceProbe(games = 60) {
 /** Dev-only probe: check no single game-plan setting dominates the sim (#L10 F2).
  * For each of up to 8 NFL opponents and each preset, plays `n` games with the
  * user's club as the home team and reports points against/by preset. */
-export function planMatrix(n = 60) {
+export function planMatrix(n = 60, includePersonnel = false) {
   const career = useGame.getState().career
   const userTeam = career?.teamId ?? 'BUF'
   const nfl = world.teams.filter((t) => t.tier === 'NFL')
@@ -4232,7 +4269,59 @@ export function planMatrix(n = 60) {
     opponents: opponents.map((t) => t.id),
     defense: runSide('def', defPresets),
     offense: runSide('off', offPresets),
+    // L13: opt-in personnel section so `__planMatrix(n, true)` covers packages too.
+    ...(includePersonnel ? { personnel: personnelMatrixCore(n) } : {}),
   }
+}
+
+/** L13: the core of the personnel probe — every package vs every opponent, paired seeds. */
+function personnelMatrixCore(n = 60) {
+  const career = useGame.getState().career
+  const userTeam = career?.teamId ?? 'BUF'
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const opponents = nfl.filter((t) => t.id !== userTeam).slice(0, 8)
+  const seeds = Array.from({ length: n }, (_, i) => world.seed + i * 7919 + 101)
+  setUserCoaching(null)
+  setLivePlan(null)
+
+  const runSide = (side: 'off' | 'def') => {
+    const ids: string[] = side === 'off' ? OFF_PERSONNEL.map((p) => p.id) : DEF_PACKAGES.map((p) => p.id)
+    const labels = ['auto', ...ids]
+    const perOpp: Record<string, Record<string, number>> = {}
+    for (const opp of opponents) {
+      const row: Record<string, number> = {}
+      for (const label of labels) {
+        const personnel: PersonnelSet =
+          label === 'auto' ? {} : side === 'off' ? { off: label as OffPersonnel } : { def: label as DefPackage }
+        let total = 0
+        for (const seed of seeds) {
+          const ctx: GameCtx = { userTeamId: userTeam, scope: 'hc', callSheet: career?.callSheet ?? DEFAULT_CALL_SHEET, personnel }
+          const sim = simulatePlayByPlay(world, userTeam, opp.id, seed, ctx)
+          total += sim.homeScore - sim.awayScore
+        }
+        row[label] = +(total / n).toFixed(2)
+      }
+      perOpp[opp.id] = row
+    }
+    const bestCount: Record<string, number> = Object.fromEntries(labels.map((l) => [l, 0]))
+    const edgeVsAuto: Record<string, number> = Object.fromEntries(labels.map((l) => [l, 0]))
+    for (const opp of opponents) {
+      const row = perOpp[opp.id]
+      const best = Math.max(...labels.map((l) => row[l]))
+      for (const l of labels) {
+        if (row[l] === best) bestCount[l] += 1
+        edgeVsAuto[l] += row[l] - row.auto
+      }
+    }
+    for (const l of labels) edgeVsAuto[l] = +(edgeVsAuto[l] / Math.max(1, opponents.length)).toFixed(2)
+    return { ...perOpp, bestCount, edgeVsAuto }
+  }
+  return { n, userTeam, opponents: opponents.map((t) => t.id), offense: runSide('off'), defense: runSide('def') }
+}
+
+/** Dev-only probe (L13): no personnel package should dominate (paired seeds, up to 8 foes). */
+export function personnelMatrix(n = 60) {
+  return personnelMatrixCore(n)
 }
 
 /** Dev-only probe: prove game-day pauses never change the RNG stream (L10 G1). */

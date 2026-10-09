@@ -11,6 +11,7 @@ import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from './PlanEditor'
+import { PersonnelCard } from './PersonnelCard'
 import { KeysCard } from './KeysCard'
 import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
@@ -1160,6 +1161,7 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   const world = useWorld()
   const career = useGame((s) => s.career)
   const setGameDayPlan = useGame((s) => s.setGameDayPlan)
+  const setGameDayPersonnel = useGame((s) => s.setGameDayPersonnel)
   const [side, setSide] = useState<'off' | 'def'>('off')
   if (!career) return null
   const caps = capabilities(career)
@@ -1169,6 +1171,7 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   if (!hasOff && !hasDef) return null
   const active: 'off' | 'def' = side === 'off' && hasOff ? 'off' : hasDef ? 'def' : 'off'
   const oppId = gameDay.state.homeId === career.teamId ? gameDay.state.awayId : gameDay.state.homeId
+  const oppScheme = active === 'off' ? coachLabels(world, oppId).dcScheme : coachLabels(world, oppId).ocScheme
   const advice = coordinatorAdvice(world, career, oppId).filter((a) => a.side === active)
   return (
     <div className="p-3">
@@ -1212,6 +1215,17 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
           })}
           <div className="rounded-lg bg-white p-3">
             <PlanEditor plan={gameDay.plan[active]} onChange={(p) => setGameDayPlan(active, p)} side={active} />
+            <div className="mt-3 border-t border-line pt-3">
+              <PersonnelCard
+                compact
+                side={active}
+                value={active === 'off' ? gameDay.personnel.off : gameDay.personnel.def}
+                onChange={(v) => setGameDayPersonnel(active, v)}
+                teamId={career.teamId}
+                oppId={oppId}
+                oppScheme={oppScheme}
+              />
+            </div>
           </div>
           {gameDay.changes.length > 0 && (
             <ul className="mt-2 space-y-0.5">

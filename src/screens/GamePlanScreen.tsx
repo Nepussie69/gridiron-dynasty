@@ -6,6 +6,7 @@ import { DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_
 import { capabilities } from '../game/engine/capabilities'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from '../components/PlanEditor'
+import { PersonnelCard } from '../components/PersonnelCard'
 import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
 import { WrinkleCard } from '../components/WrinkleCard'
@@ -27,6 +28,7 @@ export function GamePlanScreen() {
   const career = useGame((s) => s.career)!
   const defaultPlan = useGame((s) => s.defaultPlan)
   const setDefaultPlan = useGame((s) => s.setDefaultPlan)
+  const setPersonnel = useGame((s) => s.setPersonnel)
   const viewTeam = useGame((s) => s.viewTeam)
   const [side, setSide] = useState<'off' | 'def'>('off')
 
@@ -82,6 +84,17 @@ export function GamePlanScreen() {
             </div>
             <PlanEditor plan={plan} onChange={(p) => setDefaultPlan(side, p)} side={side} />
           </Card>
+
+          {capabilities(career).planScope !== 'none' && (
+            <PersonnelCard
+              side={side}
+              value={side === 'off' ? career.personnel?.off : career.personnel?.def}
+              onChange={(v) => setPersonnel({ ...career.personnel, [side]: v })}
+              teamId={team.id}
+              oppId={opp?.id}
+              oppScheme={opponentScheme}
+            />
+          )}
 
           <SchemeFitReport teamId={team.id} side={side} />
           <KeysCard oppId={opp?.id} />
