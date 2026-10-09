@@ -715,12 +715,17 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
   const m = startMovers(f, ctx)
   const seed = play.n * 11 + play.startYard
-  const depth = Math.max(-2, Math.min(45, play.passDepth ?? 8))
+  const inc = play.result === 'Incomplete'
+  const int = play.result.startsWith('Interception')
+  // A completion is drawn as a throw no deeper than the gain allows (plus a
+  // little run after the catch): a 1-yard completion is a flat or bubble, not
+  // a 15-yard dig caught and run back to the line.
+  const gainYds = play.endYard - play.startYard
+  const simDepth = Math.max(-2, Math.min(45, play.passDepth ?? 8))
+  const depth = inc || int ? simDepth : Math.min(simDepth, Math.max(1, gainYds + 3))
   const tgt = targetKey(play, ctx)
   const scramble = !!play.pressure
   const rollSide = hash(seed + 9) < 0.5 ? -1 : 1
-  const inc = play.result === 'Incomplete'
-  const int = play.result.startsWith('Interception')
   const concept = play.concept
   const boot = concept === 'Bootleg'
   const quick = depth <= 8
@@ -768,6 +773,16 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     routeMap[tgt] = routeMap[pick]
     routeMap[pick] = tmp
   }
+  // No route in the concept is short enough for this completion: the target
+  // runs the natural short option instead (bubble/flat, quick out/check-down).
+  const blockingRoute = /^(stalk|runFake|block|passBlock)$/.test(routeMap[tgt] ?? '')
+  if (!inc && !int && (blockingRoute || (ROUTES[routeMap[tgt]]?.depth ?? 0) > (gainYds <= 0 ? 1 : gainYds + 2))) {
+    const back = tgt === 'rb' || tgt === 'te' || tgt === 'fb'
+    const short = gainYds <= 0
+      ? (tgt === 'rb' || tgt === 'fb' ? 'swing' : 'screen')
+      : gainYds <= 1 ? (back ? 'flat' : 'bubble') : gainYds <= 6 ? (back ? 'check' : 'quickOut') : blockingRoute ? (back ? 'angle' : 'slant') : null
+    if (short) routeMap[tgt] = short
+  }
 
   const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb']
   let catchPt: Pt = { x: los, y: MID_Y }
@@ -793,6 +808,29 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     }
   }
   if (m.fb) m.fb.run([{ x: los - 3, y: MID_Y + 1 }, { x: los - 1, y: MID_Y + side * 4 }], { stop: true })
+  // A completion that gains less than the route's depth: the ball arrives
+  // earlier on the route, short of the end spot, so the run after the catch
+  // goes forward (or across), never back toward the line like a real NFL catch.
+  let catchV0 = 0
+  if (!inc && !int) {
+    const endX0 = clampX(10 + play.endYard)
+    const gain = endX0 - los
+    const yacMin = gain > 0 ? clampN(gain * 0.25, 1, 4) : 0
+    if (catchPt.x > endX0 - yacMin) {
+      let tc = -1
+      for (let t = catchSec; t >= 0.35; t -= 0.02) {
+        if (posAt(m[tgt].path, t).x <= endX0 - yacMin) {
+          tc = t
+          break
+        }
+      }
+      if (tc > 0) {
+        catchPt = posAt(m[tgt].path, tc)
+        catchV0 = seek(m[tgt], tc)
+        catchSec = tc
+      }
+    }
+  }
   catchSec = Math.max(catchSec, 0.35)
 
   // Release and flight: throw power sets a bullet vs a floater.
@@ -859,11 +897,13 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: near }], flights })
   }
 
-  // Complete: the catch, then the run after it to the recorded end spot.
-  const endX = clampX(10 + play.endYard)
+  // Complete: the catch, then the run after it to the recorded end spot. A
+  // touchdown caught in the end zone stays in the end zone (a step or two on).
+  const goal = clampX(10 + play.endYard)
+  const endX = goal >= 110 && catchPt.x >= goal ? clampX(catchPt.x + 1.5) : goal
   const yac = Math.abs(endX - catchPt.x)
   const endY = clampY(catchPt.y + (MID_Y - catchPt.y) * (yac > 8 ? 0.35 : 0.12) + (hash(seed + 8) - 0.5) * 4)
-  m[tgt].run([{ x: endX, y: endY }], { v0: 0, stop: true })
+  m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: true })
   const endSec = Math.max(catchSec, m[tgt].t)
   pursueRun(m, DEF_KEYS, catchSec, { x: endX + 0.8, y: endY }, endSec, seed, { x: endX - catchPt.x, y: endY - catchPt.y })
   ball.push(...shadow(m[tgt].path, catchSec).slice(1))
