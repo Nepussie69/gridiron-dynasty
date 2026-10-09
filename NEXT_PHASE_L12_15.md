@@ -34,3 +34,5 @@ No sim formula changes beyond re-keying OVR thresholds; no rng; optional save fi
 
 ## Verification log
 - Codex review of stars4: build/lint4, equivalence20/20 and four-season smokes both paths0/0; simulation within0.4points of branch baseline, cap/market/dead-money and rookie probes pass. Six-season whole/active distribution flags fail on all3seeds, with early90+ trough and later overproduction; not accepted or merged. wt-stars safely integrated onto main eb720d6, retaining recovery stash; buildpasses. stars5 addresses growth/ceiling scarcity, migrated HOF peakOVR, new GM desk thresholds and remaining fallback consistency. Whole-pool versus active-roster population clarification remains pending; no bands relaxed or unsigned retirement added.
+
+- Handover2026-10-09: stars5 selected/applied candidateL before overnight timeout; all retries exhausted, no final acceptance. stars6(`/private/tmp/gridiron-stars6.txt`) runs remaining S2/S3 audits and fresh verification; Claude receives ownership via CLAUDE_HANDOVER.md.

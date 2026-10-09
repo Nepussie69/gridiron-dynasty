@@ -61,3 +61,5 @@ User: "make sure missed tackles are involved in the gameplay … toughness → m
 
 
 - Codex review of realism3: measured injury6.47–6.50 events/club-month and TGH60/95 ratio1.478; PBP drops3.48–3.54%/target, CTH direction correct. Eq20/20; animation endspots100%, syntheticSPD1.33; 3-game frame spike4.575 identical without stumble. Independent final build fails TS6133 and lint5 due unfinished POS_MEAN import. Review also finds synthetic drops always round to0, paired highSPD yields fewer20+ runs, and team/average-RB/elusive tackle bands still fail. Not accepted or merged; realism4(`/private/tmp/gridiron-realism4.txt`, execsession84520) fixes these before final R2 retune. Measurements `/private/tmp/realism3-*.out`.
+
+- Handover2026-10-09: realism4 exhausted retries after overnight interruption before implementing the requested fixes. realism5(`/private/tmp/gridiron-realism5.txt`) continues in the preserved worktree; Claude receives ownership via CLAUDE_HANDOVER.md. No final acceptance or merge.

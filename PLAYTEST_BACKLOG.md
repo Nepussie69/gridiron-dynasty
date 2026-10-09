@@ -73,5 +73,6 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 67 | 2026-10-08 | Pay QBs closer to real 2025 money (~$55–60M top-5) | Push `qbpay`: top-5 QB AAV $43.2M → $58.2M, cap use 0.80–0.83, dead money fixed (no double count) | ✅ merged 8a8b6cd |
 | 68 | 2026-10-08 | Make the Cap screen contract ledger sortable | Claude: every column header sorts (▲/▼), click again to flip | ✅ |
 | 69 | 2026-10-08 | Write a ChatGPT handover before 95% usage | Claude: OPENCODE_CONTINUE.md + AGENTS.md (08a896e) | ✅ |
-| 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: sole ownership; GM desk merged, QB pay independently verified; stars4/realism ongoing | 🔨 continuing |
+| 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: GM desk published, QB pay independently verified; user requested Claude handover2026-10-09; stars6/realism5 running | 🔨 handed to Claude |
 | 71 | 2026-10-08 | Push the current progress to the stable build | Codex: GM desk verified/merged52d1df7; stable4173 serves90508fd | ✅ published |
+| 72 | 2026-10-09 | Create a handover for Claude | CLAUDE_HANDOVER.md: live state, runner paths, preserved worktrees, review failures and exact next steps; Codex relinquishes orchestration after documentation | ✅ |
