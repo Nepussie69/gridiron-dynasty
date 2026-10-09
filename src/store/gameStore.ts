@@ -129,7 +129,7 @@ import { BYE_OPTIONS, byeEdge, byeIsRest, byeLastWeek, byeMasteryMult, canByeWee
 import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId, type KeyGrade } from '../game/engine/keys'
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
-import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
+import { MAX_ROOM_FOCUS, MAX_ROOM_REPS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
 import { MAX_DEV_AGE, autoFocusFor, devFocusById, devGroupFor, type DevFocusId } from '../game/engine/devPlan'
 import {
   MAX_CAPTAINS,
@@ -162,6 +162,21 @@ import {
   ownerMandate,
 } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerProfile } from '../game/engine/owner'
+import {
+  OWNER_STAFF_FUND_INTEREST,
+  grantLabels,
+  meetingDue,
+  meetingStanding,
+  meetingState,
+  ownerGraceActive,
+  ownerStaffBudgetBonus,
+  ownerStaffFundOpen,
+  resolveOwnerMeeting,
+  resultsBonus,
+  type OwnerAsk,
+  type OwnerMeetingEntry,
+  type OwnerMeetingState,
+} from '../game/engine/ownerMeeting'
 import { evaluateTraits } from '../game/engine/earnedTraits'
 import { applyWilderness, makeSuccessor } from '../game/engine/legacy'
 import { pushLedger, gradeLedger, logCoachCalls } from '../game/engine/ledger'
@@ -211,7 +226,7 @@ import {
   negotiationAskMultiplier,
   skillEffectText,
 } from '../game/engine/skills'
-import { applyCombine, combineOpen, type CombineKind } from '../game/engine/combine'
+import { COMBINE_HOURS, applyCombine, combineOpen, type CombineKind } from '../game/engine/combine'
 import { applyTravel, autoTravel, travelOpen, coverageOf, travelState, TRAVEL_BUDGET, type TravelKind } from '../game/engine/scoutTravel'
 import { readProspect } from '../game/engine/evaluation'
 import {
@@ -569,6 +584,8 @@ interface GameStore {
   pickPractice: (plan: PracticePlan) => void
   /** FUTURES 17: pick this bye week's plan (Rest / Install / Self-scout). */
   pickBye: (plan: ByePlan) => void
+  /** FUTURES 25: hold the periodic owner meeting and make one ask. */
+  holdOwnerMeeting: (ask: OwnerAsk) => OwnerMeetingEntry | null
   /** L12 W2: add or remove a key to the game (up to two). */
   toggleKey: (id: GameKeyId) => void
   /** K3: pitch a starter on your side to the coordinator (once a week). */
@@ -2004,6 +2021,69 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  holdOwnerMeeting: (ask) => {
+    const career = get().career
+    if (!career) return null
+    const due = meetingDue(world, career)
+    if (!due.open) {
+      get().showToast('No owner meeting is due right now.')
+      return null
+    }
+    const result = resolveOwnerMeeting(world, career, ask)
+    const grant = result.grant
+    // Apply the grant to the career. Everything is optional and clamped.
+    let next: CareerState = { ...career }
+    if (grant.jobSecurity) {
+      next = { ...next, jobSecurity: clamp(next.jobSecurity + grant.jobSecurity, 0, 100) }
+    }
+    if (grant.skillPoints) {
+      next = { ...next, skillPoints: (next.skillPoints ?? 0) + grant.skillPoints }
+    }
+    if (grant.travel) {
+      const state = travelState(career, world.season)
+      next = { ...next, scoutTravel: { ...state, tripsLeft: state.tripsLeft + grant.travel } }
+    }
+    if (grant.combine) {
+      const state =
+        career.combine && career.combine.season === world.season
+          ? career.combine
+          : { season: world.season, hoursLeft: COMBINE_HOURS, seen: [] as string[] }
+      next = { ...next, combine: { ...state, hoursLeft: state.hoursLeft + grant.combine } }
+    }
+    if (grant.room) {
+      const room = career.room ?? { focus: [], plan: 'concentrate' as const, reps: 0 }
+      next = { ...next, room: { ...room, reps: Math.min(MAX_ROOM_REPS, room.reps + grant.room) } }
+    }
+    // The meeting book records the ask, the answer, and the standing grants.
+    const state: OwnerMeetingState = { ...meetingState(career) }
+    if (grant.patience) state.graceSeason = world.season
+    if (grant.staffFund) {
+      state.staffFundSeason = world.season
+      state.staffFundUsed = false
+    }
+    if (grant.staffBudget) {
+      state.staffBudgetSeason = world.season
+      state.staffBudget = grant.staffBudget
+    }
+    const entry: OwnerMeetingEntry = {
+      season: world.season,
+      window: due.window,
+      week: world.week,
+      ask,
+      outcome: result.outcome,
+      message: result.message,
+      grants: grantLabels(grant),
+    }
+    state.log = [...state.log, entry].slice(-12)
+    next = { ...next, ownerMeeting: state }
+    set({ career: next, tick: get().tick + 1 })
+    pushCareerNews(world, next, { category: 'Owner', headline: result.headline, body: result.message })
+    const summary = entry.grants.length ? ` — ${entry.grants.join(', ')}` : ''
+    get().showToast(`${result.headline}: ${result.outcome}${summary}`)
+    get().save()
+    return entry
+  },
+
   toggleKey: (id) => {
     const career = get().career
     if (!career || !canPickKeys(career)) return
@@ -3421,9 +3501,24 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const rng = makeRng(world.seed + world.season * 3607 + candidateId.length + Math.round(salary))
-    const res = attemptHire(world, career.teamId, career.reputation, candidate, salary, rng)
+    // FUTURES 25: an owner-funded hire pulls harder, and is spent once it lands.
+    const funded = ownerStaffFundOpen(career, world.season)
+    const res = attemptHire(
+      world,
+      career.teamId,
+      career.reputation,
+      candidate,
+      salary,
+      rng,
+      funded ? OWNER_STAFF_FUND_INTEREST : 0,
+    )
     if (res.signed) {
       applyHire(world, career.teamId, candidate, salary, scheme)
+      if (funded) {
+        const state = { ...meetingState(career) }
+        state.staffFundUsed = true
+        set({ career: { ...career, ownerMeeting: state }, tick: get().tick + 1 })
+      }
       get().showToast(
         scheme ? `${res.message.replace(/\.$/, '')} — installing the ${scheme} system.` : res.message,
       )
@@ -4422,8 +4517,11 @@ function runEndOfRegularSeason(
     // change while there is still security left (25); a patient builder only
     // when it bottoms out (0).
     const ownerLine = ownerFiringLine(career.teamId)
+    // FUTURES 25: a season of grace the owner promised in a meeting holds for
+    // the whole season — he doesn't judge you on this one.
+    const grace = ownerGraceActive(career, world.season)
     let demoted = false
-    if (nextSecurity <= ownerLine && career.level > 0) {
+    if (nextSecurity <= ownerLine && career.level > 0 && !grace) {
       demoted = true
     }
 
@@ -5784,6 +5882,45 @@ export function ownerProbe() {
   return { owners: rows, me }
 }
 
+/**
+ * FUTURES 25 dev probe: the owner-meeting state for the active career — the
+ * current window, your standing with the owner, a pure preview of what each ask
+ * would return right now, the meetings already held, and the live grants.
+ * Read-only: it never mutates the world or the career.
+ */
+export function ownerMeetingProbe() {
+  const career = useGame.getState().career
+  if (!career) return { career: null }
+  const profile = ownerProfile(career.teamId)
+  const due = meetingDue(world, career)
+  const state = meetingState(career)
+  const asks: OwnerAsk[] = ['budget', 'patience', 'staff']
+  return {
+    career: {
+      team: career.teamId,
+      owner: ownerName(career.teamId),
+      personality: profile.personality,
+      label: profile.label,
+      fireLine: ownerFiringLine(career.teamId),
+      jobSecurity: career.jobSecurity,
+      graceSeason: state.graceSeason ?? null,
+      staffFundOpen: ownerStaffFundOpen(career, world.season),
+      staffBudgetBonus: ownerStaffBudgetBonus(career, world.season),
+    },
+    phase: world.phase,
+    season: world.season,
+    week: world.week,
+    due,
+    standing: meetingStanding(world, career),
+    results: resultsBonus(world, career),
+    previews: asks.map((ask) => {
+      const r = resolveOwnerMeeting(world, career, ask)
+      return { ask, outcome: r.outcome, reason: r.reason, message: r.message }
+    }),
+    meetings: state.log.filter((e) => e.season === world.season),
+  }
+}
+
 
 /** L12.14 C2: 2025 top-of-market bands by position (dollars). */
 const MARKET_BANDS: Record<string, [number, number]> = {
@@ -6479,6 +6616,12 @@ export async function careerSmoke(
     if (canByeWeek(career) && isByeWeek(world, career.teamId)) {
       const byePlans: ByePlan[] = ['rest', 'install', 'scout']
       exercise('pickBye', () => get().pickBye(byePlans[(world.season + world.week) % byePlans.length]))
+    }
+    // FUTURES 25: take the periodic owner meeting (rotates the ask so every
+    // outcome path is exercised across the probe's seasons).
+    if (meetingDue(world, career).open) {
+      const asks: OwnerAsk[] = ['budget', 'patience', 'staff']
+      exercise('holdOwnerMeeting', () => get().holdOwnerMeeting(asks[world.week % asks.length]))
     }
     // L12 W2: promise two keys to the game.
     if (canPickKeys(career)) {

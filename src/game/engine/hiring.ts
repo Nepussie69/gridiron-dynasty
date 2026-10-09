@@ -130,8 +130,10 @@ export function attemptHire(
   candidate: HireCandidate,
   salaryOffer: number,
   rng: Rng,
+  /** FUTURES 25: an owner-funded hire adds pull (default 0 = unchanged). */
+  interestBonus = 0,
 ): HireResult {
-  const interest = computeInterest(world, teamId, rep, candidate, salaryOffer)
+  const interest = clamp(computeInterest(world, teamId, rep, candidate, salaryOffer) + interestBonus, 0, 99)
   // Convert interest to a hire probability.
   const prob = clamp(interest / 100 - (candidate.rating - 75) * 0.004, 0.05, 0.95)
   const roll = rng()

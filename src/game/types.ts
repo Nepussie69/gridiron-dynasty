@@ -705,6 +705,8 @@ export interface CareerState {
   scoutTravel?: import('./engine/scoutTravel').ScoutTravelState
   /** L15 (FUTURES 16): the locker-room program — captains, rookie mentors, effort edge. */
   lockerRoom?: import('./engine/lockerRoom').LockerRoomState
+  /** FUTURES 25: the owner-meeting book — this season's asks and the grants they earned. */
+  ownerMeeting?: import('./engine/ownerMeeting').OwnerMeetingState
   /** The region you're assigned to scout (drives information scope). */
   scoutRegion?: string
   /** Weekly time budget (#5). Legacy save field — ignored since L12.9 H1. */

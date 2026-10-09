@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, ovrDistribution, ownerProbe, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, ovrDistribution, ownerProbe, ownerMeetingProbe, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 import { animProbe } from './game/engine/animProbe'
@@ -25,6 +25,7 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__tradeProbe = tradeProbe
   ;(window as unknown as Record<string, unknown>).__balanceProbe = balanceProbe
   ;(window as unknown as Record<string, unknown>).__ownerProbe = ownerProbe
+  ;(window as unknown as Record<string, unknown>).__ownerMeetingProbe = ownerMeetingProbe
   ;(window as unknown as Record<string, unknown>).__marketProbe = marketProbe
   ;(window as unknown as Record<string, unknown>).__deadMoneyProbe = deadMoneyProbe
   ;(window as unknown as Record<string, unknown>).__askGmProbe = askGmProbe

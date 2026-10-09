@@ -28,6 +28,7 @@ import { KeysCard } from '../components/KeysCard'
 import { OfficeScene } from '../components/OfficeScene'
 import { PracticeCard } from '../components/PracticeCard'
 import { ByeWeekCard } from '../components/ByeWeekCard'
+import { OwnerMeetingCard } from '../components/OwnerMeetingCard'
 import { RoomCard } from '../components/RoomCard'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { WeeklyDecision } from '../components/WeeklyDecision'
@@ -103,6 +104,7 @@ export function Dashboard() {
       />
 
       <OfficeScene className="mb-5" />
+      <OwnerMeetingCard compact className="mb-5" />
       <ByeWeekCard className="mb-5" />
       <WeeklyDecision className="mb-5" />
       <WeeklyChecklist className="mb-5" />

@@ -9,6 +9,7 @@ import { DataTable, type Column } from '../components/DataTable'
 import { coachEffect, staffGrade, type CoachEffect } from '../game/engine/coaching'
 import { focusOptions, isFrontOfficeRole, openCandidates, schemesForRole, type HireCandidate } from '../game/engine/hiring'
 import { HoverCard } from '../components/HoverCard'
+import { ownerStaffBudgetBonus, ownerStaffFundOpen } from '../game/engine/ownerMeeting'
 import { InitialsAvatar, StaffHoverCard, VacantChip } from '../components/StaffReadout'
 import {
   COACH_UNIT,
@@ -138,8 +139,12 @@ export function Staff() {
   const visibleStaff = staff.filter((m) => inGroup(m.role, roleGroup))
 
   // Existing display-only staff budget: prestige-scaled pot minus current payroll.
-  const staffBudget = Math.round((18 + league.byId[career.teamId].prestige * 0.3) * 1_000_000)
+  // FUTURES 25: an owner meeting can top this up for the season, and grant a
+  // one-time owner-funded hire that pulls a candidate harder.
+  const ownerBonus = ownerStaffBudgetBonus(career, league.season)
+  const staffBudget = Math.round((18 + league.byId[career.teamId].prestige * 0.3) * 1_000_000) + ownerBonus
   const localeBudget = Math.max(0, staffBudget - payroll)
+  const ownerFundedHire = ownerStaffFundOpen(career, league.season)
 
   const holderOf = (role: string) => staff.find((m) => m.role === role)
 
@@ -261,6 +266,22 @@ export function Staff() {
           </HoverCard>
         </Card>
       </div>
+
+      {(ownerBonus > 0 || ownerFundedHire) && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--team)] bg-[var(--team-soft)] px-3 py-2">
+          <Badge tone="team">Owner meeting</Badge>
+          {ownerBonus > 0 && (
+            <span className="text-xs text-ink-2">
+              The owner added <strong className="text-ink">{money(ownerBonus)}</strong> to the staff budget this season.
+            </span>
+          )}
+          {ownerFundedHire && (
+            <span className="text-xs text-ink-2">
+              One staff hire this season is <strong className="text-ink">owner-funded</strong> — he leans hard on your target.
+            </span>
+          )}
+        </div>
+      )}
 
       {tab === 'staff' ? (
         <>

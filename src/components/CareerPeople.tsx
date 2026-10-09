@@ -7,6 +7,7 @@ import { overallRep } from '../game/engine/career'
 import { getAwards, getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, RatingBar, TeamCrest } from '../ui/kit'
 import { OwnerCard } from './OwnerCard'
+import { OwnerMeetingCard } from './OwnerMeetingCard'
 
 /** #9 contacts, #10 traits, #11 mentor + tree, #12 rival class, #17 wilderness, #19 legacy. */
 export function CareerPeople() {
@@ -51,6 +52,9 @@ export function CareerPeople() {
 
       {/* FUTURES 22: who you answer to, and how much rope you have. */}
       <OwnerCard />
+
+      {/* FUTURES 25: the periodic sit-down with the owner. */}
+      <OwnerMeetingCard />
 
       {career.mentor && (
         <Card>
