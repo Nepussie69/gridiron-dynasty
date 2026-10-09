@@ -6,6 +6,8 @@ _Latest handover 2026-10-09: the user requested transfer back to Claude; read `C
 
 **⚠ 2026-10-09: the user asked to HOLD stable-build rebuilds. Keep merging verified pushes to main, but do NOT rebuild 4173 until the user says so (stable stays 4377982). Report what has piled up on main instead.**
 
+**GitHub Pages (2026-10-09):** the stable build is also published at https://nepussie69.github.io/gridiron-dynasty/ from the `gh-pages` branch (repo made public by the user). Update it whenever stable is rebuilt: `scripts/publish-pages.sh [commit]`. Pages saves live in that site's browser storage — use Export/Import save to move a career between 4173 and Pages.
+
 ## Your role and the user's standing instructions
 - You are the **orchestrator**: spec → send to DeepSeek Flash → verify → merge → rebuild the stable build → tell the user. Small UI fixes you do yourself.
 - "Keep going through all the pushes." "Get DeepSeek doing updates in the background so we can move fast" → run **several pushes in parallel, one git worktree each**.
