@@ -227,12 +227,13 @@ function dealSummary(world: World, partnerId: string, get: TradeAsset[]): string
 }
 
 /**
- * Shop one of your players around the league: the best acceptable package from
+ * Shop one of your players (or picks) around the league: the best acceptable package from
  * each club, best first (max 6). Deterministic. Every offer is a deal
  * `evaluateTrade` already accepts by hand — this only searches.
  */
-export function findDeals(world: World, userTeamId: string, playerId: string, userNegotiation?: number): DealOffer[] {
-  const give: TradeAsset[] = [{ kind: 'player', id: playerId }]
+export function findDeals(world: World, userTeamId: string, assetId: string, userNegotiation?: number): DealOffer[] {
+  // Shop a player or one of your draft picks (pick ids live in world.draftPicks).
+  const give: TradeAsset[] = [{ kind: findPick(world, assetId) ? 'pick' : 'player', id: assetId }]
   const shoppedValue = assetValue(world, give[0])
   const offers: DealOffer[] = []
 
@@ -300,11 +301,14 @@ function packageCost(world: World, assets: TradeAsset[]): number {
  * `evaluateTrade(world, X, userTeamId, give, [target])` already accepts. Greedy,
  * deterministic, no rng. Sorted by least total value given, at most five.
  */
-export function findPackagesFor(world: World, userTeamId: string, playerId: string): DealOffer[] {
-  const targetPlayer = findPlayer(world, playerId)
-  if (!targetPlayer || !targetPlayer.teamId || targetPlayer.teamId === userTeamId) return []
-  const partnerId = targetPlayer.teamId
-  const target: TradeAsset = { kind: 'player', id: playerId }
+export function findPackagesFor(world: World, userTeamId: string, assetId: string): DealOffer[] {
+  // The target is another club's player or one of its draft picks.
+  const targetPick = findPick(world, assetId)
+  const targetPlayer = targetPick ? undefined : findPlayer(world, assetId)
+  const partnerId = targetPick ? targetPick.ownerTeam : targetPlayer?.teamId
+  if (!partnerId || partnerId === userTeamId) return []
+  if (targetPick && !isTradeablePick(world, targetPick)) return []
+  const target: TradeAsset = { kind: targetPick ? 'pick' : 'player', id: assetId }
   const up = upcomingDraftSeason(world)
 
   const roster = world.roster[userTeamId] ?? []
@@ -312,10 +316,10 @@ export function findPackagesFor(world: World, userTeamId: string, playerId: stri
   // Don't hand back a player at the target's own position unless he's clearly
   // the lesser player (under 60% of the target's value): nobody swaps one star
   // edge rusher for another.
-  const targetValue = playerTradeValue(targetPlayer)
+  const targetValue = targetPlayer ? playerTradeValue(targetPlayer) : 0
   const players = [...roster]
     .filter((p) => roster.filter((x) => x.pos === p.pos).length > 1)
-    .filter((p) => p.pos !== targetPlayer.pos || playerTradeValue(p) < targetValue * 0.6)
+    .filter((p) => !targetPlayer || p.pos !== targetPlayer.pos || playerTradeValue(p) < targetValue * 0.6)
     .sort((a, b) => playerTradeValue(a) - playerTradeValue(b) || a.id.localeCompare(b.id))
   const picks = world.draftPicks
     .filter((pk) => pk.ownerTeam === userTeamId && isTradeablePick(world, pk))

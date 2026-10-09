@@ -989,10 +989,10 @@ function AssetColumn({
                   <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
                   {a.kind === 'player' && showGmAsk && player && <GmAskButton player={player} kind="trade" label="Ask GM" />}
                   {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
-                  {a.kind === 'player' && onFindDeals && (
+                  {onFindDeals && (
                     <button
                       type="button"
-                      title="Find deals"
+                      title={a.kind === 'pick' ? 'Find deals for this pick' : 'Find deals'}
                       onClick={(e) => {
                         e.stopPropagation()
                         onFindDeals(a)
