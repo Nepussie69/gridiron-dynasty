@@ -252,6 +252,12 @@ export interface Player {
    * profile and the season-end development report (D3).
    */
   lastGrowth?: { season: number; from: number; to: number; experience: number }
+  /** FUTURES 12: this offseason's holdout, if any (optional; a legacy save has none). */
+  holdout?: import('./engine/contractLife').HoldoutState
+  /** FUTURES 12: a franchise or transition tag applied to this player. */
+  tag?: import('./engine/contractLife').TagState
+  /** FUTURES 12: a Round-1 rookie's fifth-year option decision. */
+  optionDecision?: import('./engine/contractLife').OptionState
 }
 
 /**

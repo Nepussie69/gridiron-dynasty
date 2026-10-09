@@ -259,6 +259,26 @@ export function PlayerProfile() {
 
           <div className="rounded-xl border border-line bg-surface p-4">
             <div className="label mb-3">Contract</div>
+            {(player.holdout?.status === 'open' ||
+              player.tag?.season === league.season ||
+              player.optionDecision?.season === league.season) && (
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {player.holdout?.status === 'open' && (
+                  <Badge tone="loss">Holdout · asks {money(player.holdout.demand)}</Badge>
+                )}
+                {player.tag?.season === league.season && (
+                  <Badge tone="team">
+                    {player.tag.kind === 'franchise' ? 'Franchise tag' : 'Transition tag'}
+                  </Badge>
+                )}
+                {player.optionDecision?.season === league.season && (
+                  <Badge tone="neutral">
+                    5th-year option {player.optionDecision.kind === 'exercise' ? 'exercised' : 'declined'}
+                    {player.optionDecision.value ? ` · ${money(player.optionDecision.value)}` : ''}
+                  </Badge>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-3">
               <Stat label="AAV" value={money(player.contract.annual)} />
               <Stat label="Cap Hit" value={money(player.contract.capHit)} />

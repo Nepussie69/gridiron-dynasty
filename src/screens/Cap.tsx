@@ -17,6 +17,7 @@ import { ExtensionTalks } from '../components/ExtensionTalks'
 import { ContractExplainer } from '../components/ContractExplainer'
 import { GmRestructureRequest } from '../components/GmRestructureRequest'
 import { CapPlanner } from '../components/CapPlanner'
+import { ContractLifeCard } from '../components/ContractLifeCard'
 
 type LedgerKey = 'name' | 'pos' | 'age' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'pct'
 const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
@@ -108,6 +109,8 @@ export function Cap() {
       )}
 
       <CapMemoCard className="mb-4" />
+
+      <ContractLifeCard className="mb-4" />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
