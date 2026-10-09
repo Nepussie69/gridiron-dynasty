@@ -28,7 +28,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 18 | **3-year cap planner** | Future cap hits, dead money and expiring deals before you sign anyone | — | ✅ merged |
 | 19 | **Analytics department** | Hire analysts: sharper win probability, 4th-down advice, opponent tendencies | staff redesign | ⏳ |
 | 20 | **Press conferences** (`NEXT_PHASE_L12_17.md`, spec only) | Answers move owner trust, player morale and your profile | — | ⛔ dropped by the user 2026-10-08 |
-| 21 | **Coaching tree** | Your coordinators get hired away as head coaches; their success adds to your legacy; poach them back | History ✅ | ⏳ |
+| 21 | **Coaching tree** | Your coordinators get hired away as head coaches; their success adds to your legacy; poach them back | History ✅ | ✅ merged |
 | 22 | **Owner personalities** | Win-now, patient builder, meddler — different firing lines and mandates | — | ✅ merged |
 | 23 | **Hall of Fame & legacy** (`NEXT_PHASE_L12_16.md`) | Career timeline, records, HOF vote at retirement (yours and your players'); also persists history/awards across reloads | History ✅ | ✅ merged |
 | 24 | **Trick plays** | Flea flicker, reverse, halfback pass, fake spike as calls with surprise value | 1 | ⏳ |
