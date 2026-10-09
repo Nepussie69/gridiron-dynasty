@@ -129,6 +129,7 @@ import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKe
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
 import { pitchBonus, portfolioItems } from '../game/engine/portfolio'
 import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGain } from '../game/engine/room'
+import { MAX_DEV_AGE, autoFocusFor, devFocusById, devGroupFor, type DevFocusId } from '../game/engine/devPlan'
 import { evaluateTrade, executeTrade, findDeals, findPackagesFor, isTradeablePick, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { DEADLINE_WEEK, buildDeadlineOffers, deadlineNewsItem, runDeadlineAI } from '../game/engine/deadline'
@@ -137,7 +138,7 @@ import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
 import { STARTERS, depthAt, depthGroup, moveInDepth, resetDepth, setStarterInDepth, topPlayers } from '../game/engine/depth'
-import { attributesFor } from '../game/data/ratings'
+import { attributesFor, playerAttrs } from '../game/data/ratings'
 import {
   advanceContacts,
   advanceRivals,
@@ -228,7 +229,7 @@ import { loadCalibration } from '../game/data/calibration'
 import { runBalance, runOvrDistribution, runRookieProbe } from '../game/engine/balance'
 
 export type ScreenId =
-  | 'career' | 'history' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
+  | 'career' | 'history' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'development' | 'gameplan' | 'staff' | 'scouting' | 'draft'
   | 'freeagency' | 'trades' | 'cap' | 'schedule' | 'standings'
   | 'stats' | 'awards' | 'league' | 'inbox' | 'players'
   // L12.8 V1: a read-only page for another club (not in the sidebar).
@@ -249,6 +250,7 @@ export const SCREENS: ScreenMeta[] = [
   { id: 'scouting', label: 'Scouting', group: 'Career', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'roster', label: 'Roster', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'depth', label: 'Depth Chart', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
+  { id: 'development', label: 'Development', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'gameplan', label: 'Game Plan', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'schedule', label: 'Schedule', group: 'Team', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'draft', label: 'Draft Board', group: 'Personnel', tiers: ['NFL'] },
@@ -505,6 +507,12 @@ interface GameStore {
   setStarter: (pos: Position, playerId: string) => void
   /** Depth chart: drop your club's stored order and fall back to ratings. */
   resetDepthChart: () => void
+  /** L15: set (or clear) a young player's development focus. */
+  setDevFocus: (playerId: string, focus: DevFocusId | null) => void
+  /** L15: give every young player the focus that targets his weakest area. */
+  autoDevPlans: (groupId?: string) => void
+  /** L15: apply one focus to every young player in a position group. */
+  selectAllDevFocus: (groupId: string, focus: DevFocusId) => void
   startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId }) => void
   resetCareer: () => void
   advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
@@ -849,6 +857,63 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     resetDepth(world, career.teamId)
+    bump(set, get)
+    get().save()
+  },
+
+  // L15 (FUTURES row 13): development plans for the user's young players.
+  setDevFocus: (playerId, focus) => {
+    // Mutating the canonical player object updates `world.roster` too (relinked
+    // on load), and the plan rides along in the save automatically.
+    const p = world.players.find((x) => x.id === playerId)
+    if (!p) return
+    if (focus) {
+      if (!devFocusById(focus)) return
+      if (p.age > MAX_DEV_AGE) return
+      p.devFocus = focus
+    } else {
+      delete p.devFocus
+    }
+    bump(set, get)
+    get().save()
+  },
+
+  autoDevPlans: (groupId) => {
+    const career = get().career
+    const teamId = career?.teamId ?? get().activeTeamId
+    const roster = world.roster[teamId] ?? []
+    let n = 0
+    for (const p of roster) {
+      if (p.age > MAX_DEV_AGE) continue
+      if (groupId && devGroupFor(p.pos) !== groupId) continue
+      p.devFocus = autoFocusFor(p)
+      n++
+    }
+    if (!n) {
+      get().showToast('No young players to plan for.')
+      return
+    }
+    bump(set, get)
+    get().save()
+    get().showToast(`Auto development plans set for ${n} player${n === 1 ? '' : 's'}.`)
+  },
+
+  selectAllDevFocus: (groupId, focus) => {
+    if (!devFocusById(focus)) return
+    const career = get().career
+    const teamId = career?.teamId ?? get().activeTeamId
+    const roster = world.roster[teamId] ?? []
+    let n = 0
+    for (const p of roster) {
+      if (p.age > MAX_DEV_AGE) continue
+      if (devGroupFor(p.pos) !== groupId) continue
+      p.devFocus = focus
+      n++
+    }
+    if (!n) {
+      get().showToast('No young players in that group.')
+      return
+    }
     bump(set, get)
     get().save()
   },
@@ -5054,6 +5119,65 @@ export function draftTradeProbe() {
     accepted: evaluateTrade(clone, o.partnerId, career.teamId, o.give, o.get).accepted,
   }))
   return { userTeam: career.teamId, slot, onClock: slot >= 0 ? clone.draftOrder[slot] : null, down, up }
+}
+
+/**
+ * L15 dev-only probe: give the user's young players the same auto focus on a
+ * clone of the world and run one season-end `developPlayers`, then compare it to
+ * an unfocused control clone. Because the focus draws no `rng()`, the control
+ * and focused seasons are identical except for the earned rating banks — so this
+ * proves plans are neutral by default and only move the focused ratings.
+ */
+export function devPlanProbe(teamId?: string) {
+  const career = useGame.getState().career
+  const tid = teamId ?? career?.teamId ?? useGame.getState().activeTeamId
+  const focusClone = structuredClone(world) as World
+  const ctrlClone = structuredClone(world) as World
+  const assign = (w: World, on: boolean) => {
+    let n = 0
+    for (const p of w.roster[tid] ?? []) {
+      if (p.age > MAX_DEV_AGE) continue
+      if (on) p.devFocus = autoFocusFor(p)
+      else {
+        // The control must be genuinely plan-free, even if the live world has
+        // plans set, or the comparison would cancel itself out.
+        delete p.devFocus
+        delete p.devRatings
+      }
+      n++
+    }
+    return n
+  }
+  const young = assign(focusClone, true)
+  assign(ctrlClone, false)
+  developPlayers(focusClone, { teamId: tid, growth: 1 })
+  developPlayers(ctrlClone, { teamId: tid, growth: 1 })
+  const ctrlById = new Map(ctrlClone.players.map((p) => [p.id, p]))
+  let compared = 0
+  let ovrDelta = 0
+  const samples: { name: string; pos: string; focus: string | undefined; keys: string[]; bonus: number }[] = []
+  for (const p of focusClone.roster[tid] ?? []) {
+    if (p.age > MAX_DEV_AGE + 1) continue
+    const ctrl = ctrlById.get(p.id)
+    if (!ctrl) continue
+    compared++
+    ovrDelta += p.ovr - ctrl.ovr
+    const keys = Object.keys(p.devRatings ?? {})
+    if (keys.length && samples.length < 6) {
+      const fa = playerAttrs(p)
+      const ca = playerAttrs(ctrl)
+      const bonus = keys.reduce((s, k) => s + ((fa[k] ?? 0) - (ca[k] ?? 0)), 0)
+      samples.push({ name: p.name, pos: p.pos, focus: p.devFocus, keys, bonus })
+    }
+  }
+  return {
+    team: world.byId[tid]?.abbr ?? tid,
+    program: +coachEffect(world, tid).development.toFixed(3),
+    young,
+    compared,
+    ovrDelta, // 0 proves the plan adds no OVR and no rng draw
+    samples,
+  }
 }
 
 /**

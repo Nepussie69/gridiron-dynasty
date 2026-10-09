@@ -31,6 +31,7 @@ const AREA_BY_SCREEN: Partial<Record<ScreenId, AccessArea>> = {
   staff: 'staff',
   gameplan: 'gameplan',
   roster: 'roster',
+  development: 'roster',
 }
 
 type Item =

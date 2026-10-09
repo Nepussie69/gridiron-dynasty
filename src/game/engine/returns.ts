@@ -15,7 +15,7 @@
 
 import type { Player } from '../types'
 import type { World } from './generate'
-import { attributesFor } from '../data/ratings'
+import { playerAttrs } from '../data/ratings'
 import { depthAt, depthGroup } from './depth'
 
 export interface ClubReturners {
@@ -27,7 +27,7 @@ export interface ClubReturners {
 const COMPARABLE = 3
 
 function attrs(p: Player): Record<string, number> {
-  return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+  return playerAttrs(p)
 }
 
 /** R6: return value from the ratings that drive a return (centered on ~70 ratings). */

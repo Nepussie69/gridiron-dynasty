@@ -18,6 +18,7 @@ import {
   Repeat,
   Search,
   Shield,
+  TrendingUp,
   Trophy,
   UserCog,
   UserRound,
@@ -44,6 +45,7 @@ const ICONS: Record<ScreenId, IconType> = {
   ledger: BookOpen,
   roster: Users,
   depth: ListOrdered,
+  development: TrendingUp,
   gameplan: ClipboardList,
   schedule: CalendarDays,
   standings: Trophy,
@@ -72,6 +74,7 @@ const AREA_BY_SCREEN: Partial<Record<ScreenId, AccessArea>> = {
   gameplan: 'gameplan',
   roster: 'roster',
   depth: 'roster',
+  development: 'roster',
 }
 
 export function Sidebar() {

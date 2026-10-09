@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { GameStatLine, Player, Position } from '../types'
-import { attributesFor } from '../data/ratings'
+import { playerAttrs } from '../data/ratings'
 import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
 import type { Game, World } from './generate'
@@ -28,7 +28,7 @@ const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
 }
 
 function mkAttrs(p: Player): Record<string, number> {
-  return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+  return playerAttrs(p)
 }
 
 // R7: fast-path drops. The fast allocator never models incompletions (targets ≈

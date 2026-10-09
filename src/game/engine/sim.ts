@@ -3,7 +3,7 @@ import { teamStrength, type Game, type World } from './generate'
 import { playoffPicture } from './playoffs'
 import { statGame } from './statAlloc'
 import { clamp, gauss, hash32, makeRng, type Rng } from './rng'
-import { attributesFor } from '../data/ratings'
+import { playerAttrs } from '../data/ratings'
 import { POS_MEAN } from './ratingMeans'
 
 /**
@@ -118,7 +118,7 @@ function healPlayers(world: World, rng: Rng, week: number, recovery?: WeekRecove
     if (!p.injured && p.teamId) {
       const m = recovery?.teamId === p.teamId ? mult : 1
       const tghMean = POS_MEAN[p.pos]?.TGH
-      const tgh = (p.attrs?.TGH ?? attributesFor(p.id, p.pos, p.ovr).TGH ?? tghMean ?? 70)
+      const tgh = (playerAttrs(p).TGH ?? tghMean ?? 70)
       const tghMult = tghMean === undefined ? 1 : clamp(1 + (tghMean - tgh) / INJ_TGH_SLOPE, 0.5, 1.7)
       if (rng() < INJ_BASE * m * tghMult) {
         p.injured = { games: 1 + Math.floor(rng() * 3), note: pickNote(rng) }

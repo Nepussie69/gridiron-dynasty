@@ -178,6 +178,17 @@ export function playerAttrs(p: {
   pos: Position
   ovr: number
   attrs?: Record<string, number>
+  /** L15: earned development-plan rating gains (additive, clamped to 40–99). */
+  devRatings?: Record<string, number>
 }): Record<string, number> {
-  return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+  const out = { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+  const gains = p.devRatings
+  if (gains) {
+    for (const k of Object.keys(gains)) {
+      const g = gains[k]
+      if (!g) continue
+      out[k] = Math.max(40, Math.min(99, (out[k] ?? 70) + g))
+    }
+  }
+  return out
 }
