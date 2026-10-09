@@ -57,7 +57,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | ✅ merged |
 | 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | ✅ merged |
 | 53 | 2026-10-08 | Head coach + GM work together: ask to extend, restructure for a push, go get a trade/FA target, release a player | L12.14 C6 (GM requests desk) | ✅ merged 52d1df7 |
-| 54 | 2026-10-08 | Too many franchise players: only a few 90+, more 80s | NEXT_PHASE_L12_15.md S1–S4 (82 at 90+ today → ~25–32) | ⏳ after contracts merges |
+| 54 | 2026-10-08 | Too many franchise players: only a few 90+, more 80s | NEXT_PHASE_L12_15.md S1–S4 (82 at 90+ → 34 at season 1); merged 2262df2; long-term drift fix stars7 | ✅ merged / 🔨 S4 |
 | 55 | 2026-10-08 | How much each rating matters + table; missed tackles in gameplay; realism vs NFL last 5–10 years | Table given in chat (47/48 ratings in the sim, RTE unused); missed tackles → NEXT_PHASE_REALISM.md R5 | ⏳ with the retune |
 | 56 | 2026-10-08 | (new chat) Keep going through the pushes, DeepSeek in parallel, log requests, report every stable-build update | Orchestration continued; 4th parallel push `hof` (FUTURES 23, NEXT_PHASE_L12_16.md) — also fixes history/awards not being saved | ✅ (hof merged) |
 | 57 | 2026-10-08 | (screenshot of a call moment) Will the playbook mean more options when I call a play? | Yes: L12.10 B6 in push `anim` (formation → any play from the ~38-play playbook, route diagram) | ✅ merged |
