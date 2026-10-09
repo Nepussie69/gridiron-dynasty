@@ -64,6 +64,13 @@ Today `PlayOutcome.pressure` is a boolean set on every sack and on incompletions
 - **Stats:** optional `pressureId` on the play; defensive `PRS` (pressures) in box score, season, career (optional fields, old saves default 0), Stats Hub column + glossary, QB "pressured %" (pressures faced / dropbacks) on the passing side. Fast-sim allocation (`statAlloc`) gives rushers a matching deterministic share so simmed seasons show them too.
 - **Checks:** league pressure rate 30–35% of dropbacks on 3 seeds; top edge rushers ~50–80 pressures per 17 games; elite PMV/FMV rusher > average; SIM/eq unchanged vs the pre-change branch.
 
+## R8 — QB sacked in the passing line (user request, 2026-10-09: "include qb sacked in game and statistics")
+Team `sacksTaken` exists, and sack plays carry `qbId`, but the QB's own line has no sacks.
+- Passing line gets **SK** (times sacked) and **SKY** (sack yards lost): game box score (`C/ATT YDS TD INT SK RTG`), season, career, Stats Hub columns + glossary. Optional fields; old saves default 0.
+- Game day / play-by-play: counted from sack plays by `qbId` (yards = |play.yards|).
+- Fast-sim (`statAlloc`): the team's existing `sacksTaken` and sack yards go to the QBs by dropback share (deterministic, no rng), so simmed seasons match.
+- Keep NFL convention: sacks are not pass attempts and sack yards are not subtracted from the QB's passing yards (team net passing already handles it). Check: league QB SK/game ≈ team sacks taken (2.2–2.6), box totals == play-level counts.
+
 ## Progress
 | Task | Current state |
 |---|---|
