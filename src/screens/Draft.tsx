@@ -8,6 +8,7 @@ import { readProspect, readRookieRanges } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { AccessBadge } from '../components/AccessBadge'
+import { DraftTradePanel } from '../components/DraftTradePanel'
 import { RatingRing } from '../components/PlayerCard'
 import { Badge, Button, Card, PageHeader, RatingBar, RookieRangeBadges, Stat, TeamCrest } from '../ui/kit'
 
@@ -180,6 +181,8 @@ export function Draft() {
         </div>
 
         <div className="space-y-4">
+          <DraftTradePanel />
+
           <Card pad={false}>
             <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2">
               <span className="label">Prospect Board · Best Available</span>

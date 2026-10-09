@@ -100,6 +100,7 @@ import {
 import { snapshotDevBaseline } from '../game/engine/objectives'
 import { clamp, hash32 } from '../game/engine/rng'
 import {
+  bestAvailableFor,
   currentRound,
   currentTeamId,
   initDraft,
@@ -118,7 +119,7 @@ import {
 } from '../game/engine/draft'
 import { ensureDraftWindow, ledgerFreeAgent } from '../game/engine/picks'
 import { rescaleOvr, unscaleOvr } from '../game/engine/ovrScale'
-import { canSetTrust, calibrationGain } from '../game/engine/department'
+import { canSetTrust, calibrationGain, departmentGrade } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
 import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
@@ -131,6 +132,7 @@ import { MAX_ROOM_FOCUS, applyRoomDevelopment, hasRoom, roomPlayers, type RoomGa
 import { evaluateTrade, executeTrade, findDeals, findPackagesFor, isTradeablePick, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { DEADLINE_WEEK, buildDeadlineOffers, deadlineNewsItem, runDeadlineAI } from '../game/engine/deadline'
+import { buildDraftTradeDownOffers, buildDraftTradeUpTargets, nextUserPickSlot } from '../game/engine/draftTrades'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
@@ -610,6 +612,14 @@ interface GameStore {
   declineDeadlineOffer: (id: string) => void
   /** L14: let AI clubs make their own deadline trades (off by default; changes league rosters). */
   setDeadlineAI: (v: boolean) => void
+  /** L14: accept a rival's draft-day offer for the pick on your clock (you move back). */
+  acceptDraftTradeOffer: (id: string) => void
+  /** L14: pay a package for an earlier pick while your own pick is still ahead (you move up). */
+  proposeDraftTradeUp: (pickId: string) => void
+  /** L14: turn the per-pick draft clock on/off (off by default; on = auto-pick at 0). */
+  setDraftClock: (v: boolean) => void
+  /** L14: the draft clock ran out — take the top name on your board for the current pick. */
+  draftClockExpired: () => void
 
   markRead: (id: string) => void
   /** L11.5 Q12: mark every current news item read. */
@@ -2818,6 +2828,136 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  // L14: draft-day trades — accept a rival's offer for the pick on your clock.
+  acceptDraftTradeOffer: (id) => {
+    const career = get().career
+    if (!career) return
+    if (!draftOpen(world)) {
+      get().showToast('The draft is in April — scout the class now.')
+      return
+    }
+    if (accessFor(career, 'trades') !== 'decide') {
+      get().showToast('You do not have trade authority yet — keep climbing.')
+      return
+    }
+    if (!userOnClock(world, career)) {
+      get().showToast('You are not on the clock.')
+      return
+    }
+    const offer = buildDraftTradeDownOffers(world, career.teamId, 8).find((o) => o.id === id)
+    if (!offer) {
+      get().showToast('That offer is no longer on the table.')
+      return
+    }
+    if (
+      !offer.give.every((a) => draftAssetOwnedBy(world, a, career.teamId)) ||
+      !offer.get.every((a) => draftAssetOwnedBy(world, a, offer.partnerId))
+    ) {
+      get().showToast('That deal is no longer available — the board has moved.')
+      return
+    }
+    const verdict = evaluateTrade(world, offer.partnerId, career.teamId, offer.give, offer.get, career.skills.negotiation)
+    if (!verdict.accepted) {
+      get().showToast(verdict.reason)
+      return
+    }
+    const rec = recordTrade(world, career, offer.partnerId, offer.give, offer.get)
+    executeTrade(world, career.teamId, offer.partnerId, offer.give, offer.get)
+    stampIncomingPlayers(world, career, offer.partnerId, offer.get)
+    // Re-point every slot to its pick's current owner, so the buyer is now on the
+    // clock at the pick you just sold — and any pick you got back lands with you.
+    syncDraftOrder(world)
+    const prospect = bestAvailableFor(world, offer.partnerId)
+    if (prospect) makePick(world, prospect, offer.partnerId)
+    else world.draftState.complete = true
+    // Run the board forward to your next selection.
+    simUntilUser(world, career)
+    logConvictionPicks(world, career)
+    logRedFlags(world, career)
+    announceDraftPicks(world, career)
+    resolveTradePicks(world, career)
+    const trades = [...(career.trades ?? []), rec].slice(-60)
+    set({ career: { ...career, trades }, tick: get().tick + 1 })
+    get().showToast(`Draft-day deal with the ${world.byId[offer.partnerId].name} — you moved back.`)
+    get().save()
+  },
+
+  // L14: draft-day trades — pay for an earlier pick while your own is still ahead.
+  proposeDraftTradeUp: (pickId) => {
+    const career = get().career
+    if (!career) return
+    if (!draftOpen(world)) {
+      get().showToast('The draft is in April — scout the class now.')
+      return
+    }
+    if (accessFor(career, 'trades') !== 'decide') {
+      get().showToast('You do not have trade authority yet — keep climbing.')
+      return
+    }
+    if (accessFor(career, 'draft') !== 'decide') {
+      get().showToast('You do not make the draft calls at this rung.')
+      return
+    }
+    if (userOnClock(world, career)) {
+      get().showToast('You are on the clock — make the pick or trade back.')
+      return
+    }
+    const target = buildDraftTradeUpTargets(world, career.teamId, 12).find((t) => t.pickId === pickId)
+    if (!target) {
+      get().showToast('That pick is no longer available.')
+      return
+    }
+    if (
+      !target.give.every((a) => draftAssetOwnedBy(world, a, career.teamId)) ||
+      !target.get.every((a) => draftAssetOwnedBy(world, a, target.partnerId))
+    ) {
+      get().showToast('That deal is no longer available — the board has moved.')
+      return
+    }
+    const verdict = evaluateTrade(world, target.partnerId, career.teamId, target.give, target.get, career.skills.negotiation)
+    if (!verdict.accepted) {
+      get().showToast(verdict.reason)
+      return
+    }
+    const rec = recordTrade(world, career, target.partnerId, target.give, target.get)
+    executeTrade(world, career.teamId, target.partnerId, target.give, target.get)
+    stampIncomingPlayers(world, career, target.partnerId, target.get)
+    syncDraftOrder(world)
+    const trades = [...(career.trades ?? []), rec].slice(-60)
+    set({ career: { ...career, trades }, tick: get().tick + 1 })
+    get().showToast(`You traded up to #${target.overall}.`)
+    get().save()
+  },
+
+  setDraftClock: (v) => {
+    const career = get().career
+    if (!career) return
+    set({ career: { ...career, draftClock: v }, tick: get().tick + 1 })
+    get().showToast(v ? 'Draft clock ON — 90 seconds a pick.' : 'Draft clock OFF.')
+    get().save()
+  },
+
+  draftClockExpired: () => {
+    const career = get().career
+    if (!career || !draftOpen(world) || !userOnClock(world, career)) return
+    let prospect: (typeof world.draft)[number] | undefined
+    for (const id of career.userBoard ?? []) {
+      const p = world.draft.find((d) => d.id === id && !d.draftedBy)
+      if (p) {
+        prospect = p
+        break
+      }
+    }
+    if (!prospect) {
+      prospect =
+        bestAvailableFor(world, career.teamId, undefined, (p) => departmentGrade(world, career, p) ?? p.grade) ??
+        undefined
+    }
+    if (!prospect) return
+    get().draftProspect(prospect.id)
+    get().showToast(`The clock ran out — ${prospect.name} is the pick.`)
+  },
+
   hireStaff: (candidateId, salary, scheme) => {
     const career = get().career
     if (!career) return
@@ -3175,6 +3315,39 @@ function openTradeDeadline(world: World, career: CareerState): CareerState {
   }
 }
 
+/**
+ * A live draft-day trade can move a pick that still has a slot ahead of it, so
+ * re-point the slot's team from current pick ownership (comp picks included)
+ * without rebuilding the whole order.
+ */
+function syncDraftOrder(world: World): void {
+  const ids = world.draftPickIds
+  if (!ids?.length) return
+  for (let i = 0; i < ids.length && i < world.draftOrder.length; i++) {
+    const pk = world.draftPicks.find((p) => p.id === ids[i])
+    if (pk) world.draftOrder[i] = pk.ownerTeam
+  }
+}
+
+/** Does `teamId` still own this asset, and is a pick still live for trading? */
+function draftAssetOwnedBy(world: World, a: TradeAsset, teamId: string): boolean {
+  if (a.kind === 'player') return world.players.find((p) => p.id === a.id)?.teamId === teamId
+  const pk = world.draftPicks.find((p) => p.id === a.id)
+  return !!pk && pk.ownerTeam === teamId && isTradeablePick(world, pk)
+}
+
+/** Stamp players arriving via a trade as your acquisitions (origin + shadow note). */
+function stampIncomingPlayers(world: World, career: CareerState, partnerId: string, get2: TradeAsset[]): void {
+  for (const a of get2) {
+    if (a.kind !== 'player') continue
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
+    if (p) {
+      p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
+      if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
+    }
+  }
+}
+
 /** Ping the inbox whenever one of your guys comes off the board (#20). */
 function announceDraftPicks(world: World, career: CareerState) {
   const board = new Set(career.userBoard ?? [])
@@ -3321,7 +3494,13 @@ function migrateWorld(w: World): World {
   ensureDraftWindow(w, w.season + 1)
   // Older saves stored a 32-team draft order; rebuild the ownership-aware one
   // (preserving the current pick index) unless the draft is already finished.
-  if ((w.draftOrder?.length ?? 0) < DRAFT_ROUNDS * 32 && !w.draftState?.complete) {
+  // Also backfill `draftPickIds`, which newer draft-day trades read.
+  if (
+    !w.draftState?.complete &&
+    ((w.draftOrder?.length ?? 0) < DRAFT_ROUNDS * 32 ||
+      !w.draftPickIds?.length ||
+      w.draftPickIds.length !== w.draftOrder?.length)
+  ) {
     const built = buildDraftOrder(w)
     w.draftOrder = built.order
     w.draftRounds = built.rounds
@@ -4602,6 +4781,40 @@ export function deadlineProbe() {
     aiTrades,
     aiSample: aiClone.news.filter((n) => n.id.startsWith('deadlineai_')).slice(0, 2).map((n) => n.headline),
   }
+}
+
+/**
+ * Dev-only probe: L14 draft-day trades. Reports the trade-back offers the league
+ * would send at your pick and the trade-up targets available just before it,
+ * each re-checked against `evaluateTrade` on a forced-open clone of the draft.
+ */
+export function draftTradeProbe() {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  const clone = structuredClone(world) as World
+  clone.phase = 'offseason'
+  clone.offseasonStage = 'draft'
+  clone.draftState = { round: 1, pickIndex: 0, complete: false, log: [] }
+  initDraft(clone)
+  const slot = nextUserPickSlot(clone, career.teamId)
+  // Trade-up targets are visible while the board is still ahead of your pick.
+  const up = buildDraftTradeUpTargets(clone, career.teamId, 6).map((t) => ({
+    pick: `#${t.overall} Rd ${t.round}`,
+    partner: t.partnerId,
+    give: t.giveValue,
+    get: t.getValue,
+    accepted: evaluateTrade(clone, t.partnerId, career.teamId, t.give, t.get).accepted,
+  }))
+  // Trade-down offers need your club on the clock.
+  if (slot >= 0) clone.draftState.pickIndex = slot
+  const down = buildDraftTradeDownOffers(clone, career.teamId, 6).map((o) => ({
+    partner: o.partnerId,
+    give: o.giveValue,
+    get: o.getValue,
+    net: o.getValue - o.giveValue,
+    accepted: evaluateTrade(clone, o.partnerId, career.teamId, o.give, o.get).accepted,
+  }))
+  return { userTeam: career.teamId, slot, onClock: slot >= 0 ? clone.draftOrder[slot] : null, down, up }
 }
 
 /**
