@@ -63,19 +63,26 @@ export function fgProb(yard: number, kickPower: number): number {
  *  (KPW 95) attempts from ~3 yards deeper than a weak one (KPW 78) — using the
  *  same KPW/KAC blend the make model uses. */
 export function fgRangeYard(kickPower: number): number {
-  return 55 - (kickPower - 88) * 0.22
+  return 57 - (kickPower - 88) * 0.22
 }
 
 /** EV of each 4th-down option for the offense. `fg` is null outside FG range. */
 export function fourthDownEV(s: Situation, kickPower: number): { go: number; fg: number | null; punt: number } {
   const p = convertProb(s.distance)
   const q = fgProb(s.yard, kickPower)
-  const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard)
+  // Modern fourth-down analytics value possession a touch higher than the raw
+  // expected-points curve implies; the flat bonus keeps the CALIBRATED go-rate
+  // near the 2015–2024 NFL norm across every field zone instead of only in plus
+  // territory. It is a decision-model knob, not a play-outcome change.
+  const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard) + GO_BONUS
   const fg = s.yard < fgRangeYard(kickPower) ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
   // A 40-yard net punt, touchback at the 20.
   const punt = -epAt(100 - Math.min(80, s.yard + 40))
   return { go, fg, punt }
 }
+
+/** R2: flat 4th-down possession bonus (see fourthDownEV). */
+export const GO_BONUS = 0.8
 
 export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: number): 'go' | 'fg' | 'punt' {
   const ev = fourthDownEV(s, kickPower)
@@ -98,9 +105,9 @@ export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: nu
     if (s.distance <= 6 && ev.go >= val(best) - 0.4) return 'go'
     return best === 'go' ? (inRange ? 'fg' : 'punt') : best
   }
-  // standard: the best EV, but go only when distance <= 5 (modern NFL is more
-  // aggressive on 4th & medium than the old <= 4 threshold).
-  if (best === 'go' && s.distance > 5) return inRange ? 'fg' : 'punt'
+  // standard: the best EV, but go whenever it wins on 4th & short/medium (the
+  // modern NFL is more aggressive than the old <= 4 threshold).
+  if (best === 'go' && s.distance > 7) return inRange ? 'fg' : 'punt'
   return best
 }
 

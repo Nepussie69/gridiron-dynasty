@@ -77,7 +77,7 @@ import { clamp, hash32, makeRng, type Rng } from './rng'
 // added or removed — these only move the league-average baseline the terms sit on.
 export const R2 = {
   /** Completion-probability base (real NFL completion % ≈ 64.3). */
-  compBase: 0.568,
+  compBase: 0.569,
   /** Completion penalty as the field compresses toward the goal line (0 at the 20). */
   rzCompDamp: 0,
   /** Fraction of a would-be scoring run shaved by the compressed, crowded front. */
@@ -87,7 +87,7 @@ export const R2 = {
   /** Multiplier on explosive gains (20+ yards) to tune the long-TD rate. */
   explosiveCal: 1.3,
   /** R2: red-zone pass lean — clubs throw more inside the 20 than between them. */
-  rzPassBias: 0.09,
+  rzPassBias: 0.03,
   /** R2: money-down conversion — on 3rd down the throw is schemed to the sticks, so
    *  it converts a little more often than the same matchup on 1st/2nd (≈ +4%). */
   moneyComp: 0.03,
@@ -99,7 +99,7 @@ export const R2 = {
    *  open-field bump. Sized so TAK 90+ defenders miss under 6% of attempts, TAK under 65
    *  over 18%, the league near 12%, an average RB ≈ 0.10–0.12 forced per carry and an
    *  elusive back 0.18–0.25 (see the tackle probe). */
-  missBase: 0.05,
+  missBase: 0.061,
   missGain: 0.004,
   missDefDiff: 0.016,
   missCarDiff: 0.015,
@@ -117,7 +117,7 @@ export const R2 = {
   /** Multiplier on the yards-after-catch / style bonus on completions. */
   yacCal: 1,
   /** Multiplier on a positive pass gain after the real distribution is sampled. */
-  passGainCal: 1.07,
+  passGainCal: 1.06,
   /** Game-clock seconds consumed per second of play time (pace). */
   pace: 0.835,
   /** Where a drive starts after a touchback (2015–2024 average ≈ the 27). */
@@ -131,7 +131,7 @@ export const R2 = {
   runFumbleBase: 0.027,
   passFumbleBase: 0.005,
   /** League-wide run/pass lean added to the OC's pass rate (negative = more runs). */
-  passAdj: -0.05,
+  passAdj: -0.035,
 }
 
 /**
@@ -1582,29 +1582,28 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const offMove = userOff ? env?.matchups?.off : undefined
   const defMove = userDef ? env?.matchups?.def : undefined
   const usage = env?.usage
-  // R15: the actual personnel on the field, from the concept's offensive grouping
-  // and the defensive package that answers it. The resolver reuses these same
-  // selected players for its ratings and for the snap/fatigue charge.
-  const offUnits = offenseOnField(world, offId, concept, env?.qbOverride, undefined, env?.fat)
-  const qb = offUnits.find((p) => p.pos === 'QB')
-  const ol = offUnits.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
-  const backs = offUnits.filter((p) => p.pos === 'RB')
+  // R15: select the actual healthy 11 first — the concept's grouping topped up to
+  // eleven (QB override, injuries and fatigue rotation preserved) — then derive
+  // every resolver group from that same eleven, so a backfill player has a real
+  // rated role instead of only a snap charge. The snap/fatigue accounting uses
+  // exactly this eleven; it is never reconstructed from a different group.
+  const offEleven = fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, undefined, env?.fat), OFF_FILL)
+  const qb = offEleven.find((p) => p.pos === 'QB')
+  const ol = offEleven.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
+  const backs = offEleven.filter((p) => p.pos === 'RB')
   const rb = backs[0]
-  const fb = offUnits.find((p) => p.pos === 'FB')
+  const fb = offEleven.find((p) => p.pos === 'FB')
   // G11 doubleRusher: chipping the best rusher also keeps a back in to block,
   // so the target pool drops to the top three receivers.
-  const passCatchers = offUnits.filter((p) => p.pos === 'WR' || p.pos === 'TE')
+  const passCatchers = offEleven.filter((p) => p.pos === 'WR' || p.pos === 'TE')
   const wrs = passCatchers.slice(0, offMove === 'doubleRusher' ? 3 : 4)
-  const defUnits = defenseOnField(world, defId, concept.personnel, env?.fat)
-  const dl = defUnits.filter((p) => p.pos === 'DE' || p.pos === 'DT')
-  const lbs = defUnits.filter((p) => p.pos === 'LB')
-  const cbs = defUnits.filter((p) => p.pos === 'CB')
-  const saf = defUnits.filter((p) => p.pos === 'S')
-  // R15: the exact participant id lists the snap/fatigue charge uses. A back who
-  // actually took the rep replaces the nominal starter in a one-back grouping.
-  const onFieldDefIds = fillToEleven(world, defId, defUnits, DEF_FILL).map((p) => p.id)
-  const onFieldOffIds = (reppedId?: string) =>
-    fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat), OFF_FILL).map((p) => p.id)
+  const defEleven = fillToEleven(world, defId, defenseOnField(world, defId, concept.personnel, env?.fat), DEF_FILL)
+  const dl = defEleven.filter((p) => p.pos === 'DE' || p.pos === 'DT')
+  const lbs = defEleven.filter((p) => p.pos === 'LB')
+  const cbs = defEleven.filter((p) => p.pos === 'CB')
+  const saf = defEleven.filter((p) => p.pos === 'S')
+  const onFieldDefIds = defEleven.map((p) => p.id)
+  const onFieldOffIds = offEleven.map((p) => p.id)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
   // R15: the offence's and defence's average in-game fatigue. Effects use the
@@ -1748,7 +1747,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
       qbId: qb?.id, sackId, coverId,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
-      onFieldOff: onFieldOffIds(), onFieldDef: onFieldDefIds,
+      onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
   }
 
@@ -1874,7 +1873,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
-      onFieldOff: onFieldOffIds(target?.pos === 'RB' ? target.id : undefined), onFieldDef: onFieldDefIds,
+      onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
   }
   if (rng() < compProb) {
@@ -1960,10 +1959,10 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopper ? [stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
-      onFieldOff: onFieldOffIds(target?.pos === 'RB' ? target.id : undefined), onFieldDef: onFieldDefIds,
+      onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, onFieldOff: onFieldOffIds(target?.pos === 'RB' ? target.id : undefined), onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -1980,27 +1979,22 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const userDef = !!userTeamId && userTeamId === defId
   const defMove = userDef ? env?.matchups?.def : undefined
   const usage = env?.usage
-  // R15: real personnel. The rush pool keeps two backs (the carry split), but the
-  // man charged for the snap is the one who actually took the rep.
-  const offUnits = offenseOnField(world, offId, concept, env?.qbOverride, undefined, env?.fat)
-  const rb = topGroup(world, offId, ['RB'], 2)
+  // R15: real personnel. The rush pool keeps two backs for the carry split, but the
+  // eleven actually on the field is the concept's grouping plus the back who took
+  // the rep; every resolver group derives from that same selected eleven.
+  const offBase = offenseOnField(world, offId, concept, env?.qbOverride, undefined, env?.fat)
+  const qbBase = offBase.find((p) => p.pos === 'QB')
+  const fbBase = offBase.find((p) => p.pos === 'FB')
+  const rbPool = topGroup(world, offId, ['RB'], 2)
   void dcEff
-  const qb = offUnits.find((p) => p.pos === 'QB')
-  const ol = offUnits.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
-  const te = offUnits.find((p) => p.pos === 'TE')
-  const fb = offUnits.find((p) => p.pos === 'FB')
-  const defUnits = defenseOnField(world, defId, concept.personnel, env?.fat)
-  const dl = defUnits.filter((p) => p.pos === 'DE' || p.pos === 'DT')
-  const lbs = defUnits.filter((p) => p.pos === 'LB')
-  const saf = defUnits.filter((p) => p.pos === 'S')
-  const cbs = defUnits.filter((p) => p.pos === 'CB')
-  const onFieldDefIds = fillToEleven(world, defId, defUnits, DEF_FILL).map((p) => p.id)
-  const onFieldOffIds = (reppedId?: string) =>
-    fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat), OFF_FILL).map((p) => p.id)
+  const defEleven = fillToEleven(world, defId, defenseOnField(world, defId, concept.personnel, env?.fat), DEF_FILL)
+  const dl = defEleven.filter((p) => p.pos === 'DE' || p.pos === 'DT')
+  const lbs = defEleven.filter((p) => p.pos === 'LB')
+  const saf = defEleven.filter((p) => p.pos === 'S')
+  const cbs = defEleven.filter((p) => p.pos === 'CB')
+  const onFieldDefIds = defEleven.map((p) => p.id)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
-  // R15: offence-vs-defence average in-game fatigue (difference only).
-  const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...saf, ...cbs]) - unitFatigue(env?.fat, [qb, ...ol, ...rb, fb])
   // L12 E2: Q4 fatigue uses each unit's relative STA (centered; no rng).
   const isQ4 = (env?.qtr ?? 0) >= 4
   // L12 S2: split carries RB1 / RB2 / QB from deterministic role weights, shifted
@@ -2018,35 +2012,46 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
       w1 += 0.15
       runEdgeBonus = 1
     } else if (usage.rb === 'committee') {
-      if (rb[1] && rng() < 0.4) committeePick = rb[1]
+      if (rbPool[1] && rng() < 0.4) committeePick = rbPool[1]
       else {
-        committeePick = rb[0]
+        committeePick = rbPool[0]
         if ((env?.qtr ?? 1) >= 4) runEdgeBonus = 1
       }
     }
   }
-  const qbStyle = qb ? styleProfile(qb) : undefined
+  const qbStyle = qbBase ? styleProfile(qbBase) : undefined
   if (qbStyle) wq += qbStyle.scramble * 0.12
   if (distance <= 2) w1 += 0.12
   // R15: fresher legs take the carries — a tiring back cedes work to his backup.
-  if (rb[0] && rb[1] && env?.fat) {
-    const f1 = env.fat[rb[0].id] ?? 0
-    const f2 = env.fat[rb[1].id] ?? 0
+  if (rbPool[0] && rbPool[1] && env?.fat) {
+    const f1 = env.fat[rbPool[0].id] ?? 0
+    const f2 = env.fat[rbPool[1].id] ?? 0
     w1 = Math.max(0.05, w1 * clamp(1 - (f1 - f2) * 2, 0.6, 1.4))
     w2 = Math.max(0.02, w2 * clamp(1 - (f2 - f1) * 2, 0.6, 1.4))
   }
-  if (!rb[1]) { w1 += w2; w2 = 0 }
-  if (!qb) { w2 += wq; wq = 0 }
+  if (!rbPool[1]) { w1 += w2; w2 = 0 }
+  if (!qbBase) { w2 += wq; wq = 0 }
   const wTot = w1 + w2 + wq || 1
   const roll = hash32(`${n}:${offId}`) / 4294967296
-  let carrier = rb[0]
+  let carrier = rbPool[0]
   if (committeePick) carrier = committeePick
-  else if (roll < w1 / wTot) carrier = rb[0]
-  else if (roll < (w1 + w2) / wTot && rb[1]) carrier = rb[1]
-  else if (qb) carrier = qb
-  else if (rb[1]) carrier = rb[1]
+  else if (roll < w1 / wTot) carrier = rbPool[0]
+  else if (roll < (w1 + w2) / wTot && rbPool[1]) carrier = rbPool[1]
+  else if (qbBase) carrier = qbBase
+  else if (rbPool[1]) carrier = rbPool[1]
   // L12.10 B0: an occasional fullback dive on short yardage (deterministic; no rng).
-  if (fb && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fb
+  if (fbBase && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fbBase
+  // R15: now that the rep is decided, field the actual eleven (the repped back
+  // replaces the nominal starter) and take every resolver group from it.
+  const offEleven = fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, carrier?.pos === 'RB' ? carrier.id : undefined, env?.fat), OFF_FILL)
+  const qb = offEleven.find((p) => p.pos === 'QB')
+  const ol = offEleven.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
+  const te = offEleven.find((p) => p.pos === 'TE')
+  const fb = offEleven.find((p) => p.pos === 'FB')
+  const rb = offEleven.filter((p) => p.pos === 'RB')
+  const onFieldOffIds = offEleven.map((p) => p.id)
+  // R15: offence-vs-defence average in-game fatigue (difference only).
+  const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...saf, ...cbs]) - unitFatigue(env?.fat, [qb, ...ol, ...rb, fb])
   const cA = carrier ? mkAttrs(carrier) : {}
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
@@ -2153,7 +2158,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     goalLineFumble: fumble && yard >= R16.goalLineYard ? true : undefined,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
     defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : undefined,
-    onFieldOff: onFieldOffIds(carrier?.pos === 'RB' ? carrier.id : undefined), onFieldDef: onFieldDefIds,
+    onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
   }
 }
 
