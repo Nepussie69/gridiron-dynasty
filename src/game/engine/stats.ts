@@ -111,11 +111,12 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       continue
     }
 
-    const isComp = play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId
+    // R16: a muffed catch is still a completion for the receiver/QB line.
+    const isComp = play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId || !!play.muffedCatch
     if (play.type === 'pass') {
       const qb = play.qbId
       if (qb) {
-        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result === 'Interception!' || play.result === 'TOUCHDOWN!' || play.fumbleId) {
+        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result.startsWith('Interception') || play.result === 'TOUCHDOWN!' || play.fumbleId || play.muffedCatch) {
           add(qb, off, 'passAtt', 1)
         }
         if (isComp) {
@@ -123,7 +124,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
           add(qb, off, 'passYds', play.yards)
           if (play.result === 'TOUCHDOWN!') add(qb, off, 'passTD', 1)
         }
-        if (play.result === 'Interception!') add(qb, off, 'ints', 1)
+        if (play.result.startsWith('Interception')) add(qb, off, 'ints', 1)
         // R8: sacks taken by the QB (SK) and sack yards lost (SKY). A sack is not
         // a pass attempt and its yards are not subtracted from passing yards.
         if (/^Sack/.test(play.result)) {
@@ -174,7 +175,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
           if (play.result === 'TOUCHDOWN!') add(play.coverId, def, 'defTDAllowed', 1)
         }
         // R4b: INTs credited to the coverage defender (distinct from the ball hawk).
-        if (play.result === 'Interception!') add(play.coverId, def, 'defIntsCov', 1)
+        if (play.result.startsWith('Interception')) add(play.coverId, def, 'defIntsCov', 1)
       }
     } else if (play.type === 'run') {
       if (play.carrierId) {

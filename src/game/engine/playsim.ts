@@ -121,9 +121,11 @@ export const R2 = {
   /** Pre-snap penalty chance per snap (defense / offense). */
   penDefRate: 0.05,
   penOffRate: 0.042,
-  /** Base fumble chance: a carry / a completed catch that gets tackled. */
-  runFumbleBase: 0.02,
-  passFumbleBase: 0.004,
+  /** Base fumble chance: a carry / a completed catch that gets tackled. R16 splits
+   *  every loose ball ~50/50 between the clubs, so these are roughly double the old
+   *  all-lost bases to keep LOST fumbles (turnovers) in band. */
+  runFumbleBase: 0.027,
+  passFumbleBase: 0.005,
   /** League-wide run/pass lean added to the OC's pass rate (negative = more runs). */
   passAdj: -0.05,
 }
@@ -175,6 +177,36 @@ export const R15 = {
   fatBig: 0.25,
   /** Receiver target-score penalty per point of fatigue. */
   fatTarget: 22,
+}
+
+// ── R16: turnover variety ─────────────────────────────────────────────────────
+// Strip sacks, tipped/deflected interceptions, receiver muffs and goal-line
+// fumbles, with a proximity hash deciding who falls on every loose ball. The
+// league-wide split is ~50/50 (the offence keeps roughly half of its fumbles);
+// the tilts below move a given situation a few points. Every decision is a
+// deterministic hash of the play number — no rng() draw is added or removed.
+export const R16 = {
+  /** Share of loose balls the offence recovers at a neutral pile. Set a hair above
+   *  50% so the strip/goal-line tilts still leave the league near an even split. */
+  offRecover: 0.53,
+  /** The strip-sacker is usually on top of the ball — the defence recovers more. */
+  stripOffRecover: 0.42,
+  /** A doorstep pile leans defence (the ball squirts out backwards). */
+  goalLineOffRecover: 0.42,
+  /** A sack that also forces a fumble (NFL strip-sack ≈ 1 in 20 sacks). */
+  stripSackRate: 0.05,
+  /** A receiver bobbles a catch into a loose ball (rare; lower CTH muffs more). */
+  muffBase: 0.006,
+  muffSlope: 0.0004,
+  muffLo: 0.003,
+  muffHi: 0.018,
+  /** Goal-line fumble bump (inside the 10) — the classic doorstep fumble. */
+  goalLineMult: 1.9,
+  goalLineYard: 90,
+  /** Share of interceptions that come off a tipped/deflected ball. */
+  tippedIntRate: 0.2,
+  /** Of the tipped interceptions, the share a receiver muffed (vs. batted at line). */
+  tippedMuffShare: 0.4,
 }
 
 // ── R14: typed penalties ─────────────────────────────────────────────────────
@@ -415,6 +447,21 @@ export interface Play {
   penaltyPlayerId?: string
   /** R14: how the foul was enforced (accepted, declined or offsetting). */
   penaltyDisposition?: 'accepted' | 'declined' | 'offset'
+  // ── R16: turnover variety ──────────────────────────────────────────────────
+  /** R16: why the ball came loose (run / strip sack / receiver muff / kickoff). */
+  fumbleCause?: 'run' | 'carry' | 'strip' | 'muff' | 'kickoff'
+  /** R16: which club recovered a loose ball (kept or lost). */
+  fumbleRecoveredBy?: 'off' | 'def'
+  /** R16: a sack that also forced a fumble. */
+  stripSack?: boolean
+  /** R16: the interception came off a tipped/deflected pass. */
+  tippedInt?: boolean
+  /** R16: the defender (or receiver) who tipped the pass. */
+  tipId?: string
+  /** R16: a receiver muffed the catch into a loose ball. */
+  muffedCatch?: boolean
+  /** R16: a fumble on the doorstep (inside the 10). */
+  goalLineFumble?: boolean
 }
 
 export interface GameSim {
@@ -964,6 +1011,14 @@ interface PlayOutcome {
   pressureType?: 'sack' | 'hit' | 'hurry'
   /** T2M: a sideline carry/reception went out of bounds (stops the clock). */
   outOfBounds?: boolean
+  // ── R16: turnover variety ──────────────────────────────────────────────────
+  fumbleCause?: 'run' | 'carry' | 'strip' | 'muff' | 'kickoff'
+  fumbleRecoveredBy?: 'off' | 'def'
+  stripSack?: boolean
+  tippedInt?: boolean
+  tipId?: string
+  muffedCatch?: boolean
+  goalLineFumble?: boolean
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -1359,6 +1414,18 @@ export function dropChance(pos: string | undefined, a: Record<string, number>): 
   return clamp(DROP_BASE - rel * DROP_SLOPE, 0.03, 0.24)
 }
 
+/** R16: who recovers a loose ball — a deterministic hash, ~50/50 league-wide with
+ *  a situational tilt (strip sack / goal-line pile). Never an rng() draw. */
+function fumbleRecovery(key: string, offShare: number): 'off' | 'def' {
+  return h01(key) < offShare ? 'off' : 'def'
+}
+
+/** R16: chance a receiver muffs a completed catch into a loose ball. */
+export function muffChance(pos: string | undefined, a: Record<string, number>): number {
+  const rel = pos ? rmean(pos, 'CTH', a.CTH ?? 70) : 0
+  return clamp(R16.muffBase - rel * R16.muffSlope, R16.muffLo, R16.muffHi)
+}
+
 /** R5: the defender who finishes after a miss — anyone but the man who whiffed. */
 function finishTackler(key: string, first: string | undefined, lists: Player[][]): string | undefined {
   const pool: Player[] = []
@@ -1521,7 +1588,19 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       ? lbs[hash32(`${n}:${defId}:blitzlb`) % lbs.length]?.id
       : undefined
     const sackId = blitzLb ?? dlPick
-    return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId, coverId }
+    // R16: a strip sack forces a fumble. A proximity hash decides who falls on it
+    // (the rusher is usually on top of the ball, so the defence recovers more).
+    // The result keeps the "Sack" prefix so it is still counted as a sack.
+    const strip = h01(`${n}:${defId}:strip`) < R16.stripSackRate
+    const recovery = strip ? fumbleRecovery(`${n}:${defId}:striprec`, R16.stripOffRecover) : undefined
+    const lost = strip && recovery === 'def'
+    const result = !strip ? (blitz ? 'Sack (blitz)' : 'Sack') : lost ? 'Sack, forced Fumble!' : 'Sack, Fumble recovered by the offence'
+    return {
+      type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
+      ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
+      qbId: qb?.id, sackId, coverId,
+      stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
+    }
   }
 
   const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
@@ -1629,13 +1708,23 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const intId = takeCover ? coverId : fallback
     // R6: real NFL pick-six rate ≈ 10–11% of interceptions (deterministic hash).
     const pickSix = h01(`${n}:${defId}:pick6`) < 0.105
+    // R16: a share of picks come off a tipped/deflected ball — either batted at the
+    // line by a rusher or muffed by the receiver. Flavour + attribution only; the
+    // interception count itself is decided above and is unchanged.
+    const tipped = h01(`${n}:${defId}:tipped`) < R16.tippedIntRate
+    const tipMuff = tipped && h01(`${n}:${defId}:tipmuff`) < R16.tippedMuffShare
+    const tipId = !tipped ? undefined
+      : tipMuff ? target?.id
+        : hashPick(dl.length ? dl : lbs, (p) => Math.max(1, mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70), hash32(`${n}:${defId}:tipdl`))?.id
+    const tipText = !tipped ? '' : tipMuff ? ' (muffed catch)' : ' (tipped at the line)'
     return {
       type: 'pass', concept: concept.name, yards: 0,
-      result: pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!',
+      result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
       timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), qbId: qb?.id, intId, coverId,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
+      tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
     }
   }
   if (rng() < compProb) {
@@ -1688,18 +1777,35 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       forcedMissedIds = target?.id ? [target.id] : undefined
     }
     const big = gain >= 25
-    const forceFumble = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)
-    // R6: a strip-sack-style catch fumble is scooped and returned for a TD
-    // ~7–8% of the time (deterministic hash, no rng).
-    const fumTD = forceFumble && h01(`${n}:${defId}:passtd`) < 0.085
-    const baseResult = fumTD ? 'Fumble returned for a TOUCHDOWN!' : forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete'
+    // R16: the ball can still come loose on a clean stop — a big-hit strip, or the
+    // receiver's own bobble (a muff). Either way a proximity hash decides who falls
+    // on it; the offence keeps roughly half of all loose balls.
+    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)
+    const muff = !strip && gain > 0 && yard + gain < 100 && h01(`${n}:${offId}:muff`) < muffChance(target?.pos, tA)
+    const loose = strip || muff
+    const recovery = loose ? fumbleRecovery(`${n}:${offId}:passrec`, R16.offRecover) : undefined
+    const lost = loose && recovery === 'def'
+    // R6: a loose ball is scooped and returned for a TD ~7–8% of the time
+    // (deterministic hash, no rng), but only when the defence recovers it.
+    const fumTD = lost && h01(`${n}:${defId}:passtd`) < 0.085
+    // The returner is the defender on the stop; a receiver-only muff has no
+    // stopper, so fall back to a nearby defender for the scoring credit.
+    const fumTDScorer = fumTD
+      ? (stopper ?? hashPick([...cbs, ...saf, ...lbs], (p) => Math.max(1, mkAttrs(p).TAK ?? 70), hash32(`${n}:${defId}:passtdrec`))?.id)
+      : undefined
+    const baseResult = fumTD ? 'Fumble returned for a TOUCHDOWN!'
+      : lost ? (muff ? 'Muffed catch — Fumble!' : 'Fumble!')
+        : strip ? 'Fumble recovered by the offence'
+          : muff ? 'Muffed catch, recovered by the offence'
+            : big ? 'Explosive play!' : 'Complete'
     return {
       type: 'pass', concept: concept.name, yards: gain, blitz,
       result: oob ? `${baseResult} (out of bounds)` : baseResult,
-      turnover: forceFumble, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !forceFumble && big,
+      turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !loose && big,
       outOfBounds: oob || undefined,
-      fumbleId: forceFumble ? stopper : undefined,
-      defTD: fumTD, returnerId: fumTD ? stopper : undefined, scorerId: fumTD ? stopper : undefined,
+      fumbleId: strip ? stopper : undefined, muffedCatch: muff || undefined,
+      fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
+      defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}),
       timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopper ? [stopper] : undefined,
       missedTackleIds, forcedMissedIds,
@@ -1835,7 +1941,13 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R2: near the goal line the compressed front can stand a runner up short.
   if (yard + gain >= 100 && gain > 0) gain = Math.round(gain * (1 - R2.rzRunDamp))
   const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
-  const fumble = rng() < R2.runFumbleBase * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult
+  // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
+  // squirts out. Threshold only, so no rng() draw is added or removed.
+  const glMult = yard >= R16.goalLineYard ? R16.goalLineMult : 1
+  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult
+  // R16: a proximity hash decides who falls on it; goal-line piles lean defence.
+  const recovery = fumble ? fumbleRecovery(`${n}:${defId}:runrec`, yard >= R16.goalLineYard ? R16.goalLineOffRecover : R16.offRecover) : undefined
+  const lost = fumble && recovery === 'def'
   // T2M: an outside run in the two-minute drill can reach the sideline. The
   // runner steps out, so there is no defender to credit and the clock stops.
   const oob = oobSituation(env) && !fumble && gain > -3 && yard + gain < 100 &&
@@ -1861,24 +1973,27 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R6: a lost fumble is returned for a touchdown ~7–8% of the time (hash, no rng).
   let fumbleTD = false
   let recoverer: Player | undefined
-  if (fumble) {
+  if (lost) {
+    const pool = [...lbs, ...dl, ...cbs, ...saf]
+    recoverer = hashPick(pool, (p) => {
+      const a = mkAttrs(p)
+      return Math.max(1, (a.TAK ?? 70) * 0.6 + (a.PUR ?? 70) * 0.4)
+    }, hash32(`${n}:${defId}:fumrec`))
     fumbleTD = h01(`${n}:${defId}:fumtd`) < 0.085
-    if (fumbleTD) {
-      const pool = [...lbs, ...dl, ...cbs, ...saf]
-      recoverer = hashPick(pool, (p) => {
-        const a = mkAttrs(p)
-        return Math.max(1, (a.TAK ?? 70) * 0.6 + (a.PUR ?? 70) * 0.4)
-      }, hash32(`${n}:${defId}:fumrec`))
-    }
   }
-  const baseResult = fumbleTD ? 'Fumble returned for a TOUCHDOWN!' : isBig ? 'Big run!' : 'Rush'
+  const baseResult = fumbleTD ? 'Fumble returned for a TOUCHDOWN!'
+    : lost ? 'Fumble!'
+      : fumble ? 'Fumble recovered by the offence'
+        : isBig ? 'Big run!' : 'Rush'
   return {
     type: 'run', concept: concept.name, yards: gain,
     result: oob ? `${baseResult} (out of bounds)` : baseResult,
-    turnover: fumble, carrierId: carrier?.id, bigPlay: isBig,
+    turnover: lost, carrierId: carrier?.id, bigPlay: !lost && isBig,
     outOfBounds: oob || undefined,
+    fumbleCause: fumble ? 'run' : undefined, fumbleRecoveredBy: recovery,
+    goalLineFumble: fumble && yard >= R16.goalLineYard ? true : undefined,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
-    defTD: fumbleTD, returnerId: recoverer?.id, scorerId: recoverer?.id,
+    defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : undefined,
   }
 }
 
@@ -2006,6 +2121,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
     returnYards: touchback ? undefined : retYds,
     returnTD, returnKind: touchback ? 'touchback' : 'return', turnover: fumble,
     scorerId: returnTD ? returner?.id : undefined,
+    fumbleCause: fumble ? 'kickoff' : undefined, fumbleRecoveredBy: fumble ? 'def' : undefined,
   })
   if (returnTD) {
     if (receiving === s.homeId) s.homeScore += 6
@@ -3076,10 +3192,19 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   offS.plays += 1
   if (isPass) {
     offS.passAtt += 1
-    if (isSack(out)) { offS.sacksTaken += 1; defS.sacks += 1 }
-    else if (out.fumbleId) { offS.passComp += 1; offS.passYds += out.yards; offS.fumbles += 1 }
-    else if (out.turnover) { offS.ints += 1; defS.ints += 1 }
-    else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += out.yards }
+    if (isSack(out)) {
+      // R16: a strip sack is still a sack; a lost ball is also a fumble.
+      offS.sacksTaken += 1; defS.sacks += 1
+      if (out.turnover) offS.fumbles += 1
+    } else if (out.intId) {
+      // A tipped/muffed interception is still an interception.
+      offS.ints += 1; defS.ints += 1
+    } else if (out.fumbleId || out.muffedCatch) {
+      // R16: a catch that came loose still counts as a completion for yards; only
+      // a ball the defence recovered is a lost fumble (turnover).
+      offS.passComp += 1; offS.passYds += out.yards
+      if (out.turnover) offS.fumbles += 1
+    } else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += out.yards }
   } else {
     offS.rushAtt += 1
     offS.rushYds += Math.max(0, out.yards)

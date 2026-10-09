@@ -5821,7 +5821,7 @@ export function statAudit(games = 150) {
       if (p.qbId && /^Sack/.test(p.result)) plSk++
       if (p.coverId && p.targetId) {
         plTgt++
-        const comp = p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || !!p.fumbleId
+        const comp = p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || !!p.fumbleId || !!p.muffedCatch
         if (comp) { plComp++; plYds += Math.max(0, p.yards) }
       }
     }
