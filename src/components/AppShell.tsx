@@ -472,7 +472,8 @@ export function TopBar() {
           onClick={startGameDay}
           title="Coach this week's game moment by moment"
         >
-          Coach the game
+          <span className="whitespace-nowrap sm:hidden">Coach</span>
+          <span className="hidden whitespace-nowrap sm:inline">Coach the game</span>
         </Button>
       )}
 
@@ -483,7 +484,7 @@ export function TopBar() {
         title={`${advanceLabel} (${isMac ? '⌘↵' : 'Ctrl↵'})`}
       >
         {advanceLabel} ▸
-        <kbd className="ml-0.5 rounded border border-black/20 bg-black/5 px-1 font-cond text-[10px] font-700 normal-case tracking-normal">
+        <kbd className="ml-0.5 hidden rounded border border-black/20 bg-black/5 px-1 font-cond text-[10px] font-700 normal-case tracking-normal md:inline">
           {isMac ? '⌘↵' : 'Ctrl↵'}
         </kbd>
       </Button>
