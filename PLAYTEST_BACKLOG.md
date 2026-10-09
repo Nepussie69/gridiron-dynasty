@@ -37,7 +37,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 31 | 2026-10-08 | Rescale my save's rookies drafted before the fix (user approved) | Claude: rescaleLegacyRookies in migrateWorld (one-time flag rookieScaleV2) | ✅ (this commit) |
 | 32 | 2026-10-08 | Find a Player tab: all players, ratings or stats, position select, sort any column asc/desc | DeepSeek push 'findplayer' | ✅ merged |
 | 33 | 2026-10-08 | Playoff hunt chart per division and conference like the NFL (+ found: seeding ignored division winners) | DeepSeek push 'playoffs' | ✅ merged |
-| 34 | 2026-10-08 | Make the UI look more modern and advanced (game day field first) | NEXT_PHASE_UI.md U1–U4; U1 merged 7acc281, U2 merged (main, not on stable); U3/U4 next | 🔨 |
+| 34 | 2026-10-08 | Make the UI look more modern and advanced (game day field first) | NEXT_PHASE_UI.md U1–U4; U1 7acc281, U2 43e3a12, U3a (dark mode/depth/motion/top bar/sidebar) merged to main; U3b + U4 next | 🔨 |
 | 35 | 2026-10-08 | Unit Grades: show each position and overall | Claude: Dashboard position grades (10 groups, league rank) + overall badge | ✅ (this commit) |
 | 36 | 2026-10-08 | Hover a player's name (roster etc.) for complete ratings, skills, contract | Claude: PlayerName hover on Roster + Depth chart (Find a Player/teams pushes use PlayerHoverCard) | ✅ |
 | 37 | 2026-10-08 | Smaller, slightly transparent hover box | Claude: 264px, 80% opacity + blur, 6-col ratings | ✅ |
