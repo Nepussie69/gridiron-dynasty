@@ -1478,10 +1478,8 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
       {passing.length > 0 && <BoxBlock title="Passing" rows={passing} fp={fp} cols={[
         { k: 'passComp', l: 'C/ATT', fmt: (r) => `${r.passComp ?? 0}/${r.passAtt ?? 0}` },
         { k: 'passYds', l: 'YDS' }, { k: 'passTD', l: 'TD' }, { k: 'ints', l: 'INT' },
-        { k: 'sk', l: 'SK', title: 'Times sacked (not a pass attempt)' },
-        { k: 'sky', l: 'SKY', title: 'Sack yards lost (not removed from passing yards)' },
+        { k: 'sk', l: 'SK', title: 'Times sacked (sack yards lost in season stats)' },
         { k: 'passerRating', l: 'RTG', fmt: (r) => passerRating(r).toFixed(1) },
-        { k: 'pressurePct', l: 'PRS%', title: 'Pressured % (pressures faced ÷ dropbacks)', fmt: (r) => { const db = (r.passAtt ?? 0) + (r.sk ?? 0); return db > 0 ? `${(((r.pressured ?? 0) / db) * 100).toFixed(1)}%` : '—' } },
       ]} />}
       {rushing.length > 0 && <BoxBlock title="Rushing" rows={rushing} fp={fp} cols={[
         { k: 'rushAtt', l: 'CAR' }, { k: 'rushYds', l: 'YDS' }, { k: 'rushTD', l: 'TD' },
@@ -1491,17 +1489,20 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' },
-        { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'qbHits', l: 'QBH', title: 'QB hits' }, { k: 'hurries', l: 'HUR', title: 'Hurries' },
-        { k: 'defInts', l: 'INT' },
-        { k: 'defComp', l: 'REC', w: 'w-10', title: 'Receptions allowed / targets in coverage', fmt: (r) => ((r.defTargets ?? 0) > 0 ? `${r.defComp ?? 0}/${r.defTargets}` : '—') },
+        { k: 'defInts', l: 'INT' }, { k: 'defTD', l: 'TD', title: 'Defensive touchdowns (pick-six, fumble return)' },
+      ]} />}
+      {defense.some((b) => (b.line.prs ?? 0) > 0) && <BoxBlock title="Pass rush" rows={defense.filter((b) => (b.line.prs ?? 0) > 0)} fp={fp} cols={[
+        { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'defSacks', l: 'SCK' }, { k: 'qbHits', l: 'QBH', title: 'QB hits' }, { k: 'hurries', l: 'HUR', title: 'Hurries' },
+      ]} />}
+      {defense.some((b) => (b.line.defTargets ?? 0) > 0) && <BoxBlock title="Coverage" rows={defense.filter((b) => (b.line.defTargets ?? 0) > 0)} fp={fp} cols={[
+        { k: 'defComp', l: 'REC', w: 'w-10', title: 'Receptions allowed / targets in coverage', fmt: (r) => `${r.defComp ?? 0}/${r.defTargets ?? 0}` },
         { k: 'defYdsAllowed', l: 'ALW', title: 'Yards allowed in coverage' },
-        { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
-        { k: 'defTD', l: 'TD', title: 'Defensive touchdowns (pick-six, fumble return)' },
+        { k: 'coverageGrade', l: 'COV', title: 'Coverage grade', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
       ]} />}
       {returns.length > 0 && <BoxBlock title="Returns" rows={returns} fp={fp} cols={[
-        { k: 'kickRet', l: 'KR', title: 'Kickoff returns' }, { k: 'kickRetYds', l: 'KR YDS', title: 'Kickoff return yards' },
-        { k: 'puntRet', l: 'PR', title: 'Punt returns' }, { k: 'puntRetYds', l: 'PR YDS', title: 'Punt return yards' },
-        { k: 'retTD', l: 'RET TD', title: 'Return touchdowns' }, { k: 'defTD', l: 'DEF TD', title: 'Defensive touchdowns' },
+        { k: 'kickRet', l: 'KR', title: 'Kickoff returns' }, { k: 'kickRetYds', l: 'YDS', title: 'Kickoff return yards' },
+        { k: 'puntRet', l: 'PR', title: 'Punt returns' }, { k: 'puntRetYds', l: 'YDS', title: 'Punt return yards' },
+        { k: 'retTD', l: 'TD', title: 'Return touchdowns' }, { k: 'defTD', l: 'DTD', title: 'Defensive touchdowns (pick-six / fumble return)' },
       ]} />}
     </div>
   )
@@ -1511,7 +1512,8 @@ interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string,
 interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string; w?: string; title?: string }
 function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx }) {
   // Lead with the volume stat: yards for offense, tackles for defense.
-  const sortKey = (title === 'Defense' ? cols[0]?.k : cols[1]?.k) as keyof GameStatLine
+  // Lead with the block's volume stat: yards for offense, the first column otherwise.
+  const sortKey = (['Defense', 'Pass rush', 'Coverage'].includes(title) ? cols[0]?.k : cols[1]?.k) as keyof GameStatLine
   const sorted = [...rows].sort((a, b) => ((b.line[sortKey] as number) ?? 0) - ((a.line[sortKey] as number) ?? 0))
   const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct'
   return (

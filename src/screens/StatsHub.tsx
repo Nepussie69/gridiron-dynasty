@@ -81,9 +81,9 @@ const OFFENSE_GROUPS: ColGroup[] = [
   { label: 'Passing', cols: [COL_PASS_ATT, COL_PASS_PCT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_PASS_SK, COL_PASS_SKY, COL_RTG, COL_PASS_PRESSURED] },
   {
     label: 'Rushing',
-    cols: [{ ...COL_RUSH_ATT, label: 'ATT' }, COL_RUSH_YDS, { ...COL_RUSH_AVG, label: 'Y/A' }, COL_RUSH_TD, COL_FMT],
+    cols: [{ ...COL_RUSH_ATT, label: 'ATT' }, COL_RUSH_YDS, { ...COL_RUSH_AVG, label: 'Y/A' }, COL_RUSH_TD, { ...COL_FMT, id: 'fmtRush' }],
   },
-  { label: 'Receiving', cols: [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_AVG, COL_REC_TD, COL_FMT, COL_DROP] },
+  { label: 'Receiving', cols: [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_AVG, COL_REC_TD, { ...COL_FMT, id: 'fmtRec' }, COL_DROP] },
   RETURNS_GROUP,
 ]
 
