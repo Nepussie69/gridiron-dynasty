@@ -26,7 +26,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 16 | **Locker room** (L15) | Leaders and problem players, mentoring rookies (faster growth), morale affecting effort | culture K1/K2 | ✅ merged |
 | 17 | **Bye week** | A real choice: rest, install week or self-scout | practice ✅ | ✅ merged |
 | 18 | **3-year cap planner** | Future cap hits, dead money and expiring deals before you sign anyone | — | ✅ merged |
-| 19 | **Analytics department** | Hire analysts: sharper win probability, 4th-down advice, opponent tendencies | staff redesign | ⏳ |
+| 19 | **Analytics department** | Hire analysts: sharper win probability, 4th-down advice, opponent tendencies | staff redesign | ✅ merged |
 | 20 | **Press conferences** (`NEXT_PHASE_L12_17.md`, spec only) | Answers move owner trust, player morale and your profile | — | ⛔ dropped by the user 2026-10-08 |
 | 21 | **Coaching tree** | Your coordinators get hired away as head coaches; their success adds to your legacy; poach them back | History ✅ | ✅ merged |
 | 22 | **Owner personalities** | Win-now, patient builder, meddler — different firing lines and mandates | — | ✅ merged |
