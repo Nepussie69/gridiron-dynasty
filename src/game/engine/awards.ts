@@ -160,6 +160,171 @@ export function selectHonors(world: World, season: number, level: StatLevel): Se
   }
 }
 
+// ── Live award race ───────────────────────────────────────────────────────────
+//
+// The end-of-season vote (`selectHonors`) is written from the career database at
+// year end. This helper scores the season still in progress the same way — the
+// same `scoreFor` production formula, the same position groups and the same
+// rookie rule — straight off the world's live stat lines, then returns the top
+// candidates per award so the Awards screen can show who is in the running as
+// the weeks go by. Pure and read-only: it never touches the world, the database
+// or the award history. (There is no Comeback Player award in this game.)
+
+const OFF_POS = new Set(['QB', 'RB', 'WR', 'TE'])
+const DEF_POS = new Set(['DE', 'DT', 'LB', 'CB', 'S'])
+
+/** One name in the running for an award, with his (or the club's) line. */
+export interface RaceCandidate {
+  /** Set for player awards, so the UI can hover his full card. */
+  playerId?: string
+  name: string
+  pos: string
+  teamId: string
+  team: string
+  teamAbbr: string
+  /** The club's live record, e.g. "7-3" or "6-4-1". */
+  record: string
+  /** The headline production (players) or the résumé line (staff). */
+  value: string
+  score: number
+}
+
+export interface AwardRaceGroup {
+  award: string
+  /** Players hover; staff are club people, shown with their crest. */
+  kind: 'player' | 'staff'
+  candidates: RaceCandidate[]
+}
+
+export interface AwardRace {
+  season: number
+  week: number
+  /** False until the season's first week has been played. */
+  started: boolean
+  groups: AwardRaceGroup[]
+}
+
+function recordFor(world: World, teamId: string): string {
+  const r = world.standings[teamId]
+  if (!r) return '0-0'
+  return r.ties ? `${r.wins}-${r.losses}-${r.ties}` : `${r.wins}-${r.losses}`
+}
+
+/** Format a slice of already-ranked candidates as race rows for the UI. */
+function raceRows(world: World, cands: Candidate[], limit = 5): RaceCandidate[] {
+  return cands.slice(0, limit).map((c) => {
+    const teamId = c.stats.teamId
+    const t = world.byId[teamId]
+    return {
+      playerId: c.playerId,
+      name: c.name,
+      pos: c.pos,
+      teamId,
+      team: c.team,
+      teamAbbr: t?.abbr ?? '',
+      record: recordFor(world, teamId),
+      value: headline(c.pos, c.stats),
+      score: Math.round(c.score),
+    }
+  })
+}
+
+/** Rank 1 = best, mirroring `computeStaffAwards`' live standings curves. */
+function ranksBy(ids: string[], value: (id: string) => number, best: 'high' | 'low'): Record<string, number> {
+  const order = [...ids].sort((a, b) => (best === 'high' ? value(b) - value(a) : value(a) - value(b)))
+  const out: Record<string, number> = {}
+  order.forEach((id, i) => { out[id] = i + 1 })
+  return out
+}
+
+/** The front-office and coaching races: Exec, Coach, Assistant, Rising Star. */
+function staffRaceRows(world: World): AwardRaceGroup[] {
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const lastWins = world.lastWins ?? {}
+  const wins = (id: string) => world.standings[id]?.wins ?? 0
+  const improvement = (id: string) => wins(id) - (lastWins[id] ?? wins(id))
+  const winScore = (id: string) => wins(id) + 0.5 * improvement(id)
+  const nameOf = (teamId: string, role: string, suffix: string) =>
+    (world.staff[teamId] ?? []).find((s) => s.role === role)?.name ?? `${world.byId[teamId]?.name ?? ''} ${suffix}`
+
+  const row = (name: string, teamId: string, pos: string, score: number, value: string): RaceCandidate => {
+    const t = world.byId[teamId]
+    return {
+      name, pos, teamId,
+      team: t?.name ?? teamId,
+      teamAbbr: t?.abbr ?? '',
+      record: recordFor(world, teamId),
+      value,
+      score: Math.round(score * 10) / 10,
+    }
+  }
+  const top = (rows: RaceCandidate[], limit = 5) => rows.sort((a, b) => b.score - a.score).slice(0, limit)
+
+  const exec = top(nfl.map((t) => row(nameOf(t.id, 'General Manager', 'GM'), t.id, 'GM', winScore(t.id), `${t.abbr} ${recordFor(world, t.id)}`)))
+  const coach = top(nfl.map((t) => row(nameOf(t.id, 'Head Coach', 'Head Coach'), t.id, 'HC', winScore(t.id), `${t.abbr} ${recordFor(world, t.id)}`)))
+
+  const pfRank = ranksBy(nfl.map((t) => t.id), (id) => world.standings[id]?.pointsFor ?? 0, 'high')
+  const paRank = ranksBy(nfl.map((t) => t.id), (id) => world.standings[id]?.pointsAgainst ?? 0, 'low')
+  const assistant: RaceCandidate[] = []
+  for (const t of nfl) {
+    assistant.push(row(nameOf(t.id, 'Offensive Coordinator', 'OC'), t.id, 'OC', 33 - pfRank[t.id], `${t.abbr} offense #${pfRank[t.id]}`))
+    assistant.push(row(nameOf(t.id, 'Defensive Coordinator', 'DC'), t.id, 'DC', 33 - paRank[t.id], `${t.abbr} defense #${paRank[t.id]}`))
+  }
+
+  // Rising Star tracks the AI climbers' reputation gains. The user's own entry
+  // needs career state the race helper doesn't receive, so it is left out here.
+  const rising = top(
+    world.rivals
+      .map((r) => {
+        const gain = r.reputation - (r.prevReputation ?? r.reputation)
+        return row(r.name, r.teamId, 'RS', gain, `${gain >= 0 ? '+' : ''}${gain} reputation`)
+      })
+      .filter((r) => r.score > 0),
+  )
+
+  return [
+    { award: 'Executive of the Year', kind: 'staff', candidates: exec },
+    { award: 'Coach of the Year', kind: 'staff', candidates: coach },
+    { award: 'Assistant Coach of the Year', kind: 'staff', candidates: top(assistant) },
+    { award: 'Rising Star', kind: 'staff', candidates: rising },
+  ]
+}
+
+/**
+ * Score the CURRENT season and return the top five candidates per award, the
+ * same way `selectHonors` will vote at year end but from live stat lines. `db`
+ * and `awards` are accepted for symmetry with the end-of-season call; the race
+ * reads the season in progress straight off the world.
+ */
+export function awardRace(world: World, _db: CareerDatabase, _awards: AwardHistory): AwardRace {
+  const season = world.season
+  const started = world.phase === 'regular' && world.schedule.some((g) => g.played && g.tier === 'NFL')
+  if (!started) return { season, week: world.week, started: false, groups: [] }
+
+  const byScore = candidates(world, season, 'NFL').sort((a, b) => b.score - a.score)
+  const off = byScore.filter((c) => OFF_POS.has(c.pos))
+  const def = byScore.filter((c) => DEF_POS.has(c.pos))
+
+  const mvpPool = off.length ? off : byScore
+  const mvpId = mvpPool[0]?.playerId
+  const opoyPool = mvpPool.filter((c) => c.playerId !== mvpId)
+
+  // Rookies: the year-end rule is age 23 or younger with real production. Live,
+  // the six-game gate is dropped so the race is populated from week 2 on.
+  const ageById = new Map(world.players.map((p) => [p.id, p.age]))
+  const rookies = byScore.filter((c) => (ageById.get(c.playerId) ?? 99) <= 23 && c.stats.games >= 1)
+
+  const groups: AwardRaceGroup[] = [
+    { award: 'MVP', kind: 'player', candidates: raceRows(world, mvpPool) },
+    { award: 'Offensive POY', kind: 'player', candidates: raceRows(world, opoyPool) },
+    { award: 'Defensive POY', kind: 'player', candidates: raceRows(world, def) },
+    { award: 'Offensive ROY', kind: 'player', candidates: raceRows(world, rookies.filter((c) => OFF_POS.has(c.pos))) },
+    { award: 'Defensive ROY', kind: 'player', candidates: raceRows(world, rookies.filter((c) => DEF_POS.has(c.pos))) },
+    ...staffRaceRows(world),
+  ]
+  return { season, week: world.week, started: true, groups }
+}
+
 // ── Hall of Fame ─────────────────────────────────────────────────────────────
 export interface HofInductee {
   playerId: string
