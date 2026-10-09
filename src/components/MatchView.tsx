@@ -1398,8 +1398,8 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
-        { k: 'defComp', l: 'REC/TGT', fmt: (r) => ((r.defTargets ?? 0) > 0 ? `${r.defComp ?? 0}/${r.defTargets}` : '—') },
-        { k: 'defYdsAllowed', l: 'YDS ALW' },
+        { k: 'defComp', l: 'REC', w: 'w-10', title: 'Receptions allowed / targets in coverage', fmt: (r) => ((r.defTargets ?? 0) > 0 ? `${r.defComp ?? 0}/${r.defTargets}` : '—') },
+        { k: 'defYdsAllowed', l: 'ALW', title: 'Yards allowed in coverage' },
         { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
       ]} />}
     </div>
@@ -1407,7 +1407,7 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
 }
 
 interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player> }
-interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string }
+interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string; w?: string; title?: string }
 function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx }) {
   // Lead with the volume stat: yards for offense, tackles for defense.
   const sortKey = (title === 'Defense' ? cols[0]?.k : cols[1]?.k) as keyof GameStatLine
@@ -1419,12 +1419,12 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
       <table className="w-full table-fixed text-[11px] tnum">
         <colgroup>
           <col />
-          {cols.map((c) => <col key={c.k} className={wide(c.k) ? 'w-11' : 'w-8'} />)}
+          {cols.map((c) => <col key={c.k} className={c.w ?? (wide(c.k) ? 'w-11' : 'w-8')} />)}
         </colgroup>
         <thead>
           <tr className="text-white/40">
             <th className="text-left font-500">Player</th>
-            {cols.map((c) => <th key={c.k} className="whitespace-nowrap text-right font-500">{c.l}</th>)}
+            {cols.map((c) => <th key={c.k} title={c.title} className="whitespace-nowrap text-right font-500">{c.l}</th>)}
           </tr>
         </thead>
         <tbody>
