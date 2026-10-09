@@ -695,6 +695,8 @@ export interface CareerState {
   room?: { focus: string[]; plan: 'concentrate' | 'spread'; reps: number }
   /** G4: this offseason's combine-week budget (20 hours, up to 12 prospects). */
   combine?: { season: number; hoursLeft: number; seen: string[] }
+  /** L15 (FUTURES 14): this season's scouting-travel budget and the trips filed. */
+  scoutTravel?: import('./engine/scoutTravel').ScoutTravelState
   /** The region you're assigned to scout (drives information scope). */
   scoutRegion?: string
   /** Weekly time budget (#5). Legacy save field — ignored since L12.9 H1. */

@@ -11,10 +11,12 @@ import { isEvaluator, learnedBias, scoutReport } from '../game/engine/scoutBias'
 import { canSetTrust, departmentGrade } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds } from '../game/engine/conviction'
 import { MAX_RED_FLAGS, canRedFlag, redFlagIds } from '../game/engine/redflag'
+import { MAX_TRAVEL_COVERAGE, coverageOf } from '../game/engine/scoutTravel'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { AccessBadge } from '../components/AccessBadge'
 import { CombineCard } from '../components/CombineCard'
+import { ScoutTravelCard } from '../components/ScoutTravelCard'
 import { DataTable, type Column } from '../components/DataTable'
 import { Badge, Button, Card, PageHeader, RookieRangeBadges, Stat } from '../ui/kit'
 
@@ -115,6 +117,25 @@ export function Scouting() {
               {r.visible && <div className="h-full rounded-full" style={{ width: `${r.confidence}%`, background: r.confidence > 70 ? '#05914f' : '#d98207' }} />}
             </div>
           </div>
+        )
+      },
+    },
+    {
+      key: 'road',
+      label: 'Road',
+      className: 'w-14',
+      sortValue: (p) => coverageOf(career, p.id),
+      render: (p) => {
+        const d = coverageOf(career, p.id)
+        return (
+          <span
+            className="inline-flex items-center gap-0.5"
+            title={d ? `Travel coverage ${d}/${MAX_TRAVEL_COVERAGE} — a tighter read` : 'No travel yet'}
+          >
+            {Array.from({ length: MAX_TRAVEL_COVERAGE }, (_, i) => (
+              <span key={i} className={cn('h-2 w-2 rounded-[2px]', i < d ? 'bg-[var(--team)]' : 'bg-surface-3')} />
+            ))}
+          </span>
         )
       },
     },
@@ -230,6 +251,7 @@ export function Scouting() {
       </div>
 
       <CombineCard className="mb-4" />
+      <ScoutTravelCard className="mb-4" />
 
       <div className="mb-3 flex flex-wrap items-center gap-1">
         {POS_FILTERS.map((p) => (
