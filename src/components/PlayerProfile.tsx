@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import { money } from '../lib/format'
-import { attributesFor, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
-import { RATING_INFO, ratingTitle } from '../game/data/ratingInfo'
+import { attributesFor, playerAttrs, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
+import { COMPOSITES, RATING_INFO, groupForPosition, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel, schemeFit } from '../game/engine/style'
 import { careerTotals, coverageGrade, seasonLine } from '../game/engine/stats'
 import { experienceLabel } from '../game/engine/progress'
@@ -9,7 +9,7 @@ import { canAskGm, gmAskCovers } from '../game/engine/gmAsk'
 import { gmTargetNeed, monthKeyOf } from '../game/engine/gmDesk'
 import { useGame, useWorld } from '../store/gameStore'
 import { ContractExplainer } from './ContractExplainer'
-import { Badge, Button, DevBadge, MiniBars, OvrBadge, RatingBar, TeamCrest } from '../ui/kit'
+import { Badge, Button, DevBadge, MiniBars, OvrBadge, RadarChart, RatingBar, Sparkline, TeamCrest } from '../ui/kit'
 import type { Player } from '../game/types'
 
 export function PlayerProfile() {
@@ -37,6 +37,29 @@ export function PlayerProfile() {
       title: ratingTitle(k),
       sim: !!RATING_INFO[k]?.sim,
     }))
+
+  // U3b: the position's engine composites, shown as a radar + segmented bars.
+  const posGroup = groupForPosition(player.pos)
+  const composites = posGroup ? COMPOSITES[posGroup] ?? [] : []
+  const attrValues = playerAttrs(player)
+  const compositeItems = composites.map((c) => ({
+    id: c.id,
+    label: c.label,
+    title: c.title,
+    value: c.compute(attrValues),
+  }))
+  const radarItems = compositeItems.slice(0, 6).map((c) => ({ label: c.label, value: c.value }))
+  if (radarItems.length < 3) {
+    // A radar needs at least three axes — top up with the position's headline ratings.
+    const labels = new Set(radarItems.map((r) => r.label))
+    for (const k of order) {
+      if (radarItems.length >= 5) break
+      if (labels.has(k)) continue
+      const v = attrValues[k]
+      if (v == null) continue
+      radarItems.push({ label: k, value: v })
+    }
+  }
 
   const schemeLabel = team
     ? (league.staff[team.id] ?? []).find((s) =>
@@ -76,7 +99,7 @@ export function PlayerProfile() {
             <X size={16} />
           </button>
           <div className="flex items-start gap-4">
-            <OvrBadge value={player.ovr} pot={player.pot} size={64} />
+            <OvrBadge value={player.ovr} pot={player.pot} size={76} />
             <div className="min-w-0 text-white">
               <div className="label !text-white/70">
                 {player.pos} · {player.side} · {player.height} · {player.weight} lbs
@@ -113,8 +136,28 @@ export function PlayerProfile() {
 
           <div className="rounded-xl border border-line bg-surface p-4">
             <div className="label mb-3">Attributes</div>
-            <MiniBars items={posGroups} />
+            <MiniBars items={posGroups} segments={10} />
           </div>
+
+          {composites.length > 0 && (
+            <div className="rounded-xl border border-line bg-surface p-4">
+              <div className="label mb-3">Position composites</div>
+              <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+                {radarItems.length >= 3 && <RadarChart items={radarItems} size={208} className="shrink-0" />}
+                <div className="w-full flex-1 space-y-3">
+                  {compositeItems.map((c) => (
+                    <div key={c.id} title={c.title}>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="font-cond text-xs font-700 uppercase tracking-wide text-ink-2">{c.label}</span>
+                        <span className="font-cond text-xs font-700 tnum text-ink">{Math.round(c.value)}</span>
+                      </div>
+                      <RatingBar value={c.value} segments={10} height={8} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {player.age <= 26 && (
             <div className="rounded-xl border border-line bg-surface p-4">

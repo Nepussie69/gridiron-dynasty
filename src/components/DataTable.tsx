@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '../lib/cn'
+import { DensityToggle, useDensity } from '../ui/kit'
 
 export interface Column<T> {
   key: string
@@ -45,6 +46,9 @@ export function DataTable<T>({
 }) {
   const [sortKey, setSortKey] = useState<string | null>(defaultSortKey ?? null)
   const [dir, setDir] = useState<'asc' | 'desc'>(defaultDir)
+  const { density, rowPad, headPad, fontSize } = useDensity()
+  // U3b: pin the name column (fallback to the first column) while scrolling.
+  const stickyKey = columns.find((c) => c.key === 'name')?.key ?? columns[0]?.key
 
   const sorted = useMemo(() => {
     if (!sortKey) return rows
@@ -76,22 +80,29 @@ export function DataTable<T>({
   }
 
   return (
-    <div className="overflow-auto" style={{ maxHeight }}>
-      <table className="w-full border-collapse text-sm tnum">
+    <div>
+      <div className="flex items-center justify-end px-2 pb-1.5">
+        <DensityToggle />
+      </div>
+      <div className="overflow-auto" style={{ maxHeight }}>
+      <table data-density={density} className={cn('w-full border-collapse tnum', fontSize)}>
         <thead className="sticky top-0 z-10 glass">
           <tr className="border-b border-line text-left">
-            {rank && <th className="label w-9 px-2 py-1.5">#</th>}
+            {rank && <th className={cn('label w-9 px-2', headPad)}>#</th>}
             {columns.map((c) => {
               const sortable = !!c.sortValue
               const active = sortKey === c.key
+              const sticky = c.key === stickyKey
               return (
                 <th
                   key={c.key}
                   onClick={() => toggle(c.key, sortable)}
                   className={cn(
-                    'label whitespace-nowrap px-2 py-1.5 font-700',
+                    'label whitespace-nowrap px-2 font-700',
+                    headPad,
                     sortable && 'cursor-pointer select-none hover:text-ink-2',
                     active && 'text-ink',
+                    sticky && 'sticky left-0 z-20 bg-surface',
                     c.className,
                   )}
                 >
@@ -109,19 +120,23 @@ export function DataTable<T>({
             const key = rowKey(row)
             const selected = selectedKey === key
             const expanded = expandedKey === key && !!renderExpanded
+            const stickyBg = selected ? 'bg-[var(--team-soft)]' : 'bg-surface'
             return (
               <Fragment key={key}>
                 <tr
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                   className={cn(
-                    'border-b border-line/50 transition',
+                    'motion border-b border-line/50',
                     onRowClick && 'cursor-pointer',
-                    selected ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
+                    selected ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2 hover:shadow-[0_6px_16px_-10px_rgba(10,22,38,0.45)]',
                   )}
                 >
-                  {rank && <td className="px-2 py-1 font-cond text-xs text-faint">{i + 1}</td>}
+                  {rank && <td className={cn('px-2 font-cond text-xs text-faint', rowPad)}>{i + 1}</td>}
                   {columns.map((c) => (
-                    <td key={c.key} className={cn('whitespace-nowrap px-2 py-1', c.className)}>
+                    <td
+                      key={c.key}
+                      className={cn('whitespace-nowrap px-2', rowPad, c.key === stickyKey && cn('sticky left-0 z-[1]', stickyBg), c.className)}
+                    >
                       {c.render(row)}
                     </td>
                   ))}
@@ -138,6 +153,7 @@ export function DataTable<T>({
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { gradeColor, inkOn, tint } from '../lib/format'
+import { gradeColor, inkOn } from '../lib/format'
 import type { Team } from '../game/types'
 
 // ── Theme preference (U3) ────────────────────────────────────────────────────
@@ -108,6 +108,91 @@ function useCountUp(value: number, duration = 420): number {
 export function TweenNumber({ value, format }: { value: number; format?: (n: number) => string }) {
   const shown = useCountUp(value)
   return <>{format ? format(shown) : Math.round(shown)}</>
+}
+
+// ── Table density (U3b) ──────────────────────────────────────────────────────
+export type Density = 'comfortable' | 'compact'
+const DENSITY_KEY = 'gd.density'
+
+function readDensity(): Density {
+  try {
+    const v = localStorage.getItem(DENSITY_KEY)
+    if (v === 'compact' || v === 'comfortable') return v
+  } catch {
+    /* ignore */
+  }
+  return 'comfortable'
+}
+
+let densityValue: Density = readDensity()
+const densityListeners = new Set<() => void>()
+function emitDensity() {
+  for (const l of densityListeners) l()
+}
+function subscribeDensity(cb: () => void) {
+  densityListeners.add(cb)
+  return () => {
+    densityListeners.delete(cb)
+  }
+}
+function setDensity(next: Density) {
+  densityValue = next
+  try {
+    localStorage.setItem(DENSITY_KEY, next)
+  } catch {
+    /* ignore */
+  }
+  emitDensity()
+}
+
+/**
+ * U3b: one shared row-density setting for every table, persisted in
+ * localStorage (`gd.density`). Returns the current mode plus the class tokens
+ * each table applies to its rows, headers and font size.
+ */
+export function useDensity() {
+  const density = useSyncExternalStore(
+    subscribeDensity,
+    () => densityValue,
+    () => 'comfortable' as Density,
+  )
+  const compact = density === 'compact'
+  return {
+    density,
+    set: setDensity,
+    /** Vertical padding for body rows. */
+    rowPad: compact ? 'py-0.5' : 'py-1.5',
+    /** Vertical padding for header rows. */
+    headPad: compact ? 'py-1' : 'py-2',
+    /** Base font size for the table. */
+    fontSize: compact ? 'text-[12px]' : 'text-sm',
+  }
+}
+
+/** Comfortable / Compact segmented control, rendered by each of the tables. */
+export function DensityToggle({ className }: { className?: string }) {
+  const { density, set } = useDensity()
+  const options: Density[] = ['comfortable', 'compact']
+  return (
+    <div
+      className={cn('inline-flex items-center rounded-md border border-line bg-surface-2 p-0.5', className)}
+      title="Row density"
+    >
+      {options.map((o) => (
+        <button
+          key={o}
+          type="button"
+          onClick={() => set(o)}
+          className={cn(
+            'motion rounded px-2 py-0.5 font-cond text-[10px] font-700 uppercase tracking-wide',
+            density === o ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+          )}
+        >
+          {o === 'comfortable' ? 'Comfortable' : 'Compact'}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 // ── Layout primitives ────────────────────────────────────────────────────────
@@ -336,13 +421,35 @@ export function RatingBar({
   max = 100,
   color,
   height = 6,
+  segments = 0,
 }: {
   value: number
   max?: number
   color?: string
   height?: number
+  /** When > 0, draw a discrete segmented meter. Filled segments use the tier
+   *  colour for their band unless an explicit `color` is given. */
+  segments?: number
 }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100))
+  if (segments > 0) {
+    const filled = Math.round((pct / 100) * segments)
+    return (
+      <div className="flex w-full items-stretch gap-[2px]" style={{ height }}>
+        {Array.from({ length: segments }, (_, i) => {
+          const band = ((i + 0.5) / segments) * max
+          const seg = color ?? gradeColor(band)
+          return (
+            <span
+              key={i}
+              className="min-w-0 flex-1 rounded-[2px]"
+              style={{ background: i < filled ? seg : 'var(--color-surface-3)' }}
+            />
+          )
+        })}
+      </div>
+    )
+  }
   return (
     <div className="w-full overflow-hidden rounded-full bg-surface-3" style={{ height }}>
       <div
@@ -446,9 +553,11 @@ export function Donut({
 export function MiniBars({
   items,
   max = 100,
+  segments = 0,
 }: {
   items: { label: string; value: number; color?: string; title?: string; sim?: boolean }[]
   max?: number
+  segments?: number
 }) {
   return (
     <div className="space-y-2">
@@ -464,12 +573,87 @@ export function MiniBars({
             )}
           </div>
           <div className="flex-1">
-            <RatingBar value={it.value} max={max} color={it.color} height={8} />
+            <RatingBar value={it.value} max={max} color={it.color} height={8} segments={segments} />
           </div>
           <div className="w-8 shrink-0 text-right font-cond text-xs font-700 tnum text-ink-2">{Math.round(it.value)}</div>
         </div>
       ))}
     </div>
+  )
+}
+
+/**
+ * U3b: a theme-aware radar chart (SVG only). `items` are the axes, each a
+ * 0–`max` value. Grid, labels and data all read the design tokens so both
+ * palettes stay legible.
+ */
+export function RadarChart({
+  items,
+  size = 200,
+  max = 100,
+  color = 'var(--team)',
+  className,
+}: {
+  items: { label: string; value: number }[]
+  size?: number
+  max?: number
+  color?: string
+  className?: string
+}) {
+  if (items.length < 3) return null
+  const cx = size / 2
+  const cy = size / 2
+  const r = size / 2 - 30
+  const n = items.length
+  const angle = (i: number) => (Math.PI * 2 * i) / n - Math.PI / 2
+  const at = (i: number, v: number) => {
+    const rr = (Math.max(0, Math.min(max, v)) / max) * r
+    return [cx + Math.cos(angle(i)) * rr, cy + Math.sin(angle(i)) * rr] as const
+  }
+  const poly = (pts: readonly (readonly [number, number])[]) =>
+    pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
+  const rings = [0.25, 0.5, 0.75, 1]
+  const dataPts = items.map((it, i) => at(i, it.value))
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={className}>
+      {rings.map((f) => (
+        <polygon
+          key={f}
+          points={poly(items.map((_, i) => at(i, f * max)))}
+          fill="none"
+          stroke="var(--color-line)"
+          strokeWidth={1}
+          opacity={0.9}
+        />
+      ))}
+      {items.map((_, i) => {
+        const [x, y] = at(i, max)
+        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--color-line)" strokeWidth={1} />
+      })}
+      <polygon points={poly(dataPts)} fill={color} fillOpacity={0.18} stroke={color} strokeWidth={2} strokeLinejoin="round" />
+      {dataPts.map((p, i) => (
+        <circle key={i} cx={p[0]} cy={p[1]} r={2.4} fill={color} />
+      ))}
+      {items.map((it, i) => {
+        const [lx, ly] = at(i, max + 16)
+        const anchor = Math.abs(lx - cx) < 6 ? 'middle' : lx > cx ? 'start' : 'end'
+        return (
+          <text
+            key={it.label}
+            x={lx}
+            y={ly}
+            textAnchor={anchor}
+            dominantBaseline="middle"
+            fontSize={10}
+            className="font-cond tnum"
+            fill="var(--color-muted)"
+            style={{ fontWeight: 700, textTransform: 'uppercase' }}
+          >
+            {it.label} {Math.round(it.value)}
+          </text>
+        )
+      })}
+    </svg>
   )
 }
 
@@ -540,9 +724,4 @@ export function Button({
       {children}
     </button>
   )
-}
-
-/** Soft team-tinted panel background. */
-export function teamPanelStyle(team: Team) {
-  return { background: tint(team.primary, 0.93) }
 }

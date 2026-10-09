@@ -30,7 +30,7 @@ import {
   type StatCol,
 } from './statsColumns'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, OvrBadge, TeamCrest } from '../ui/kit'
+import { Badge, DensityToggle, OvrBadge, TeamCrest, useDensity } from '../ui/kit'
 
 type Dir = 'asc' | 'desc'
 type SortKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | `col:${string}`
@@ -90,6 +90,7 @@ function Th({
   active,
   dir,
   title,
+  solid,
 }: {
   children?: ReactNode
   className?: string
@@ -97,13 +98,18 @@ function Th({
   active?: boolean
   dir?: Dir
   title?: string
+  /** Solid (non-glass) background — used for the sticky first column. */
+  solid?: boolean
 }) {
+  const { headPad } = useDensity()
   return (
     <th
       title={title}
       onClick={onClick}
       className={cn(
-        'label whitespace-nowrap border-b border-line glass-2 px-2 py-2 font-700',
+        'label whitespace-nowrap border-b border-line px-2 font-700',
+        headPad,
+        solid ? 'bg-surface' : 'glass-2',
         onClick && 'cursor-pointer select-none hover:text-ink-2',
         active && 'text-ink',
         className,
@@ -156,6 +162,7 @@ export function StatsTable({
 }: Props) {
   const world = useWorld()
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const { density, fontSize, rowPad, headPad } = useDensity()
   const [sortKey, setSortKey] = useState<SortKey>(defaultSortKey)
   const [dir, setDir] = useState<Dir>(defaultDir)
 
@@ -201,8 +208,11 @@ export function StatsTable({
 
   return (
     <div>
-      <div className="border-b border-line px-1 py-2 text-[11px] text-muted">
-        {season} season · click a column to sort · missing or zero-attempt rows sort last
+      <div className="flex items-center justify-between gap-3 border-b border-line px-1 py-2">
+        <span className="text-[11px] text-muted">
+          {season} season · click a column to sort · missing or zero-attempt rows sort last
+        </span>
+        <DensityToggle />
       </div>
 
       {sorted.length === 0 ? (
@@ -210,14 +220,14 @@ export function StatsTable({
       ) : (
         <>
           <div className="max-h-[70vh] overflow-auto">
-            <table className="min-w-full border-collapse text-sm tnum">
+            <table data-density={density} className={cn('min-w-full border-collapse tnum', fontSize)}>
             <thead>
               <tr className="text-left">
-                <Th {...hdr('name')} title="Player name" className="sticky left-0 top-0 z-30 glass-2">Name</Th>
+                <Th {...hdr('name')} title="Player name" solid className="sticky left-0 top-0 z-30">Name</Th>
                 {showTeam && <Th className="sticky top-0 z-20">Team</Th>}
                 <Th {...hdr('pos')} className="sticky top-0 z-20">Pos</Th>
                 <Th {...hdr('age')} className="sticky top-0 z-20">Age</Th>
-                <th className="label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 py-2 font-700">
+                <th className={cn('label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 font-700', headPad)}>
                   <span className="inline-flex items-center gap-1">
                     {([['ovr', 'OVR', 'Sort by overall'], ['pot', 'POT', 'Sort by potential']] as const).map(([k, label, tip], i) => (
                       <span key={k} className="inline-flex items-center gap-1">
@@ -250,13 +260,14 @@ export function StatsTable({
                     key={p.id}
                     onClick={() => selectPlayer(p.id)}
                     className={cn(
-                      'cursor-pointer border-b border-line/60 transition hover:bg-[var(--team-soft)]',
+                      'motion cursor-pointer border-b border-line/60 hover:bg-[var(--team-soft)] hover:shadow-[0_6px_16px_-10px_rgba(10,22,38,0.45)]',
                       mine && 'bg-[var(--team-soft)]',
                     )}
                   >
                     <td
                       className={cn(
-                        'sticky left-0 z-10 whitespace-nowrap px-2 py-1.5',
+                        'sticky left-0 z-10 whitespace-nowrap px-2',
+                        rowPad,
                         mine ? 'bg-[var(--team-soft)]' : 'bg-surface',
                       )}
                     >

@@ -5,7 +5,7 @@ import { playerAttrs } from '../game/data/ratings'
 import { COMPOSITES, RATING_COLUMNS, RATING_INFO, ratingTitle, type Composite, baseGroup } from '../game/data/ratingInfo'
 import { schemeFit } from '../game/engine/style'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, OvrBadge, TeamCrest } from '../ui/kit'
+import { Badge, DensityToggle, OvrBadge, TeamCrest, useDensity } from '../ui/kit'
 import { FitBadge } from './PlayerTable'
 import type { Player } from '../game/types'
 
@@ -86,6 +86,7 @@ function Th({
   onSort,
   className,
   title,
+  solid,
 }: {
   children?: ReactNode
   sort?: SortKey
@@ -94,13 +95,18 @@ function Th({
   onSort?: (key: SortKey) => void
   className?: string
   title?: string
+  /** Solid (non-glass) background — used for the sticky first column. */
+  solid?: boolean
 }) {
+  const { headPad } = useDensity()
   return (
     <th
       title={title}
       onClick={sort && onSort ? () => onSort(sort) : undefined}
       className={cn(
-        'label whitespace-nowrap border-b border-line glass-2 px-2 py-2 font-700',
+        'label whitespace-nowrap border-b border-line px-2 font-700',
+        headPad,
+        solid ? 'bg-surface' : 'glass-2',
         sort && 'cursor-pointer select-none hover:text-ink-2',
         active && 'text-ink',
         className,
@@ -134,6 +140,7 @@ export function RatingsTable({
 }: Props) {
   const world = useWorld()
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const { density, fontSize, rowPad, headPad } = useDensity()
   const [sortKey, setSortKey] = useState<SortKey>('ovr')
   const [dir, setDir] = useState<Dir>('desc')
   const [helpOpen, setHelpOpen] = useState(false)
@@ -186,12 +193,15 @@ export function RatingsTable({
         <span className="text-[11px] text-muted">
           Click a column to sort · missing ratings show “–” and sort last
         </span>
-        <button
-          onClick={() => setHelpOpen((o) => !o)}
-          className="rounded-md border border-line bg-surface px-2.5 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-ink-2 transition hover:bg-surface-2"
-        >
-          {helpOpen ? 'Hide ratings key' : 'What do these mean?'}
-        </button>
+        <div className="flex items-center gap-2">
+          <DensityToggle />
+          <button
+            onClick={() => setHelpOpen((o) => !o)}
+            className="rounded-md border border-line bg-surface px-2.5 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-ink-2 transition hover:bg-surface-2"
+          >
+            {helpOpen ? 'Hide ratings key' : 'What do these mean?'}
+          </button>
+        </div>
       </div>
 
       {helpOpen && (
@@ -224,14 +234,14 @@ export function RatingsTable({
       ) : (
         <>
           <div className="max-h-[70vh] overflow-auto">
-            <table className="min-w-full border-collapse text-sm tnum">
+            <table data-density={density} className={cn('min-w-full border-collapse tnum', fontSize)}>
             <thead>
               <tr className="text-left">
-                <Th {...hdr('name')} title="Player name" className="sticky left-0 top-0 z-30 glass-2">Name</Th>
+                <Th {...hdr('name')} title="Player name" solid className="sticky left-0 top-0 z-30">Name</Th>
                 {showTeam && <Th className="sticky top-0 z-20">Team</Th>}
                 <Th {...hdr('pos')} className="sticky top-0 z-20">Pos</Th>
                 <Th {...hdr('age')} className="sticky top-0 z-20">Age</Th>
-                <th className="label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 py-2 font-700">
+                <th className={cn('label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 font-700', headPad)}>
                   <span className="inline-flex items-center gap-1">
                     {([['ovr', 'OVR', 'Sort by overall'], ['pot', 'POT', 'Sort by potential']] as const).map(([k, label, tip], i) => (
                       <span key={k} className="inline-flex items-center gap-1">
@@ -275,13 +285,14 @@ export function RatingsTable({
                     key={p.id}
                     onClick={() => selectPlayer(p.id)}
                     className={cn(
-                      'cursor-pointer border-b border-line/60 transition hover:bg-[var(--team-soft)]',
+                      'motion cursor-pointer border-b border-line/60 hover:bg-[var(--team-soft)] hover:shadow-[0_6px_16px_-10px_rgba(10,22,38,0.45)]',
                       mine && 'bg-[var(--team-soft)]',
                     )}
                   >
                     <td
                       className={cn(
-                        'sticky left-0 z-10 whitespace-nowrap px-2 py-1.5',
+                        'sticky left-0 z-10 whitespace-nowrap px-2',
+                        rowPad,
                         mine ? 'bg-[var(--team-soft)]' : 'bg-surface',
                       )}
                     >
