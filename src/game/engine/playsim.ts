@@ -66,7 +66,7 @@ import { clamp, hash32, makeRng, type Rng } from './rng'
 // added or removed — these only move the league-average baseline the terms sit on.
 export const R2 = {
   /** Completion-probability base (real NFL completion % ≈ 64.3). */
-  compBase: 0.632,
+  compBase: 0.568,
   /** Completion penalty as the field compresses toward the goal line (0 at the 20). */
   rzCompDamp: 0,
   /** Fraction of a would-be scoring run shaved by the compressed, crowded front. */
@@ -77,6 +77,11 @@ export const R2 = {
   explosiveCal: 1.3,
   /** R2: red-zone pass lean — clubs throw more inside the 20 than between them. */
   rzPassBias: 0.09,
+  /** R2: money-down conversion — on 3rd down the throw is schemed to the sticks, so
+   *  it converts a little more often than the same matchup on 1st/2nd (≈ +4%). */
+  moneyComp: 0.03,
+  /** R2: money-down yards — a 3rd-down completion/run is worked back to the marker. */
+  moneyYards: 1.0,
   /** R5: missed-tackle grading. Both sides are centred on the measured league-average
    *  blend (79) and given their own slope, so the carrier and defender effects balance
    *  independently instead of drifting with the attribute offset. Pass plays carry an
@@ -97,11 +102,11 @@ export const R2 = {
   /** Base interception chance. */
   intBase: 0.0118,
   /** Multiplier on a positive run gain after the real distribution is sampled. */
-  runGainCal: 0.78,
+  runGainCal: 0.69,
   /** Multiplier on the yards-after-catch / style bonus on completions. */
   yacCal: 1,
   /** Multiplier on a positive pass gain after the real distribution is sampled. */
-  passGainCal: 0.88,
+  passGainCal: 1.07,
   /** Game-clock seconds consumed per second of play time (pace). */
   pace: 0.835,
   /** Where a drive starts after a touchback (2015–2024 average ≈ the 27). */
@@ -1182,7 +1187,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // throw. 0 at the 20, growing to `rzCompDamp` on the doorstep.
   const rzDamp = yard >= 80 ? R2.rzCompDamp * clamp((yard - 80) / 19, 0, 1) : 0
   let compProb = clamp(
-    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage),
+    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0),
     0.42,
     0.74,
   )
@@ -1241,6 +1246,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if ((target?.pos === 'RB' || target?.pos === 'FB') && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
     else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
     gain = clamp(gain, -8, 85)
+    // R2: on a money down the route is worked back to the sticks.
+    if (gain > 0 && env?.down === 3) gain += R2.moneyYards
     // L12 S3: a completion is stopped by one defender — the coverage defender most
     // often, support otherwise. No credit on a score or a late sideline catch.
     const late = (env?.qtr ?? 0) >= 4 && (env?.clock ?? 9999) <= 120
@@ -1388,6 +1395,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     gain += Math.round(rmean('FB', 'RBK', fA.RBK ?? 70) * 0.06 + rmean('FB', 'IBL', fA.IBL ?? 70) * 0.04)
   }
   gain = clamp(gain, -10, 90)
+  // R2: on a money down a runner lowers his shoulder to the marker.
+  if (gain > 0 && env?.down === 3) gain += R2.moneyYards
   // L12 E2: pursuit (DL/LB PUR + SPD) caps the long-run tail.
   if (gain > 20) gain = 20 + Math.round((gain - 20) * clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4))
   // R2: the long-TD rate is tuned separately from the short run game.

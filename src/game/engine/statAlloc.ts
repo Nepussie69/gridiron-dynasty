@@ -15,7 +15,7 @@ import type { Game, World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
 import { currentSeason, recordGameStats } from './stats'
 import type { GameSim, Play } from './playsim'
-import { DROP_BASE, DROP_SLOPE, carrierMissRate, defenderMissRate } from './playsim'
+import { carrierMissRate, defenderMissRate } from './playsim'
 
 import { leagueMasteryMeans, masteryGroup, type MasteryMeans } from './playbook'
 import { POS_MEAN } from './ratingMeans'
@@ -29,6 +29,17 @@ const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
 function mkAttrs(p: Player): Record<string, number> {
   return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
 }
+
+// R7: fast-path drops. The fast allocator never models incompletions (targets ≈
+// receptions + 0/1), so the PBP conditional drop chance (≈12% of incompletions)
+// lands at only ≈1.3% of targets here. Apply the drop expectation directly to
+// targets instead, calibrated to the PBP league rate (≈3–4%) and still
+// CTH-sensitive (better hands drop less). detCount keeps it deterministic — no
+// rng() draw is added or removed.
+const FAST_DROP_BASE = 0.037
+const FAST_DROP_SLOPE = 0.0006
+const FAST_DROP_LO = 0.02
+const FAST_DROP_HI = 0.08
 
 function tenureOf(p: Player): number {
   const s = p.stats ?? []
@@ -206,12 +217,11 @@ export function allocateTeamGame(
       const rec = recSplit[i] ?? 0
       // Preserve the original draw site exactly: targets = receptions + rng() threshold.
       const tg = rec + (rng() < 0.5 ? 1 : 0)
-      const inc = tg - rec
-      // R5: allocate drops per incomplete target, CTH-centred on the position mean.
+      // R5/R7: allocate drops per target, CTH-centred on the position mean.
       // `detCount` spends the fractional expectation with a per-player/game hash, so
-      // a receiver with one incompletion no longer rounds every drop away to zero.
+      // a receiver with one target no longer rounds every drop away to zero.
       const cthMean = POS_MEAN[p.pos]?.CTH ?? 72
-      const dropRate = clamp(DROP_BASE - ((mkAttrs(p).CTH ?? 70) - cthMean) * DROP_SLOPE, 0.03, 0.24)
+      const dropRate = clamp(FAST_DROP_BASE - ((mkAttrs(p).CTH ?? 70) - cthMean) * FAST_DROP_SLOPE, FAST_DROP_LO, FAST_DROP_HI)
       addOff(p.id, {
         playerId: p.id,
         targets: tg,
@@ -220,7 +230,7 @@ export function allocateTeamGame(
         recTD: tdSplit[i] ?? 0,
         // R5: rating-weighted forced-miss share (reconciled to the opponent's total).
         forcedMissed: rec * carrierMissRate(p),
-        drops: detCount(inc, dropRate, `${gameKey}:${p.id}:drop`),
+        drops: detCount(tg, dropRate, `${gameKey}:${p.id}:drop`),
       })
     })
   }
