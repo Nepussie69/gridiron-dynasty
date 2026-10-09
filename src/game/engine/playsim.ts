@@ -141,13 +141,147 @@ export const PRESSURE = {
   hitRate: 0.225,
 }
 
+// ── R14: typed penalties ─────────────────────────────────────────────────────
+// The two pre-snap rng() draws (defensive, then offensive) are untouched: they
+// still decide WHETHER a flag is thrown, in the same order, so the seed stream
+// and coached/play-by-play equivalence are unchanged. The foul type, the
+// offending player and the enforcement all come from deterministic hashes.
+//
+// Type weights are nudged by the roster's ratings (AWR/discipline, PBK vs the
+// opponent's PRS for holding, MCV for the coverage fouls, and a road-crowd bump
+// for false starts) but are always renormalised to 1, so the league-average
+// count and yardage the R2 retune calibrated against do not move. No rng() draw
+// is added or removed.
+export type PenaltyKind =
+  | 'holdingOff' | 'holdingDef' | 'falseStart' | 'offside' | 'dpi'
+  | 'opi' | 'roughing' | 'illegalContact' | 'delay' | 'unnecessary'
+
 /**
- * R2: penalty yardage from a deterministic hash — 5 / 10 / 15-yard flags mixing
- * to the real ≈ 8.7-yard average. No rng() draw is added or removed.
+ * R14: penalty yardage from a deterministic hash — 5 / 10 / 15-yard flags mixing
+ * to the real ≈ 8.5-yard average. Kept exactly as R2 shipped it so the enforced
+ * spot is byte-identical to the pre-R14 sim; the R14 type is chosen to match the
+ * tier, so a 5-yard flag is a 5-yard foul (false start / offside / …), a 10-yard
+ * flag a holding / OPI (or a short spot DPI) and a 15-yard flag a DPI / roughing /
+ * unnecessary-roughness. No rng() draw is added or removed.
  */
-function penaltyYards(key: string): number {
-  const r = hash32(key) % 10
-  return r < 5 ? 5 : r < 8 ? 10 : 15
+function penaltyYards(key: string, side: 'off' | 'def'): number {
+  // NFL mix by side: defensive flags are mostly 5-yard fouls (offside, holding,
+  // illegal contact) with ~22% 15-yarders (DPI, roughing, unnecessary roughness)
+  // and a few short spot DPIs; offensive flags are mostly 10-yard holding/OPI
+  // or 5-yard false starts / delays. (The old shared 50/30/20 split made every
+  // 10-yard defensive flag a DPI.)
+  const r = hash32(key) % 100
+  if (side === 'def') return r < 70 ? 5 : r < 78 ? 10 : 15
+  return r < 45 ? 5 : r < 98 ? 10 : 15
+}
+
+export interface PenaltyInfo { label: string; side: 'off' | 'def'; yards: number; tiers: number[]; pos: Position[] }
+export const PENALTY_INFO: Record<PenaltyKind, PenaltyInfo> = {
+  holdingOff: { label: 'Offensive holding', side: 'off', yards: 10, tiers: [10], pos: ['OT', 'OG', 'C', 'TE', 'RB'] },
+  holdingDef: { label: 'Defensive holding', side: 'def', yards: 5, tiers: [5], pos: ['CB', 'S', 'LB'] },
+  falseStart: { label: 'False start', side: 'off', yards: 5, tiers: [5], pos: ['OT', 'OG', 'C', 'TE', 'WR'] },
+  // Defensive offside is a 5-yard replay-down foul in the NFL, but this pre-snap
+  // model resets the down for every defensive flag (the R2 status quo), so it
+  // takes the same treatment as the rest.
+  offside: { label: 'Offside', side: 'def', yards: 5, tiers: [5], pos: ['DE', 'DT', 'LB'] },
+  // DPI is a spot foul: a short one lands on the 10-yard tier, a deep one on 15.
+  dpi: { label: 'Defensive pass interference', side: 'def', yards: 15, tiers: [10, 15], pos: ['CB', 'S'] },
+  opi: { label: 'Offensive pass interference', side: 'off', yards: 10, tiers: [10], pos: ['WR', 'TE', 'RB'] },
+  roughing: { label: 'Roughing the passer', side: 'def', yards: 15, tiers: [15], pos: ['DE', 'DT', 'LB'] },
+  illegalContact: { label: 'Illegal contact', side: 'def', yards: 5, tiers: [5], pos: ['CB', 'LB', 'S'] },
+  delay: { label: 'Delay of game', side: 'off', yards: 5, tiers: [5], pos: ['QB'] },
+  unnecessary: { label: 'Unnecessary roughness', side: 'def', yards: 15, tiers: [15], pos: ['LB', 'S', 'CB', 'DE', 'DT', 'OT', 'OG', 'C', 'TE', 'WR', 'RB'] },
+}
+/** R14: relative frequency of each offensive foul (normalised within the tier). */
+const PEN_OFF_W: Partial<Record<PenaltyKind, number>> = {
+  holdingOff: 0.6, falseStart: 0.28, opi: 0.06, delay: 0.04, unnecessary: 0.02,
+}
+/** R14: relative frequency of each defensive foul (normalised within the tier). */
+const PEN_DEF_W: Partial<Record<PenaltyKind, number>> = {
+  offside: 0.3, holdingDef: 0.25, dpi: 0.18, illegalContact: 0.12, unnecessary: 0.09, roughing: 0.06,
+}
+
+/** R14: mean rating across a club's non-injured players at these positions. */
+function posRatingAvg(world: World, teamId: string, positions: Position[], key: string): number {
+  const ps = (world.roster[teamId] ?? []).filter((p) => positions.includes(p.pos) && !p.injured)
+  if (!ps.length) return 70
+  let sum = 0
+  for (const p of ps) sum += mkAttrs(p)[key] ?? 70
+  return sum / ps.length
+}
+/** R14: a club's mean edge-rush rating (max of PMV/FMV), for offensive holding. */
+function passRushAvg(world: World, teamId: string): number {
+  const ps = (world.roster[teamId] ?? []).filter((p) => (p.pos === 'DE' || p.pos === 'DT' || p.pos === 'LB') && !p.injured)
+  if (!ps.length) return 70
+  let sum = 0
+  for (const p of ps) {
+    const a = mkAttrs(p)
+    sum += Math.max(a.PMV ?? 70, a.FMV ?? 70)
+  }
+  return sum / ps.length
+}
+/** R14: the most likely offender for a foul — a starter at one of its positions. */
+function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', positions: Position[], key: string): Player | undefined {
+  let ps = (world.roster[teamId] ?? []).filter((p) => positions.includes(p.pos) && !p.injured)
+  // Fall back to the whole unit if the position list does not fit this side.
+  if (!ps.length) ps = (world.roster[teamId] ?? []).filter((p) => (p.side === 'DEF' ? 'def' : 'off') === side && !p.injured)
+  ps = ps.sort((a, b) => b.ovr - a.ovr || (a.id < b.id ? -1 : 1)).slice(0, 6)
+  if (!ps.length) return undefined
+  return ps[(hash32(key) >>> 0) % ps.length]
+}
+/** R14: pick the foul type from the rating-modulated weights, within the tier. */
+function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId: string, oppId: string, away: boolean, tier: number): PenaltyKind {
+  const w: Partial<Record<PenaltyKind, number>> = { ...(side === 'off' ? PEN_OFF_W : PEN_DEF_W) }
+  if (side === 'off') {
+    const olAwr = posRatingAvg(world, teamId, ['OT', 'OG', 'C'], 'AWR')
+    const qbAwr = posRatingAvg(world, teamId, ['QB'], 'AWR')
+    const wrAwr = posRatingAvg(world, teamId, ['WR', 'TE'], 'AWR')
+    const pbk = posRatingAvg(world, teamId, ['OT', 'OG', 'C'], 'PBK')
+    const prs = passRushAvg(world, oppId)
+    // Holding: the offense's pass protection versus the opponent's rush.
+    w.holdingOff = (w.holdingOff ?? 0) * clamp(1 + (prs - pbk) * 0.012, 0.7, 1.35)
+    // Road crowd noise: the visiting offense false-starts more.
+    w.falseStart = (w.falseStart ?? 0) * clamp(1 + (72 - olAwr) * 0.012, 0.7, 1.3) * (away ? 1.25 : 1)
+    w.opi = (w.opi ?? 0) * clamp(1 + (72 - wrAwr) * 0.01, 0.8, 1.3)
+    w.delay = (w.delay ?? 0) * clamp(1 + (72 - qbAwr) * 0.012, 0.7, 1.3)
+  } else {
+    const mcv = posRatingAvg(world, teamId, ['CB', 'S'], 'MCV')
+    const dbAwr = posRatingAvg(world, teamId, ['CB', 'S', 'LB'], 'AWR')
+    const dlAwr = posRatingAvg(world, teamId, ['DE', 'DT'], 'AWR')
+    w.dpi = (w.dpi ?? 0) * clamp(1 + (72 - mcv) * 0.012, 0.7, 1.4)
+    w.illegalContact = (w.illegalContact ?? 0) * clamp(1 + (72 - mcv) * 0.01, 0.8, 1.3)
+    w.holdingDef = (w.holdingDef ?? 0) * clamp(1 + (72 - dbAwr) * 0.01, 0.8, 1.3)
+    w.offside = (w.offside ?? 0) * clamp(1 + (72 - dlAwr) * 0.012, 0.7, 1.3)
+    w.roughing = (w.roughing ?? 0) * clamp(1 + (72 - dlAwr) * 0.008, 0.8, 1.3)
+    w.unnecessary = (w.unnecessary ?? 0) * clamp(1 + (72 - dbAwr) * 0.01, 0.8, 1.3)
+  }
+  const entries = (Object.entries(w) as [PenaltyKind, number][])
+    .filter(([k, v]) => v > 0 && PENALTY_INFO[k].tiers.includes(tier))
+  if (!entries.length) return side === 'off' ? 'holdingOff' : 'dpi'
+  const total = entries.reduce((a, [, v]) => a + v, 0)
+  let roll = h01(`${s.n}:penKind:${side}:${teamId}:${tier}`) * total
+  for (const [k, v] of entries) {
+    roll -= v
+    if (roll <= 0) return k
+  }
+  return entries[entries.length - 1][0]
+}
+
+/** R14: a club's accepted penalties from a play log, by type (for the box score). */
+export interface PenaltyTally { count: number; yards: number; byType: Partial<Record<PenaltyKind, number>> }
+export function penaltyTotals(plays: Play[], teamId: string): PenaltyTally {
+  const out: PenaltyTally = { count: 0, yards: 0, byType: {} }
+  for (const p of plays) {
+    if (p.type !== 'penalty') continue
+    const team = p.penaltyTeam ?? (p.concept === 'Offensive Penalty' ? p.offId : p.defId)
+    if (team !== teamId) continue
+    if (p.penaltyDisposition && p.penaltyDisposition !== 'accepted') continue
+    out.count += 1
+    out.yards += Math.abs(p.yards ?? 0)
+    const kind = p.penaltyKind
+    if (kind) out.byType[kind] = (out.byType[kind] ?? 0) + 1
+  }
+  return out
 }
 
 /**
@@ -242,6 +376,15 @@ export interface Play {
   pressureId?: string
   /** R7: how the pressure is classified. A sack is always a pressure. */
   pressureType?: 'sack' | 'hit' | 'hurry'
+  // ── R14: typed penalties ───────────────────────────────────────────────────
+  /** R14: the specific foul (holding, false start, DPI, …). */
+  penaltyKind?: PenaltyKind
+  /** R14: the club that committed the foul. */
+  penaltyTeam?: string
+  /** R14: the player charged with the foul. */
+  penaltyPlayerId?: string
+  /** R14: how the foul was enforced (accepted, declined or offsetting). */
+  penaltyDisposition?: 'accepted' | 'declined' | 'offset'
 }
 
 export interface GameSim {
@@ -2695,38 +2838,60 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     }
   }
 
-  // Defensive penalty (~3.5%) — 5 yards and an automatic first down.
+  // Defensive penalty — typed by hash within the R2 yardage tier, automatic first down.
   const defDisc = ocEffect(world, defId).discipline * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
   // L12.13 M3: a defense that knows the system makes fewer mental errors.
   if (s.rng() < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    const py = penaltyYards(`${s.n}:penD:${defId}`)
-    s.yard = clamp(s.yard + py, 1, 99)
-    // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
-    penS.firstDowns += 1
+    const py = penaltyYards(`${s.n}:penD:${defId}`, 'def')
+    const kind = pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py)
+    const info = PENALTY_INFO[kind]
+    const offender = penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`)
+    const who = shortName(offender?.name)
+    // R14: offsetting — both clubs fouled on the snap; replay, no yardage.
+    const offset = h01(`${s.n}:penOffset:${defId}`) < 0.001
+    // R14: the offense may decline a defensive offside.
+    const declined = !offset && kind === 'offside' && h01(`${s.n}:penDecline:${defId}`) < 0.005
+    let yards = 0
+    let result: string
+    if (offset) {
+      result = 'Offsetting penalties — replay the down'
+    } else if (declined) {
+      result = `${info.label} on ${who} — declined`
+    } else {
+      s.yard = clamp(s.yard + py, 1, 99)
+      // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
+      penS.firstDowns += 1
+      s.down = 1
+      s.distance = Math.min(10, 100 - s.yard)
+      yards = py
+      result = `${info.label} on ${who} — ${py} yards, automatic first down`
+    }
     const t = 18 * s.pace
     s.clock -= t
     penS.top += t
-    pushPlay(s, { type: 'penalty', concept: 'Defensive Penalty', yards: py, result: `${py}-yard penalty, automatic first down`, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 18 })
-    s.down = 1
-    s.distance = Math.min(10, 100 - s.yard)
+    pushPlay(s, { type: 'penalty', concept: info.label, penaltyKind: kind, penaltyTeam: defId, penaltyPlayerId: offender?.id, penaltyDisposition: offset ? 'offset' : declined ? 'declined' : 'accepted', yards, result, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 18 })
     return 'continue'
   }
 
-  // Offensive penalty (~2.5%, ×1.3 in the G7 hurry-up) — 5 yards, replay the down.
+  // Offensive penalty — typed by hash within the R2 yardage tier, replay the down.
   const offDisc = ocEffect(world, offId).discipline * cohesionMult(s.cohesionMean?.off, s.cohesion?.[offId]?.off, 0.6)
   const hurryPen = s.twoMinMode === 'hurry' ? 1.3 : 1
   if (s.rng() < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    const py = penaltyYards(`${s.n}:penO:${offId}`)
+    const py = penaltyYards(`${s.n}:penO:${offId}`, 'off')
+    const kind = pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py)
+    const info = PENALTY_INFO[kind]
+    const offender = penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`)
+    const who = shortName(offender?.name)
     s.yard = clamp(s.yard - py, 1, 99)
     // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
     const t = 22 * s.pace
     s.clock -= t
     penS.top += t
-    pushPlay(s, { type: 'penalty', concept: 'Offensive Penalty', yards: -py, result: `${py}-yard penalty, replay down`, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 22 })
+    pushPlay(s, { type: 'penalty', concept: info.label, penaltyKind: kind, penaltyTeam: offId, penaltyPlayerId: offender?.id, penaltyDisposition: 'accepted', yards: -py, result: `${info.label} on ${who} — ${py} yards, replay down`, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 22 })
     s.distance = Math.min(s.distance + py, 100 - s.yard)
     return 'continue'
   }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { coachLabels, type GameState, type Play as PlayEvent, type Moment, type MomentKind } from '../game/engine/playsim'
+import { coachLabels, penaltyTotals, PENALTY_INFO, type GameState, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
@@ -406,6 +406,8 @@ export function MatchView() {
   ]
   const activeTab = sideTabs.some((t) => t.id === tab) ? tab : 'plays'
   const boxTeamId = boxTeam === match.homeId || boxTeam === match.awayId ? boxTeam : (career?.teamId === match.homeId ? match.homeId : match.awayId)
+  // R14: the club's penalties by type, for the box score (follows the replay).
+  const pen = penaltyTotals(shownPlays, boxTeamId)
 
   const onClose = () => {
     if (gameDay) {
@@ -874,6 +876,7 @@ export function MatchView() {
                   world={world}
                   teamId={boxTeamId}
                   box={liveBox}
+                  pen={pen}
                   gmName={career?.gmName}
                   myTeamId={career?.teamId}
                   onTeamClick={
@@ -1455,7 +1458,7 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
   )
 }
 
-export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; gmName?: string; myTeamId?: string; onTeamClick?: (teamId: string) => void }) {
+export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClick }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; pen?: PenaltyTally; gmName?: string; myTeamId?: string; onTeamClick?: (teamId: string) => void }) {
   const team = world.byId[teamId]
   const rows = (box ?? []).filter((b) => b.teamId === teamId)
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
@@ -1518,6 +1521,19 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
         { k: 'puntRet', l: 'PR', title: 'Punt returns' }, { k: 'puntRetYds', l: 'YDS', title: 'Punt return yards' },
         { k: 'retTD', l: 'TD', title: 'Return touchdowns' }, { k: 'defTD', l: 'DTD', title: 'Defensive touchdowns (pick-six / fumble return)' },
       ]} />}
+      {pen && pen.count > 0 && (
+        <div className="mb-1">
+          <div className="label mb-0.5 !text-white/50">Penalties</div>
+          <div className="text-[11px] text-white/85 tnum">{pen.count} accepted for {pen.yards} yds</div>
+          <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-white/60">
+            {Object.entries(pen.byType)
+              .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+              .map(([k, n]) => (
+                <span key={k}>{PENALTY_INFO[k as PenaltyKind]?.label ?? k} <span className="tnum text-white/80">{n}</span></span>
+              ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, ovrDistribution, ownerProbe, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, penaltyProbe, ovrDistribution, ownerProbe, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 import { animProbe } from './game/engine/animProbe'
@@ -57,6 +57,7 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__faFlowProbe = faFlowProbe
   ;(window as unknown as Record<string, unknown>).__skillProbe = skillProbe
   ;(window as unknown as Record<string, unknown>).__hofProbe = hofProbe
+  ;(window as unknown as Record<string, unknown>).__penaltyProbe = penaltyProbe
   ;(window as unknown as Record<string, unknown>).__leagueWorkerDebug = leagueWorkerDebug
   ;(window as unknown as Record<string, unknown>).__game = useGame
   ;(window as unknown as Record<string, unknown>).__world = getWorld
