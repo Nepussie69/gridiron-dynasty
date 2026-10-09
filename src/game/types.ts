@@ -142,6 +142,9 @@ export interface SeasonStats {
   /** R15: scrimmage snaps played and the share of the club's snaps (0–100). */
   snaps?: number
   snapPct?: number
+  /** R15: the side snap total this player's share is measured against (numerator/
+   *  denominator). Optional, so an unmeasured game/season never implies 0%. */
+  snapSide?: number
   // honors
   awards?: string[]
 }
@@ -156,7 +159,6 @@ export function emptySeason(season: number, level: StatLevel, teamId: string): S
     missedTackles: 0, forcedMissed: 0, drops: 0,
     kickRet: 0, kickRetYds: 0, puntRet: 0, puntRetYds: 0, retTD: 0, defTD: 0,
     prs: 0, qbHits: 0, hurries: 0, pressured: 0, sk: 0, sky: 0,
-    snaps: 0, snapPct: 0,
   }
 }
 
@@ -213,6 +215,8 @@ export interface GameStatLine {
   /** R15: scrimmage snaps played and the share of the club's snaps (0–100). */
   snaps?: number
   snapPct?: number
+  /** R15: side snap total for the numerator/denominator share (optional). */
+  snapSide?: number
 }
 
 export interface Player {

@@ -111,8 +111,11 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       continue
     }
 
-    // R16: a muffed catch is still a completion for the receiver/QB line.
-    const isComp = play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId || !!play.muffedCatch
+    // R16: a reception is a caught pass (including a catch that later came loose).
+    // A deflected/muffed INTERCEPTION keeps `reception` unset, so it is never
+    // credited as a completion; metadata alone distinguishes the two. The result
+    // text is only a legacy fallback for play logs without the flag.
+    const isComp = play.reception ?? (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || (!!play.fumbleId && !play.intId) || (!!play.muffedCatch && !play.intId))
     if (play.type === 'pass') {
       const qb = play.qbId
       if (qb) {
@@ -202,25 +205,26 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
   // season snap % is complete.
   if (sim.snaps && sim.snapSide) {
     const pmap = new Map(world.players.map((p) => [p.id, p]))
-    const share = (id: string, teamId: string): number | undefined => {
+    const share = (id: string, teamId: string): { pct: number; side: number } | undefined => {
       const p = pmap.get(id)
       const side = p?.side
       if (side !== 'OFF' && side !== 'DEF') return undefined
       const counts = sim.snapSide![teamId]
       const base = side === 'OFF' ? counts?.off : counts?.def
-      return base ? Math.round(((sim.snaps![id] ?? 0) / base) * 1000) / 10 : undefined
+      return base ? { pct: Math.round(((sim.snaps![id] ?? 0) / base) * 1000) / 10, side: base } : undefined
     }
     for (const [id, n] of Object.entries(sim.snaps)) {
       if (!n) continue
       const p = pmap.get(id)
       if (!p) continue
       const teamId = p.teamId ?? meta[id]?.teamId ?? ''
-      const pct = share(id, teamId)
-      if (pct === undefined) continue
+      const s = share(id, teamId)
+      if (!s) continue
       const line = ensure(id, teamId)
       if (!line) continue
       line.snaps = n
-      line.snapPct = pct
+      line.snapPct = s.pct
+      line.snapSide = s.side
     }
   }
 
@@ -277,9 +281,11 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.sk = (season.sk ?? 0) + (line.sk ?? 0)
   season.sky = (season.sky ?? 0) + (line.sky ?? 0)
   season.pressured = (season.pressured ?? 0) + (line.pressured ?? 0)
-  // R15: snap totals and the games-weighted snap share.
+  // R15: snaps are kept as a numerator/denominator pair so a season with some
+  // unmeasured games is never biased toward zero (absent != no participation).
   season.snaps = (season.snaps ?? 0) + (line.snaps ?? 0)
-  if (line.snapPct !== undefined) season.snapPct = (season.snapPct ?? 0) + (line.snapPct - (season.snapPct ?? 0)) / season.games
+  season.snapSide = (season.snapSide ?? 0) + (line.snapSide ?? 0)
+  if (line.snapSide) season.snapPct = Math.round(((season.snaps ?? 0) / season.snapSide) * 1000) / 10
 }
 
 /** Get or create this season's stat line for a player at a level. */
@@ -351,7 +357,6 @@ export function boxTeamTotals(box: PlayerBoxScore[]): Record<string, { passYds: 
 export function careerTotals(p: Player) {
   const t = emptySeason(0, 'NFL', '')
   const seasons = p.stats ?? []
-  let snapWeighted = 0
   for (const s of seasons) {
     t.games += s.games
     t.passAtt += s.passAtt; t.passComp += s.passComp; t.passYds += s.passYds
@@ -381,9 +386,9 @@ export function careerTotals(p: Player) {
     t.sky = (t.sky ?? 0) + (s.sky ?? 0)
     t.pressured = (t.pressured ?? 0) + (s.pressured ?? 0)
     t.snaps = (t.snaps ?? 0) + (s.snaps ?? 0)
-    snapWeighted += (s.snapPct ?? 0) * s.games
+    t.snapSide = (t.snapSide ?? 0) + (s.snapSide ?? 0)
   }
-  if (t.games > 0) t.snapPct = Math.round((snapWeighted / t.games) * 10) / 10
+  if (t.snapSide) t.snapPct = Math.round(((t.snaps ?? 0) / t.snapSide) * 1000) / 10
   return t
 }
 

@@ -5821,7 +5821,7 @@ export function statAudit(games = 150) {
       if (p.qbId && /^Sack/.test(p.result)) plSk++
       if (p.coverId && p.targetId) {
         plTgt++
-        const comp = p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || !!p.fumbleId || !!p.muffedCatch
+        const comp = p.reception ?? (p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || (!!p.fumbleId && !p.intId) || (!!p.muffedCatch && !p.intId))
         if (comp) { plComp++; plYds += Math.max(0, p.yards) }
       }
     }
@@ -6154,14 +6154,23 @@ export function staminaProbe(games = 150) {
   let made = 0
   let offSnaps = 0
   let defSnaps = 0
-  let qbPct = 0, qbN = 0
-  let rbPct = 0, rbN = 0
-  let dlPct = 0, dlN = 0
-  let rotPct = 0, rotN = 0
+  let offPlayers = 0
+  let defPlayers = 0
   let rotateTeams = 0
   let maxFat = 0
   let endFat = 0, endFatN = 0
-  let dPoints = 0, dSacks = 0, dPassYds = 0, dComp = 0, dAtt = 0
+  // Snap shares are accumulated per player-team-game, then averaged once — no
+  // double division by games. Each bucket is [sum of %, count].
+  const buckets: Record<string, [number, number]> = {
+    qb: [0, 0], rb1: [0, 0], rb2: [0, 0], wr1: [0, 0], dlStarter: [0, 0], rotationalDl: [0, 0],
+  }
+  const add = (b: [number, number], v: number) => { b[0] += v; b[1] += 1 }
+  // A/B (stamina on vs off on identical seeds). Points/sacks/yards are per game
+  // (both clubs); the completion delta is the difference of the two rates.
+  let ePoints = 0, bPoints = 0
+  let eSacks = 0, bSacks = 0
+  let ePass = 0, bPass = 0
+  let eComp = 0, eAtt = 0, bComp = 0, bAtt = 0
   while (made < games) {
     const h = nfl[Math.floor(rng() * nfl.length)]
     const a = nfl[Math.floor(rng() * nfl.length)]
@@ -6170,57 +6179,86 @@ export function staminaProbe(games = 150) {
     const sim = simulatePlayByPlay(world, h.id, a.id, seed)
     const side = sim.snapSide ?? {}
     const snaps = sim.snaps ?? {}
-    offSnaps += (side[h.id]?.off ?? 0) + (side[a.id]?.off ?? 0)
-    defSnaps += (side[h.id]?.def ?? 0) + (side[a.id]?.def ?? 0)
     for (const t of [h.id, a.id]) {
-      const off = side[t]?.off ?? 1
-      const def = side[t]?.def ?? 1
+      const off = side[t]?.off ?? 0
+      const def = side[t]?.def ?? 0
+      offSnaps += off
+      defSnaps += def
       const top4 = new Set(depthGroup(world, t, ['DE', 'DT'], 4).map((p) => p.id))
+      const rbPool = depthGroup(world, t, ['RB'], 2)
+      const rb1 = rbPool[0]
+      const rb2 = rbPool[1]
+      const wr1 = depthGroup(world, t, ['WR'], 1)[0]
       let rotated = false
       for (const [id, n] of Object.entries(snaps)) {
         const p = pmap.get(id)
         if (!p || p.teamId !== t || !n) continue
-        if (p.pos === 'QB') { qbPct += (n / off) * 100; qbN++ }
-        else if (p.pos === 'RB') { rbPct += (n / off) * 100; rbN++ }
-        else if ((p.pos === 'DE' || p.pos === 'DT') && top4.has(id)) { dlPct += (n / def) * 100; dlN++ }
-        else if ((p.pos === 'DE' || p.pos === 'DT') && !top4.has(id)) {
-          rotated = true
-          rotPct += (n / def) * 100
-          rotN++
+        if (p.side === 'OFF') { offPlayers += n; if (off) add(buckets.qb, 0) }
+        else if (p.side === 'DEF') { defPlayers += n; if (def) add(buckets.qb, 0) }
+        if (p.pos === 'QB' && off) add(buckets.qb, (n / off) * 100)
+        else if (rb1 && p.id === rb1.id && off) add(buckets.rb1, (n / off) * 100)
+        else if (rb2 && p.id === rb2.id && off) add(buckets.rb2, (n / off) * 100)
+        else if (wr1 && p.id === wr1.id && off) add(buckets.wr1, (n / off) * 100)
+        if ((p.pos === 'DE' || p.pos === 'DT') && def) {
+          if (top4.has(id)) add(buckets.dlStarter, (n / def) * 100)
+          else { add(buckets.rotationalDl, (n / def) * 100); rotated = true }
         }
         maxFat = Math.max(maxFat, sim.fatigue?.[id] ?? 0)
       }
       if (rotated) rotateTeams++
     }
     for (const f of Object.values(sim.fatigue ?? {})) { endFat += f; endFatN++ }
-    // A/B: identical seeds with the stamina effect off.
-    setStamina(false)
-    const base = simulatePlayByPlay(world, h.id, a.id, seed)
-    setStamina(true)
-    dPoints += (sim.homeScore + sim.awayScore) - (base.homeScore + base.awayScore)
-    dSacks += (sim.stats.home.sacksTaken + sim.stats.away.sacksTaken) - (base.stats.home.sacksTaken + base.stats.away.sacksTaken)
-    dPassYds += (sim.stats.home.passYds + sim.stats.away.passYds) - (base.stats.home.passYds + base.stats.away.passYds)
-    dComp += (sim.stats.home.passComp + sim.stats.away.passComp) - (base.stats.home.passComp + base.stats.away.passComp)
-    dAtt += (sim.stats.home.passAtt + sim.stats.away.passAtt) - (base.stats.home.passAtt + base.stats.away.passAtt)
+    // A/B: identical seed with the stamina effect off. Always restored.
+    try {
+      setStamina(false)
+      const base = simulatePlayByPlay(world, h.id, a.id, seed)
+      bPoints += base.homeScore + base.awayScore
+      bSacks += base.stats.home.sacksTaken + base.stats.away.sacksTaken
+      bPass += base.stats.home.passYds + base.stats.away.passYds
+      bComp += base.stats.home.passComp + base.stats.away.passComp
+      bAtt += base.stats.home.passAtt + base.stats.away.passAtt - base.stats.home.sacksTaken - base.stats.away.sacksTaken
+    } finally {
+      setStamina(true)
+    }
+    ePoints += sim.homeScore + sim.awayScore
+    eSacks += sim.stats.home.sacksTaken + sim.stats.away.sacksTaken
+    ePass += sim.stats.home.passYds + sim.stats.away.passYds
+    eComp += sim.stats.home.passComp + sim.stats.away.passComp
+    eAtt += sim.stats.home.passAtt + sim.stats.away.passAtt - sim.stats.home.sacksTaken - sim.stats.away.sacksTaken
     made++
   }
-  const per = (x: number, n = made) => +(x / (n || 1)).toFixed(2)
+  const perTeamGame = (x: number) => +(x / (2 * (made || 1))).toFixed(2)
+  const pct = (k: string) => +(buckets[k][0] / (buckets[k][1] || 1)).toFixed(1)
+  const eRate = eComp / (eAtt || 1)
+  const bRate = bComp / (bAtt || 1)
   return {
     games: made,
-    snapsPerTeamGame: { off: per(offSnaps / 2), def: per(defSnaps / 2) },
-    snapPct: {
-      qb: per(qbPct / (qbN || 1)),
-      rb: per(rbPct / (rbN || 1)),
-      dlStarter: per(dlPct / (dlN || 1)),
-      rotationalDl: per(rotPct / (rotN || 1)),
+    snapsPerTeamGame: { off: perTeamGame(offSnaps), def: perTeamGame(defSnaps) },
+    playersPerSnap: {
+      off: +(offPlayers / (offSnaps || 1)).toFixed(2),
+      def: +(defPlayers / (defSnaps || 1)).toFixed(2),
     },
-    rotationRatePct: per((rotateTeams / (made * 2)) * 100),
+    snapPct: {
+      qb: pct('qb'),
+      rb1: pct('rb1'),
+      rb2: pct('rb2'),
+      wr1: pct('wr1'),
+      dlStarter: pct('dlStarter'),
+      rotationalDl: pct('rotationalDl'),
+    },
+    rotationRatePct: +((rotateTeams / (made * 2 || 1)) * 100).toFixed(1),
     fatigue: { max: +maxFat.toFixed(3), meanEnd: +(endFat / (endFatN || 1)).toFixed(3) },
     ab: {
-      pointsPerGame: per(dPoints),
-      sacksPerGame: per(dSacks),
-      passYdsPerGame: per(dPassYds),
-      compPctDelta: +((dComp / (dAtt || 1)) * 100).toFixed(2),
+      // Per-game totals for both clubs; divide by two for a team-game figure.
+      pointsPerGame: perTeamGame(ePoints - bPoints) [0] ?? 0,
+      sacksPerGame: perTeamGame(eSacks - bSacks),
+      passYdsPerGame: perTeamGame(ePass - bPass),
+      pointsPerTeamGame: perTeamGame(ePoints - bPoints),
+      sacksPerTeamGame: perTeamGame(eSacks - bSacks),
+      passYdsPerTeamGame: perTeamGame(ePass - bPass),
+      compPctEnabled: +(eRate * 100).toFixed(2),
+      compPctBaseline: +(bRate * 100).toFixed(2),
+      compPctDelta: +((eRate - bRate) * 100).toFixed(2),
     },
   }
 }

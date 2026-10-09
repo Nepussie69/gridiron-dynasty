@@ -17,7 +17,7 @@ import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, coachTendency, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
-import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook } from '../data/playbookData'
+import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
 
 // The user's own coaching skill, set once per game by the store when they hold a
@@ -158,25 +158,27 @@ export const PRESSURE = {
 // All of it is deterministic arithmetic: no rng() draw is added or removed.
 export const R15 = {
   /** Fatigue added to an average (STA 75) player per scrimmage snap. */
-  snap: 0.006,
+  snap: 0.012,
   /** Fraction of fatigue shed on a change of possession / at halftime. */
-  restDrive: 0.4,
-  restHalf: 0.55,
+  restDrive: 0.3,
+  restHalf: 0.45,
   /** Extra fatigue charged to a defence on a hurry-up possession / a long drive. */
-  hurry: 1.7,
-  longDrive: 1.25,
+  hurry: 1.6,
+  longDrive: 1.2,
   /** Rotation: spell a starter once he is this much more tired than his backup. */
-  rotateGap: 0.22,
+  rotateGap: 0.08,
   /** Rotation: the largest OVR drop a backup may be to take the rep. */
-  rotateMaxDrop: 6,
-  /** Effect slopes per unit-fatigue difference (defence minus offence). */
-  fatPress: 7,
-  fatComp: 0.02,
-  fatInt: 0.25,
-  fatRun: 6,
-  fatBig: 0.25,
+  rotateMaxDrop: 8,
+  /** Effect slopes per unit-fatigue difference (defence minus offence). Halved
+   *  from the R15 values because the fatigue scale is larger, so the league
+   *  effect stays the same while the rotation is real. */
+  fatPress: 4,
+  fatComp: 0.012,
+  fatInt: 0.15,
+  fatRun: 4,
+  fatBig: 0.15,
   /** Receiver target-score penalty per point of fatigue. */
-  fatTarget: 22,
+  fatTarget: 14,
 }
 
 // ── R16: turnover variety ─────────────────────────────────────────────────────
@@ -491,6 +493,12 @@ export interface Play {
   fake?: boolean
   /** R17: a blocked field goal, extra point or punt. */
   blockedKick?: boolean
+  // ── R15/R16: reception metadata and on-field participants ──────────────────
+  /** R16: the pass was caught (a true reception, including a catch then fumble). */
+  reception?: boolean
+  /** R15: the scrimmage players on the field for this snap (offence / defence ids). */
+  onFieldOff?: string[]
+  onFieldDef?: string[]
 }
 
 export interface GameSim {
@@ -813,6 +821,42 @@ function unitFatigue(fat: Record<string, number> | undefined, list: Array<Player
   return ps.reduce((a, p) => a + (fat[p.id] ?? 0), 0) / ps.length
 }
 
+/** R15: offensive personnel → how many RB/TE/WR line up (plus a fullback). */
+interface PersonnelCounts { rb: number; te: number; wr: number; fb: boolean }
+function personnelCounts(p: Personnel | undefined): PersonnelCounts {
+  switch (p) {
+    case '00': return { rb: 0, te: 0, wr: 5, fb: false }
+    case '10': return { rb: 1, te: 0, wr: 4, fb: false }
+    case '11': return { rb: 1, te: 1, wr: 3, fb: false }
+    case '12': return { rb: 1, te: 2, wr: 2, fb: false }
+    case '13': return { rb: 1, te: 3, wr: 1, fb: false }
+    case '21': return { rb: 1, te: 1, wr: 2, fb: true }
+    case '22': return { rb: 1, te: 2, wr: 1, fb: true }
+    case 'GL': return { rb: 1, te: 3, wr: 0, fb: true }
+    default: return { rb: 1, te: 1, wr: 3, fb: false }
+  }
+}
+
+/** R15: the defensive package that answers an offensive personnel grouping. */
+interface Package { dl: number; lb: number; cb: number; s: number }
+function defensePackage(p: Personnel | undefined): Package {
+  const c = personnelCounts(p)
+  const heavy = c.rb + c.te + (c.fb ? 1 : 0)
+  if (heavy >= 3) return { dl: 4, lb: 3, cb: 2, s: 2 } // base (4-3)
+  if (heavy <= 1) return { dl: 4, lb: 1, cb: 4, s: 2 } // dime
+  return { dl: 4, lb: 2, cb: 3, s: 2 } // nickel
+}
+
+/** How many players a package lists at a position (for the resolver's groups). */
+function packageGroup(world: World, defId: string, positions: Position[], pkg: Package, fat?: Record<string, number>): Player[] {
+  const n = positions.includes('DE') || positions.includes('DT') ? pkg.dl
+    : positions.includes('LB') ? pkg.lb
+      : positions.includes('CB') ? pkg.cb
+        : positions.includes('S') ? pkg.s : 0
+  if (positions.includes('DE') || positions.includes('DT')) return fieldGroup(world, defId, positions, n, fat)
+  return topGroup(world, defId, positions, n)
+}
+
 /**
  * The on-field group, with a tiring starter spelled by the next man up the depth
  * chart once that backup is close enough in overall. When nobody is tired this is
@@ -837,40 +881,57 @@ function fieldGroup(world: World, teamId: string, positions: Position[], n: numb
   return out
 }
 
-/** The 11 offensive players on the field for a scrimmage snap (with the QB override). */
-function onFieldOffense(world: World, offId: string, qbOverride?: Record<string, string>): Player[] {
-  const list: Array<Player | undefined> = [
-    topGroup(world, offId, ['QB'], 1, qbOverride)[0],
-    ...topGroup(world, offId, ['OT', 'OG', 'C'], 5),
-    topGroup(world, offId, ['RB'], 1)[0],
-    ...depthGroup(world, offId, ['WR', 'TE'], 3),
-    topGroup(world, offId, ['FB'], 1)[0],
-  ]
+/**
+ * R15: the offensive players on the field for a scrimmage snap, chosen from the
+ * concept's personnel grouping (QB override + injuries respected). The back who
+ * actually gets the rep (`reppedId`) replaces the nominal starter in a one-back
+ * set, so a backup back is charged for his own snaps instead of the starter.
+ */
+function offenseOnField(world: World, offId: string, concept: Concept, qbOverride?: Record<string, string>, reppedId?: string, fat?: Record<string, number>): Player[] {
+  const c = personnelCounts(concept.personnel)
+  const list: Array<Player | undefined> = [topGroup(world, offId, ['QB'], 1, qbOverride)[0], ...topGroup(world, offId, ['OT', 'OG', 'C'], 5)]
+  if (c.rb >= 2) {
+    list.push(...fieldGroup(world, offId, ['RB'], c.rb, fat))
+  } else if (c.rb === 1) {
+    const pool = topGroup(world, offId, ['RB'], 2)
+    const repped = reppedId ? pool.find((p) => p.id === reppedId) : undefined
+    const man = repped ?? (fat ? fieldGroup(world, offId, ['RB'], 1, fat)[0] : pool[0])
+    if (man) list.push(man)
+  }
+  if (c.fb) list.push(topGroup(world, offId, ['FB'], 1)[0])
+  if (c.te) list.push(...fieldGroup(world, offId, ['TE'], c.te, fat))
+  if (c.wr) list.push(...fieldGroup(world, offId, ['WR'], c.wr, fat))
   return list.filter((p): p is Player => !!p)
 }
 
-/** The 11 defensive players on the field for a scrimmage snap (with DL rotation). */
-function onFieldDefense(world: World, defId: string, fat?: Record<string, number>): Player[] {
+/** R15: the defensive players on the field, from the package that matches the offence. */
+function defenseOnField(world: World, defId: string, personnel: Personnel | undefined, fat?: Record<string, number>): Player[] {
+  const pkg = defensePackage(personnel)
   return [
-    ...fieldGroup(world, defId, ['DE', 'DT'], 4, fat),
-    ...topGroup(world, defId, ['LB'], 3),
-    ...topGroup(world, defId, ['CB'], 2),
-    ...topGroup(world, defId, ['S'], 2),
+    ...packageGroup(world, defId, ['DE', 'DT'], pkg, fat),
+    ...topGroup(world, defId, ['LB'], pkg.lb),
+    ...topGroup(world, defId, ['CB'], pkg.cb),
+    ...topGroup(world, defId, ['S'], pkg.s),
   ]
 }
 
 /** Charge one snap of fatigue to a player, at most once per play. */
-function chargeSnap(s: GameState, p: Player | undefined, mult: number, seen: Set<string>) {
-  if (!p || seen.has(p.id)) return
-  seen.add(p.id)
+function chargeSnap(s: GameState, id: string | undefined, p: Player | undefined, mult: number, seen: Set<string>) {
+  if (!p || !id || seen.has(id)) return
+  seen.add(id)
   const sta = mkAttrs(p).STA ?? 75
   const rate = clamp(1 + (75 - sta) / 100, 0.6, 1.8)
-  s.snaps[p.id] = (s.snaps[p.id] ?? 0) + 1
-  s.fat[p.id] = clamp((s.fat[p.id] ?? 0) + R15.snap * rate * mult, 0, 1.2)
+  s.snaps[id] = (s.snaps[id] ?? 0) + 1
+  s.fat[id] = clamp((s.fat[id] ?? 0) + R15.snap * rate * mult, 0, 1.2)
 }
 
-/** Charge one scrimmage snap to both on-field units (and anyone who touched the ball). */
-function chargeSnaps(world: World, s: GameState, out: PlayOutcome) {
+/**
+ * R15: charge one scrimmage snap to exactly the players the play resolution put
+ * on the field. The resolver returns the participants it actually used (personnel
+ * group + resolved carrier/receiver/coverage defenders), so a backup back or a
+ * rotational lineman is charged for his own rep, never the man he replaced.
+ */
+function chargeSnaps(s: GameState, out: PlayOutcome) {
   const offSide = (s.snapSide[s.offId] ??= { off: 0, def: 0 })
   const defSide = (s.snapSide[s.defId] ??= { off: 0, def: 0 })
   offSide.off += 1
@@ -878,11 +939,8 @@ function chargeSnaps(world: World, s: GameState, out: PlayOutcome) {
   const defMult = (s.twoMinMode === 'hurry' ? R15.hurry : 1) * (s.driveSnaps >= 8 ? R15.longDrive : 1)
   s.driveSnaps += 1
   const seen = new Set<string>()
-  for (const p of onFieldOffense(world, s.offId, s.qbOverride)) chargeSnap(s, p, 1, seen)
-  for (const p of onFieldDefense(world, s.defId, s.fat)) chargeSnap(s, p, defMult, seen)
-  // Skill players and defenders outside the base group still took the rep.
-  const extras = [out.carrierId, out.targetId, out.qbId, out.sackId, out.pressureId, out.intId, out.coverId, ...(out.tackleIds ?? [])]
-  for (const id of extras) chargeSnap(s, id ? s.pIndex.get(id) : undefined, 1, seen)
+  for (const id of out.onFieldOff ?? []) chargeSnap(s, id, s.pIndex.get(id), 1, seen)
+  for (const id of out.onFieldDef ?? []) chargeSnap(s, id, s.pIndex.get(id), defMult, seen)
 }
 
 /** Shed a fraction of every tracked player's in-game fatigue (between drives / halftime). */
@@ -931,6 +989,8 @@ export interface Concept {
   yac: number // yards-after-catch appetite 0-1
   /** L11.5 Q1: one-line plain-English description for the moment card. */
   description: string
+  /** R15: offensive personnel grouping (11/12/21/21/22/GL); defaults to 11. */
+  personnel?: Personnel
 }
 
 interface OffenseStyle {
@@ -1053,6 +1113,15 @@ interface PlayOutcome {
   // ── R17: kicking realism ───────────────────────────────────────────────────
   /** R17: a blocked field goal, extra point or punt. */
   blockedKick?: boolean
+  // ── R15/R16: reception metadata and on-field participants ──────────────────
+  /** R16: the receiver caught the ball (a true reception, including a catch that
+   *  later came loose). Absent on an interception, sack or incompletion, so a
+   *  deflected/muffed interception is never confused with a completion. */
+  reception?: boolean
+  /** R15: the scrimmage players actually on the field for this snap (offence ids). */
+  onFieldOff?: string[]
+  /** R15: the scrimmage defenders actually on the field for this snap (ids). */
+  onFieldDef?: string[]
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -1210,7 +1279,7 @@ function pickConceptOfClass(rng: Rng, style: OffenseStyle, cls: OffClass): Conce
 
 /** G9: the user's call cards — the run, short pass and deep pass in the book. */
 function callCards(): Concept[] {
-  return PLAYBOOK.map((p) => ({ name: p.name, type: p.type, depth: p.depth, yac: p.yac, description: p.description }))
+  return PLAYBOOK.map((p) => ({ name: p.name, type: p.type, depth: p.depth, yac: p.yac, description: p.description, personnel: p.personnel }))
 }
 
 function downDistance(down: number, distance: number, yard: number): string {
@@ -1482,17 +1551,29 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const offMove = userOff ? env?.matchups?.off : undefined
   const defMove = userDef ? env?.matchups?.def : undefined
   const usage = env?.usage
-  const qb = topGroup(world, offId, ['QB'], 1, env?.qbOverride)[0]
+  // R15: the actual personnel on the field, from the concept's offensive grouping
+  // and the defensive package that answers it. The resolver reuses these same
+  // selected players for its ratings and for the snap/fatigue charge.
+  const offUnits = offenseOnField(world, offId, concept, env?.qbOverride, undefined, env?.fat)
+  const qb = offUnits.find((p) => p.pos === 'QB')
+  const ol = offUnits.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
+  const backs = offUnits.filter((p) => p.pos === 'RB')
+  const rb = backs[0]
+  const fb = offUnits.find((p) => p.pos === 'FB')
   // G11 doubleRusher: chipping the best rusher also keeps a back in to block,
   // so the target pool drops to the top three receivers.
-  const wrs = topGroup(world, offId, ['WR', 'TE'], offMove === 'doubleRusher' ? 3 : 4)
-  const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
-  const rb = topGroup(world, offId, ['RB'], 1)[0]
-  const fb = topGroup(world, offId, ['FB'], 1)[0]
-  const dl = fieldGroup(world, defId, ['DE', 'DT'], 4, env?.fat)
-  const lbs = topGroup(world, defId, ['LB'], 3)
-  const cbs = topGroup(world, defId, ['CB'], 3)
-  const saf = topGroup(world, defId, ['S'], 2)
+  const passCatchers = offUnits.filter((p) => p.pos === 'WR' || p.pos === 'TE')
+  const wrs = passCatchers.slice(0, offMove === 'doubleRusher' ? 3 : 4)
+  const defUnits = defenseOnField(world, defId, concept.personnel, env?.fat)
+  const dl = defUnits.filter((p) => p.pos === 'DE' || p.pos === 'DT')
+  const lbs = defUnits.filter((p) => p.pos === 'LB')
+  const cbs = defUnits.filter((p) => p.pos === 'CB')
+  const saf = defUnits.filter((p) => p.pos === 'S')
+  // R15: the exact participant id lists the snap/fatigue charge uses. A back who
+  // actually took the rep replaces the nominal starter in a one-back grouping.
+  const onFieldDefIds = defUnits.map((p) => p.id)
+  const onFieldOffIds = (reppedId?: string) =>
+    offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat).map((p) => p.id)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
   // R15: the offence's and defence's average in-game fatigue. Effects use the
@@ -1636,6 +1717,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
       qbId: qb?.id, sackId, coverId,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
+      onFieldOff: onFieldOffIds(), onFieldDef: onFieldDefIds,
     }
   }
 
@@ -1761,6 +1843,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
+      onFieldOff: onFieldOffIds(target?.pos === 'RB' ? target.id : undefined), onFieldDef: onFieldDefIds,
     }
   }
   if (rng() < compProb) {
@@ -1845,9 +1928,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}),
       timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopper ? [stopper] : undefined,
       missedTackleIds, forcedMissedIds,
+      reception: true,
+      onFieldOff: onFieldOffIds(target?.pos === 'RB' ? target.id : undefined), onFieldDef: onFieldDefIds,
     }
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, onFieldOff: onFieldOffIds(target?.pos === 'RB' ? target.id : undefined), onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -1864,16 +1949,23 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const userDef = !!userTeamId && userTeamId === defId
   const defMove = userDef ? env?.matchups?.def : undefined
   const usage = env?.usage
+  // R15: real personnel. The rush pool keeps two backs (the carry split), but the
+  // man charged for the snap is the one who actually took the rep.
+  const offUnits = offenseOnField(world, offId, concept, env?.qbOverride, undefined, env?.fat)
   const rb = topGroup(world, offId, ['RB'], 2)
   void dcEff
-  const qb = topGroup(world, offId, ['QB'], 1)[0]
-  const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
-  const te = topGroup(world, offId, ['TE'], 1)[0]
-  const fb = topGroup(world, offId, ['FB'], 1)[0]
-  const dl = fieldGroup(world, defId, ['DE', 'DT'], 4, env?.fat)
-  const lbs = topGroup(world, defId, ['LB'], 3)
-  const saf = topGroup(world, defId, ['S'], 2)
-  const cbs = topGroup(world, defId, ['CB'], 3)
+  const qb = offUnits.find((p) => p.pos === 'QB')
+  const ol = offUnits.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
+  const te = offUnits.find((p) => p.pos === 'TE')
+  const fb = offUnits.find((p) => p.pos === 'FB')
+  const defUnits = defenseOnField(world, defId, concept.personnel, env?.fat)
+  const dl = defUnits.filter((p) => p.pos === 'DE' || p.pos === 'DT')
+  const lbs = defUnits.filter((p) => p.pos === 'LB')
+  const saf = defUnits.filter((p) => p.pos === 'S')
+  const cbs = defUnits.filter((p) => p.pos === 'CB')
+  const onFieldDefIds = defUnits.map((p) => p.id)
+  const onFieldOffIds = (reppedId?: string) =>
+    offenseOnField(world, offId, concept, env?.qbOverride, reppedId, env?.fat).map((p) => p.id)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
   // R15: offence-vs-defence average in-game fatigue (difference only).
@@ -2030,6 +2122,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     goalLineFumble: fumble && yard >= R16.goalLineYard ? true : undefined,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
     defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : undefined,
+    onFieldOff: onFieldOffIds(carrier?.pos === 'RB' ? carrier.id : undefined), onFieldDef: onFieldDefIds,
   }
 }
 
@@ -3285,8 +3378,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const out = concept.type === 'pass'
     ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
     : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
-  // R15: charge the snap (and its stamina cost) to the units on the field.
-  chargeSnaps(world, s, out)
+  // R15: charge the snap (and its stamina cost) to the players actually on the field.
+  chargeSnaps(s, out)
 
   // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
