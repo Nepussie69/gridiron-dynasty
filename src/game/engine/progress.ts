@@ -9,6 +9,7 @@ import { unscaleOvr } from './ovrScale'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
+import { applyDevFocus, focusPointsFor } from './devPlan'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
 import type { CareerDatabase } from './statsDb'
 
@@ -116,6 +117,16 @@ export function developPlayers(world: World, user?: { teamId: string; growth: nu
       p.ovr = clamp(p.ovr - (rng() < rate ? decline : 0), 40, 99)
     }
     if (p.age <= 26) p.lastGrowth = { season: world.season, from: ovrBefore, to: p.ovr, experience }
+
+    // L15 development plans (FUTURES row 13): the user's young players convert
+    // playing time into focused rating gains. The number of points rides the same
+    // experience score the OVR growth uses — a bench player earns none — and a
+    // stronger development program (the position coaches) pays off more. Applied
+    // only to the user's club and only when a focus is set, so AI development and
+    // calibration are untouched. Deterministic: no `rng()` draw is added here.
+    if (user && p.teamId === user.teamId && p.age <= 26 && p.devFocus) {
+      applyDevFocus(p, focusPointsFor(experience, dev))
+    }
 
     // Bust risk: a player who never got the motor can stall out. Generated
     // players only — we never invent off-field failure for real names.

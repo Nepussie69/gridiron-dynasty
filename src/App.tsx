@@ -11,6 +11,7 @@ import { History } from './screens/History'
 import { Dashboard } from './screens/Dashboard'
 import { Ledger } from './screens/Ledger'
 import { Roster } from './screens/Roster'
+import { Development } from './screens/Development'
 import { DepthChart } from './screens/DepthChart'
 import { GamePlanScreen } from './screens/GamePlanScreen'
 import { Staff } from './screens/Staff'
@@ -61,6 +62,7 @@ export default function App() {
         {screen === 'dashboard' && <Dashboard />}
         {screen === 'ledger' && <Ledger />}
         {screen === 'roster' && <Roster />}
+        {screen === 'development' && <Development />}
         {screen === 'depth' && <DepthChart />}
         {screen === 'gameplan' && <GamePlanScreen />}
         {screen === 'staff' && <Staff />}

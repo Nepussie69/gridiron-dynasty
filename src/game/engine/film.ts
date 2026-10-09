@@ -12,7 +12,7 @@
 import type { World } from './generate'
 import type { GameSim, Play } from './playsim'
 import { isSack } from './playsim'
-import { attributesFor } from '../data/ratings'
+import { playerAttrs } from '../data/ratings'
 import { depthGroup } from './depth'
 import {
   fourthDownEV,
@@ -68,7 +68,7 @@ function clockSec(clock: string): number {
 export function kickPowerFor(world: World, teamId: string): number {
   const k = depthGroup(world, teamId, ['K'], 1)[0]
   if (!k) return 78
-  const attrs = { ...attributesFor(k.id, k.pos, k.ovr), ...(k.attrs ?? {}) }
+  const attrs = playerAttrs(k)
   return (attrs.KPW ?? 78) * 0.5 + (attrs.KAC ?? 78) * 0.5
 }
 

@@ -13,7 +13,7 @@
 
 import type { GameStatLine, Player, PlaybookState } from '../types'
 import type { StaffMember } from '../types'
-import { attributesFor } from '../data/ratings'
+import { playerAttrs } from '../data/ratings'
 import { STARTERS } from './depth'
 import { hash32 } from './rng'
 import { coverageGrade, passerRating } from './stats'
@@ -242,7 +242,7 @@ export function gainGameReps(
   if (!p.playbook) return undefined
   if (!played) return p.playbook
   const fit = schemeFit(p, p.playbook.scheme, sideOf(p))
-  const attrs = { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+  const attrs = playerAttrs(p)
   const awr = attrs.AWR ?? 70
   const gain =
     REP_GAIN_PER_GAME * ageFactor(p.age) * devFactor(p.dev) * snapShare *

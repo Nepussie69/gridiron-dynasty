@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Player, Position, MatchupSet, UsageSet, PersonnelSet } from '../types'
-import { attributesFor } from '../data/ratings'
+import { playerAttrs } from '../data/ratings'
 import { unscaleOvr } from './ovrScale'
 import { POS_MEAN } from './ratingMeans'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
@@ -316,7 +316,8 @@ function emptyStats(): TeamGameStats {
 
 // ── Attribute access (merge exact ratings with position fallbacks) ────────────
 function mkAttrs(p: Player): Record<string, number> {
-  return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
+  // L15: `playerAttrs` also folds in any development-plan gains (empty by default).
+  return playerAttrs(p)
 }
 
 // ── L12.13 M3: mastery relative to the league mean for the position group ────

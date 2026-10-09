@@ -252,6 +252,18 @@ export interface Player {
    * profile and the season-end development report (D3).
    */
   lastGrowth?: { season: number; from: number; to: number; experience: number }
+  /**
+   * L15 (FUTURES row 13): the development focus the user set for this young
+   * player ("speed", "hands", "coverage"…). Optional — a legacy save has none,
+   * and an AI-club player never has one.
+   */
+  devFocus?: import('./engine/devPlan').DevFocusId
+  /**
+   * L15: earned development-plan rating gains, keyed by rating (SPD, CTH…). These
+   * are added on top of the OVR-derived ratings by `playerAttrs`/the sim, and are
+   * empty for every player the user has not given a focus.
+   */
+  devRatings?: Record<string, number>
 }
 
 /**
