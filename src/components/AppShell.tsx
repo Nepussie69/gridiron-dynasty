@@ -81,13 +81,17 @@ export function Sidebar() {
   const screen = useGame((s) => s.screen)
   const setScreen = useGame((s) => s.setScreen)
   const career = useGame((s) => s.career)
-  const resetCareer = useGame((s) => s.resetCareer)
+  const openSaves = useGame((s) => s.openSaves)
+  const activeSlot = useGame((s) => s.activeSlot)
+  const slots = useGame((s) => s.slots)
   const exportSaveText = useGame((s) => s.exportSaveText)
   const importSaveText = useGame((s) => s.importSaveText)
   const readNews = useGame((s) => s.readNews)
   const unread = useWorld().news.filter((n) => !readNews[n.id]).length
 
   const tier = career?.tier ?? 'NFL'
+  const activeSlotMeta = activeSlot !== null ? slots.find((s) => s.slot === activeSlot)?.meta ?? null : null
+  const activeSlotLabel = activeSlot === null ? null : activeSlotMeta?.label ?? `Slot ${activeSlot}`
   const visible = SCREENS.filter((s) => {
     if (!s.tiers.includes(tier)) return false
     // The ladder is the tutorial: hide screens that are locked at this rung.
@@ -251,13 +255,18 @@ export function Sidebar() {
             <div className="mt-0.5 font-cond text-[11px] text-muted">
               {career?.path === 'coach' ? 'Coaching' : 'Personnel'} · Season {career?.season ?? 2026}
             </div>
+            {activeSlotLabel && (
+              <div className="mt-1 truncate font-cond text-[11px] text-faint">
+                Slot {activeSlot} · {activeSlotLabel}
+              </div>
+            )}
             <button
               onClick={() => {
-                if (confirm('Start a new career? Your current save will be erased.')) resetCareer()
+                void openSaves()
               }}
-              className="motion mt-2 w-full rounded-md border border-line bg-surface px-2 py-1 font-cond text-[10px] font-700 uppercase tracking-wide text-muted hover:text-loss"
+              className="motion mt-2 w-full rounded-md border border-line bg-surface px-2 py-1 font-cond text-[10px] font-700 uppercase tracking-wide text-muted hover:text-ink-2"
             >
-              New Career
+              Saves &amp; Slots
             </button>
             <div className="mt-1.5 grid grid-cols-2 gap-1.5">
               <button
