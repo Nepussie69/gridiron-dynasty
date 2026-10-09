@@ -154,6 +154,18 @@ import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummar
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
 import { MAX_SHADOW, canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../game/engine/negotiation'
+import {
+  addGuaranteedYear,
+  fifthYearOptionValue,
+  flagHoldouts,
+  holdoutDemand,
+  optionEligible,
+  openHoldouts,
+  runAITags,
+  tagEligible,
+  tagSalary,
+  tagUsed,
+} from '../game/engine/contractLife'
 import { cultureDiscountFor } from '../game/engine/culture'
 import { canAskGm, gmAskCovers, gmExtendDecision, gmOffer, type GmAskResult } from '../game/engine/gmAsk'
 import {
@@ -567,6 +579,12 @@ interface GameStore {
   extendPlayer: (id: string) => void
   /** G2: negotiate an extension with a player's agent (negotiate rungs). */
   offerExtension: (playerId: string, offer: ExtensionOffer) => void
+  /** FUTURES 12: apply a franchise or transition tag (one of each per season). */
+  tagPlayer: (playerId: string, kind: 'franchise' | 'transition') => void
+  /** FUTURES 12: exercise or decline a Round-1 rookie's fifth-year option. */
+  decideFifthYearOption: (playerId: string, exercise: boolean) => void
+  /** FUTURES 12: resolve an open holdout — pay, tag, trade or let him report. */
+  resolveHoldout: (playerId: string, choice: 'pay' | 'tag' | 'trade' | 'report') => void
   /** L12.14 C4: a coach asks the AI GM to extend a player (once per season). */
   askGmToExtend: (playerId: string) => GmAskResult | null
   /** L12.14 C6: ask the AI GM to restructure 1–3 big deals to clear cap for a named target. */
@@ -1401,6 +1419,15 @@ export const useGame = create<GameStore>((set, get) => ({
     } else if (stage === 'draft') {
       // Leaving April with the class unfinished completes it, then camp opens.
       if (!done.draft) completeDraft(world, career)
+      // FUTURES 12: camp is the fifth-year option deadline.
+      const declined = finalizeFifthYearOptions(world, career)
+      if (declined > 0) {
+        pushCareerNews(world, career, {
+          category: 'Roster',
+          headline: declined === 1 ? 'Fifth-year option deadline passed' : `${declined} fifth-year options expired`,
+          body: 'Camp opened with the decision unmade, so the option lapsed. Those players will reach free agency after this season.',
+        })
+      }
       world.offseasonStage = 'camp'
       if (!done.trades) {
         runAITrades(world)
@@ -1434,6 +1461,9 @@ export const useGame = create<GameStore>((set, get) => ({
     // L12.6 C1: if the calendar was skipped (fast path, legacy save), run the
     // remaining stages — AI free agency, draft + UDFAs, AI trades — in order.
     completeOffseasonStages(world, career)
+    // FUTURES 12: any undecided fifth-year option lapses when the new season
+    // begins (the fast path never saw the camp deadline).
+    finalizeFifthYearOptions(world, career)
     world.season += 1
     world.week = 1
     world.phase = 'regular'
@@ -1485,6 +1515,15 @@ export const useGame = create<GameStore>((set, get) => ({
       const still = new Set(roomPlayers(world, seasonCareer).map((p) => p.id))
       const room: NonNullable<CareerState['room']> = seasonCareer.room ?? { focus: [], plan: 'concentrate', reps: 0 }
       seasonCareer.room = { ...room, reps: 0, focus: room.focus.filter((id) => still.has(id)) }
+    }
+    // FUTURES 12: an unresolved holdout reports to camp unhappy. Sim-neutral —
+    // morale only feeds extension talks, never the game engine.
+    for (const p of world.roster[seasonCareer.teamId] ?? []) {
+      const h = p.holdout
+      if (h && h.season < world.season && h.status === 'open') {
+        p.holdout = { ...h, status: 'resolved', resolution: 'report' }
+        p.morale = clamp(p.morale - 10, 1, 100)
+      }
     }
     set({
       career: seasonCareer,
@@ -2278,6 +2317,164 @@ export const useGame = create<GameStore>((set, get) => ({
     set({ career: { ...career, talks } })
     bump(set, get)
     get().showToast(`${p.name} extended: ${offer.years} yrs, ${money(offer.aav)}/yr.`)
+    get().save()
+  },
+
+  // FUTURES 12: apply a franchise or transition tag. One of each per season. The
+  // tag adds a fully-guaranteed year at the position's top-5 rate, so the player
+  // stays off the market without a long-term commitment.
+  tagPlayer: (playerId, kind) => {
+    const career = get().career
+    if (!career) return
+    if (world.phase !== 'offseason') {
+      get().showToast('Tags are applied in the offseason.')
+      return
+    }
+    if (!canSignFreeAgents(career)) {
+      get().showToast('The GM holds the pen on tags and options.')
+      return
+    }
+    const roster = world.roster[career.teamId] ?? []
+    const p = roster.find((x) => x.id === playerId)
+    if (!p) return
+    if (!tagEligible(p)) {
+      get().showToast(`${p.name} is not tag-eligible (a star in his final year, off a rookie deal).`)
+      return
+    }
+    if (tagUsed(roster, 'franchise', world.season) || tagUsed(roster, 'transition', world.season)) {
+      get().showToast('You have already used your tag this season.')
+      return
+    }
+    const value = tagSalary(world.players, p, kind)
+    p.contract = addGuaranteedYear(p.contract, value, world.season)
+    p.tag = { season: world.season, kind }
+    if (p.holdout?.season === world.season && p.holdout.status === 'open') {
+      p.holdout = { ...p.holdout, status: 'resolved', resolution: 'tagged' }
+    }
+    pushLedger(career, {
+      kind: 'contract',
+      playerId: p.id,
+      name: p.name,
+      pos: p.pos,
+      college: '—',
+      aav: value,
+      ovrAtSign: p.ovr,
+      note: `${kind === 'franchise' ? 'Franchise' : 'Transition'} tag: ${p.name} — ${money(value)} for ${world.season + 1}`,
+    })
+    pushCareerNews(world, career, {
+      category: 'Roster',
+      headline: `${p.name} tagged (${kind})`,
+      body: `The ${world.byId[career.teamId].name} tagged ${p.name} at ${money(value)} for ${world.season + 1}. He stays off the market.`,
+    })
+    bump(set, get)
+    get().showToast(`${p.name} tagged: ${money(value)} for ${world.season + 1}.`)
+    get().save()
+  },
+
+  // FUTURES 12: a Round-1 rookie's fifth-year option. Exercising adds the option
+  // year at the transition-tag rate; declining lets him reach free agency.
+  decideFifthYearOption: (playerId, exercise) => {
+    const career = get().career
+    if (!career) return
+    if (world.phase !== 'offseason') {
+      get().showToast('Rookie options are decided in the offseason.')
+      return
+    }
+    if (!canSignFreeAgents(career)) {
+      get().showToast('The GM holds the pen on tags and options.')
+      return
+    }
+    const roster = world.roster[career.teamId] ?? []
+    const p = roster.find((x) => x.id === playerId)
+    if (!p) return
+    if (!optionEligible(p, world.season)) {
+      get().showToast(`${p.name} has no fifth-year option to decide.`)
+      return
+    }
+    const value = fifthYearOptionValue(world.players, p)
+    if (exercise) {
+      p.contract = addGuaranteedYear(p.contract, value, world.season)
+    } else {
+      p.contract = { ...p.contract, fifthYearOption: false }
+    }
+    p.optionDecision = { season: world.season, kind: exercise ? 'exercise' : 'decline', value }
+    pushLedger(career, {
+      kind: 'contract',
+      playerId: p.id,
+      name: p.name,
+      pos: p.pos,
+      college: '—',
+      aav: exercise ? value : 0,
+      ovrAtSign: p.ovr,
+      note: exercise
+        ? `Exercised ${p.name}'s 5th-year option: ${money(value)} for ${world.season + 1}`
+        : `Declined ${p.name}'s 5th-year option — he hits free agency after this season`,
+    })
+    bump(set, get)
+    get().showToast(
+      exercise ? `${p.name}'s 5th-year option exercised: ${money(value)}.` : `${p.name}'s 5th-year option declined.`,
+    )
+    get().save()
+  },
+
+  // FUTURES 12: resolve an open holdout. Pay = extend at his ask; tag = franchise
+  // (falling back to transition); trade = shop him; report = he plays unhappy.
+  resolveHoldout: (playerId, choice) => {
+    const career = get().career
+    if (!career) return
+    if (!canSignFreeAgents(career)) {
+      get().showToast('The GM holds the pen on holdouts.')
+      return
+    }
+    const roster = world.roster[career.teamId] ?? []
+    const p = roster.find((x) => x.id === playerId)
+    const h = p?.holdout
+    if (!p || !h || h.season !== world.season || h.status !== 'open') {
+      get().showToast('He is not holding out.')
+      return
+    }
+    if (choice === 'pay') {
+      const disc = cultureDiscountFor(world, statDb, career.teamId, p)
+      const ask = marketAsk(p, world.season, career.skills.negotiation, disc.pct)
+      p.contract = buildExtension(p, world.season, { years: 3, aav: ask, guarantee: 'mid' })
+      p.holdout = { ...h, status: 'resolved', resolution: 'paid' }
+      pushLedger(career, {
+        kind: 'contract',
+        playerId: p.id,
+        name: p.name,
+        pos: p.pos,
+        college: '—',
+        aav: ask,
+        ovrAtSign: p.ovr,
+        note: `Paid ${p.name}: 3 yrs, ${money(ask)}/yr to end his holdout`,
+      })
+      get().showToast(`${p.name} paid: 3 yrs, ${money(ask)}/yr. Holdout over.`)
+    } else if (choice === 'tag') {
+      get().tagPlayer(playerId, 'franchise')
+      if (p.tag?.season !== world.season) get().tagPlayer(playerId, 'transition')
+      if (p.tag?.season === world.season) {
+        p.holdout = { ...h, status: 'resolved', resolution: 'tagged' }
+        bump(set, get)
+        get().save()
+      }
+      return
+    } else if (choice === 'trade') {
+      const current = (career.tradeBlock ?? []).filter((id) => roster.some((x) => x.id === id))
+      if (!current.includes(playerId)) {
+        if (current.length >= 5) {
+          get().showToast('Your trade block is full (5 players).')
+          return
+        }
+        set({ career: { ...career, tradeBlock: [...current, playerId] } })
+      }
+      p.holdout = { ...h, status: 'resolved', resolution: 'trade' }
+      get().showToast(`${p.name} is on the trade block. Find a deal before camp.`)
+    } else {
+      p.holdout = { ...h, status: 'resolved', resolution: 'report' }
+      p.morale = clamp(p.morale - 10, 1, 100)
+      get().showToast(`${p.name} reports to camp unhappy. Morale −10.`)
+    }
+    bump(set, get)
     get().save()
   },
 
@@ -3388,6 +3585,25 @@ function completeDraft(world: World, career: CareerState | null) {
 }
 
 /**
+ * FUTURES 12: the fifth-year option deadline is the opening of camp. Any Round-1
+ * rookie still undecided when camp opens is declined — he plays out the final
+ * year and reaches free agency. User club only; the AI never carries options.
+ * Returns the number auto-declined.
+ */
+function finalizeFifthYearOptions(world: World, career: CareerState | null): number {
+  if (!career || !canSignFreeAgents(career)) return 0
+  let declined = 0
+  for (const p of world.roster[career.teamId] ?? []) {
+    if (!p.contract.rookie || !p.contract.fifthYearOption) continue
+    if (p.contract.years !== 1 || p.optionDecision?.season === world.season) continue
+    p.contract = { ...p.contract, fifthYearOption: false }
+    p.optionDecision = { season: world.season, kind: 'decline', value: fifthYearOptionValue(world.players, p) }
+    declined++
+  }
+  return declined
+}
+
+/**
  * L12.6 C1: run every offseason stage that hasn't happened yet, in calendar
  * order and exactly once. `startNextSeason` calls this so a fast path from any
  * stage (probe, import, stall) still produces a legal new season.
@@ -3489,8 +3705,28 @@ function runEndOfRegularSeason(
   const ownsContracts = career
     ? capabilities(career).can.has('negotiate') || capabilities(career).can.has('manageCap')
     : false
+  // FUTURES 12: AI clubs keep their best expiring star with a franchise or
+  // transition tag before the re-signing pass. Contract-only and sim-neutral:
+  // the tagged player would have been re-signed or lost anyway, and the tag
+  // value is a market number, so no game result changes.
+  runAITags(world, career?.teamId)
   runAIResign(world, ownsContracts && career ? career.teamId : undefined, statDb)
   tickAllContracts(world)
+
+  // FUTURES 12: a star entering the final year of a below-market deal may hold
+  // out. User-only (the AI never holds out), deterministic, and sim-neutral: it
+  // only files a morale/contract decision to resolve in the offseason.
+  if (career && canSignFreeAgents(career)) {
+    const filed = flagHoldouts(world, career.teamId, world.season)
+    if (filed > 0) {
+      const names = openHoldouts(world.roster[career.teamId] ?? [], world.season).map((p) => p.name)
+      pushCareerNews(world, career, {
+        category: 'Roster',
+        headline: names.length === 1 ? `${names[0]} is holding out` : `${names.length} players are holding out`,
+        body: `${names.join(', ')} want new deals before camp. Pay, tag or trade them on the Salary Cap screen.`,
+      })
+    }
+  }
 
   // Coaching continuity: a settled staff ages up; a churned side resets to year 1.
   // Tenure lives entirely in world.staffTenure, keyed `${teamId}:off|def`.
@@ -3505,9 +3741,12 @@ function runEndOfRegularSeason(
     }
   }
 
-  // Playbook mastery grows between seasons (training, OTAs, camp).
+  // Playbook mastery grows between seasons (training, OTAs, camp). FUTURES 12: a
+  // player holding out skips camp, so he earns no between-season mastery gain
+  // until the holdout is settled.
   for (const teamId of Object.keys(world.roster)) {
     for (const p of world.roster[teamId]) {
+      if (p.holdout?.status === 'open') continue
       const next = gainSeasonTraining(p)
       if (next) p.playbook = next
     }
@@ -6187,3 +6426,100 @@ export function ratingSpread(games = 300, teamId?: string) {
   })
   return { team, games, opponents: opponents.length, baselineMargin: +(baseSum / games).toFixed(2), rows }
 }
+
+/**
+ * FUTURES 12 probe: exercise holdouts, both tags and a fifth-year option on a
+ * user club, and confirm the AI carries none of it. Returns a small JSON summary
+ * for manual verification in the browser (`__contractLifeProbe()`).
+ */
+export function contractLifeProbe(seed = 33333) {
+  const get = () => useGame.getState()
+  get().startCareer({ name: 'Contract Life', path: 'personnel', archetype: 'cap', teamId: 'CLE', seed, startLevel: 7 })
+  const career = get().career!
+  const teamId = career.teamId
+  const roster = () => world.roster[teamId] ?? []
+  const out: Record<string, unknown> = { seed, teamId, season: world.season }
+
+  // Actions are legal only in the offseason; the probe forces the Feb window.
+  world.phase = 'offseason'
+  world.offseasonStage = 'resign'
+
+  // 1. A holdout, paid off.
+  const star = [...roster()].sort((a, b) => b.ovr - a.ovr).find((p) => !p.contract.rookie) ?? roster()[0]
+  if (star) {
+    star.contract = { ...star.contract, years: 1, base: [900_000], annual: 900_000, signedThrough: world.season }
+    star.holdout = { season: world.season, demand: holdoutDemand(star, world.season), status: 'open' }
+    const before = star.contract.years
+    get().resolveHoldout(star.id, 'pay')
+    out.holdoutPay = {
+      name: star.name,
+      before,
+      after: star.contract.years,
+      status: star.holdout?.status,
+      resolution: star.holdout?.resolution,
+    }
+  }
+
+  // 2. A franchise tag, then a second franchise tag refused.
+  const star2 = [...roster()].sort((a, b) => b.ovr - a.ovr).find((p) => p.id !== star?.id && !p.contract.rookie)
+  if (star2) {
+    star2.contract = { ...star2.contract, years: 1, base: [1_000_000], annual: 1_000_000, signedThrough: world.season }
+    const before = star2.contract.years
+    get().tagPlayer(star2.id, 'franchise')
+    const star3 = [...roster()]
+      .sort((a, b) => b.ovr - a.ovr)
+      .find((p) => p.id !== star?.id && p.id !== star2.id && !p.contract.rookie)
+    let secondBlocked = true
+    if (star3) {
+      star3.contract = { ...star3.contract, years: 1, base: [1_000_000], annual: 1_000_000, signedThrough: world.season }
+      get().tagPlayer(star3.id, 'franchise')
+      secondBlocked = star3.tag?.season !== world.season
+    }
+    out.tag = {
+      name: star2.name,
+      before,
+      after: star2.contract.years,
+      tagged: star2.tag?.season === world.season,
+      secondBlocked,
+    }
+  }
+
+  // 3. A fifth-year option exercised.
+  const rookie = roster().find((p) => p.contract.rookie && p.contract.fifthYearOption) ?? roster().find((p) => p.contract.rookie)
+  if (rookie) {
+    rookie.contract = {
+      ...rookie.contract,
+      rookie: true,
+      fifthYearOption: true,
+      years: 1,
+      base: [2_000_000],
+      annual: 2_000_000,
+      signedThrough: world.season,
+    }
+    delete rookie.optionDecision
+    const before = rookie.contract.years
+    const value = fifthYearOptionValue(world.players, rookie)
+    get().decideFifthYearOption(rookie.id, true)
+    const after = world.players.find((p) => p.id === rookie.id)
+    out.option = {
+      name: rookie.name,
+      before,
+      after: rookie.contract.years,
+      value,
+      decision: after?.optionDecision?.kind,
+      fifthYearOption: rookie.contract.fifthYearOption,
+    }
+  }
+
+  // 4. AI clubs tag their own expiring stars (the user is skipped); they never
+  // hold out and never carry a fifth-year option.
+  runAITags(world, teamId)
+  const ai = world.players.filter((p) => p.teamId && p.teamId !== teamId)
+  out.ai = {
+    tagged: ai.filter((p) => p.tag?.season === world.season).length,
+    holdouts: ai.filter((p) => p.holdout).length,
+    options: ai.filter((p) => p.optionDecision).length,
+  }
+  return out
+}
+

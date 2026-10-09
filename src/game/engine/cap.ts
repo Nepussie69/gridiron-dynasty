@@ -228,16 +228,29 @@ export function extendContract(c: Contract, rng: Rng, ovr: number, pos: Position
   return recomputeCapHit(next)
 }
 
-/** Franchise/transition tag value = average of the top-5 cap hits at the position. */
-export function tagValue(players: Player[], pos: Position, kind: 'franchise' | 'transition' = 'franchise') {
+/**
+ * Franchise/transition tag value, on the NFL formula: the greater of the
+ * average of the top-5 cap hits at the position and 120% of the player's own
+ * prior salary. The transition tag sits slightly below the franchise number at
+ * the same position. `priorSalary` is optional so a position-only lookup (the
+ * fifth-year option) still works.
+ */
+export function tagValue(
+  players: Player[],
+  pos: Position,
+  kind: 'franchise' | 'transition' = 'franchise',
+  priorSalary = 0,
+) {
   const at = players
     .filter((p) => p.pos === pos && p.teamId)
-    .map((p) => p.contract.annual)
+    .map((p) => p.contract.capHit)
     .sort((a, b) => b - a)
     .slice(0, 5)
   const avg = at.reduce((s, v) => s + v, 0) / (at.length || 1)
   const base = avg > 0 ? avg : marketAAV(85, pos, 27)
-  return Math.round(base * (kind === 'franchise' ? 1.2 : 1.05))
+  const rate = kind === 'franchise' ? 1 : 0.95
+  const floor120 = priorSalary > 0 ? priorSalary * 1.2 : 0
+  return Math.round(Math.max(base * rate, floor120))
 }
 
 export interface CapSummary {
