@@ -91,7 +91,7 @@ export function animProbe(world: World, games = 2, seeds?: number[]) {
         const want = play.type === 'kickoff'
           ? clampX(10 + play.endYard)
           : play.returnTD
-            ? 110
+            ? 10 // a punt-return TD scores in the punting club's own end zone
             : clampX(changeSpot(play, sim.plays[i + 1]) ?? 10 + play.startYard + play.yards)
         const path = anim.actors.find((a) => a.key === key)?.path
         const got = path ? posAt(path, 1).x : NaN

@@ -997,10 +997,13 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   // possession's snap (or the goal line on a return score). The catch spot is
   // backed out from the recorded return yardage so the animation's return
   // distance matches the box score.
+  // The punting club drives toward x=110, so a return comes BACK toward x=10:
+  // the catch is deeper than the end spot by the return yardage, and a return
+  // touchdown finishes in the punting club's own end zone.
   const finalX = play.returnTD
-    ? 110
+    ? 10
     : clampX(changeSpot(play, ctx.next) ?? 10 + play.startYard + play.yards)
-  const landX = touchback ? 108 : isReturn ? clampX(finalX - retYds) : finalX
+  const landX = touchback ? 108 : isReturn ? clampX(finalX + retYds) : finalX
   const landY = clampY(MID_Y + (hash(seed + 1) - 0.5) * 14)
   const kpw = attrOf(m.qb.player, 'KPW')
   const flight = clampN(1.1 - (kpw - 70) * 0.004, 0.6, 1.5)
@@ -1009,14 +1012,23 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   // The returner gets to the landing spot (his pace), catches, then returns to
   // the recorded end spot. A fair catch / downed punt stops where it lands; a
   // touchback never catches the ball.
-  m.s0.reset(f.s0.x, f.s0.y)
+  // A returner sets up at the depth the punter can reach: just behind the
+  // landing spot, so he drifts up to field it instead of chasing it backward.
+  if (touchback) m.s0.reset(f.s0.x, f.s0.y)
+  else m.s0.reset(clampX(landX + 4), clampY(landY + (landY > MID_Y ? 3 : -3)))
   if (touchback) {
     m.s0.run([{ x: clampX(los + 32), y: f.s0.y }], { stop: true })
   } else {
     m.s0.run([{ x: landX, y: landY }], { stop: false })
     if (m.s0.t > landT) seek(m.s0, landT)
     else m.s0.hold(landT - m.s0.t)
-    if (isReturn) m.s0.run([{ x: finalX, y: clampY(landY + (hash(seed + 2) - 0.5) * 8) }], { stop: true })
+    if (isReturn) {
+      // Catch, a lateral cut away from the first wave of coverage, then upfield.
+      const cutDir = landY > MID_Y ? -1 : 1
+      const cutY = clampY(landY + cutDir * (4 + hash(seed + 2) * 6))
+      const midX = clampX(landX - Math.max(1.5, retYds * 0.35))
+      m.s0.run([{ x: midX, y: cutY }, { x: finalX, y: clampY(cutY + (hash(seed + 3) - 0.5) * 8) }], { stop: true })
+    }
   }
   const retT = m.s0.t
   const blockers = ['wr0', 'wr1', 'te', 'ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'wr2']
@@ -1076,7 +1088,16 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   m.rb.reset(8, MID_Y)
   m.rb.run([{ x: catchX, y: MID_Y }], { stop: false })
   const catchT = m.rb.t
-  m.rb.run([{ x: touchback ? catchX : endX, y: MID_Y }], { stop: true })
+  if (touchback || retYds <= 0) {
+    m.rb.run([{ x: touchback ? catchX : endX, y: MID_Y }], { stop: true })
+  } else {
+    // Catch, cut to a seam away from the coverage lane, then upfield to the spot.
+    const seed = play.n * 29 + play.startYard
+    const side = hash(seed) < 0.5 ? -1 : 1
+    const seamY = clampY(MID_Y + side * (6 + hash(seed + 1) * 8))
+    const midX = clampX(catchX + Math.max(2, retYds * 0.4))
+    m.rb.run([{ x: midX, y: seamY }, { x: endX, y: clampY(seamY + (hash(seed + 2) - 0.5) * 10) }], { stop: true })
+  }
   OFF_KEYS.filter((k) => k !== 'rb').forEach((k, i) => {
     m[k].reset(30 + (i % 3) * 6, 4 + i * 4.6)
     m[k].run([{ x: 28 + (i % 3) * 4, y: clampY(4 + i * 4.6 + (MID_Y - (4 + i * 4.6)) * 0.3) }], { stop: true })

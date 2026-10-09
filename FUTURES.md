@@ -32,6 +32,6 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 22 | **Owner personalities** | Win-now, patient builder, meddler — different firing lines and mandates | — | ✅ merged |
 | 23 | **Hall of Fame & legacy** (`NEXT_PHASE_L12_16.md`) | Career timeline, records, HOF vote at retirement (yours and your players'); also persists history/awards across reloads | History ✅ | ✅ merged |
 | 24 | **Trick plays** | Flea flicker, reverse, halfback pass, fake spike as calls with surprise value | 1 | ⏳ |
-| 25 | **Ask the GM / owner meetings** | Request budget, a star signing or a staff hire; owner reacts by personality | 22 | GM requests ✅ 52d1df7; owner meetings ⏳ |
+| 25 | **Ask the GM / owner meetings** | Request budget, a star signing or a staff hire; owner reacts by personality | 22 | GM requests ✅ 52d1df7; owner meetings ✅ merged |
 
 NFL statistical retuning is approved and running in `wt-realism`.
