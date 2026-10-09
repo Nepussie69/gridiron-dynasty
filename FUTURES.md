@@ -16,7 +16,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 6 | **Weather & stadiums** | Wind (deep balls, kicks), rain/snow (fumbles, footing), cold, domes; crowd noise → false starts on the road; forecast on Game Plan | — | ⏳ |
 | 7 | **Halftime speech** | Fire up / calm / challenge a star / stay the course → morale and second-half edge, can backfire | — | ⏳ |
 | 8 | **Primetime & rivalry stakes** | TNF/SNF/MNF and rivalry games swing reputation more; a clutch rating for players | — | ⏳ |
-| 9 | **Trade deadline day** (L14) | A live deadline week: contenders buy, rebuilders sell, AI calls you with offers | trade desk ✅ | ⏳ |
+| 9 | **Trade deadline day** (L14) | A live deadline week: contenders buy, rebuilders sell, AI calls you with offers | trade desk ✅ | ✅ merged |
 | 10 | **Draft-day trades** (L14) | Trade up/down while on the clock; AI offers by the value chart; timer per pick | calendar ✅ | ⏳ |
 | 11 | **Free-agency frenzy** (L14) | March bidding window: competing offers, deadlines, players choosing money vs fit/winning/culture | calendar ✅, culture K2 | ⏳ |
 | 12 | **Contract holdouts, franchise/transition tags, 5th-year options** | Stars want new deals; tag, trade or pay; rookie options | — | ⏳ |
