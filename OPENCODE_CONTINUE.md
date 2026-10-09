@@ -8,14 +8,34 @@ _Latest handover 2026-10-09: the user requested transfer back to Claude; read `C
 
 **GitHub Pages (2026-10-09): serves 124bff0 (pushed with the user's ok); 4173 still held at 4377982.** the stable build is also published at https://nepussie69.github.io/gridiron-dynasty/ from the `gh-pages` branch (repo made public by the user). Republish with `scripts/publish-pages.sh [commit]` — **but only after the user says ok: no git push of any kind (main or gh-pages) without the user's explicit ok (2026-10-09).** Pages saves live in that site's browser storage — use Export/Import save to move a career between 4173 and Pages.
 
-_**Live state 2026-10-09 ~20:55 AEDT (Claude Opus 5.5, paused at 89% 5-hour usage; resets ~21:20 AEDT).**_
-- main = `1f0ffed`+ (local, NOT pushed; GitHub main = `c3cd429`, Pages = `124bff0`). Stable 4173 held at `4377982` by the user. **No git push / Pages publish without the user's explicit ok.**
-- Merged to main since the last push (all verified): catch→YAC direction fix, Find by Position (30 players, rare stars, strength-based rebuilding), box-score REC/ALW header, stars7+8 (`b236d21`), realism R2 retune (points ~21 until returns), Run/Pass quick-call buttons (`quickCall.ts`; browser click-through still to do).
-- Running: **realism8** (wt-realism, returns + return/defensive TDs, prompt /private/tmp/gridiron-realism8.txt, wrapper pid 33216) and **ui3b** (wt-ui3b, command palette/density/data viz, pid 26531).
-- Auto-queue `/private/tmp/gridiron-queue.sh` (log /private/tmp/gridiron-queue.log): after realism8 → **realism9** (pressures+hurries, QB sacked, sim coverage stats) → **realism10** (two-high def call) in wt-realism; after ui3b → commits ui3b in its branch (unreviewed) → **ui4** in new wt-ui4 off wt-ui3b.
-- Also running: **fut18** (3-year cap planner, wt-fut18, prompt /private/tmp/gridiron-fut18.txt). Queue2 `/private/tmp/gridiron-queue2.sh`: after ui4 → **fut3** personnel packages (wt-fut3). GitHub/Pages now at `54ae13c` (TD-share fix pushed with the user's ok).
-- Also: **gd1** running (team hover card, matchup ranks, compact play picker); queue3 → **realism11** (two-minute out-of-bounds + timeout button) after realism10.
-- To resume: review each report + verify (build, lint 4, calib 3x500 --eq --smoke, anim probe; for UI a browser check light/dark/phone), merge realism (merge main into wt-realism first), merge ui3b then ui4. Probes: scratchpad yac-probe.mjs (receiver backward after catch), pos-probe.mjs (Find by Position), quick.mjs (quick calls).
+_**HANDOFF FOR CHATGPT / CODEX — 2026-10-09 23:15 AEDT (written by Claude Opus 5.5 at the user's request). Start here.**_
+
+### Where things are
+- **main = `4623563`+** (this handoff commit on top). **GitHub main + Pages (https://nepussie69.github.io/gridiron-dynasty/) = `4623563`** — pushed with the user's ok just before this handoff (check `git log origin/main -1`; if the last publish didn't land, re-run `scripts/publish-pages.sh main` only after the user says ok).
+- **Stable 4173 is HELD at `4377982`** (user: "hold off the stable"). Do not rebuild it unless asked; the user plays on the Pages site.
+- **Never `git push` / publish Pages without the user's explicit ok for that push** (memory `github-push-needs-ok`). When they say "push": build, lint 4, quick `gridiron-calib.mjs 33333 200 --eq`, secret scan, `git push origin main`, `scripts/publish-pages.sh main`, confirm the new `index-*.js` is served.
+- Main verified at 8a2cab0+: 3x500 SIM 22.5 / 21.9 / 22.3 pts, eq 20/20, 4-season smokes 0/0, anim end spots 217/217; later merges re-checked with eq + smokes (all neutral).
+
+### Merged today (all on GitHub now)
+Stars rare (stars6-8), realism R1-R13 (NFL stat retune, returns/defensive TDs, pressures incl. hurries, QB sacked, sim coverage, two-high, two-minute OOB + timeout button, returns tuning, season realism), R14 penalty types (+ Claude fix: side-specific yardage, DPI 1.5 -> 0.76), UI U1-U4 + gd1 (TV field, scorebug, dark mode, command palette, team hover cards, matchup ranks, compact play tray), Run/Pass quick calls, award race, Find by Position + rare stars, catch->YAC direction, returns direction (Claude 4623563), GP double count, TD shares, FUTURES #3 #9 #10 #12 #13 #14 #16 #17 #18 #19 #21 #22 #25.
+
+### Running / queued (DeepSeek, check `pgrep -fl ds-push-`)
+- **realism16** (turnover variety) running in `wt-realism` (queue `/private/tmp/gridiron-queue5.sh`, log `/private/tmp/gridiron-queue5.log`); then **realism17** (kicking: blocks/fakes/onside), **realism18** (coaching tendencies incl. 4th-down aggressiveness — should fix punts 4.6-4.9 vs 3.6-4.4 and FG att 2.1-2.2 vs 1.6-2.0). Queue5 snapshot-commits each push on branch `wt-realism`.
+- **realism15 (fatigue & snap counts) finished, UNREVIEWED: snapshot `5b8a832` on wt-realism.** realism14 (`46779af`) is already merged; review/merge 5b8a832 next.
+
+### How to review a realism snapshot (proven method)
+1. `S=/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/0caa60df-7d86-49bc-9a22-8c5c5e9ef6da/scratchpad`; `cd $S/rv && git checkout -q --detach <snapshot>` (a spare worktree; node_modules symlinked). Build + lint (exactly 4).
+2. `node --import /private/tmp/gridiron-loader.mjs $S/calib-rv.mjs 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4` and `$S/anim-rv.mjs 33333 1` (end spots must be 100%). Points band 22-23.2.
+3. Feature probes in `$S`: `ret-probe.mjs <repo>` (returns/def TDs), `retdir.mjs` (return direction, main only), `yac-probe.mjs <repo>` (receiver backward after catch), `pen-main.mjs` (penalty mix, main), `season-main.mjs` (season realism 20 rows), `gp.mjs` (games played), `qbrate.mjs`, `pos-probe.mjs`, `quick.mjs`.
+4. Merge with `git merge --no-edit <snapshot>` in main. Import-line conflicts in `src/main.tsx`/`gameStore.ts`: `python3 /private/tmp/union-imports.py <file>` (unions import names, keeps both for other blocks — check the result). Re-run calib on main, update `PLAYTEST_BACKLOG.md`/`FUTURES.md`/spec, commit with your model trailer.
+
+### Futures still open (`FUTURES.md`)
+#4 special-teams calls (overlaps realism17), #5 challenges & replay, #6 weather & stadiums, #7 halftime speech, #8 primetime & rivalry, #15 injury decisions, #24 trick plays (all touch the sim → run after the realism chain, one at a time). #20 press conferences: **dropped by the user**. Launch pattern: `sed "s/FUTURES.md row 18/FUTURES.md row N/g; s/row 18/row N/g" /private/tmp/gridiron-fut18.txt > /private/tmp/gridiron-futN.txt; /private/tmp/ds-wt futN /private/tmp/gridiron-futN.txt` (worktree off main HEAD). Max ~4 DeepSeek jobs at once (ECONNRESET beyond that; ds-push retries 3x).
+
+### Known open items
+- Punts/FG attempts slightly high (realism18), missed-tackle % 13.2-13.3 (band 11-13), defensive holding/offside a bit high in the penalty mix.
+- Fast-sim stats for seasons already played before today's fixes keep their old (inflated) GP/TD numbers — new weeks are correct.
+- Every user request goes into `PLAYTEST_BACKLOG.md` (121 rows now). Status table to the user after each merge; say when a push finishes.
 
 ## Your role and the user's standing instructions
 - You are the **orchestrator**: spec → send to DeepSeek Flash → verify → merge → rebuild the stable build → tell the user. Small UI fixes you do yourself.
