@@ -23,6 +23,7 @@ import { useGame, useWorld } from '../store/gameStore'
 import { TopPlayers } from '../components/TopPlayers'
 import { TeamHoverCard } from '../components/TeamHoverCard'
 import { ScoutButton } from '../components/ScoutClub'
+import { AnalyticsCard } from '../components/AnalyticsCard'
 import { Badge, Button, Card, PageHeader, TeamCrest } from '../ui/kit'
 
 export function GamePlanScreen() {
@@ -107,6 +108,7 @@ export function GamePlanScreen() {
           <SchemeFitReport teamId={team.id} side={side} />
           <KeysCard oppId={opp?.id} />
           <StudyOpponentCard oppId={opp?.id} />
+          <AnalyticsCard oppId={opp?.id} home={!!next?.home} />
           {canWrinkle(career) && <WrinkleCard />}
           <InstallCard />
           <ScriptCard />

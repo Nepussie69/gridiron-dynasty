@@ -9,6 +9,7 @@
 import type { StaffMember } from '../types'
 import { coachEffect } from './coaching'
 import type { World } from './generate'
+import { FIRST, LAST } from './names'
 import { clamp, hash32, type Rng } from './rng'
 import type { Reputation } from './career'
 
@@ -27,8 +28,40 @@ export const SCOUT_FOCUS = ['College East', 'College West', 'Pro', 'Character']
 export const DPP_FOCUS = ['Pro scouting', 'Negotiation', 'Cap', 'Analytics']
 export const FRONT_SPECIALTIES = ['Talent ID', 'Character reads', 'Negotiation', 'Cap management', 'Analytics']
 
+// ── FUTURES 19: the analytics department ─────────────────────────────────────
+// A dedicated front-office lane you hire from (one analyst at a time). Analysts
+// sharpen the information you see — win probability, 4th-down advice and opponent
+// tendencies — and never touch the sim itself. Candidates live in a separate
+// `world.analyticsPool` (optional; generated deterministically) so the AI market
+// and every existing save are untouched.
+export const ANALYTICS_ROLE = 'Analytics'
+export const ANALYTICS_SPECIALTIES = ['Win probability', 'Fourth downs', 'Tendencies', 'Situation models']
+
+/** Deterministic analyst candidates for one world seed — no rng() draws. */
+export function generateAnalyticsPool(seed: number, count = 4): StaffMember[] {
+  return Array.from({ length: count }, (_, i) => {
+    const h = hash32(`analytics|${seed}|${i}`, 17)
+    const rating = 58 + (h % 35) // 58..92
+    const id = `an_${seed}_${i}`
+    return {
+      id,
+      name: `${FIRST[h % FIRST.length]} ${LAST[(h >>> 8) % LAST.length]}`,
+      role: ANALYTICS_ROLE,
+      age: 30 + ((h >>> 16) % 28),
+      rating,
+      specialty: ANALYTICS_SPECIALTIES[h % ANALYTICS_SPECIALTIES.length],
+      scheme: 'Analytics',
+      focus: ANALYTICS_SPECIALTIES[h % ANALYTICS_SPECIALTIES.length],
+      annual: Math.round((0.9 + (rating / 100) * 2.2) * 1_000_000),
+      contractYears: 3,
+      teamId: null,
+      status: 'Available' as const,
+    } satisfies StaffMember
+  })
+}
+
 export function isFrontOfficeRole(role: string): boolean {
-  return role === 'Scout' || role === 'Director of Player Personnel' || role === 'General Manager'
+  return role === 'Scout' || role === 'Director of Player Personnel' || role === 'General Manager' || role === ANALYTICS_ROLE
 }
 
 /** Focus options for a front-office role (empty for coaches). */
@@ -103,7 +136,12 @@ export function openCandidates(
   rep: Reputation,
   role?: string,
 ): HireCandidate[] {
-  const pool = world.staffPool.filter((m) => m.status === 'Available' && (!role || m.role === role))
+  // FUTURES 19: the analytics pool is separate (user-only). A fired analyst
+  // returns to staffPool, so both sources are merged here.
+  const pool = [
+    ...(world.analyticsPool ?? []).filter((m) => m.status === 'Available' && (!role || m.role === role)),
+    ...world.staffPool.filter((m) => m.status === 'Available' && (!role || m.role === role)),
+  ]
   const out: HireCandidate[] = []
   for (const m of pool.slice(0, 24)) {
     const asking = Math.round(m.annual * (1 + (100 - destinationAppeal(world, teamId)) / 200))
@@ -166,5 +204,8 @@ export function applyHire(world: World, teamId: string, candidate: HireCandidate
   if (idx >= 0) staff[idx] = member
   else staff.push(member)
   world.staffPool = world.staffPool.filter((m) => m.id !== candidate.id)
+  if (candidate.role === ANALYTICS_ROLE) {
+    world.analyticsPool = (world.analyticsPool ?? []).filter((m) => m.id !== candidate.id)
+  }
   return member
 }

@@ -334,6 +334,7 @@ export type StaffRole =
   | 'Scout'
   | 'Director of Player Personnel'
   | 'General Manager'
+  | 'Analytics'
 
 export interface StaffMember {
   id: string

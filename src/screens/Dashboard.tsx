@@ -3,7 +3,8 @@ import { useMemo } from 'react'
 import { gradeColor, inkOn, money } from '../lib/format'
 import { cn } from '../lib/cn'
 import { depthGroup } from '../game/engine/depth'
-import { teamStrength, type World } from '../game/engine/generate'
+import { type World } from '../game/engine/generate'
+import { winProjection } from '../game/engine/analytics'
 import type { Position } from '../game/types'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import {
@@ -61,16 +62,13 @@ export function Dashboard() {
 
   // U4: a broadcast-style win probability for the hero card. Reads the same
   // strength model the ghost-GM projection uses (home field worth ~0.5).
-  const winProb =
+  // FUTURES 19: with analysts hired, winProjection() blends in the form model
+  // and reports a confidence band — display only, the sim is unchanged.
+  const wp =
     next && opp
-      ? Math.min(
-          0.92,
-          Math.max(
-            0.08,
-            0.5 + (teamStrength(roster) + (next.home ? 0.5 : -0.5) - teamStrength(rosterOf(league, opp.id))) / 20,
-          ),
-        )
-      : 0.5
+      ? winProjection(league, activeTeamId, opp.id, next.home)
+      : { base: 0.5, value: 0.5, margin: 0.16, confidence: 'low' as const, sharp: false, factors: [] }
+  const winProb = wp.value
 
   const stars = [...roster].sort((a, b) => b.ovr - a.ovr).slice(0, 5)
   const news = league.news.slice(0, 5)
@@ -227,16 +225,25 @@ export function Dashboard() {
                 {/* Win probability */}
                 <div className="border-t border-line px-4 py-3">
                   <div className="mb-1.5 flex items-center justify-between">
-                    <span className="label !mb-0">Win probability</span>
+                    <span className="label !mb-0 flex items-center gap-1.5">
+                      Win probability
+                      {wp.sharp && <Badge tone="team">Analytics</Badge>}
+                    </span>
                     <span className="font-cond text-[11px] tnum text-muted">
-                      {team.abbr || team.name} {Math.round(winProb * 100)}% · {opp.abbr || opp.name}{' '}
-                      {Math.round((1 - winProb) * 100)}%
+                      {team.abbr || team.name} {Math.round(winProb * 100)}%
+                      {wp.sharp && <span className="text-faint"> ±{Math.round(wp.margin * 100)}</span>} ·{' '}
+                      {opp.abbr || opp.name} {Math.round((1 - winProb) * 100)}%
                     </span>
                   </div>
                   <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3">
                     <span className="transition-[width] duration-500" style={{ width: `${winProb * 100}%`, background: team.primary }} />
                     <span className="flex-1" style={{ background: opp.primary }} />
                   </div>
+                  {wp.sharp && wp.factors.length > 0 && (
+                    <div className="mt-1 text-[10px] text-faint">
+                      Model: {wp.factors.join(' · ')} · {wp.confidence} confidence
+                    </div>
+                  )}
                 </div>
 
                 {/* L12.8 V2: the opponent's best three on each side (hover for ratings). */}

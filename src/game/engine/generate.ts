@@ -6,7 +6,7 @@ import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { SALARY_CAP, capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
-import { frontOfficeProfile } from './hiring'
+import { frontOfficeProfile, generateAnalyticsPool } from './hiring'
 import { freshDraftWindow } from './picks'
 import { makeCharacter } from './character'
 import { makeScoutBias } from './scoutBias'
@@ -68,6 +68,9 @@ export interface World {
   roster: Record<string, Player[]>
   staff: Record<string, StaffMember[]>
   staffPool: StaffMember[]
+  /** FUTURES 19: analysts the user can hire (never touched by the AI). Optional
+   *  save field — a legacy save gets it on load. */
+  analyticsPool?: StaffMember[]
   standings: Record<string, TeamRecord>
   news: NewsItem[]
   /** NFL draft pool — draft-eligible COLLEGE players. */
@@ -781,6 +784,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     roster,
     staff,
     staffPool: generateStaffPool(rng, 44),
+    analyticsPool: generateAnalyticsPool(seed),
     standings,
     news: buildNews('BUF', 'Buffalo Bills', 'NFL'),
     draft,

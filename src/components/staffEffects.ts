@@ -1,7 +1,8 @@
 import type { StaffMember } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { coachEffect, type CoachEffect } from '../game/engine/coaching'
-import { isFrontOfficeRole } from '../game/engine/hiring'
+import { isFrontOfficeRole, ANALYTICS_ROLE } from '../game/engine/hiring'
+import { ANALYTICS_LEVEL_LABEL, analyticsLevel } from '../game/engine/analytics'
 import { AXIS_LABEL, isEvaluator, learnedBias } from '../game/engine/scoutBias'
 
 /**
@@ -170,9 +171,23 @@ export function staffEffectLines(
     if (m.focus) opts.push(`focus ${m.focus}`)
     out.push({
       label: 'Department role',
-      value: opts.length ? opts.join(' · ') : 'Player personnel',
+      value:
+        m.role === ANALYTICS_ROLE
+          ? `Analytics · ${ANALYTICS_LEVEL_LABEL[analyticsLevel(m.rating)]}`
+          : opts.length
+            ? opts.join(' · ')
+            : 'Player personnel',
       tone: 'neutral',
       hint: 'hiring.ts frontOfficeProfile / focusOptions — the market and evaluation lane this role works',
+    })
+  }
+
+  if (m.role === ANALYTICS_ROLE) {
+    out.push({
+      label: 'Sharper information',
+      value: 'win prob · 4th down · tendencies',
+      tone: 'neutral',
+      hint: 'analytics.ts — analyst quality sharpens the win-probability model, the 4th-down recommendation and opponent tendency projections. Advisory only; the sim is unchanged.',
     })
   }
 

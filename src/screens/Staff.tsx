@@ -44,6 +44,7 @@ const MARKET_ROLES: { id: string; label: string }[] = [
   { id: 'Secondary Coach', label: 'DB' },
   { id: 'Scout', label: 'Scout' },
   { id: 'Director of Player Personnel', label: 'DPP' },
+  { id: 'Analytics', label: 'Analytics' },
 ]
 
 type View = 'chart' | 'table'
@@ -83,6 +84,7 @@ const SHORT_ROLE: Record<string, string> = {
   'Secondary Coach': 'Secondary',
   Scout: 'Scout',
   'Director of Player Personnel': 'Dir. Player Personnel',
+  Analytics: 'Analytics',
   'General Manager': 'General Manager',
 }
 
@@ -644,7 +646,7 @@ function OrgChart({
           <span className="text-[10px] text-faint">evaluates the draft class</span>
         </div>
         <div className="grid gap-2 md:grid-cols-3">
-          {(['Scout', 'Director of Player Personnel'] as StaffRole[]).map((role) => (
+          {(['Scout', 'Director of Player Personnel', 'Analytics'] as StaffRole[]).map((role) => (
             <ChartChip
               key={role}
               member={byRole(role)}
