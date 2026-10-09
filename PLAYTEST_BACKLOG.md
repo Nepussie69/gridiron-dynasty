@@ -76,3 +76,4 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: GM desk published, QB pay independently verified; user requested Claude handover2026-10-09; stars6/realism5 running | 🔨 handed to Claude |
 | 71 | 2026-10-08 | Push the current progress to the stable build | Codex: GM desk verified/merged52d1df7; stable4173 serves90508fd | ✅ published |
 | 72 | 2026-10-09 | Create a handover for Claude | CLAUDE_HANDOVER.md: live state, runner paths, preserved worktrees, review failures and exact next steps; Codex relinquishes orchestration after documentation | ✅ |
+| 73 | 2026-10-09 | Long-term star targets: count active NFL rosters only (not unsigned free agents) | Claude: recorded in NEXT_PHASE_L12_15.md; stars acceptance uses active-roster bands, whole pool diagnostic only | ✅ decided |

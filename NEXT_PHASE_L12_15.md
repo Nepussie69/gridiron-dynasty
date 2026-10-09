@@ -7,6 +7,8 @@ User: "lower some players' ratings, only keep a few above 90 and more in the 80s
 99: 7 · 95–98: 24 · 90–94: 51 (→ **82 at 90+**, ~2.5 per club) · 85–89: 102 · 80–84: 184 · 75–79: 361 · 70–74: 488 · 60–69: 594 · <60: 22.
 
 ## Target distribution (whole league, OVR)
+
+> **User decision 2026-10-09:** long-term (S4, seasons 2+) targets apply to **players on active NFL rosters only**. Unsigned free agents are excluded from the acceptance bands; whole-pool counts stay as a diagnostic, not a pass/fail. No unsigned-player retirement rule.
 | Band | Target count | Meaning |
 |---|---|---|
 | 97–99 | 2–4 | the league's faces |
@@ -33,6 +35,6 @@ build + lint 4; distribution inside the target bands at season 1 and after 6 sea
 No sim formula changes beyond re-keying OVR thresholds; no rng; optional save fields only; canonical player objects; no new deps; no temp files in the repo; no `*.md` edits; no git commands.
 
 ## Verification log
-- Codex review of stars4: build/lint4, equivalence20/20 and four-season smokes both paths0/0; simulation within0.4points of branch baseline, cap/market/dead-money and rookie probes pass. Six-season whole/active distribution flags fail on all3seeds, with early90+ trough and later overproduction; not accepted or merged. wt-stars safely integrated onto main eb720d6, retaining recovery stash; buildpasses. stars5 addresses growth/ceiling scarcity, migrated HOF peakOVR, new GM desk thresholds and remaining fallback consistency. Whole-pool versus active-roster population clarification remains pending; no bands relaxed or unsigned retirement added.
+- Codex review of stars4: build/lint4, equivalence20/20 and four-season smokes both paths0/0; simulation within0.4points of branch baseline, cap/market/dead-money and rookie probes pass. Six-season whole/active distribution flags fail on all3seeds, with early90+ trough and later overproduction; not accepted or merged. wt-stars safely integrated onto main eb720d6, retaining recovery stash; buildpasses. stars5 addresses growth/ceiling scarcity, migrated HOF peakOVR, new GM desk thresholds and remaining fallback consistency. Population clarified by the user 2026-10-09: accept on active rosters only; whole pool is diagnostic. No bands relaxed or unsigned retirement added.
 
 - Handover2026-10-09: stars5 selected/applied candidateL before overnight timeout; all retries exhausted, no final acceptance. stars6(`/private/tmp/gridiron-stars6.txt`) runs remaining S2/S3 audits and fresh verification; Claude receives ownership via CLAUDE_HANDOVER.md.
