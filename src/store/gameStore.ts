@@ -116,6 +116,7 @@ import {
   rescaleLegacyRookies,
 } from '../game/engine/draft'
 import { ensureDraftWindow, ledgerFreeAgent } from '../game/engine/picks'
+import { rescaleOvr, unscaleOvr } from '../game/engine/ovrScale'
 import { canSetTrust, calibrationGain } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds, convictionPayout, logConvictionPicks } from '../game/engine/conviction'
 import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, redFlagPayout, isRedFlaggable } from '../game/engine/redflag'
@@ -207,7 +208,7 @@ import { money } from '../lib/format'
 import { loadRealData, getRealData } from '../game/data/realData'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import { loadCalibration } from '../game/data/calibration'
-import { runBalance, runRookieProbe } from '../game/engine/balance'
+import { runBalance, runOvrDistribution, runRookieProbe } from '../game/engine/balance'
 
 export type ScreenId =
   | 'career' | 'history' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'gameplan' | 'staff' | 'scouting' | 'draft'
@@ -1116,7 +1117,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // X3: once a season (week 12), warn a contract-owning user about expiring deals.
     const ownsContracts = capabilities(career).can.has('negotiate') || capabilities(career).can.has('manageCap')
     if (ownsContracts && world.phase === 'regular' && world.week === 12 && !world.news.some((n) => n.id === `expiring_${world.season}`)) {
-      const expiring = (world.roster[career.teamId] ?? []).filter((p) => p.contract.years <= 1 && p.ovr >= 70)
+      const expiring = (world.roster[career.teamId] ?? []).filter((p) => p.contract.years <= 1 && unscaleOvr(p.ovr) >= 70)
       if (expiring.length) {
         const names = [...expiring].sort((a, b) => b.ovr - a.ovr).slice(0, 6).map((p) => `${p.name} (${p.pos}, ${p.ovr})`).join(', ')
         world.news.unshift({
@@ -1475,11 +1476,12 @@ export const useGame = create<GameStore>((set, get) => ({
   continueCareer: () => {
     const p = get().pendingSave
     if (!p || !p.career) return
+    const careerWasScaled = p.world.ovrScaleV2 === true
     world = migrateWorld(p.world)
     // L12.16 H0: the league database and award history travel with the save.
-    statDb = restoreStatsDb(p.statDb, world)
+    statDb = restoreStatsDb(p.statDb, world, !careerWasScaled)
     awards = restoreAwards(p.awards)
-    const career = reconcileCareerTeam(world, migrateCareer(p.career))
+    const career = reconcileCareerTeam(world, migrateCareer(p.career, !careerWasScaled))
     set({
       career,
       activeTeamId: p.activeTeamId && world.byId[p.activeTeamId] ? p.activeTeamId : career.teamId,
@@ -2777,10 +2779,11 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('That save file could not be read.')
       return
     }
+    const careerWasScaled = data.world.ovrScaleV2 === true
     world = migrateWorld(data.world)
-    statDb = restoreStatsDb(data.statDb, world)
+    statDb = restoreStatsDb(data.statDb, world, !careerWasScaled)
     awards = restoreAwards(data.awards)
-    const career = reconcileCareerTeam(world, migrateCareer(data.career))
+    const career = reconcileCareerTeam(world, migrateCareer(data.career, !careerWasScaled))
     set({
       career,
       activeTeamId: data.activeTeamId && world.byId[data.activeTeamId] ? data.activeTeamId : career.teamId,
@@ -3098,6 +3101,19 @@ function migrateWorld(w: World): World {
   relinkPlayers(w)
   // L12.7: rookies drafted under the old college-scale rule get the NFL rookie scale, once.
   rescaleLegacyRookies(w)
+  // L12.15 S3: move a pre-remap save onto the new "stars are rare" OVR scale, once.
+  if (!w.ovrScaleV2) {
+    for (const p of w.players) {
+      const ovr = rescaleOvr(p.ovr)
+      p.pot = Math.max(ovr, rescaleOvr(p.pot))
+      p.ovr = ovr
+      if (p.lastGrowth) {
+        p.lastGrowth.from = rescaleOvr(p.lastGrowth.from)
+        p.lastGrowth.to = rescaleOvr(p.lastGrowth.to)
+      }
+    }
+    w.ovrScaleV2 = true
+  }
   // Z1b: legacy saves can hold roster/PS/IR/free-agent players with no canonical
   // `players` entry; adopt them so development and lookups can see everyone.
   indexPlayers(w)
@@ -3215,7 +3231,7 @@ function describeSave(p: SaveData, savedAt: number, usedBackup: boolean): SaveIn
 }
 
 /** Bring a legacy save (numeric reputation, single ladder) up to the current shape. */
-function migrateCareer(c: CareerState): CareerState {
+function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   const rep = c.reputation as unknown
   const path: CareerState['path'] = c.path === 'coach' || c.path === 'personnel' ? c.path : 'personnel'
   const minLevel = minNflLevel(path)
@@ -3224,6 +3240,19 @@ function migrateCareer(c: CareerState): CareerState {
     c.level < minLevel
       ? { ...c, path, level: minLevel, tier: 'NFL', salary: salaryFor(path, minLevel) }
       : { ...c, path }
+  // L12.15 S3: a save made before the OVR remap keeps ledger/shadow ratings on the
+  // old scale; move them with the world so "grew +4 since I added him" stays true.
+  // Run once, on the same load that first moves the world onto the new scale.
+  if (rescaleOvrValues) {
+    if (base.ledger?.length) {
+      base.ledger = base.ledger.map((e) =>
+        e.ovrAtSign === undefined ? e : { ...e, ovrAtSign: rescaleOvr(e.ovrAtSign) },
+      )
+    }
+    if (base.shadowBoard?.length) {
+      base.shadowBoard = base.shadowBoard.map((e) => ({ ...e, ovrAtAdd: rescaleOvr(e.ovrAtAdd) }))
+    }
+  }
   // L10 G10: optional opening script defaults to empty.
   base.script ??= []
   // L11.5 Q6: per-week action counts (optional on legacy saves).
@@ -3273,9 +3302,23 @@ function reconcileCareerTeam(w: World, c: CareerState): CareerState {
  * L12.16 H0: restore the league database from a save. Saves written before this
  * field existed are rebuilt from the individual season lines each player still
  * carries — team seasons and retiree metadata cannot be recovered, which is fine.
+ *
+ * L12.15 S2: `peakOvr` snapshots were first recorded on the old (pre-remap) OVR
+ * scale, so a legacy save's peaks must be moved onto the new scale exactly once,
+ * on the same load that first remaps the world (alongside the ledger/shadow
+ * migration). Rebuilding the players map keeps every team record and retiree
+ * entry — only the peak is re-keyed, so no stats or awards data is lost.
  */
-function restoreStatsDb(saved: CareerDatabase | undefined, w: World): CareerDatabase {
-  if (saved && Array.isArray(saved.teams) && saved.players && typeof saved.players === 'object') return saved
+function restoreStatsDb(saved: CareerDatabase | undefined, w: World, rescalePeaks = false): CareerDatabase {
+  if (saved && Array.isArray(saved.teams) && saved.players && typeof saved.players === 'object') {
+    if (!rescalePeaks) return saved
+    const players: CareerDatabase['players'] = {}
+    for (const [id, entry] of Object.entries(saved.players)) {
+      players[id] =
+        entry.peakOvr !== undefined ? { ...entry, peakOvr: rescaleOvr(entry.peakOvr) } : entry
+    }
+    return { ...saved, players }
+  }
   const db = newDatabase()
   recordPlayerSeasons(db, w.players)
   return db
@@ -5077,6 +5120,14 @@ export function skillProbe() {
  */
 export function rookieProbe(seasons = 8) {
   return runRookieProbe({ seasons, seed: world.seed, data: getRealData() })
+}
+
+/**
+ * Dev-only probe (L12.15 S4): the whole-league OVR distribution vs the rare-star
+ * target bands over `seasons` seasons, on a throwaway world. Offline-safe.
+ */
+export function ovrDistribution(seasons = 6) {
+  return runOvrDistribution({ seasons, seed: world.seed, data: getRealData() })
 }
 
 /** One caught failure from the career smoke probe (Z1). */

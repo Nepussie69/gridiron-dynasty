@@ -37,7 +37,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 31 | 2026-10-08 | Rescale my save's rookies drafted before the fix (user approved) | Claude: rescaleLegacyRookies in migrateWorld (one-time flag rookieScaleV2) | ✅ (this commit) |
 | 32 | 2026-10-08 | Find a Player tab: all players, ratings or stats, position select, sort any column asc/desc | DeepSeek push 'findplayer' | ✅ merged |
 | 33 | 2026-10-08 | Playoff hunt chart per division and conference like the NFL (+ found: seeding ignored division winners) | DeepSeek push 'playoffs' | ✅ merged |
-| 34 | 2026-10-08 | Make the UI look more modern and advanced (game day field first) | NEXT_PHASE_UI.md U1–U4 | ⏳ after running pushes merge |
+| 34 | 2026-10-08 | Make the UI look more modern and advanced (game day field first) | NEXT_PHASE_UI.md U1–U4; U1 running as ui1 (2026-10-09) | 🔨 |
 | 35 | 2026-10-08 | Unit Grades: show each position and overall | Claude: Dashboard position grades (10 groups, league rank) + overall badge | ✅ (this commit) |
 | 36 | 2026-10-08 | Hover a player's name (roster etc.) for complete ratings, skills, contract | Claude: PlayerName hover on Roster + Depth chart (Find a Player/teams pushes use PlayerHoverCard) | ✅ |
 | 37 | 2026-10-08 | Smaller, slightly transparent hover box | Claude: 264px, 80% opacity + blur, 6-col ratings | ✅ |
@@ -57,7 +57,7 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 51 | 2026-10-08 | How do extensions work; can the head coach ask the GM to push for one | L12.14 C4–C5 | ✅ merged |
 | 52 | 2026-10-08 | Keep the cap at 2025 ($279.2M), never increase it per year | L12.14 C1–C2 | ✅ merged |
 | 53 | 2026-10-08 | Head coach + GM work together: ask to extend, restructure for a push, go get a trade/FA target, release a player | L12.14 C6 (GM requests desk) | ✅ merged 52d1df7 |
-| 54 | 2026-10-08 | Too many franchise players: only a few 90+, more 80s | NEXT_PHASE_L12_15.md S1–S4 (82 at 90+ today → ~25–32) | ⏳ after contracts merges |
+| 54 | 2026-10-08 | Too many franchise players: only a few 90+, more 80s | NEXT_PHASE_L12_15.md S1–S4 (82 at 90+ → 34 at season 1); merged 2262df2; long-term drift fix stars7 | ✅ merged / 🔨 S4 |
 | 55 | 2026-10-08 | How much each rating matters + table; missed tackles in gameplay; realism vs NFL last 5–10 years | Table given in chat (47/48 ratings in the sim, RTE unused); missed tackles → NEXT_PHASE_REALISM.md R5 | ⏳ with the retune |
 | 56 | 2026-10-08 | (new chat) Keep going through the pushes, DeepSeek in parallel, log requests, report every stable-build update | Orchestration continued; 4th parallel push `hof` (FUTURES 23, NEXT_PHASE_L12_16.md) — also fixes history/awards not being saved | ✅ (hof merged) |
 | 57 | 2026-10-08 | (screenshot of a call moment) Will the playbook mean more options when I call a play? | Yes: L12.10 B6 in push `anim` (formation → any play from the ~38-play playbook, route diagram) | ✅ merged |
@@ -73,5 +73,8 @@ _Kept by the orchestrator. Newest at the bottom. Each request is turned into a s
 | 67 | 2026-10-08 | Pay QBs closer to real 2025 money (~$55–60M top-5) | Push `qbpay`: top-5 QB AAV $43.2M → $58.2M, cap use 0.80–0.83, dead money fixed (no double count) | ✅ merged 8a8b6cd |
 | 68 | 2026-10-08 | Make the Cap screen contract ledger sortable | Claude: every column header sorts (▲/▼), click again to flip | ✅ |
 | 69 | 2026-10-08 | Write a ChatGPT handover before 95% usage | Claude: OPENCODE_CONTINUE.md + AGENTS.md (08a896e) | ✅ |
-| 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: sole ownership; GM desk merged, QB pay independently verified; stars4/realism ongoing | 🔨 continuing |
+| 70 | 2026-10-08 | Read OPENCODE_CONTINUE.md and take over orchestration | Codex: GM desk published, QB pay independently verified; user requested Claude handover2026-10-09; stars6/realism5 running | 🔨 handed to Claude |
 | 71 | 2026-10-08 | Push the current progress to the stable build | Codex: GM desk verified/merged52d1df7; stable4173 serves90508fd | ✅ published |
+| 72 | 2026-10-09 | Create a handover for Claude | CLAUDE_HANDOVER.md: live state, runner paths, preserved worktrees, review failures and exact next steps; Codex relinquishes orchestration after documentation | ✅ |
+| 73 | 2026-10-09 | Long-term star targets: count active NFL rosters only (not unsigned free agents) | Claude: recorded in NEXT_PHASE_L12_15.md; stars acceptance uses active-roster bands, whole pool diagnostic only | ✅ decided |
+| 74 | 2026-10-09 | Update the stable build and keep pushing | Claude: stable4173 rebuilt at e841299 (docs only, same JS); ui1 (UI U1 TV field) launched in parallel with stars6/realism5 | 🔨 |

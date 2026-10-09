@@ -32,6 +32,7 @@ import { STARTERS, depthAt, teamRatings, topPlayers } from './depth'
 import { installSides } from './install'
 import { mainStatValue, seasonLine } from './stats'
 import { canAskGm, gmAskCovers, gmExtendDecision, gmOffer, type GmAskResult } from './gmAsk'
+import { unscaleOvr } from './ovrScale'
 
 export type GmRequestKind = 'extend' | 'restructure' | 'trade' | 'sign' | 'release'
 export type GmRequestOutcome = 'done' | 'notNow' | 'declined'
@@ -152,7 +153,7 @@ export function poorProduction(world: World, p: Player): boolean {
   // A rough per-position benchmark for a 17-game starter, scaled to his snaps.
   const FULL: Record<string, number> = { QB: 3800, RB: 950, WR: 850, TE: 600, FB: 120, DE: 45, DT: 45, LB: 95, CB: 80, S: 80, K: 85, P: 0 }
   const full = FULL[p.pos] ?? 0
-  if (full <= 0) return p.ovr < 70
+  if (full <= 0) return unscaleOvr(p.ovr) < 70
   const expected = (full * line.games) / 17
   return value < expected * 0.55
 }
@@ -225,7 +226,7 @@ export function gmRestructureTargets(world: World, career: CareerState): GmRestr
   const stars = world.teams
     .filter((t) => t.tier === 'NFL' && t.id !== career.teamId)
     .flatMap((t) => world.roster[t.id] ?? [])
-    .filter((p) => p.ovr >= 85)
+    .filter((p) => unscaleOvr(p.ovr) >= 85)
     .sort((a, b) => b.ovr - a.ovr || a.id.localeCompare(b.id))
     .slice(0, 4)
   for (const p of stars) add(p, 'trade')
@@ -498,7 +499,7 @@ export function gmReleaseDecision(world: World, career: CareerState, playerId: s
     }
   }
   const mandate = mandateOf(career)
-  if (mandate.winNow && p.age >= 28 && p.ovr >= 80 && !poor) {
+  if (mandate.winNow && p.age >= 28 && unscaleOvr(p.ovr) >= 80 && !poor) {
     return { kind: 'release', outcome: 'declined', reason: 'mandate', message: `The owner is in win-now mode — no cutting productive veterans.` }
   }
   const trust = gmTrust(world, career)

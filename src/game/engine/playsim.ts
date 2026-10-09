@@ -8,6 +8,7 @@
 
 import type { Player, Position, MatchupSet, UsageSet } from '../types'
 import { attributesFor } from '../data/ratings'
+import { unscaleOvr } from './ovrScale'
 import { POS_MEAN } from './ratingMeans'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
 import { coachEffect } from './coaching'
@@ -1054,17 +1055,22 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const a = mkAttrs(w)
     const st = styleProfile(w)
     const longBall = concept.depth >= 12
-    const route = longBall ? (a.DRR ?? w.ovr) : concept.depth >= 7 ? (a.MRR ?? w.ovr) : (a.SRR ?? w.ovr)
+    // L12.15 S2: route-running ratings are absent from the Madden/CFB data, so the
+    // fallback is the receiver's raw (pre-remap) overall — the same value the sim
+    // used before the compressed scale, via the inverse map.
+    const rawOvr = unscaleOvr(w.ovr)
+    const route = longBall ? (a.DRR ?? rawOvr) : concept.depth >= 7 ? (a.MRR ?? rawOvr) : (a.SRR ?? rawOvr)
     const styleBonus = longBall ? st.deepBias * 14 : st.yacBias * 10 + st.contested * 6
     const fit = schemeFit(w, ocScheme, 'OFF')
     const r = rng()
-    return { w, score: route * 0.6 + (a.SPD ?? w.ovr) * 0.25 + styleBonus + (fit - 0.5) * 16 + r * 12, r }
+    return { w, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + styleBonus + (fit - 0.5) * 16 + r * 12, r }
   })
   if (rb && !scored.some((s) => s.w.id === rb.id)) {
     const a = mkAttrs(rb)
     const longBall = concept.depth >= 12
-    const route = longBall ? (a.DRR ?? rb.ovr) : concept.depth >= 7 ? (a.MRR ?? rb.ovr) : (a.SRR ?? rb.ovr)
-    scored.push({ w: rb, score: route * 0.6 + (a.SPD ?? rb.ovr) * 0.25 + TARGET_TUNE.rbPrior, r: -1 })
+    const rawOvr = unscaleOvr(rb.ovr)
+    const route = longBall ? (a.DRR ?? rawOvr) : concept.depth >= 7 ? (a.MRR ?? rawOvr) : (a.SRR ?? rawOvr)
+    scored.push({ w: rb, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + TARGET_TUNE.rbPrior, r: -1 })
   }
   // L12.10 B0: a fullback is an occasional flat/checkdown target (handled below).
   scored.sort((a, b) => b.score - a.score)

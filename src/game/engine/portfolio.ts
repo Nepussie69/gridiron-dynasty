@@ -16,6 +16,7 @@ import type { CareerPath, CareerState, JobOffer, LedgerEntry } from '../types'
 import type { World } from './generate'
 import { hash32 } from './rng'
 import { tradeTree } from './tradeTree'
+import { unscaleOvr } from './ovrScale'
 
 export type PitchTag = 'eye' | 'builder' | 'winner' | 'teacher' | 'conviction'
 
@@ -44,7 +45,7 @@ function ledgerItems(world: World, e: LedgerEntry): PortfolioItem[] {
       label: e.name,
       detail: e.outcome ?? e.note,
       tags: ['eye'],
-      strength: ovr !== undefined && ovr >= 88 ? 3 : 2,
+      strength: ovr !== undefined && unscaleOvr(ovr) >= 88 ? 3 : 2,
       season: e.season,
     }]
   }
