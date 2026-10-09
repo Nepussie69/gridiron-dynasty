@@ -12,11 +12,13 @@ import { attributesFor } from '../data/ratings'
 import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
 import type { Game, World } from './generate'
-import { clamp, makeRng, type Rng } from './rng'
+import { clamp, hash32, makeRng, type Rng } from './rng'
 import { currentSeason, recordGameStats } from './stats'
 import type { GameSim, Play } from './playsim'
+import { carrierMissRate, defenderMissRate } from './playsim'
 
 import { leagueMasteryMeans, masteryGroup, type MasteryMeans } from './playbook'
+import { POS_MEAN } from './ratingMeans'
 import { styleProfile } from './style'
 
 const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
@@ -27,6 +29,17 @@ const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
 function mkAttrs(p: Player): Record<string, number> {
   return { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
 }
+
+// R7: fast-path drops. The fast allocator never models incompletions (targets ≈
+// receptions + 0/1), so the PBP conditional drop chance (≈12% of incompletions)
+// lands at only ≈1.3% of targets here. Apply the drop expectation directly to
+// targets instead, calibrated to the PBP league rate (≈3–4%) and still
+// CTH-sensitive (better hands drop less). detCount keeps it deterministic — no
+// rng() draw is added or removed.
+const FAST_DROP_BASE = 0.037
+const FAST_DROP_SLOPE = 0.0006
+const FAST_DROP_LO = 0.02
+const FAST_DROP_HI = 0.08
 
 function tenureOf(p: Player): number {
   const s = p.stats ?? []
@@ -67,6 +80,31 @@ function split(_rng: Rng, total: number, weights: number[]): number[] {
   return out
 }
 
+/** R5: the fast-allocation reference miss rate for an average defender. Measured
+ *  from the same rating helper the play-by-play uses, so a league-average defence
+ *  lands at the base team total below (≈ the play-by-play 7–9 band). */
+const MT_ALLOC_REF = 0.083
+/** R5: base team missed-tackle total (play-by-play expectation). */
+const MT_ALLOC_BASE = 8
+
+/** R5: a deterministic uniform in [0,1) from a string key — never an rng() draw. */
+function hashUnit(key: string): number {
+  return (hash32(key) >>> 0) / 4294967296
+}
+
+/**
+ * R5: deterministic, unbiased count for `total` independent events at `rate`.
+ * A fast-sim game gives a receiver at most one incompletion, or a defender a
+ * handful of tackles, so rounding `total * rate` would quantise most events to
+ * zero. The fractional part is spent by a per-event hash instead: the expected
+ * value is exactly `total * rate`, it is reproducible, and it draws no rng().
+ */
+function detCount(total: number, rate: number, key: string): number {
+  const expected = total * rate
+  const base = Math.floor(expected)
+  return base + (hashUnit(`${key}:frac`) < expected - base ? 1 : 0)
+}
+
 /**
  * Allocate one team's game production to its players.
  * Uses realistic team totals derived from the scoreline.
@@ -77,12 +115,22 @@ export function allocateTeamGame(
   points: number,
   _opponentPoints: number,
   rng: Rng,
-): { playerId: string; line: GameStatLine }[] {
+  gameKey: string,
+): { lines: { playerId: string; line: GameStatLine }[]; offense: { playerId: string; line: GameStatLine }[]; defMissed: number } {
   const scheme = (world.staff[teamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme ?? ''
   const eff = coachEffect(world, teamId)
   const means = leagueMasteryMeans(world)
   const out: { playerId: string; line: GameStatLine }[] = []
+  // R5: offensive lines carry the (rating-weighted) forced-miss share; the two
+  // teams' forced totals are reconciled to the opponent's missed-tackle total in
+  // statGame so the generated league never reports fake independent counts.
+  const offense: { playerId: string; line: GameStatLine }[] = []
   const addLine = (playerId: string, line: GameStatLine) => out.push({ playerId, line })
+  const addOff = (playerId: string, line: GameStatLine) => {
+    const ref = { playerId, line }
+    out.push(ref)
+    offense.push(ref)
+  }
 
   const isNFL = world.byId[teamId]?.tier === 'NFL'
   const basePass = isNFL ? 218 : 235
@@ -103,7 +151,7 @@ export function allocateTeamGame(
     const comp = Math.round(att * compPct)
     const td = Math.max(0, Math.round((points / 7) * 0.72 * (0.7 + rng() * 0.6)))
     const ints = rng() < 0.42 ? (rng() < 0.7 ? 1 : 2) : 0
-    addLine(qb.id, {
+    addOff(qb.id, {
       playerId: qb.id, passAtt: att, passComp: comp, passYds, passTD: td, ints,
     })
   }
@@ -136,7 +184,14 @@ export function allocateTeamGame(
     const rushTd = Math.max(0, Math.round((points / 7) * 0.28 * (0.6 + rng() * 0.8)))
     const qbTd = qb && carries > 0 ? Math.min(rushTd, Math.round((rushTd * qbCarries) / carries)) : 0
     const tdSplit = split(rng, rushTd - qbTd, shares)
-    rbs.items.forEach((p, i) => addLine(p.id, { playerId: p.id, rushAtt: split_[i] ?? 0, rushYds: yardsSplit[i] ?? 0, rushTD: tdSplit[i] ?? 0 }))
+    rbs.items.forEach((p, i) => addOff(p.id, {
+      playerId: p.id,
+      rushAtt: split_[i] ?? 0,
+      rushYds: yardsSplit[i] ?? 0,
+      rushTD: tdSplit[i] ?? 0,
+      // R5: rating-weighted forced-miss share (reconciled to the opponent's total).
+      forcedMissed: (split_[i] ?? 0) * carrierMissRate(p),
+    }))
     // Fold the keepers onto the QB's existing (passing) line so he is only counted
     // once per game, matching how a played game's box score merges by player.
     if (qb && qbCarries > 0) {
@@ -158,18 +213,30 @@ export function allocateTeamGame(
     const yardSplit = split(rng, passYds, shares)
     const td = Math.max(0, Math.round((points / 7) * 0.72 * 0.9))
     const tdSplit = split(rng, td, shares)
-    recvs.items.forEach((p, i) =>
-      addLine(p.id, {
+    recvs.items.forEach((p, i) => {
+      const rec = recSplit[i] ?? 0
+      // Preserve the original draw site exactly: targets = receptions + rng() threshold.
+      const tg = rec + (rng() < 0.5 ? 1 : 0)
+      // R5/R7: allocate drops per target, CTH-centred on the position mean.
+      // `detCount` spends the fractional expectation with a per-player/game hash, so
+      // a receiver with one target no longer rounds every drop away to zero.
+      const cthMean = POS_MEAN[p.pos]?.CTH ?? 72
+      const dropRate = clamp(FAST_DROP_BASE - ((mkAttrs(p).CTH ?? 70) - cthMean) * FAST_DROP_SLOPE, FAST_DROP_LO, FAST_DROP_HI)
+      addOff(p.id, {
         playerId: p.id,
-        targets: recSplit[i] + (rng() < 0.5 ? 1 : 0),
-        rec: recSplit[i] ?? 0,
+        targets: tg,
+        rec,
         recYds: yardSplit[i] ?? 0,
         recTD: tdSplit[i] ?? 0,
-      }),
-    )
+        // R5: rating-weighted forced-miss share (reconciled to the opponent's total).
+        forcedMissed: rec * carrierMissRate(p),
+        drops: detCount(tg, dropRate, `${gameKey}:${p.id}:drop`),
+      })
+    })
   }
 
   // ── Defense ──
+  let defMissed = 0
   const defenders = (world.roster[teamId] ?? []).filter((p) => POS_SIDE[p.pos] === 'DEF' && !p.injured).slice(0, 12)
   if (defenders.length) {
     // Team tackles scale with opponent plays faced; sacks and INTs are rare events.
@@ -182,19 +249,51 @@ export function allocateTeamGame(
     const dbGroup = defenders.filter((p) => ['CB', 'S'].includes(p.pos))
     const sSplit = rushers.length ? split(rng, sacks, rushers.map((p) => weight(p, 'def', scheme, means))) : []
     const iSplit = dbGroup.length ? split(rng, ints, dbGroup.map((p) => weight(p, 'def', scheme, means))) : []
+    // R5: team missed-tackle total sits in the play-by-play band (≈7–9); a
+    // better-tackling defence sits lower, a poor one higher, using the SAME
+    // rating helper the play-by-play uses. `MT_ALLOC_REF` is the model's
+    // league-average defender rate, so an average defence lands at the base 8.
+    const avgMtRate = defenders.reduce((s, p) => s + defenderMissRate(p), 0) / defenders.length
+    const mtTotal = clamp(Math.round(MT_ALLOC_BASE * (avgMtRate / MT_ALLOC_REF)), 5, 11)
+    const mtWeight = defenders.map((p, i) => (tSplit[i] ?? 0) * defenderMissRate(p))
+    const mtSplit = split(rng, mtTotal, mtWeight)
+    defMissed = mtTotal
     defenders.forEach((p) => {
       const ri = rushers.indexOf(p)
       const di = dbGroup.indexOf(p)
+      const tk = tSplit[defenders.indexOf(p)] ?? 0
       addLine(p.id, {
         playerId: p.id,
-        tackles: tSplit[defenders.indexOf(p)] ?? 0,
+        tackles: tk,
         defSacks: ri >= 0 ? sSplit[ri] ?? 0 : 0,
         defInts: di >= 0 ? iSplit[di] ?? 0 : 0,
+        missedTackles: mtSplit[defenders.indexOf(p)] ?? 0,
       })
     })
   }
 
-  return out
+  return { lines: out, offense, defMissed }
+}
+
+/**
+ * R5: each club's forced-miss total must equal the opponent's missed-tackle
+ * total (they are the same events), so the fast allocation never reports two
+ * independent counts for one play. The rating-weighted shares set the split.
+ */
+function reconcileForced(offense: { playerId: string; line: GameStatLine }[], target: number) {
+  const cur = offense.reduce((s, o) => s + (o.line.forcedMissed ?? 0), 0)
+  if (target <= 0 || !offense.length) {
+    for (const o of offense) o.line.forcedMissed = 0
+    return
+  }
+  const raw = cur > 0
+    ? offense.map((o) => ((o.line.forcedMissed ?? 0) / cur) * target)
+    : offense.map(() => target / offense.length)
+  const out = raw.map((v) => Math.floor(v))
+  let rem = target - out.reduce((a, b) => a + b, 0)
+  const order = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac)
+  for (let k = 0; k < rem && order.length; k++) out[order[k % order.length].i] += 1
+  offense.forEach((o, i) => { o.line.forcedMissed = out[i] })
 }
 
 /**
@@ -206,6 +305,13 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
   // Reconstruct a minimal GameSim-shaped object so the stats layer can consume it.
   const rng = makeRng(world.seed + game.week * 7919 + game.homeId.length + game.awayId.length)
   const lines: Play[] = []
+  // Home is allocated first, then away, exactly as before so the rng stream is
+  // unchanged. R5: reconcile each offence's forced-miss total to the opponent's
+  // missed-tackle total (they are the same plays).
+  const homeAlloc = allocateTeamGame(world, game.homeId, game.homeScore, game.awayScore, rng, `${game.week}:${game.homeId}`)
+  const awayAlloc = allocateTeamGame(world, game.awayId, game.awayScore, game.homeScore, rng, `${game.week}:${game.awayId}`)
+  reconcileForced(homeAlloc.offense, awayAlloc.defMissed)
+  reconcileForced(awayAlloc.offense, homeAlloc.defMissed)
   const sim: GameSim = {
     homeId: game.homeId,
     awayId: game.awayId,
@@ -217,8 +323,8 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
       away: { plays: 60, points: game.awayScore, passAtt: 0, passComp: 0, passYds: 0, passTD: 0, ints: 0, rushAtt: 0, rushYds: 0, rushTD: 0, sacks: 3, sacksTaken: 3, firstDowns: 20, thirdDownAtt: 12, thirdDownConv: 5, fumbles: 0, td: 0, fgAtt: 2, fgMade: 1, twoAtt: 0, twoMade: 0, top: 1800 },
     },
     generated: true,
-    homeLines: allocateTeamGame(world, game.homeId, game.homeScore, game.awayScore, rng),
-    awayLines: allocateTeamGame(world, game.awayId, game.awayScore, game.homeScore, rng),
+    homeLines: homeAlloc.lines,
+    awayLines: awayAlloc.lines,
   }
   recordAllocatedStats(world, sim, season, level)
 }
@@ -247,6 +353,10 @@ function recordAllocatedStats(world: World, sim: GameSim, season: number, level:
       entry.tackles += line.tackles ?? 0
       entry.defSacks += line.defSacks ?? 0
       entry.defInts += line.defInts ?? 0
+      // R5: fold the new defensive/offensive bookkeeping into the season line too.
+      entry.missedTackles = (entry.missedTackles ?? 0) + (line.missedTackles ?? 0)
+      entry.forcedMissed = (entry.forcedMissed ?? 0) + (line.forcedMissed ?? 0)
+      entry.drops = (entry.drops ?? 0) + (line.drops ?? 0)
     }
   }
 }

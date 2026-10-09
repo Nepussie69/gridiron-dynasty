@@ -11,7 +11,7 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecovery } from '../game/engine/sim'
-import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
+import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills } from '../game/engine/coaching'
@@ -5744,10 +5744,20 @@ export function draftFlowProbe() {
 }
 
 /** Dev-only balance probe: simulate many matchups and report per-team-per-game stats. */
+export interface SimRow {
+  measure: string
+  actual: number
+  target: number
+  lo: number
+  hi: number
+  unit: string
+  ok: boolean
+}
+
 export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
   const pool = world.teams.filter((t) => t.tier === tier)
   const rng = makeRng(world.seed + 999331)
-  const keys = ['points', 'plays', 'passAtt', 'passComp', 'passYds', 'passTD', 'ints', 'rushAtt', 'rushYds', 'rushTD', 'sacks', 'sacksTaken', 'firstDowns', 'thirdDownAtt', 'thirdDownConv', 'fgAtt', 'fgMade', 'td', 'top'] as const
+  const keys = ['points', 'plays', 'passAtt', 'passComp', 'passYds', 'passTD', 'ints', 'rushAtt', 'rushYds', 'rushTD', 'sacks', 'sacksTaken', 'firstDowns', 'thirdDownAtt', 'thirdDownConv', 'fgAtt', 'fgMade', 'fumbles', 'td', 'top'] as const
   const acc: Record<string, number> = Object.fromEntries(keys.map((k) => [k, 0]))
   let made = 0
   let margin = 0
@@ -5755,6 +5765,19 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
   let rzTD = 0
   let rzFG = 0
   let drives = 0
+  let penCount = 0
+  let penYds = 0
+  let punts = 0
+  let sackYds = 0
+  let possessions = 0
+  let xpAtt = 0
+  let xpMade = 0
+  let missedTackles = 0
+  let forcedMissed = 0
+  // R5: tackle attempts (the denominator for the missed-tackle rate). A whiff is
+  // an attempt; a credited tackle is an attempt; on a miss the finishing defender
+  // is a second attempt. No tackle is credited on a score.
+  let mtAttempts = 0
   while (made < games) {
     const h = pool[Math.floor(rng() * pool.length)]
     const a = pool[Math.floor(rng() * pool.length)]
@@ -5764,34 +5787,116 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
     margin += Math.abs(sim.homeScore - sim.awayScore)
     // drive/red-zone accounting for the home team
     let inRZ = false
-    let reachedRZ = false
+    let prevOff: string | null = null
     for (const p of sim.plays) {
-      if (p.offId !== h.id) continue
+      if (p.type === 'penalty') { penCount += 1; penYds += Math.abs(p.yards ?? 0); continue }
+      // One red-zone trip per possession: reset at every change of possession.
+      if (p.offId !== prevOff) { if (p.offId === h.id) possessions += 1; inRZ = false; prevOff = p.offId }
+      const homeOff = p.offId === h.id
+      if (!homeOff) continue
       if (p.down === 1 && p.startYard <= 40 === false) drives++
-      if (p.startYard >= 80 && !reachedRZ) { reachedRZ = true; rzTrips++; inRZ = true }
-      if (p.result === 'TOUCHDOWN!' && inRZ) rzTD++
-      if (/FG is good/.test(p.result) && inRZ) rzFG++
-      if (/End of|TOUCHDOWN|no good|Interception|Turnover/.test(p.result) || p.result.includes('halftime')) inRZ = false
+      // A trip begins on the first snap of the possession that puts the ball
+      // inside the 20 (a snap there, or a scrimmage gain that reaches it), and is
+      // counted once per drive. A touchdown from outside the 20 is not a trip.
+      const reachesRz = p.startYard >= 80 || ((p.type === 'run' || p.type === 'pass') && p.endYard >= 80 && p.result !== 'TOUCHDOWN!')
+      if (!inRZ && reachesRz) { rzTrips += 1; inRZ = true }
+      if (p.type === 'punt') punts += 1
+      if (p.type === 'pass' && isSack(p)) sackYds += Math.abs(p.yards ?? 0)
+      if (p.type === 'pat' && p.concept === 'Extra Point') { xpAtt += 1; if (/good/.test(p.result)) xpMade += 1 }
+      missedTackles += p.missedTackleIds?.length ?? 0
+      forcedMissed += p.forcedMissedIds?.length ?? 0
+      // Attempts: every whiff plus every tackle the opponent actually made.
+      if (p.type === 'run' || p.type === 'pass') {
+        mtAttempts += p.missedTackleIds?.length ?? 0
+        if (p.result !== 'TOUCHDOWN!') mtAttempts += p.tackleIds?.length ?? 0
+      }
+      if (inRZ) {
+        if (p.result === 'TOUCHDOWN!') { rzTD += 1; inRZ = false }
+        else if (/FG is good/.test(p.result)) { rzFG += 1; inRZ = false }
+        else if (p.turnover) inRZ = false
+      }
     }
-    if (reachedRZ && !inRZ) inRZ = false
     made++
   }
   const avg = (k: string) => acc[k] / made
+  // `plays` is every scrimmage snap and already includes sacks (passAtt counts a
+  // sack as a dropback), so this is the NFL "offensive plays incl. sacks" total.
+  const scrimmagePlays = avg('plays')
+  const grossPass = avg('passYds')
+  const netPass = grossPass - sackYds / made
+  // NFL "pass attempts" exclude sacks; the team `passAtt` counter includes them
+  // (dropbacks). Measure attempts/completion%/YPA against true attempts so the
+  // rows match the real-league definitions instead of hiding a denominator bias.
+  const truePassAtt = avg('passAtt') - avg('sacksTaken')
+  const ypa = grossPass / Math.max(1, truePassAtt)
+  const missedTacklePct = (missedTackles / Math.max(1, mtAttempts)) * 100
+  const fgPct = (avg('fgMade') / Math.max(1, avg('fgAtt'))) * 100
+  const xpPct = (xpMade / Math.max(1, xpAtt)) * 100
+  const rzTDPct = (rzTD / Math.max(1, rzTrips)) * 100
+  const turnovers = avg('ints') + avg('fumbles')
+  const r = (s: string) => +s
+  const rows: SimRow[] = [
+    { measure: 'Points', actual: r(avg('points').toFixed(1)), target: 22.6, lo: 22.0, hi: 23.2, unit: '', ok: false },
+    { measure: 'Offensive plays (incl. sacks)', actual: r(scrimmagePlays.toFixed(1)), target: 63.5, lo: 62.0, hi: 65.0, unit: '', ok: false },
+    { measure: 'Pass attempts', actual: r(truePassAtt.toFixed(1)), target: 34.7, lo: 33.2, hi: 36.2, unit: '', ok: false },
+    { measure: 'Completion %', actual: r(((avg('passComp') / Math.max(1, truePassAtt)) * 100).toFixed(1)), target: 64.3, lo: 63.3, hi: 65.3, unit: '%', ok: false },
+    { measure: 'Gross passing yards', actual: r(grossPass.toFixed(1)), target: 241, lo: 233, hi: 249, unit: '', ok: false },
+    { measure: 'Net passing yards', actual: r(netPass.toFixed(1)), target: 225, lo: 217, hi: 233, unit: '', ok: false },
+    { measure: 'Yards per attempt (gross)', actual: r(ypa.toFixed(2)), target: 6.95, lo: 6.7, hi: 7.2, unit: '', ok: false },
+    { measure: 'Passing TD', actual: r(avg('passTD').toFixed(2)), target: 1.55, lo: 1.4, hi: 1.7, unit: '', ok: false },
+    { measure: 'Interceptions', actual: r(avg('ints').toFixed(2)), target: 0.8, lo: 0.7, hi: 0.9, unit: '', ok: false },
+    { measure: 'Sacks taken', actual: r(avg('sacksTaken').toFixed(2)), target: 2.4, lo: 2.2, hi: 2.6, unit: '', ok: false },
+    { measure: 'Rush attempts', actual: r(avg('rushAtt').toFixed(1)), target: 26.8, lo: 25.3, hi: 28.3, unit: '', ok: false },
+    { measure: 'Rushing yards', actual: r(avg('rushYds').toFixed(1)), target: 114, lo: 108, hi: 120, unit: '', ok: false },
+    { measure: 'Yards per carry', actual: r((avg('rushYds') / Math.max(1, avg('rushAtt'))).toFixed(2)), target: 4.27, lo: 4.15, hi: 4.39, unit: '', ok: false },
+    { measure: 'Rushing TD', actual: r(avg('rushTD').toFixed(2)), target: 0.8, lo: 0.68, hi: 0.92, unit: '', ok: false },
+    { measure: 'Total yards', actual: Math.round(netPass + avg('rushYds')), target: 340, lo: 328, hi: 352, unit: '', ok: false },
+    { measure: 'First downs', actual: r(avg('firstDowns').toFixed(1)), target: 20.0, lo: 19.0, hi: 21.0, unit: '', ok: false },
+    { measure: '3rd-down conversion %', actual: r(((avg('thirdDownConv') / Math.max(1, avg('thirdDownAtt'))) * 100).toFixed(1)), target: 39, lo: 37, hi: 41, unit: '%', ok: false },
+    { measure: 'Red-zone trips', actual: r((rzTrips / made).toFixed(2)), target: 3.3, lo: 2.6, hi: 4.0, unit: '', ok: false },
+    { measure: 'Red-zone TD %', actual: r(rzTDPct.toFixed(1)), target: 56, lo: 51, hi: 61, unit: '%', ok: false },
+    { measure: 'FG attempts', actual: r(avg('fgAtt').toFixed(2)), target: 1.8, lo: 1.6, hi: 2.0, unit: '', ok: false },
+    { measure: 'FG %', actual: r(fgPct.toFixed(1)), target: 85, lo: 82, hi: 88, unit: '%', ok: false },
+    { measure: 'XP %', actual: r(xpPct.toFixed(1)), target: 94, lo: 92, hi: 96, unit: '%', ok: false },
+    { measure: 'Lost fumbles', actual: r(avg('fumbles').toFixed(2)), target: 0.55, lo: 0.43, hi: 0.67, unit: '', ok: false },
+    { measure: 'Turnovers (INT + lost fumbles)', actual: r(turnovers.toFixed(2)), target: 1.35, lo: 1.2, hi: 1.5, unit: '', ok: false },
+    { measure: 'Penalties', actual: r((penCount / made / 2).toFixed(2)), target: 6.0, lo: 5.2, hi: 6.8, unit: '', ok: false },
+    { measure: 'Penalty yards', actual: r((penYds / made / 2).toFixed(1)), target: 52, lo: 44, hi: 60, unit: '', ok: false },
+    { measure: 'Punts', actual: r((punts / made).toFixed(2)), target: 4.0, lo: 3.6, hi: 4.4, unit: '', ok: false },
+    { measure: 'Missed tackles', actual: r((missedTackles / made).toFixed(2)), target: 8.0, lo: 7.0, hi: 9.0, unit: '', ok: false },
+    { measure: 'Missed tackle %', actual: r(missedTacklePct.toFixed(1)), target: 12, lo: 11, hi: 13, unit: '%', ok: false },
+    { measure: 'Forced missed tackles', actual: r((forcedMissed / made).toFixed(2)), target: 8.0, lo: 7.0, hi: 9.0, unit: '', ok: false },
+    { measure: 'Time of possession', actual: Math.round(avg('top')), target: 1800, lo: 1500, hi: 2100, unit: 's', ok: false },
+  ]
+  for (const row of rows) row.ok = row.actual >= row.lo && row.actual <= row.hi
+  const line = (row: SimRow) => {
+    const actual = row.unit === 's' ? `${Math.floor(row.actual / 60)}:${String(row.actual % 60).padStart(2, '0')}` : `${row.actual}${row.unit}`
+    const target = row.unit === 's' ? `${Math.floor(row.target / 60)}:${String(row.target % 60).padStart(2, '0')}` : `${row.target}${row.unit} (${row.lo}–${row.hi})`
+    return `${row.ok ? '✅' : '❌'} ${row.measure.padEnd(34)} ${actual.padStart(8)}  target ${target}`
+  }
+  console.log(`simTest ${tier} ${made} games (seed ${world.seed})\n${rows.map(line).join('\n')}`)
   return {
     tier,
     games: made,
+    rows,
     points: +avg('points').toFixed(1),
     td: +avg('td').toFixed(2),
     fgMade: +avg('fgMade').toFixed(2),
+    fgPct: +fgPct.toFixed(1),
+    xpPct: +xpPct.toFixed(1),
+    possessionsPerGame: +(possessions / made).toFixed(2),
     rzTripsPerGame: +(rzTrips / made).toFixed(2),
     rzTDPerGame: +(rzTD / made).toFixed(2),
     rzFGPerGame: +(rzFG / made).toFixed(2),
-    rzTDPct: +((rzTD / Math.max(1, rzTrips)) * 100).toFixed(1),
-    plays: +avg('plays').toFixed(1),
-    passAtt: +avg('passAtt').toFixed(1),
+    rzTDPct: +rzTDPct.toFixed(1),
+    plays: +scrimmagePlays.toFixed(1),
+    drives: +(drives / made).toFixed(2),
+    passAtt: +truePassAtt.toFixed(1),
     passComp: +avg('passComp').toFixed(1),
-    compPct: +((avg('passComp') / Math.max(1, avg('passAtt'))) * 100).toFixed(1),
-    passYds: +avg('passYds').toFixed(1),
+    compPct: +((avg('passComp') / Math.max(1, truePassAtt)) * 100).toFixed(1),
+    passYds: +grossPass.toFixed(1),
+    netPassYds: +netPass.toFixed(1),
+    ypa: +ypa.toFixed(2),
     passTD: +avg('passTD').toFixed(1),
     ints: +avg('ints').toFixed(2),
     rushAtt: +avg('rushAtt').toFixed(1),
@@ -5799,10 +5904,21 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
     ypc: +(avg('rushYds') / Math.max(1, avg('rushAtt'))).toFixed(2),
     rushTD: +avg('rushTD').toFixed(2),
     sacks: +avg('sacks').toFixed(2),
+    sacksTaken: +avg('sacksTaken').toFixed(2),
     firstDowns: +avg('firstDowns').toFixed(1),
     thirdDownPct: +((avg('thirdDownConv') / Math.max(1, avg('thirdDownAtt'))) * 100).toFixed(1),
     fgAtt: +avg('fgAtt').toFixed(2),
-    totalYds: Math.round(avg('passYds') + avg('rushYds')),
+    lostFumbles: +avg('fumbles').toFixed(2),
+    turnovers: +turnovers.toFixed(2),
+    penalties: +(penCount / made / 2).toFixed(2),
+    penaltyYds: +(penYds / made / 2).toFixed(1),
+    punts: +(punts / made).toFixed(2),
+    missedTackles: +(missedTackles / made).toFixed(2),
+    forcedMissed: +(forcedMissed / made).toFixed(2),
+    missedTacklePct: +missedTacklePct.toFixed(1),
+    mtAttempts: Math.round(mtAttempts / made),
+    mtMisses: Math.round(missedTackles / made),
+    totalYds: Math.round(netPass + avg('rushYds')),
     topSec: Math.round(avg('top')),
     avgMargin: +(margin / made).toFixed(1),
   }
@@ -5830,6 +5946,8 @@ export function statShape(games = 200) {
   const rb1Car: number[] = []
   const tackles: number[] = []
   const topTackler: number[] = []
+  const topRecYds: number[] = []
+  const qbYds: number[] = []
   const tgPos: Record<string, number> = { WR: 0, TE: 0, RB: 0 }
   const tkPos: Record<string, number> = { LB: 0, DL: 0, S: 0, CB: 0 }
   const skPos: Record<string, number> = { DL: 0, LB: 0, DB: 0 }
@@ -5862,6 +5980,8 @@ export function statShape(games = 200) {
       rb1Car.push(rbs[0]?.line.rushAtt ?? 0)
       tackles.push(rows.reduce((s, b) => s + (b.line.tackles ?? 0), 0))
       topTackler.push(rows.reduce((m, b) => Math.max(m, b.line.tackles ?? 0), 0))
+      topRecYds.push(rows.reduce((m, b) => Math.max(m, b.line.recYds ?? 0), 0))
+      qbYds.push(rows.filter((b) => pos.get(b.playerId) === 'QB').reduce((s, b) => s + (b.line.passYds ?? 0), 0))
       for (const b of rows) {
         const p = pos.get(b.playerId)
         const gp = group(p)
@@ -5894,6 +6014,9 @@ export function statShape(games = 200) {
     ['RB1 rush yards (median)', med(rb1Yds), '50–75', within(med(rb1Yds), 50, 75)],
     ['RB1 100-yard games', +share(rb1Yds, (x) => x >= 100).toFixed(2), '0.12–0.25', within(share(rb1Yds, (x) => x >= 100), 0.12, 0.25)],
     ['RB1 30+ carry games', +share(rb1Car, (x) => x >= 30).toFixed(3), '≤ 0.02', within(share(rb1Car, (x) => x >= 30), 0, 0.02)],
+    // R3: NFL 2015–2024 per-game medians for the lead receiver and the QB.
+    ['Top receiver rec yards (median)', med(topRecYds), '55–85', within(med(topRecYds), 55, 85)],
+    ['QB passing yards (median)', med(qbYds), '215–265', within(med(qbYds), 215, 265)],
     ['Tackles credited per team-game', med(tackles), '45–60', within(med(tackles), 45, 60)],
     ['Tackles LB / S / CB / DL', `${tk.LB} / ${tk.S} / ${tk.CB} / ${tk.DL}`, '0.35–0.45 / 0.18–0.26 / 0.15–0.22 / 0.15–0.22', within(tk.LB, 0.35, 0.45) === '✅' && within(tk.S, 0.18, 0.26) === '✅' ? '✅' : '❌'],
     ['Top tackler (median)', med(topTackler), '7–10', within(med(topTackler), 7, 10)],
@@ -5928,9 +6051,11 @@ export function ratingSpread(games = 300, teamId?: string) {
     { pos: 'WR', key: 'CTH' },
     { pos: 'OT', key: 'PBK' },
     { pos: 'DE', key: 'PMV' },
+    { pos: 'DE', key: 'TAK' },
     { pos: 'CB', key: 'MCV' },
     { pos: 'S', key: 'ZCV' },
     { pos: 'RB', key: 'BCV' },
+    { pos: 'RB', key: 'BTK' },
   ]
   const seedFor = (i: number) => world.seed + 400000 + i * 7919 + 101
   const oppFor = (i: number) => opponents[i % opponents.length]

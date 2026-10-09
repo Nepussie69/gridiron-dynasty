@@ -9,8 +9,11 @@ import {
   COL_COV_TGT,
   COL_COV_YDS,
   COL_DEF_INT,
+  COL_DROP,
+  COL_FMT,
   COL_GP,
   COL_MAIN,
+  COL_MT,
   COL_PASS_ATT,
   COL_PASS_INT,
   COL_PASS_TD,
@@ -37,13 +40,13 @@ type SortKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | `col:${string}`
 
 const QB_COLS: StatCol[] = [COL_PASS_ATT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_RTG]
 
-const RB_COLS: StatCol[] = [COL_RUSH_ATT, COL_RUSH_YDS, COL_RUSH_AVG, COL_RUSH_TD, COL_REC, COL_REC_YDS]
+const RB_COLS: StatCol[] = [COL_RUSH_ATT, COL_RUSH_YDS, COL_RUSH_AVG, COL_RUSH_TD, COL_FMT, COL_REC, COL_REC_YDS]
 
-const WR_COLS: StatCol[] = [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_TD]
+const WR_COLS: StatCol[] = [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_TD, COL_FMT, COL_DROP]
 
-const FRONT_COLS: StatCol[] = [COL_TCK, COL_TFL, COL_SCK]
+const FRONT_COLS: StatCol[] = [COL_TCK, COL_MT, COL_TFL, COL_SCK]
 
-const DB_COLS: StatCol[] = [COL_TCK, COL_DEF_INT, COL_COV_TGT, COL_COV_YDS, COL_COV]
+const DB_COLS: StatCol[] = [COL_TCK, COL_MT, COL_DEF_INT, COL_COV_TGT, COL_COV_YDS, COL_COV]
 
 /** Columns for a stats-tab group. Empty groups (OL, K/P) fall back to GP. */
 function columnsFor(group: string): StatCol[] {

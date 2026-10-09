@@ -60,6 +60,76 @@ function cohesionMult(mean: number | undefined, coh: number | undefined, factor:
 import type { World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
 
+// ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
+// The real-league retune lives in ONE small block of base knobs. Every relative
+// rating term in the resolvers (E1/E2/M3) is untouched, and no rng() draw is
+// added or removed — these only move the league-average baseline the terms sit on.
+export const R2 = {
+  /** Completion-probability base (real NFL completion % ≈ 64.3). */
+  compBase: 0.568,
+  /** Completion penalty as the field compresses toward the goal line (0 at the 20). */
+  rzCompDamp: 0,
+  /** Fraction of a would-be scoring run shaved by the compressed, crowded front. */
+  rzRunDamp: 0,
+  /** Fraction of a would-be scoring catch shaved by the compressed, crowded front. */
+  rzPassDamp: 0,
+  /** Multiplier on explosive gains (20+ yards) to tune the long-TD rate. */
+  explosiveCal: 1.3,
+  /** R2: red-zone pass lean — clubs throw more inside the 20 than between them. */
+  rzPassBias: 0.09,
+  /** R2: money-down conversion — on 3rd down the throw is schemed to the sticks, so
+   *  it converts a little more often than the same matchup on 1st/2nd (≈ +4%). */
+  moneyComp: 0.03,
+  /** R2: money-down yards — a 3rd-down completion/run is worked back to the marker. */
+  moneyYards: 1.0,
+  /** R5: missed-tackle grading. Both sides are centred on the measured league-average
+   *  blend (79) and given their own slope, so the carrier and defender effects balance
+   *  independently instead of drifting with the attribute offset. Pass plays carry an
+   *  open-field bump. Sized so TAK 90+ defenders miss under 6% of attempts, TAK under 65
+   *  over 18%, the league near 12%, an average RB ≈ 0.10–0.12 forced per carry and an
+   *  elusive back 0.18–0.25 (see the tackle probe). */
+  missBase: 0.05,
+  missGain: 0.004,
+  missDefDiff: 0.016,
+  missCarDiff: 0.015,
+  missPassBump: 0.16,
+  /** R5: extra yards on a broken tackle are 1..missYardsRange. */
+  missYardsRange: 4,
+  /** R5: talent tilt of the real yardage draw — see sampleYards (bounded, no point mass). */
+  talentTilt: 0.02,
+  /** Base sack chance per dropback (real rate ≈ 6.5%). */
+  sackBase: 0.12,
+  /** Base interception chance. */
+  intBase: 0.0118,
+  /** Multiplier on a positive run gain after the real distribution is sampled. */
+  runGainCal: 0.69,
+  /** Multiplier on the yards-after-catch / style bonus on completions. */
+  yacCal: 1,
+  /** Multiplier on a positive pass gain after the real distribution is sampled. */
+  passGainCal: 1.07,
+  /** Game-clock seconds consumed per second of play time (pace). */
+  pace: 0.835,
+  /** Where a drive starts after a touchback (2015–2024 average ≈ the 27). */
+  kickoffYard: 27,
+  /** Pre-snap penalty chance per snap (defense / offense). */
+  penDefRate: 0.05,
+  penOffRate: 0.042,
+  /** Base fumble chance: a carry / a completed catch that gets tackled. */
+  runFumbleBase: 0.02,
+  passFumbleBase: 0.004,
+  /** League-wide run/pass lean added to the OC's pass rate (negative = more runs). */
+  passAdj: -0.05,
+}
+
+/**
+ * R2: penalty yardage from a deterministic hash — 5 / 10 / 15-yard flags mixing
+ * to the real ≈ 8.7-yard average. No rng() draw is added or removed.
+ */
+function penaltyYards(key: string): number {
+  const r = hash32(key) % 10
+  return r < 5 ? 5 : r < 8 ? 10 : 15
+}
+
 export interface Play {
   n: number
   qtr: number
@@ -100,6 +170,12 @@ export interface Play {
   coverId?: string
   /** L12 E2: the defender who forced a fumble on a catch (bookkeeping only). */
   fumbleId?: string
+  /** R5: defenders who failed to bring the carrier down on this play. */
+  missedTackleIds?: string[]
+  /** R5: carriers/receivers who forced one or more missed tackles on this play. */
+  forcedMissedIds?: string[]
+  /** R5: the targeted receiver charged with a drop on this incompletion. */
+  dropId?: string
 }
 
 export interface GameSim {
@@ -414,13 +490,19 @@ function sampleYards(rng: Rng, isPass: boolean, edge: number, stack: string[], y
   const cal = getCalibration(tier)
   const cdf = isPass ? cal.passCdf : cal.runCdf
   let r = rng()
-  // Talent tilt: small nudge to the draw, plus a modest yard shift.
-  const shift = clamp(edge * 0.0035, -0.08, 0.08)
-  r = clamp(r - shift, 0.001, 0.999)
+  // Talent tilt: a bounded, mass-preserving tilt of the real distribution. A
+  // positive edge (better offence / faster back) shifts mass toward the explosive
+  // buckets, a negative edge (better defence) toward losses and stuffs. The power
+  // form keeps r inside (0,1), so — unlike an additive `r - shift` — it cannot
+  // pile a clamped point mass into the biggest bucket and overrun the real NFL tail.
+  const tilt = clamp(edge * R2.talentTilt, -0.08, 0.08)
+  r = clamp(r ** (1 / (1 + tilt)), 0.0005, 0.9995)
   let bucket = sampleBucket(cdf, r)
-  // Red-zone / goal-line makes chunk buckets far less likely.
+  // Red-zone / goal-line makes chunk buckets far less likely (R2: leans to a
+  // still-scoring 10–14 / 15–24 more often than a 5–9 that usually leaves a 3rd down).
   if (yard >= 80 && (bucket === '25-49' || bucket === '50+' || bucket === '15-24')) {
-    bucket = rng() < 0.5 ? '10-14' : '5-9'
+    const u = rng()
+    bucket = u < 0.3 ? '15-24' : u < 0.85 ? '10-14' : '5-9'
   }
   stack.push(bucket)
   let gain = bucketYards(bucket, rng, isPass)
@@ -532,6 +614,12 @@ interface PlayOutcome {
   coverId?: string
   /** L12 E2: the defender who forced a fumble on a catch (bookkeeping only). */
   fumbleId?: string
+  /** R5: defenders who missed the tackle on this play (a second tackler finishes). */
+  missedTackleIds?: string[]
+  /** R5: the carrier/receiver who forced those misses (for FMT stats). */
+  forcedMissedIds?: string[]
+  /** R5: the targeted receiver marked with a drop (the result stays Incomplete). */
+  dropId?: string
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -803,6 +891,94 @@ function passTackler(n: number, defId: string, coverId: string | undefined, saf:
   return coverId ?? saf[0]?.id ?? lbs[0]?.id
 }
 
+// ── R5: missed tackles ───────────────────────────────────────────────────────
+// The first defender on a run or completion "attempts" the tackle. TAK/PUR/HPW/AGI
+// against the carrier's BTK/TRK/JKM/SPM/SFA/SPD decide whether he brings him down;
+// a miss is a deterministic hash (no rng() draw), adds a couple of yards and a
+// second defender finishes the play. League rate ≈ 11–13% of attempts.
+
+// R5 review fix: both sides of the matchup use the SAME absolute 0–100 scale and
+// each term is centred on the measured league-average blend, so an average defender
+// against an average carrier sits exactly at `missBase` and the offset can no longer
+// dominate the difference. The attribute set is unchanged.
+/** R5: measured league-average tackling blend across all attempts. */
+export const MT_REF_TACKLER = 79
+/** R5: measured league-average break-tackle blend across all attempts. */
+export const MT_REF_CARRIER = 79
+
+/** A defender's tackling blend (absolute): TAK/PUR primary, HPW/AGI secondary. */
+export function tackleRating(p: Player | undefined): number {
+  if (!p) return 70
+  const a = mkAttrs(p)
+  return (a.TAK ?? 70) * 0.5 + (a.PUR ?? 70) * 0.25 + (a.HPW ?? 70) * 0.15 + (a.AGI ?? 70) * 0.1
+}
+
+/** A carrier's break-tackle blend (absolute): BTK/TRK/JKM/SPM/SFA plus a little speed. */
+export function elusiveRating(carrier: Player | undefined): number {
+  if (!carrier) return 70
+  const a = mkAttrs(carrier)
+  const pos = carrier.pos
+  if (pos === 'QB') return (a.SPD ?? 70) * 0.4 + (a.AGI ?? 70) * 0.3 + (a.BCV ?? 70) * 0.2 + (a.RUN ?? 70) * 0.1
+  return (a.BTK ?? 70) * 0.25 + (a.TRK ?? 70) * 0.2 + (a.JKM ?? 70) * 0.15 + (a.SPM ?? 70) * 0.15 +
+    (a.SFA ?? 70) * 0.1 + (a.SPD ?? 70) * 0.15
+}
+
+/** R5: the deterministic rating-only miss rate for a named defender/carrier pair.
+ *  Shared with the fast stat allocation so generated seasons agree with play-by-play. */
+export function missRate(tackler: Player | undefined, carrier: Player | undefined): number {
+  const carTerm = (elusiveRating(carrier) - MT_REF_CARRIER) * R2.missCarDiff
+  const defTerm = (MT_REF_TACKLER - tackleRating(tackler)) * R2.missDefDiff
+  return clamp(R2.missBase + carTerm + defTerm, 0.004, 0.4)
+}
+
+/** R5: a defender's miss rate against a league-average carrier (fast allocation). */
+export function defenderMissRate(tackler: Player | undefined): number {
+  return clamp(R2.missBase + (MT_REF_TACKLER - tackleRating(tackler)) * R2.missDefDiff, 0.004, 0.4)
+}
+
+/** R5: a carrier's forced-miss rate against a league-average defender (fast allocation). */
+export function carrierMissRate(carrier: Player | undefined): number {
+  return clamp(R2.missBase + (elusiveRating(carrier) - MT_REF_CARRIER) * R2.missCarDiff, 0.004, 0.4)
+}
+
+/** R5: chance the first defender misses. `missRate` plus an open-field term and, on
+ *  passes, an open-field bump scaled by how tackle-prone the defender is, so an elite
+ *  tackler still stays under 6% while the league lands near 12% of attempts. */
+function tackleMissChance(tackler: Player | undefined, carrier: Player | undefined, gain: number, passing: boolean): number {
+  const openness = clamp(gain, 0, 30) * (passing ? R2.missGain * 0.85 : R2.missGain)
+  const quality = passing ? clamp(defenderMissRate(tackler) / R2.missBase, 0, 2) : 0
+  const bump = R2.missPassBump * quality
+  return clamp(missRate(tackler, carrier) + openness + bump, 0, 0.4)
+}
+
+/** R5: deterministic extra yards on a broken tackle, reusing no rng draw. */
+function missExtraYards(key: string): number {
+  return 1 + (hash32(key) % Math.max(1, R2.missYardsRange))
+}
+
+// ── R5: drops ────────────────────────────────────────────────────────────────
+// A target's hands decide how often a catchable ball is dropped. This is a
+// bookkeeping label on an incompletion only — the result stays Incomplete and no
+// completion/yard term moves, so team calibration is untouched. Decided by a
+// deterministic hash on the existing incompletion branch (no new rng draw).
+export const DROP_BASE = 0.125
+export const DROP_SLOPE = 0.004
+/** Conditional drop chance on an incompletion: ≈12% at league-average hands,
+ *  lower for better CTH. League-wide this lands at ≈3–5% of targets. */
+export function dropChance(pos: string | undefined, a: Record<string, number>): number {
+  const rel = pos ? rmean(pos, 'CTH', a.CTH ?? 70) : 0
+  return clamp(DROP_BASE - rel * DROP_SLOPE, 0.03, 0.24)
+}
+
+/** R5: the defender who finishes after a miss — anyone but the man who whiffed. */
+function finishTackler(key: string, first: string | undefined, lists: Player[][]): string | undefined {
+  const pool: Player[] = []
+  for (const l of lists) for (const p of l) if (p.id !== first && !pool.some((x) => x.id === p.id)) pool.push(p)
+  // No alternative defender: never credit the man who just missed with the stop.
+  if (!pool.length) return undefined
+  return pool[hash32(key) % pool.length]?.id
+}
+
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
@@ -873,7 +1049,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
-  const sackChance = clamp((0.069 + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)), 0.02, 0.13)
+  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)), 0.02, 0.13)
 
   // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
   // more looks, but the ball is spread by a softmax draw over those scores rather
@@ -926,7 +1102,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const coverId = coverDefender(target, concept, wrs, cbs, saf, lbs)
 
   if (rng() < sackChance) {
-    const y = -Math.round(6 + rng() * 6)
+    // R2: a sack costs ≈ 7 yards (real 2015–2024).
+    const y = -Math.round(5 + rng() * 5)
     // Always consume the DL pick draw so the rng stream is unchanged.
     const dlPick = dl[rng() < 0.5 ? 0 : Math.min(1, dl.length - 1)]?.id
     // L12 S3: on a blitz sack, 30% of the time a linebacker gets the credit
@@ -1006,8 +1183,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // E1: a receiver's hands (CTH/CIT/SPC/JMP) move the completion a little; tight coverage is when
   // the defense's coverage edge beats the route.
   const tightCoverage = coverage * 1.15 > qAccuracy + separation
+  // R2: the pocket compresses near the goal line — a smaller window, a faster
+  // throw. 0 at the 20, growing to `rzCompDamp` on the doorstep.
+  const rzDamp = yard >= 80 ? R2.rzCompDamp * clamp((yard - 80) / 19, 0, 1) : 0
   let compProb = clamp(
-    (0.645 + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage),
+    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(defMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0),
     0.42,
     0.74,
   )
@@ -1021,7 +1201,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const a = mkAttrs(p)
     return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
   }))
-  const intProb = clamp(0.014 * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth), 0.005, 0.06)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth), 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -1048,18 +1228,26 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const gains: string[] = []
     const catchSkill = (tA.CTH ?? 70) * 0.5 + (tA.SPC ?? 70) * 0.2 + (tA.BTK ?? 70) * 0.3 + tStyle.contested * 8
     let gain = sampleYards(rng, true, talentEdge + (catchSkill - 72), gains, yard, tier)
+    // R2: the real distribution is sampled first, then a small league-wide
+    // calibration trims the positive tail (the rating terms above are unchanged).
+    if (gain > 0) gain = Math.round(gain * R2.passGainCal)
     // Live defensive plan bends the explosive part of a play: soft zone caps
     // them, press man risks them. Underneath gains are left alone.
     if (gain > 15) gain = 15 + Math.round((gain - 15) * bigPlayRisk)
+    // R2: the long-TD rate is tuned separately from the short passing game.
+    if (gain > 20) gain = Math.round(gain * R2.explosiveCal)
     // Style-driven YAC: playmakers and elusive receivers add yards after the catch.
-    if (gain > 0) gain += Math.round(tStyle.yacBias * 2.5 * (0.5 + rng()) + tStyle.elusiveness * (1 + rng() * 3))
-    if (yard >= 88) gain += 4
-    else if (yard >= 80) gain += 2
+    if (gain > 0) gain += Math.round((tStyle.yacBias * 2.5 * (0.5 + rng()) + tStyle.elusiveness * (1 + rng() * 3)) * R2.yacCal)
+    // R2: near the goal line the field is compressed — a would-be score can be
+    // stood up short, so it becomes a tackle at the 1 rather than a guaranteed TD.
+    if (yard + gain >= 100 && gain > 0) gain = Math.round(gain * (1 - R2.rzPassDamp))
     // L12 S1: checkdowns and tight-end throws are underneath targets — scale their
     // yards to NFL yards-per-target (RB ~5.5, TE ~7) instead of the route model's.
     if ((target?.pos === 'RB' || target?.pos === 'FB') && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
     else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
     gain = clamp(gain, -8, 85)
+    // R2: on a money down the route is worked back to the sticks.
+    if (gain > 0 && env?.down === 3) gain += R2.moneyYards
     // L12 S3: a completion is stopped by one defender — the coverage defender most
     // often, support otherwise. No credit on a score or a late sideline catch.
     const late = (env?.qtr ?? 0) >= 4 && (env?.clock ?? 9999) <= 120
@@ -1068,20 +1256,39 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const tacklerGroups = [cbs, saf, lbs]
     // L12 E2: a strong tackler cuts the YAC short.
     if (stopped && gain > 0) gain = Math.max(-4, gain - tacklerYacShrink(stopped, tacklerGroups))
-    const big = gain >= 25
     // L12 E2: a big hitter can jar the ball loose on the stop. Reuses this play's
     // time draw (no new rng) and only fires on a tackle, never on a score.
     const tu = rng()
-    const forceFumble = !!stopped && gain > 0 && yard + gain < 100 && tu < tacklerHitPower(stopped, tacklerGroups)
+    // R5: the first defender attempts the tackle. A deterministic miss adds yards
+    // and a second defender finishes the play (no rng draw added or removed).
+    let stopper = stopped
+    let missedTackleIds: string[] | undefined
+    let forcedMissedIds: string[] | undefined
+    if (stopped && gain > 0 && yard + gain < 100 &&
+      hash32(`${n}:${defId}:passmt`) / 4294967296 < tackleMissChance([...cbs, ...saf, ...lbs].find((p) => p.id === stopped), target, gain, true)) {
+      missedTackleIds = [stopped]
+      gain += missExtraYards(`${n}:${offId}:passmty`)
+      // A miss that reaches the end zone has no finishing tackle to credit.
+      stopper = yard + gain < 100 ? finishTackler(`${n}:${defId}:passmt2`, stopped, [cbs, saf, lbs]) : undefined
+      forcedMissedIds = target?.id ? [target.id] : undefined
+    }
+    const big = gain >= 25
+    const forceFumble = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)
     return {
       type: 'pass', concept: concept.name, yards: gain, blitz,
       result: forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete',
       turnover: forceFumble, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !forceFumble && big,
-      fumbleId: forceFumble ? stopped : undefined,
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopped ? [stopped] : undefined,
+      fumbleId: forceFumble ? stopper : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopper ? [stopper] : undefined,
+      missedTackleIds, forcedMissedIds,
     }
   }
-  return { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
+  // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
+  // the existing play number/offence; the result and every sim counter are
+  // unchanged. Better hands (CTH) drop fewer.
+  if (target && hash32(`${n}:${offId}:drop`) / 4294967296 < dropChance(target.pos, tA)) incomplete.dropId = target.id
+  return incomplete
 }
 
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
@@ -1178,6 +1385,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
   let gain = tier === 'FBS' && runGain < 0 ? Math.round(runGain * 0.7) : runGain
+  // R2: trim the positive run tail to the 10-year NFL average (base constant only).
+  if (gain > 0) gain = Math.round(gain * R2.runGainCal)
   if (distance <= 2) gain += (rng() < 0.35 ? 2 : 1) + Math.round(cStyle.power * 1.5)
   gain += rbAfterContact(carrier?.pos, cA, gain)
   // L12.10 B0: a fullback's lead block earns a little extra on the ground (centered; no rng).
@@ -1185,21 +1394,39 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     const fA = mkAttrs(fb)
     gain += Math.round(rmean('FB', 'RBK', fA.RBK ?? 70) * 0.06 + rmean('FB', 'IBL', fA.IBL ?? 70) * 0.04)
   }
-  if (yard >= 95) gain += 4
-  else if (yard >= 88) gain += 2
   gain = clamp(gain, -10, 90)
+  // R2: on a money down a runner lowers his shoulder to the marker.
+  if (gain > 0 && env?.down === 3) gain += R2.moneyYards
   // L12 E2: pursuit (DL/LB PUR + SPD) caps the long-run tail.
   if (gain > 20) gain = 20 + Math.round((gain - 20) * clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4))
-  const isBig = gain >= 20
+  // R2: the long-TD rate is tuned separately from the short run game.
+  if (gain > 20) gain = Math.round(gain * R2.explosiveCal)
+  // R2: near the goal line the compressed front can stand a runner up short.
+  if (yard + gain >= 100 && gain > 0) gain = Math.round(gain * (1 - R2.rzRunDamp))
   const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
-  const fumble = rng() < 0.011 * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult
+  const fumble = rng() < R2.runFumbleBase * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
-  const tackler = fumble ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
+  let tackler = fumble ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
+  let missedTackleIds: string[] | undefined
+  let forcedMissedIds: string[] | undefined
+  // R5: the first defender attempts the tackle. A deterministic miss adds yards
+  // and a second defender finishes the play (no rng draw is added or removed).
+  if (tackler && !fumble && gain > -3) {
+    const first = [...lbs, ...dl, ...saf, ...cbs].find((p) => p.id === tackler)
+    if (hash32(`${n}:${defId}:runmt`) / 4294967296 < tackleMissChance(first, carrier, gain, false)) {
+      missedTackleIds = [tackler]
+      gain += missExtraYards(`${n}:${offId}:runmty`)
+      // A miss that reaches the end zone has no finishing tackle to credit.
+      tackler = yard + gain < 100 ? finishTackler(`${n}:${defId}:runmt2`, tackler, [lbs, dl, saf, cbs]) : undefined
+      forcedMissedIds = carrier ? [carrier.id] : undefined
+    }
+  }
+  const isBig = gain >= 20
   const tackleIds = tackler ? [tackler] : []
   return {
     type: 'run', concept: concept.name, yards: gain, result: isBig ? 'Big run!' : 'Rush',
     turnover: fumble, carrierId: carrier?.id, bigPlay: isBig,
-    timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds,
+    timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
   }
 }
 
@@ -1227,7 +1454,8 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
 function resolvePAT(world: World, rng: Rng, offId: string): PlayOutcome {
   const k = topGroup(world, offId, ['K'], 1)[0]
   const acc = k ? (mkAttrs(k).KAC ?? 84) : 84
-  const good = rng() < clamp(0.88 + (acc - 80) * 0.006, 0.8, 0.99)
+  // R2: the real extra-point rate is ≈ 94% over the last decade.
+  const good = rng() < clamp(0.93 + (acc - 80) * 0.005, 0.88, 0.99)
   return {
     type: 'pat', concept: 'Extra Point', yards: 0,
     result: good ? 'Extra point good' : 'Extra point MISSED',
@@ -1810,8 +2038,8 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     homeId,
     awayId,
     tier: isCollege ? 'FBS' : 'NFL',
-    pace: isCollege ? 0.78 : 0.9,
-    passAdj: isCollege ? -0.09 : 0,
+    pace: isCollege ? 0.78 : R2.pace,
+    passAdj: isCollege ? -0.09 : R2.passAdj,
     timeouts: { [homeId]: 3, [awayId]: 3 },
     timeoutsUsed: { [homeId]: 0, [awayId]: 0 },
     adjust: {},
@@ -1855,7 +2083,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
   // G10: if the user receives the opening kick, this is their first drive.
   if (ctx && s.offId === ctx.userTeamId) s.userDrive = 1
   // opening kickoff
-  pushPlay(s, { type: 'kickoff', concept: 'Kickoff', yards: 0, result: 'Touchback', startYard: 25, endYard: 25, down: null, distance: null, timeUsed: 5 })
+  pushPlay(s, { type: 'kickoff', concept: 'Kickoff', yards: 0, result: 'Touchback', startYard: R2.kickoffYard, endYard: R2.kickoffYard, down: null, distance: null, timeUsed: 5 })
   return s
 }
 
@@ -1872,7 +2100,7 @@ function stepClock(s: GameState): 'continue' | 'done' {
       s.qtr += 1
       s.clock = 600
       swapPossession(s)
-      s.yard = 25
+      s.yard = R2.kickoffYard
       s.down = 1
       s.distance = 10
       pushPlay(s, { type: 'end', concept: 'End of Regulation', yards: 0, result: 'Tied — Overtime', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
@@ -1895,7 +2123,7 @@ function stepHalftime(s: GameState): 'continue' {
   s.qtr = 3
   s.clock = 900
   swapPossession(s)
-  s.yard = 25
+  s.yard = R2.kickoffYard
   s.down = 1
   s.distance = 10
   s.timeouts = { [s.homeId]: 3, [s.awayId]: 3 }
@@ -1956,10 +2184,10 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
   }
 
   swapPossession(s)
-  s.yard = 25
+  s.yard = R2.kickoffYard
   s.down = 1
   s.distance = 10
-  pushPlay(s, { type: 'kickoff', concept: 'Kickoff', yards: 0, result: 'Touchback', startYard: 25, endYard: 25, down: null, distance: null, timeUsed: 5 })
+  pushPlay(s, { type: 'kickoff', concept: 'Kickoff', yards: 0, result: 'Touchback', startYard: R2.kickoffYard, endYard: R2.kickoffYard, down: null, distance: null, timeUsed: 5 })
   s.phase = 'play'
   return 'continue'
 }
@@ -2006,7 +2234,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     }
     pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: s.down, distance: s.distance })
     swapPossession(s)
-    s.yard = 25
+    s.yard = R2.kickoffYard
     s.down = 1
     s.distance = 10
     return 'continue'
@@ -2016,7 +2244,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const quickPassAdj = hasFix(envFor(s), offId, 'quickGame') ? 0.1 : 0
   const modePassAdj = s.twoMinMode === 'protect' ? -0.15 : 0
   const isFourth = s.down === 4
-  const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj
+  // R2: red-zone finishing — inside the 20 the league throws more than it does
+  // between the 20s, so the concept draw leans pass there (no extra rng draw).
+  const rzPassAdj = s.yard >= 80 ? R2.rzPassBias : 0
+  const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj + rzPassAdj
 
   // ── L10 G9/G10: the snap's concept and any call-matrix edge. The `call` and
   //    `defCall` decisions sit before the penalty rng; the AI's counter-call is
@@ -2116,16 +2347,17 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // Defensive penalty (~3.5%) — 5 yards and an automatic first down.
   const defDisc = ocEffect(world, defId).discipline * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
   // L12.13 M3: a defense that knows the system makes fewer mental errors.
-  if (s.rng() < 0.035 * defDisc * (s.mental[defId]?.def ?? 1)) {
+  if (s.rng() < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    s.yard = clamp(s.yard + 5, 1, 99)
-    penS.plays += 1
+    const py = penaltyYards(`${s.n}:penD:${defId}`)
+    s.yard = clamp(s.yard + py, 1, 99)
+    // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
     penS.firstDowns += 1
     const t = 18 * s.pace
     s.clock -= t
     penS.top += t
-    pushPlay(s, { type: 'penalty', concept: 'Defensive Penalty', yards: 5, result: '5-yard penalty, automatic first down', turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 18 })
+    pushPlay(s, { type: 'penalty', concept: 'Defensive Penalty', yards: py, result: `${py}-yard penalty, automatic first down`, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 18 })
     s.down = 1
     s.distance = Math.min(10, 100 - s.yard)
     return 'continue'
@@ -2134,16 +2366,17 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // Offensive penalty (~2.5%, ×1.3 in the G7 hurry-up) — 5 yards, replay the down.
   const offDisc = ocEffect(world, offId).discipline * cohesionMult(s.cohesionMean?.off, s.cohesion?.[offId]?.off, 0.6)
   const hurryPen = s.twoMinMode === 'hurry' ? 1.3 : 1
-  if (s.rng() < 0.025 * offDisc * hurryPen * (s.mental[offId]?.off ?? 1)) {
+  if (s.rng() < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    s.yard = clamp(s.yard - 5, 1, 99)
-    penS.plays += 1
+    const py = penaltyYards(`${s.n}:penO:${offId}`)
+    s.yard = clamp(s.yard - py, 1, 99)
+    // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
     const t = 22 * s.pace
     s.clock -= t
     penS.top += t
-    pushPlay(s, { type: 'penalty', concept: 'Offensive Penalty', yards: -5, result: '5-yard penalty, replay down', turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 22 })
-    s.distance = Math.min(s.distance + 5, 100 - s.yard)
+    pushPlay(s, { type: 'penalty', concept: 'Offensive Penalty', yards: -py, result: `${py}-yard penalty, replay down`, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 22 })
+    s.distance = Math.min(s.distance + py, 100 - s.yard)
     return 'continue'
   }
 
@@ -2163,7 +2396,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       }
       pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: 4, distance: s.distance })
       swapPossession(s)
-      s.yard = 25
+      s.yard = R2.kickoffYard
       s.down = 1
       s.distance = 10
       return 'continue'
@@ -2241,7 +2474,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       return 'continue'
     }
     swapPossession(s)
-    s.yard = 25
+    s.yard = R2.kickoffYard
     s.down = 1
     s.distance = 10
     pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })

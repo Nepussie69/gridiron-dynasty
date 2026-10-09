@@ -7,7 +7,10 @@ import {
   COL_COV_TGT,
   COL_COV_YDS,
   COL_DEF_INT,
+  COL_DROP,
+  COL_FMT,
   COL_GP,
+  COL_MT,
   COL_PASS_ATT,
   COL_PASS_INT,
   COL_PASS_PCT,
@@ -61,13 +64,13 @@ const OFFENSE_GROUPS: ColGroup[] = [
   { label: 'Passing', cols: [COL_PASS_ATT, COL_PASS_PCT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_RTG] },
   {
     label: 'Rushing',
-    cols: [{ ...COL_RUSH_ATT, label: 'ATT' }, COL_RUSH_YDS, { ...COL_RUSH_AVG, label: 'Y/A' }, COL_RUSH_TD],
+    cols: [{ ...COL_RUSH_ATT, label: 'ATT' }, COL_RUSH_YDS, { ...COL_RUSH_AVG, label: 'Y/A' }, COL_RUSH_TD, COL_FMT],
   },
-  { label: 'Receiving', cols: [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_AVG, COL_REC_TD] },
+  { label: 'Receiving', cols: [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_AVG, COL_REC_TD, COL_FMT, COL_DROP] },
 ]
 
 const DEFENSE_GROUPS: ColGroup[] = [
-  { label: 'Defense', cols: [COL_TCK, COL_TFL, COL_SCK, COL_DEF_INT, COL_PD] },
+  { label: 'Defense', cols: [COL_TCK, COL_MT, COL_TFL, COL_SCK, COL_DEF_INT, COL_PD] },
   { label: 'Coverage', cols: [COL_COV_TGT, COL_COV_CMP, { ...COL_COV_YDS, label: 'YDS' }, COL_COV_TD, COL_COV] },
 ]
 
