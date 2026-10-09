@@ -56,6 +56,24 @@ Today every kickoff is a touchback (playsim `pushPlay(... 'Touchback')`) and pun
 - **Show it:** PlayEvent gains optional `returnerId` + `returnYards`; play text "Punt 47 yds, returned 11 by #84 D. Smith" / "Kickoff returned 27 yds by …"; animation uses the real returner (his jersey number and pace from his ratings) for both punts and kickoffs; box score / season / career stats get KR / KR yds / PR / PR yds / return TD columns (optional fields).
 - **Calibration:** re-run the 3-seed SIM after: field position changes will move points — fold into the R2 bands (do not inflate TDs elsewhere).
 
+## R7 — QB pressures as a stat (user request, 2026-10-09: "include pressures in statistics in the game and box score")
+Today `PlayOutcome.pressure` is a boolean set on every sack and on incompletions when `pressureEdge > 6`; nobody is credited and the rate is not realistic.
+- **Model:** on every dropback (sacks, completions, incompletions, INTs, scrambles if any) decide pressure from the existing `pressureEdge` with a deterministic per-play hash (no new rng draws): league rate ~30–35% of dropbacks (NFL Next Gen/PFF style), higher vs weak pass protection / on blitzes, lower vs elite OL; every sack is a pressure. **Stats only — do not change completion, sack or INT outcomes** (calibration must not move).
+- **Types (user, 2026-10-09: "include hurries in PRS"):** every pressure is exactly one of **sack**, **QB hit** (non-sack, QB knocked down as/after he throws; ~20–25% of non-sack pressures) or **hurry** (QB forced to throw/move early; the rest). **PRS = SCK + QBH + HUR**. Box score shows PRS and HUR next to SCK; season/career/Stats Hub show PRS, HUR and QBH; glossary explains the split.
+- **Credit:** one rusher per pressure — DL weighted by max(PMV, FMV) (and LBs on blitzes, as sack credit does) via the same hash; the sacker is credited on sacks.
+- **Stats:** optional `pressureId` on the play; defensive `PRS` (pressures) in box score, season, career (optional fields, old saves default 0), Stats Hub column + glossary, QB "pressured %" (pressures faced / dropbacks) on the passing side. Fast-sim allocation (`statAlloc`) gives rushers a matching deterministic share so simmed seasons show them too.
+- **Checks:** league pressure rate 30–35% of dropbacks on 3 seeds; top edge rushers ~50–80 pressures per 17 games; elite PMV/FMV rusher > average; SIM/eq unchanged vs the pre-change branch.
+
+## R8 — QB sacked in the passing line (user request, 2026-10-09: "include qb sacked in game and statistics")
+Team `sacksTaken` exists, and sack plays carry `qbId`, but the QB's own line has no sacks.
+- Passing line gets **SK** (times sacked) and **SKY** (sack yards lost): game box score (`C/ATT YDS TD INT SK RTG`), season, career, Stats Hub columns + glossary. Optional fields; old saves default 0.
+- Game day / play-by-play: counted from sack plays by `qbId` (yards = |play.yards|).
+- Fast-sim (`statAlloc`): the team's existing `sacksTaken` and sack yards go to the QBs by dropback share (deterministic, no rng), so simmed seasons match.
+- Keep NFL convention: sacks are not pass attempts and sack yards are not subtracted from the QB's passing yards (team net passing already handles it). Check: league QB SK/game ≈ team sacks taken (2.2–2.6), box totals == play-level counts.
+
+## R9 — Coverage stats in simmed games (2026-10-09, with "include receptions allowed")
+Game-day box score now shows REC/TGT and YDS ALW (Claude, main). But fast-sim `statAlloc` allocates no coverage stats (defTargets/defComp/defYdsAllowed/defTDAllowed/defIntsCov), so simmed seasons show zero. Allocate them deterministically (no rng) from the team's passing allowed to its CBs/S/LBs by coverage role and MCV/ZCV, consistent with PBP coverage shares, so season REC allowed / YDS ALW / COV grades exist for every game.
+
 ## Progress
 | Task | Current state |
 |---|---|

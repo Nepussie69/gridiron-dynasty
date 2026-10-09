@@ -277,6 +277,13 @@ export function MatchView() {
   // Run the play's animation: a pre-snap beat, then t from 0 to 1.
   useEffect(() => {
     if (!anim || frozen) return
+    // A play that already finished stays finished: when a coached game appends
+    // the next plays, this play's animation is rebuilt (its "next" changed) —
+    // don't replay it from the snap. Replay/jump reset tRef, so they still run.
+    if (tRef.current.i === idx && tRef.current.t >= 1) {
+      setClock({ i: idx, t: 1 })
+      return
+    }
     let raf = 0
     const span = anim.duration / speed
     // Resume from a frozen frame of this play; otherwise start after the pre-snap beat.
@@ -323,7 +330,8 @@ export function MatchView() {
     if (!match || !playing || frozen || !play) return
     // Only the part of this play still to animate (it may resume mid-play).
     const done = tRef.current.i === idx ? tRef.current.t : 0
-    const dur = ((anim?.duration ?? 1600) * (1 - done) + (done > 0 ? 0 : PRE_SNAP)) / speed + (play.type === 'end' ? 200 : 550)
+    // Already finished (e.g. the next plays were just appended): move on at once.
+    const dur = done >= 1 ? 0 : ((anim?.duration ?? 1600) * (1 - done) + (done > 0 ? 0 : PRE_SNAP)) / speed + (play.type === 'end' ? 200 : 550)
     timer.current = window.setTimeout(() => {
       setIdx((i) => {
         if (i >= match.plays.length - 1) {
@@ -1390,7 +1398,8 @@ export function BoxScore({ world, teamId, box, gmName, myTeamId, onTeamClick }: 
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' }, { k: 'defInts', l: 'INT' },
-        { k: 'defYdsAllowed', l: 'ALW' },
+        { k: 'defComp', l: 'REC/TGT', fmt: (r) => ((r.defTargets ?? 0) > 0 ? `${r.defComp ?? 0}/${r.defTargets}` : '—') },
+        { k: 'defYdsAllowed', l: 'YDS ALW' },
         { k: 'coverageGrade', l: 'COV', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
       ]} />}
     </div>
