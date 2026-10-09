@@ -10,7 +10,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 1a2 | **Stars are rare** (`NEXT_PHASE_L12_15.md`) | ~25–32 players at 90+ (one per club), more 80s; rank order kept | contracts | 🔨 stars4 review/verification |
 | 1b | **Real NFL numbers retune** (`NEXT_PHASE_REALISM.md`) | Every team stat to the 2015–2024 NFL averages (passing ~241, comp 64%, sacks 2.4, ypc 4.3, red-zone TD 56% …) | playbook, culture | 🔨 realism calibration |
 | 2 | **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`) | TV field (yard numbers, blue LOS + yellow 1st-down line, end zones, camera follow, result toasts), scorebug/dock, dark mode, ⌘K, screen passes | current batch merged | ⏳ |
-| 3 | **Personnel packages** (L13) | 11/12/21/22 personnel vs Base/Nickel/Dime; who's on the field and the matchups that follow | 1 | ⏳ |
+| 3 | **Personnel packages** (L13) | 11/12/21/22 personnel vs Base/Nickel/Dime; who's on the field and the matchups that follow | 1 | ✅ merged |
 | 4 | **Special-teams calls** (L13) | Onside kick, fake punt/FG, return strategy; fakes get scouted (tendency memory) | — | ⏳ |
 | 5 | **Challenges & replay** | Throw the red flag on close spots, catches, fumbles; lose a timeout if wrong; booth reviews in the last 2 minutes | — | ⏳ |
 | 6 | **Weather & stadiums** | Wind (deep balls, kicks), rain/snow (fumbles, footing), cold, domes; crowd noise → false starts on the road; forecast on Game Plan | — | ⏳ |
@@ -25,7 +25,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 15 | **Injury decisions** (L15) | Play him hurt or sit him: risk of a longer injury, owner pressure in a playoff push | — | ⏳ |
 | 16 | **Locker room** (L15) | Leaders and problem players, mentoring rookies (faster growth), morale affecting effort | culture K1/K2 | ⏳ |
 | 17 | **Bye week** | A real choice: rest, install week or self-scout | practice ✅ | ⏳ |
-| 18 | **3-year cap planner** | Future cap hits, dead money and expiring deals before you sign anyone | — | ⏳ |
+| 18 | **3-year cap planner** | Future cap hits, dead money and expiring deals before you sign anyone | — | ✅ merged |
 | 19 | **Analytics department** | Hire analysts: sharper win probability, 4th-down advice, opponent tendencies | staff redesign | ⏳ |
 | 20 | **Press conferences** (`NEXT_PHASE_L12_17.md`, spec only) | Answers move owner trust, player morale and your profile | — | ⛔ dropped by the user 2026-10-08 |
 | 21 | **Coaching tree** | Your coordinators get hired away as head coaches; their success adds to your legacy; poach them back | History ✅ | ⏳ |
