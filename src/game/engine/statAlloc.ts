@@ -545,11 +545,17 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
 function recordAllocatedStats(world: World, sim: GameSim, season: number, level: 'NFL' | 'CFB') {
   for (const teamId of [sim.homeId, sim.awayId]) {
     const lines = teamId === sim.homeId ? sim.homeLines ?? [] : sim.awayLines ?? []
+    // A player can have several lines in one game (e.g. a back's rushing and
+    // receiving lines) — he still played one game.
+    const counted = new Set<string>()
     for (const { playerId, line } of lines) {
       const p = world.players.find((x) => x.id === playerId)
       if (!p) continue
       const entry = currentSeason(p, season, level, teamId)
-      entry.games += 1
+      if (!counted.has(playerId)) {
+        counted.add(playerId)
+        entry.games += 1
+      }
       entry.passAtt += line.passAtt ?? 0
       entry.passComp += line.passComp ?? 0
       entry.passYds += line.passYds ?? 0
