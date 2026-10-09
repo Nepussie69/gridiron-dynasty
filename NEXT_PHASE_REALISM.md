@@ -77,6 +77,15 @@ Game-day box score now shows REC/TGT and YDS ALW (Claude, main). But fast-sim `s
 ## R10 — Two-high defensive call (user request, 2026-10-09)
 Add DefCall `twoHigh` (Cover 2/4 two-deep shell) to DEF_CALLS, CALL_MATRIX (suggested: run +2, short +1, deep -3 — between zone and stack), labels/descriptions, `aiTendency` defRaw weight (from coverage style), user tendency book (`emptyBook` def keys), film/ledger summaries and the defCall moment cards; keep old saves valid (optional book keys default 0). Re-run calib/eq after.
 
+## R13–R18 — Next realism layer (user: "queue all six", 2026-10-09)
+- **R13 Season realism checks:** a 17-week fast-sim + PBP season probe on 3 seeds printing NFL 2015–24 season shapes: leaders (pass yds ~4,500–5,000 top, rush ~1,400–1,800, rec ~1,500–1,800, sacks ~15–19, INTs ~6–8, tackles ~140–170), 4,000-yd passers ~8–12, 1,000-yd rushers ~12–18, standings spread (best ~13–4, worst ~3–14, SD of wins ~3.0), point differential range, home win % ~54–57%, favourite win % ~67–70%. Tune allocation/sim constants only where a shape is off.
+- **R14 Penalty detail:** typed penalties (holding off/def, false start, offside/encroachment, DPI spot foul, OPI, roughing the passer, illegal contact, delay of game, unnecessary roughness) at NFL per-game rates, driven by player ratings (AWR/discipline, PBK vs PRS for holding, MCV for DPI) and road crowd noise for false starts; accepted/declined/offsetting logic; play text + box score penalties by type and team.
+- **R15 Fatigue & snap counts:** in-game stamina per player (STA), rotation for DL/RB/WR by depth chart, hurry-up/long drives tire defenses (small effect), snap % in box score and season stats.
+- **R16 Turnover variety:** strip sacks, tipped-pass INTs, fumble recovery ~50/50 by proximity (no new rng — hash), muffed catches, goal-line fumbles; keep total turnovers in band.
+- **R17 Kicking realism:** blocked FG/XP/punts (~1–2%), fake punt/FG and onside kicks (AI situational; user via special-teams call on 4th down), long-FG range by KPW, wind hook for weather (#6) as a neutral parameter.
+- **R18 Coaching tendencies:** per-coach 4th-down aggressiveness, 2-point appetite, run/pass identity, timeout usage and tempo from staff traits; visible on the scouting/opponent card.
+Each push: no new/removed rng() draws (hash), optional save fields, build + lint 4, calib 3x500 --eq --smoke, anim end spots 100%, foreground verification output.
+
 ## Progress
 | Task | Current state |
 |---|---|
