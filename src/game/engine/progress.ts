@@ -10,6 +10,7 @@ import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
 import { applyDevFocus, focusPointsFor } from './devPlan'
+import { mentorGrowthBonus } from './lockerRoom'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
 import type { CareerDatabase } from './statsDb'
 
@@ -77,7 +78,10 @@ export function experienceLabel(experience: number): 'starter' | 'rotation' | 'b
   return experience >= 0.55 ? 'starter' : experience >= 0.3 ? 'rotation' : 'barely played'
 }
 
-export function developPlayers(world: World, user?: { teamId: string; growth: number }) {
+export function developPlayers(
+  world: World,
+  user?: { teamId: string; growth: number; mentors?: Record<string, string> },
+) {
   const rng = makeRng(world.seed + world.season * 31337)
   const retired: Player[] = []
   // Practice-squad players get no snaps and no starts, by rule (D2).
@@ -96,14 +100,25 @@ export function developPlayers(world: World, user?: { teamId: string; growth: nu
     const experience = p.age <= 26 ? experienceScore(world, p, psIds) : 0
     // L12.11: Player Development skill speeds up the young players on your club.
     const clubGrowth = user && p.teamId === user.teamId ? user.growth : 1
+    // L15 locker room (FUTURES 16): a young player paired with a captain grows
+    // faster. User-only, opt-in (no mentor = ×1), and deterministic — it scales
+    // the existing growth term without adding or removing any `rng()` draw.
+    let mentorMult = 1
+    if (user && p.teamId === user.teamId && p.age <= 26) {
+      const mentorId = user.mentors?.[p.id]
+      if (mentorId && mentorId !== p.id) {
+        const mentor = world.players.find((m) => m.id === mentorId)
+        if (mentor) mentorMult = 1 + mentorGrowthBonus(mentor)
+      }
+    }
     // L12.15 S4: with a deliberately thin elite pipeline, young players need to
     // reach their ceilings sooner or the opening star cohort ages out into a
     // multi-year trough. Faster maturation moves the (unchanged) ceiling supply
     // forward without raising the long-run level.
     if (p.age <= 24) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.22 + 0.42 * experience + rng() * 0.18) * dev * clubGrowth)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.22 + 0.42 * experience + rng() * 0.18) * dev * clubGrowth * mentorMult)), 40, 99)
     } else if (p.age <= 26) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.15 + 0.28 * experience + rng() * 0.12) * dev * clubGrowth)), 40, 99)
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.15 + 0.28 * experience + rng() * 0.12) * dev * clubGrowth * mentorMult)), 40, 99)
     } else if (p.age <= 29) {
       p.ovr = clamp(p.ovr + (rng() < 0.45 ? 1 : 0) - (rng() < 0.25 ? 1 : 0), 40, p.pot)
     } else {
