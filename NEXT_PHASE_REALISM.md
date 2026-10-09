@@ -47,6 +47,15 @@ User: "make sure missed tackles are involved in the gameplay … toughness → m
 - Re-check the rating table claims with the probe: TGH injury rate (NFL ~6–8 injuries per club per month of season, TGH 60 vs 95 ~1.5× difference), SPD on long runs (20+ yd runs share), TAK on missed tackles, CTH on drops (NFL drop rate ~3–5% of targets).
 - `__ratingSpread` re-run after R1–R5; report each rating's effect.
 
+## R6 — Punt and kick returns with a real returner (user request, 2026-10-09: "also for punt and kick returns so they player returning")
+Today every kickoff is a touchback (playsim `pushPlay(... 'Touchback')`) and punts only record a net distance; the animation invents a return by whoever stands at the `s0` spot, unnamed, with no stats.
+- **Returner:** each club gets a KR and a PR picked automatically from WR/RB/CB (not starting QB, not the top-2 WR/top RB if a comparable backup exists) by a return score from SPD, ACC, AGI, BCV, CAR (Madden has no return rating). Optional depth-chart override slots `KR`/`PR` (optional save field, defaults to auto). Injured players skipped.
+- **Kickoffs:** touchback vs return by kicker KPW and returner; return yards from returner score vs coverage (kicking team's ST tacklers: LB/S/CB backups by TAK/PUR/SPD) with the existing yard-sampling style; rare return TD and rare fumble. Targets (approx. NFL 2015–2023, before the 2024 kickoff rule): touchback ~55–60% of kickoffs, average kick return ~22–23 yds, return TD ~0.3% of returns.
+- **Punts:** gross distance (existing net formula split into gross − return), fair catch / downed / out of bounds / touchback vs return; return yards from PR vs coverage; rare muff and return TD. Targets: ~45% of punts returned, ~9 yds per return, net ~40–41.
+- **Determinism:** no new rng() draws in the sim — derive the extra randomness from a deterministic per-play hash (as drops do), so seeds and equivalence stay stable.
+- **Show it:** PlayEvent gains optional `returnerId` + `returnYards`; play text "Punt 47 yds, returned 11 by #84 D. Smith" / "Kickoff returned 27 yds by …"; animation uses the real returner (his jersey number and pace from his ratings) for both punts and kickoffs; box score / season / career stats get KR / KR yds / PR / PR yds / return TD columns (optional fields).
+- **Calibration:** re-run the 3-seed SIM after: field position changes will move points — fold into the R2 bands (do not inflate TDs elsewhere).
+
 ## Progress
 | Task | Current state |
 |---|---|
