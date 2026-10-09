@@ -15,7 +15,7 @@ import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
 import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
@@ -207,6 +207,30 @@ export const R16 = {
   tippedIntRate: 0.2,
   /** Of the tipped interceptions, the share a receiver muffed (vs. batted at line). */
   tippedMuffShare: 0.4,
+}
+
+// ── R17: kicking realism ─────────────────────────────────────────────────────
+// Blocked kicks, situational fakes and onside kicks, a KPW-scaled FG range and a
+// neutral wind hook. Every decision is a deterministic hash of the play number —
+// no rng() draw is added or removed, so the seed stream and the coached/full
+// equivalence are unchanged. The ~1–2% block rates leave FG% / XP% in band.
+export const R17 = {
+  /** A kick is blocked. NFL blocks are ≈1–2% of each attempt type. */
+  blockFg: 0.015,
+  blockPat: 0.012,
+  blockPunt: 0.012,
+  /** Fake punt/FG: rare, and only from 4th & short in plus territory. */
+  fakeRate: 0.03,
+  /** Onside kick: the share of desperate late kickoffs a trailing club tries. */
+  onsideRate: 0.4,
+  /** Onside recovery rate (kicking team; NFL ≈ 10–20%). */
+  onsideRecover: 0.13,
+  /**
+   * Wind hook for weather (#6): the FG/XP make-probability change per mph. A
+   * parameter only — the default 0 is exactly neutral, so today's sim and the
+   * calibration are unchanged until a weather layer supplies a value.
+   */
+  windPerMph: 0.006,
 }
 
 // ── R14: typed penalties ─────────────────────────────────────────────────────
@@ -427,7 +451,7 @@ export interface Play {
   /** R6: the return was taken back for a touchdown. */
   returnTD?: boolean
   /** R6: the return outcome (drives the play text and the animation). */
-  returnKind?: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff'
+  returnKind?: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff' | 'blocked'
   /** R6: a defensive touchdown (pick-six or fumble return). */
   defTD?: boolean
   /** R6: a safety (two points for this play's defense). */
@@ -462,6 +486,11 @@ export interface Play {
   muffedCatch?: boolean
   /** R16: a fumble on the doorstep (inside the 10). */
   goalLineFumble?: boolean
+  // ── R17: kicking realism ───────────────────────────────────────────────────
+  /** R17: a fake punt/FG — a scrimmage play run from a kicking formation. */
+  fake?: boolean
+  /** R17: a blocked field goal, extra point or punt. */
+  blockedKick?: boolean
 }
 
 export interface GameSim {
@@ -1003,7 +1032,7 @@ interface PlayOutcome {
   returnerId?: string
   returnYards?: number
   returnTD?: boolean
-  returnKind?: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff'
+  returnKind?: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff' | 'blocked' | 'blocked'
   defTD?: boolean
   /** R7: the defender credited with the pressure (sack, QB hit or hurry). */
   pressureId?: string
@@ -1019,6 +1048,9 @@ interface PlayOutcome {
   tipId?: string
   muffedCatch?: boolean
   goalLineFumble?: boolean
+  // ── R17: kicking realism ───────────────────────────────────────────────────
+  /** R17: a blocked field goal, extra point or punt. */
+  blockedKick?: boolean
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -1240,6 +1272,8 @@ interface SimEnv {
   hurry?: boolean
   /** R15: live per-player in-game fatigue (for the offence/defence difference). */
   fat?: Record<string, number>
+  /** R17: wind in mph for the kick hook (positive = into the kicker's face). 0 = calm. */
+  wind?: number
 }
 
 /**
@@ -2005,11 +2039,16 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
     // L12 E2: an aware kicker is steadier in a one-score fourth quarter.
     const late = (env?.qtr ?? 0) >= 4 && Math.abs(margin) <= 3
     const power = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
-    const good = rng() < fgProb(yard, power)
+    // R17: the lone rng() draw is unchanged; a blocked kick is a per-play hash.
+    // The wind hook is exactly neutral at 0 (weather #6 will supply a value).
+    const wind = env?.wind ?? 0
+    const made = rng() < fgProb(yard, power) + wind * R17.windPerMph
+    const blocked = h01(`${n}:${offId}:fgblock`) < R17.blockFg
+    const good = made && !blocked
     return {
       type: 'fg', concept: `${dist}-yard field goal`, yards: 0,
-      result: good ? `${dist}-yd FG is good` : `${dist}-yd FG is no good`,
-      turnover: !good, timeUsed: 5,
+      result: blocked ? `${dist}-yd FG is BLOCKED!` : good ? `${dist}-yd FG is good` : `${dist}-yd FG is no good`,
+      turnover: !good, blockedKick: blocked || undefined, timeUsed: 5,
     }
   }
   const p = topGroup(world, offId, ['P'], 1)[0]
@@ -2017,12 +2056,16 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
   // R6: the existing distance formula is the GROSS punt; the return (or a
   // touchback) comes out of it, so the net lands at ~40–41 with ~9-yard
   // returns. The lone rng() draw is unchanged; the outcome is a per-play hash.
-  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14)
+  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wind ?? 0) * 0.3)
   const key = `${n}:${offId}:punt`
   const u = h01(`${key}:kind`)
   const pr = defId ? clubReturners(world, defId).pr : undefined
-  let kind: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff'
-  if (u < 0.25) kind = 'fairCatch'
+  // R17: a blocked punt is a per-play hash, decided before the kind draw so the
+  // existing kind distribution is untouched.
+  const blocked = h01(`${key}:block`) < R17.blockPunt
+  let kind: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff' | 'blocked'
+  if (blocked) kind = 'blocked'
+  else if (u < 0.25) kind = 'fairCatch'
   else if (u < 0.45) kind = 'downed'
   else if (u < 0.53) kind = 'touchback'
   else if (u < 0.54) kind = 'muff'
@@ -2045,33 +2088,41 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
   }
   const spot =
     returnTD ? 100
-      : kind === 'touchback' ? 80
-        : kind === 'return' ? clamp(yard + gross - retYds, 1, 99)
-          : kind === 'muff' ? clamp(yard + gross - Math.round(h01(`${key}:muff`) * 6), 1, 99)
-            : clamp(yard + gross, 1, 99)
+      : kind === 'blocked' ? clamp(yard + 8 + Math.round(h01(`${key}:blkspot`) * 8), 1, 99)
+        : kind === 'touchback' ? 80
+          : kind === 'return' ? clamp(yard + gross - retYds, 1, 99)
+            : kind === 'muff' ? clamp(yard + gross - Math.round(h01(`${key}:muff`) * 6), 1, 99)
+              : clamp(yard + gross, 1, 99)
   const net = clamp(spot - yard, -20, 80)
   const name = shortName(pr?.name)
   const result =
-    kind === 'touchback' ? `${gross}-yard punt, touchback`
-      : kind === 'fairCatch' ? `${gross}-yard punt, fair catch by ${name}`
-        : kind === 'muff' ? `${gross}-yard punt, muffed`
-          : kind === 'downed' ? `${gross}-yard punt, downed`
-            : `Punt ${gross} yds, returned ${retYds} by ${name}${returnTD ? ' TOUCHDOWN!' : ''}`
+    kind === 'blocked' ? `${gross}-yard punt, BLOCKED`
+      : kind === 'touchback' ? `${gross}-yard punt, touchback`
+        : kind === 'fairCatch' ? `${gross}-yard punt, fair catch by ${name}`
+          : kind === 'muff' ? `${gross}-yard punt, muffed`
+            : kind === 'downed' ? `${gross}-yard punt, downed`
+              : `Punt ${gross} yds, returned ${retYds} by ${name}${returnTD ? ' TOUCHDOWN!' : ''}`
   return {
     type: 'punt', concept: 'Punt', yards: net, result, turnover: true, timeUsed: 6,
     returnerId, returnYards: kind === 'return' ? retYds : undefined, returnTD, returnKind: kind,
+    blockedKick: kind === 'blocked' || undefined,
   }
 }
 
-function resolvePAT(world: World, rng: Rng, offId: string): PlayOutcome {
+function resolvePAT(world: World, rng: Rng, offId: string, n = 0, env?: SimEnv): PlayOutcome {
   const k = topGroup(world, offId, ['K'], 1)[0]
   const acc = k ? (mkAttrs(k).KAC ?? 84) : 84
   // R2: the real extra-point rate is ≈ 94% over the last decade.
-  const good = rng() < clamp(0.93 + (acc - 80) * 0.005, 0.88, 0.99)
+  // R17: the lone rng() draw is unchanged; a block is a per-play hash and the
+  // wind hook is exactly neutral at 0. The base carries the block rate so the
+  // NET make rate (and the XP% band) is unchanged by blocking.
+  const made = rng() < clamp(0.93 + (acc - 80) * 0.005 + R17.blockPat, 0.88, 0.99) + (env?.wind ?? 0) * R17.windPerMph
+  const blocked = h01(`${n}:${offId}:patblock`) < R17.blockPat
+  const good = made && !blocked
   return {
     type: 'pat', concept: 'Extra Point', yards: 0,
-    result: good ? 'Extra point good' : 'Extra point MISSED',
-    turnover: !good, timeUsed: 4,
+    result: blocked ? 'Extra point BLOCKED!' : good ? 'Extra point good' : 'Extra point MISSED',
+    turnover: !good, blockedKick: blocked || undefined, timeUsed: 4,
   }
 }
 
@@ -2090,6 +2141,33 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
   const kA = k ? mkAttrs(k) : {}
   const base = `${s.n}:${kicking}:ko`
   const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006, 0.42, 0.66)
+  // R17: a desperate, trailing club can try an onside kick (AI situational). A
+  // per-play hash decides whether it is tried and, if so, who recovers. No rng()
+  // draw is added or removed.
+  const koMargin = kicking === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  const desperate = s.qtr === 4 && s.clock <= 150 && koMargin < 0 && koMargin >= -10
+  if (desperate && h01(`${base}:onside`) < R17.onsideRate) {
+    const recovered = h01(`${base}:onsiderec`) < R17.onsideRecover
+    const kAbbr = world.byId[kicking]?.abbr ?? kicking
+    const rAbbr = world.byId[receiving]?.abbr ?? receiving
+    if (recovered) {
+      // The kicking club fell on its own kick and keeps the ball near midfield.
+      swapPossession(s)
+      s.yard = clamp(42 + Math.round(h01(`${base}:onsidespot`) * 10), 1, 99)
+    } else {
+      // The receiving club falls on it — good field position, no return.
+      s.yard = clamp(44 + Math.round(h01(`${base}:onsiderecspot`) * 8), 1, 99)
+    }
+    s.down = 1
+    s.distance = 10
+    pushPlay(s, {
+      type: 'kickoff', concept: 'Onside kick', yards: 0,
+      result: recovered ? `Onside kick recovered by ${kAbbr}!` : `Onside kick, recovered by ${rAbbr}`,
+      startYard: s.yard, endYard: s.yard, down: 1, distance: 10, timeUsed: 5,
+      returnKind: 'return', turnover: !recovered,
+    })
+    return { scored: false }
+  }
   const returner = clubReturners(world, receiving).kr
   const touchback = !returner || h01(`${base}:tb`) < pTb
   let retYds = 0
@@ -2290,6 +2368,9 @@ export interface GameState {
   driveSnaps: number
   /** Player index for O(1) lookups while charging snaps (not persisted). */
   pIndex: Map<string, Player>
+  // ── R17: kicking realism ───────────────────────────────────────────────────
+  /** Wind for the kick hook (mph, positive into the kicker's face). 0 = calm. */
+  wind: number
 }
 
 const MAX_PLAYS = 210
@@ -2420,22 +2501,40 @@ function fmtEV(v: number): string {
  * 4th-down decision for the offense. Must be called before any rng draw in the
  * step; returns null when the user's moment is pending.
  */
-function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | null {
-  const inFgRange = s.yard >= 52
+function kickPowerOf(world: World, teamId: string): number {
+  const k = topGroup(world, teamId, ['K'], 1)[0]
+  const kA = k ? mkAttrs(k) : {}
+  return (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5
+}
+
+function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake' | null {
   const isUser = !!s.ctx && s.offId === s.ctx.userTeamId
   const sheet = isUser ? s.ctx!.callSheet : aiCallSheet(world, s.offId)
-  const k = topGroup(world, s.offId, ['K'], 1)[0]
-  const kA = k ? mkAttrs(k) : {}
-  const kickPower = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5
+  const kickPower = kickPowerOf(world, s.offId)
+  // R17: the offered FG range scales with the kicker's power (the make model's
+  // range sits 3 yards shorter, matching the pre-R17 option/EV gap).
+  const inFgRange = s.yard >= fgRangeYard(kickPower) - 3
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const sit: Situation = { yard: s.yard, down: 4, distance: s.distance, qtr: s.qtr, clockSec: s.clock, margin }
   const ev = fourthDownEV(sit, kickPower)
   const chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  // R17: a fake is a rare, situational surprise from 4th & short in plus
+  // territory — likelier for a trailing or aggressive club. In this sim the EV
+  // already says "go" there, so the fake is that call executed from a kicking
+  // look (a surprise). AI only; the user gets the same call as a moment option
+  // below. A per-play hash, no rng draw.
+  const fakeEligible = s.distance <= 2 && s.yard >= 45 && s.yard <= 68
+  if (!isUser && fakeEligible && chosen === 'go') {
+    const urgency = margin < 0 ? 1.7 : margin === 0 ? 1 : 0.5
+    const styleMult = sheet.fourth === 'aggressive' ? 1.6 : sheet.fourth === 'conservative' ? 0.4 : 1
+    if (h01(`${s.n}:${s.offId}:fake`) < R17.fakeRate * urgency * styleMult) return 'fake'
+  }
   const defaultId = inFgRange ? chosen : chosen === 'fg' ? 'punt' : chosen
   const options: MomentOption[] = [
     { id: 'go', label: 'Go for it', hint: 'One snap to keep the drive alive.' },
     ...(inFgRange ? [{ id: 'fg', label: `Kick the ${100 - s.yard + 17}-yd FG`, hint: 'Take the points.' }] : []),
     { id: 'punt', label: 'Punt', hint: 'Trade the ball for field position.' },
+    ...(isUser && fakeEligible ? [{ id: 'fake', label: inFgRange ? 'Fake FG' : 'Fake punt', hint: 'Snap it to the up-back — a surprise run or pass.' }] : []),
   ]
   const yardText = s.yard >= 50 ? `their ${100 - s.yard}` : `your ${s.yard}`
   const ask = (s.yard >= 35 && s.distance <= 5) || s.yard >= 52
@@ -2446,7 +2545,7 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | null {
     ask, margin, ep: ev.go,
   })
   if (choice == null) return null
-  return choice as 'go' | 'fg' | 'punt'
+  return choice as 'go' | 'fg' | 'punt' | 'fake'
 }
 
 // ── L10 G6: halftime adjustments + QB change ─────────────────────────────────
@@ -2610,7 +2709,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind }
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */
@@ -2774,6 +2873,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     snapSide: {},
     driveSnaps: 0,
     pIndex: new Map(world.players.map((p) => [p.id, p])),
+    wind: 0,
   }
   s.defId = s.offId === homeId ? awayId : homeId
   // L12.9 K1: unit cohesion (relative to the league mean) nudges pre-snap penalty
@@ -2889,7 +2989,7 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
       offClass: offClassFor(concept.type, concept.depth),
     })
   } else {
-    const pat = resolvePAT(world, s.rng, offId)
+    const pat = resolvePAT(world, s.rng, offId, s.n, envFor(s))
     s.clock -= pat.timeUsed * s.pace
     if (!pat.turnover) {
       if (offId === s.homeId) s.homeScore += 1
@@ -2922,7 +3022,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (checkClock(s) === 'moment') return 'moment'
 
   // 4th-down decision sits at the very start of the step, before any rng draw.
-  let fourthChoice: 'go' | 'fg' | 'punt' | null = null
+  let fourthChoice: 'go' | 'fg' | 'punt' | 'fake' | null = null
   if (s.down === 4) {
     fourthChoice = chooseFourth(world, s)
     if (fourthChoice === null) return 'moment'
@@ -2935,8 +3035,9 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const planPassAdj = offPlan ? planEffects(offPlan, false).passAdj : 0
 
   // G7 fgRange: as soon as it's a long FG, kick it (≤0:30 left or on 3rd down).
-  if (s.twoMinMode === 'fgRange' && s.down !== 4 && s.yard >= 62 && (s.clock <= 30 || s.down === 3)) {
-    const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
+  // R17: the trigger point scales with the kicker's power.
+  if (s.twoMinMode === 'fgRange' && s.down !== 4 && s.yard >= fgRangeYard(kickPowerOf(world, offId)) + 7 && (s.clock <= 30 || s.down === 3)) {
+    const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore, s.n)
     s.clock -= out.timeUsed * s.pace
     const good = !out.turnover
     const fgS = statFor(s, offId)
@@ -3118,9 +3219,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   // 4th-down resolution (the choice was made before any rng draw this step).
-  if (isFourth && fourthChoice !== 'go') {
+  // A fake falls through to the ordinary scrimmage play below.
+  if (isFourth && fourthChoice !== 'go' && fourthChoice !== 'fake') {
     if (fourthChoice === 'fg') {
-      const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
+      const out = resolveSpecial(world, s.rng, offId, 'fg', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore, s.n)
       s.clock -= out.timeUsed * s.pace
       const good = !out.turnover
       const fgS = statFor(s, offId)
@@ -3224,7 +3326,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     offS.firstDowns += 1
     if (s.down === 3) offS.thirdDownConv += 1
   }
-  pushPlay(s, { ...out, result: safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
+  pushPlay(s, { ...out, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
 
   if (out.defTD) {
     // R6: a takeaway returned for a touchdown (pick-six / fumble return).

@@ -57,12 +57,20 @@ export function fgProb(yard: number, kickPower: number): number {
   return Math.max(0.45, Math.min(0.99, make))
 }
 
+/** R17: the minimum own-yard line a club will consider a field goal from (a
+ *  higher value = a shorter kick). Scales with the kicker's power — a big leg
+ *  (KPW 95) attempts from ~3 yards deeper than a weak one (KPW 78) — using the
+ *  same KPW/KAC blend the make model uses. */
+export function fgRangeYard(kickPower: number): number {
+  return 55 - (kickPower - 88) * 0.22
+}
+
 /** EV of each 4th-down option for the offense. `fg` is null outside FG range. */
 export function fourthDownEV(s: Situation, kickPower: number): { go: number; fg: number | null; punt: number } {
   const p = convertProb(s.distance)
   const q = fgProb(s.yard, kickPower)
   const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard)
-  const fg = s.yard < 55 ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
+  const fg = s.yard < fgRangeYard(kickPower) ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
   // A 40-yard net punt, touchback at the 20.
   const punt = -epAt(100 - Math.min(80, s.yard + 40))
   return { go, fg, punt }
