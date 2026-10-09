@@ -4,6 +4,8 @@
 
 ### Latest follow-up, 23:30 AEDT
 
+- **User subsequently answered "yep push to githu" to the explicit Pages publication question.** This affirmative response authorizes the pending GitHub main + Pages publication of the verified jersey-number build (backlog130), superseding the approval wait below for THIS publication only. No authorization for later feature pushes; stable4173 still held. No unverified snapshots included.
+
 - realism16 completed23:22; snapshot `ffb17c2` independently checked, rejected: build/lint4, eq20/20, smokes0/0, anim216/216 pass; points22.1/21.9/21.5 fail two seeds; 19/19 muffed INTs also credited as completions. Repair added to queue6 prompt. realism17 now running, realism18 still queued; queue6 waiter PID4909 confirmed.
 - User explicitly authorized **this GitHub main push** (backlog125); `de32f68` pushed successfully (jersey-number UI127 plus docs). Automatic approval review rejected Pages publishing because it requires separate explicit authorization: **Pages NOT published; ask user before publishing this build**. No standing permission for future pushes. Stable4173 still held.
 - Post-score kickoff request126: 30-game main audit120 made FG→ZERO kickoffs;106 tries→106 kickoffs. `NEXT_PHASE_KICKOFFS.md`, prompt `/private/tmp/gridiron-kickoffs.txt`; after realism repair launch this BEFORE returner selectors124, then FUTURES.
