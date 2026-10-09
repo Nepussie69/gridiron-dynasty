@@ -28,3 +28,5 @@ Add/run a meaningful independent focused contact audit over ≥60 games, all thr
 
 ## Orchestration log
 - 2026-10-10 Codex: initial job finished, saved99e6b85 without merge. DeepSeek reports66-game catch/contact audit passing and later completed full verification unchanged22.5/21.9/22.3,eq20/20,smokes0/0,anim206/206. Independent code review finds full healthy unit identity selection and lead-block engagements unfinished; kickoff fumble ball recovery continuity also needs inspection. Focused continuation animcontact2 started in same worktree, logs /private/tmp/gridiron-animcontact2.log. Final independent verification required before acceptance.
+
+- Codex independent f17c723 review: build/lint4,eq20/20,4-season coach/personnel0/0,anim217/217;66games catch/contact/units/blocking/end3295/3295,frameDelta2.562,kick-fumble1 holdergap0/ballstep.264. Browser generated recorded fixture contact inspected (not live MatchView). SIM unchanged22.5/21.9/22.3 misses strict scoring gate; HOLD snapshot for combined calibrated realism integration, no merge. Full unit/contact regressions rerun with new engine. Logs /private/tmp/codex-animcontact2-*.log.
