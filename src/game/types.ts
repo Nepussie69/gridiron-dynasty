@@ -741,6 +741,8 @@ export interface CareerState {
   deadline?: import('./engine/deadline').DeadlineState
   /** L14: let AI clubs make their own deadline trades (off by default; changes league rosters). */
   deadlineAI?: boolean
+  /** L14: draft-day pick clock (off by default; when on, the clock auto-takes your pick). */
+  draftClock?: boolean
   /** L12.8 V3: the clubs scouted this week (once per club per week; resets each week). */
   scoutedClubs?: { season: number; week: number; teamIds: string[] }
   /** The starting situation this career began from (F3). */
