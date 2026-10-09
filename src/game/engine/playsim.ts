@@ -6,13 +6,14 @@
 // play log with enough geometry for the 2D top-down match viewer.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Player, Position, MatchupSet, UsageSet } from '../types'
+import type { Player, Position, MatchupSet, UsageSet, PersonnelSet } from '../types'
 import { attributesFor } from '../data/ratings'
 import { unscaleOvr } from './ovrScale'
 import { POS_MEAN } from './ratingMeans'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
 import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
+import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseReceivers, personnelEdge } from './personnel'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
@@ -367,6 +368,12 @@ function fbLeadBlock(fb: Player | undefined): number {
   const a = mkAttrs(fb)
   return clamp(rmean('FB', 'RBK', a.RBK ?? 70) * 0.7 + rmean('FB', 'IBL', a.IBL ?? 70) * 0.5, -7, 7)
 }
+/** L13: 21 personnel's second back can lead-block (centered, so only a good blocker helps). */
+function secondBackLeadBlock(rb: Player | undefined): number {
+  if (!rb) return 0
+  const a = mkAttrs(rb)
+  return clamp((rmean('RB', 'RBK', a.RBK ?? 70) * 0.5 + rmean('RB', 'IBL', a.IBL ?? 70) * 0.5 - 70) * 0.1, -3, 3)
+}
 /** E1: SPM/SFA/COD/ACC join a running back's elusiveness (small). */
 function rbElusivenessExtras(pos: string | undefined, a: Record<string, number>): number {
   if (pos !== 'RB') return 0
@@ -640,6 +647,31 @@ function planFor(teamId: string, side: 'off' | 'def'): import('./gameplan').Game
   return side === 'off' ? LIVE_PLAN.off : LIVE_PLAN.def
 }
 
+// ── L13: personnel packages ───────────────────────────────────────────────────
+function coordinatorScheme(world: World, teamId: string, role: 'Offensive Coordinator' | 'Defensive Coordinator'): string | undefined {
+  return (world.staff[teamId] ?? []).find((s) => s.role === role)?.scheme
+}
+
+/**
+ * L13: the matchup edge for a personnel package. Only computed while the user's
+ * club is one of the two teams, and only for the side the user actually set — so
+ * AI-vs-AI snaps (no ctx) and legacy saves (no packages) behave exactly as before.
+ */
+function personnelEdgeFor(world: World, env: SimEnv | undefined, offId: string, defId: string): import('./personnel').PersonnelEdge | null {
+  const per = env?.personnel
+  const uid = env?.userTeamId
+  if (!per || !uid) return null
+  if (uid === offId) {
+    if (!per.off) return null
+    return personnelEdge(per.off, aiDefPackage(coordinatorScheme(world, defId, 'Defensive Coordinator')))
+  }
+  if (uid === defId) {
+    if (!per.def) return null
+    return personnelEdge(aiOffPersonnel(coordinatorScheme(world, offId, 'Offensive Coordinator')), per.def)
+  }
+  return null
+}
+
 /** Fold the DC's live plan into coverage tightness, ball-hawking, and risk. */
 function applyDefPlan(defId: string, dStyle: DefenseStyle) {
   const plan = planFor(defId, 'def')
@@ -825,6 +857,8 @@ interface SimEnv {
   userTeamId?: string
   matchups?: MatchupSet
   usage?: UsageSet
+  /** L13: the user's personnel packages for this game. */
+  personnel?: PersonnelSet
   /** L12.9 K1: the offense's unit cohesion and the league mean (0-1). */
   cohesionOff?: number
   cohesionMeanOff?: number
@@ -991,18 +1025,24 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const defMove = userDef ? env?.matchups?.def : undefined
   const usage = env?.usage
   const qb = topGroup(world, offId, ['QB'], 1, env?.qbOverride)[0]
+  // L13: the user's packages only — AI-vs-AI and legacy saves keep the old groups.
+  const userOffP = userOff ? env?.personnel?.off : undefined
+  const userDefP = userDef ? env?.personnel?.def : undefined
+  const dCounts = userDefP ? defenseCounts(userDefP) : null
   // G11 doubleRusher: chipping the best rusher also keeps a back in to block,
   // so the target pool drops to the top three receivers.
-  const wrs = topGroup(world, offId, ['WR', 'TE'], offMove === 'doubleRusher' ? 3 : 4)
+  const recN = offMove === 'doubleRusher' ? 3 : 4
+  const wrs = userOffP ? offenseReceivers(world, offId, userOffP, recN) : topGroup(world, offId, ['WR', 'TE'], recN)
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const rb = topGroup(world, offId, ['RB'], 1)[0]
   const fb = topGroup(world, offId, ['FB'], 1)[0]
   const dl = topGroup(world, defId, ['DE', 'DT'], 4)
-  const lbs = topGroup(world, defId, ['LB'], 3)
-  const cbs = topGroup(world, defId, ['CB'], 3)
+  const lbs = topGroup(world, defId, ['LB'], dCounts?.lb ?? 3)
+  const cbs = topGroup(world, defId, ['CB'], dCounts?.cb ?? 3)
   const saf = topGroup(world, defId, ['S'], 2)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
+  const pEdge = personnelEdgeFor(world, env, offId, defId)
 
   // ── L12 E2: unit-level relative ratings (centered; no rng) ──────────────────
   const isQ4 = (env?.qtr ?? 0) >= 4
@@ -1127,6 +1167,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     qbDeepThp(qbA, concept.depth) +
     targetAccCod(target, tA) +
     releaseVsPress(target, tA, coverPlayer, dStyle.manCoverage, concept.depth) +
+    // L13: a favourable personnel matchup shows up as separation.
+    (pEdge ? pEdge.pass : 0) +
     // L12.13 M3: a receiver's mastery of the system shows in his separation.
     (target && (target.pos === 'WR' || target.pos === 'TE') ? clamp(masteryOffset(target, means) * 0.06, -3, 3) : 0)
   const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
@@ -1306,12 +1348,18 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const ol = topGroup(world, offId, ['OT', 'OG', 'C'], 5)
   const te = topGroup(world, offId, ['TE'], 1)[0]
   const fb = topGroup(world, offId, ['FB'], 1)[0]
+  // L13: the user's packages only (AI-vs-AI unchanged). 12/21 keep an extra body.
+  const userOffP = userOff ? env?.personnel?.off : undefined
+  const userDefP = userDef ? env?.personnel?.def : undefined
+  const dCounts = userDefP ? defenseCounts(userDefP) : null
+  const te2 = userOffP === '12' ? topGroup(world, offId, ['TE'], 2)[1] : undefined
   const dl = topGroup(world, defId, ['DE', 'DT'], 4)
-  const lbs = topGroup(world, defId, ['LB'], 3)
+  const lbs = topGroup(world, defId, ['LB'], dCounts?.lb ?? 3)
   const saf = topGroup(world, defId, ['S'], 2)
-  const cbs = topGroup(world, defId, ['CB'], 3)
+  const cbs = topGroup(world, defId, ['CB'], dCounts?.cb ?? 3)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
+  const pEdge = personnelEdgeFor(world, env, offId, defId)
   // L12 E2: Q4 fatigue uses each unit's relative STA (centered; no rng).
   const isQ4 = (env?.qtr ?? 0) >= 4
   // L12 S2: split carries RB1 / RB2 / QB from deterministic role weights, shifted
@@ -1338,6 +1386,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   }
   const qbStyle = qb ? styleProfile(qb) : undefined
   if (qbStyle) wq += qbStyle.scramble * 0.12
+  // L13: 21 personnel leans on the second back; 12 keeps an extra tight end in.
+  if (userOffP === '21') { w2 += 0.12; w1 -= 0.04 }
   if (distance <= 2) w1 += 0.12
   if (!rb[1]) { w1 += w2; w2 = 0 }
   if (!qb) { w2 += wq; wq = 0 }
@@ -1355,7 +1405,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
 
-  const runBlock = avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te) + clamp(masteryRelAvg(ol, means) * 0.06, -3, 3)
+  const runBlock = avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te) + (te2 ? teRunBlock(te2) * 0.6 : 0) + clamp(masteryRelAvg(ol, means) * 0.06, -3, 3)
   const runDefBase = avg(dl.map((p) => (mkAttrs(p).BSH ?? 70) * 0.5 + (mkAttrs(p).TAK ?? 70) * 0.5)) * dStyle.runFit
   // The live defensive plan moves the front: stacking the box stops the run,
   // a soft-zone light box gives a little back on the ground.
@@ -1379,7 +1429,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (call?.edge ?? 0) * 1.6
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
     + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0)
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
@@ -1522,6 +1572,8 @@ export interface GameCtx {
   matchups?: MatchupSet
   /** L10 G12: the user's workload / rotation settings for this game. */
   usage?: UsageSet
+  /** L13: the user's personnel packages for this game. */
+  personnel?: PersonnelSet
   /** L12.6: call every snap on this side (coached games only); unset = key moments only. */
   callAll?: 'off' | 'def' | 'both'
 }
@@ -1913,7 +1965,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off }
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */

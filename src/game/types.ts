@@ -544,6 +544,14 @@ export interface UsageSet {
   dl: 'starters' | 'rotate'
 }
 
+/** L13: the personnel packages you send onto the field (optional; a legacy save loads with none). */
+export interface PersonnelSet {
+  /** Offence: 11 / 12 / 21. Unset = the club's scheme default. */
+  off?: import('./engine/personnel').OffPersonnel
+  /** Defence: base / nickel / dime. Unset = the club's scheme default. */
+  def?: import('./engine/personnel').DefPackage
+}
+
 export interface CareerState {
   gmName: string
   path: CareerPath
@@ -702,6 +710,8 @@ export interface CareerState {
   matchups?: MatchupSet
   /** L10 G12: running-back workload and defensive-line rotation. */
   usage?: UsageSet
+  /** L13: the personnel packages you send onto the field. */
+  personnel?: PersonnelSet
   /** OVR at season start by playerId, for young players on your side (F5). */
   devBaseline?: Record<string, number>
   history: {
