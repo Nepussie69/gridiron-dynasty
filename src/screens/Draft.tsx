@@ -72,7 +72,7 @@ export function Draft() {
       />
 
       {!draftIsOpen && (
-        <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
+        <div className="mb-4 rounded-xl border border-warn/30 bg-warn-soft p-3 text-sm text-warn">
           {closedReason} Scout the class, rank your board, file conviction calls and red flags — the picks wait until April.
         </div>
       )}

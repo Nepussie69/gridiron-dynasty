@@ -402,7 +402,7 @@ function MoraleDots({ value }: { value: number }) {
         <span
           key={n}
           className="h-2.5 w-2.5 rounded-full"
-          style={{ background: n <= level ? color : '#e6ecf4' }}
+          style={{ background: n <= level ? color : 'var(--color-surface-3)' }}
         />
       ))}
     </div>

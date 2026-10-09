@@ -60,7 +60,7 @@ export function GamePlanScreen() {
                 onClick={() => setSide(s)}
                 className={cn(
                   'rounded-md px-4 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  side === s ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  side === s ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {s === 'off' ? 'Offense' : 'Defense'}
@@ -392,7 +392,7 @@ function MatchupLine({
       <span
         className={cn(
           'ml-auto inline-flex items-center rounded-md border px-1.5 py-0.5 font-cond text-[10px] font-700 uppercase tracking-wide',
-          edge ? 'border-[#bfe6cd] bg-[#e5f6ec] text-win' : 'border-[#f6c9ce] bg-[#fdeaec] text-loss',
+          edge ? 'border-win/30 bg-win-soft text-win' : 'border-loss/30 bg-loss-soft text-loss',
         )}
       >
         {edge ? '▲' : '▼'} Edge
@@ -476,7 +476,7 @@ function ScriptCard() {
             onClick={() => setFormation(f.name)}
             className={cn(
               'rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase tracking-wide',
-              formation === f.name ? 'bg-[var(--team)] text-white' : 'bg-surface-2 text-muted hover:text-ink',
+              formation === f.name ? 'bg-[var(--team)] text-[var(--team-ink)]' : 'bg-surface-2 text-muted hover:text-ink',
             )}
           >
             {f.name}

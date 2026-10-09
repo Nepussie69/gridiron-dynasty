@@ -30,11 +30,90 @@
   --color-warn: #d98207;
   --color-gold: #c99a2e;
 
+  /* Soft semantic tints (dark-safe variants live in the dark blocks below) */
+  --color-brand-soft: #e7efff;
+  --color-win-soft: #e5f6ec;
+  --color-loss-soft: #fdeaec;
+  --color-warn-soft: #fdf0dc;
+  --color-gold-soft: #fbf3de;
+  --color-gold-ink: #9a7418;
+  /* Text that sits on a saturated accent (win/gold) and must flip with theme. */
+  --color-on-accent: #ffffff;
+
   /* Fallback team colors (overridden per active team) */
   --team: #0b62ff;
   --team-2: #0a1626;
   --team-ink: #ffffff;
   --team-soft: #e7efff;
+}
+
+/* ── U3 dark palette ──────────────────────────────────────────────────────────
+   Applied from the OS preference unless the user pinned a theme, or whenever
+   `data-theme="dark"` is set on <html> (inline script in index.html applies it
+   before first paint). Overriding the @theme custom properties here re-themes
+   every token-based utility at once. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --color-canvas: #0b1220;
+    --color-surface: #111a2b;
+    --color-surface-2: #16223a;
+    --color-surface-3: #1b2a45;
+    --color-line: #22324d;
+    --color-line-strong: #2f4466;
+    --color-ink: #e8eef7;
+    --color-ink-2: #c3cfdf;
+    --color-muted: #93a4bd;
+    --color-faint: #6b7d96;
+    --color-brand: #4d94ff;
+    --color-win: #2fce7c;
+    --color-loss: #ff5d6c;
+    --color-warn: #f0a93c;
+    --color-gold: #e2b24a;
+    --color-brand-soft: #16223a;
+    --color-win-soft: #10291e;
+    --color-loss-soft: #2c1620;
+    --color-warn-soft: #2b2210;
+    --color-gold-soft: #2b2410;
+    --color-gold-ink: #e8c874;
+    --color-on-accent: #0a1626;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-canvas: #0b1220;
+  --color-surface: #111a2b;
+  --color-surface-2: #16223a;
+  --color-surface-3: #1b2a45;
+  --color-line: #22324d;
+  --color-line-strong: #2f4466;
+  --color-ink: #e8eef7;
+  --color-ink-2: #c3cfdf;
+  --color-muted: #93a4bd;
+  --color-faint: #6b7d96;
+  --color-brand: #4d94ff;
+  --color-win: #2fce7c;
+  --color-loss: #ff5d6c;
+  --color-warn: #f0a93c;
+  --color-gold: #e2b24a;
+  --color-brand-soft: #16223a;
+  --color-win-soft: #10291e;
+  --color-loss-soft: #2c1620;
+  --color-warn-soft: #2b2210;
+  --color-gold-soft: #2b2410;
+  --color-gold-ink: #e8c874;
+    --color-on-accent: #0a1626;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+/* Team-soft is derived from the active club colour so it stays legible in both
+   palettes (a light wash on white, a deep wash on dark). */
+:root {
+  --team-soft: color-mix(in srgb, var(--team) 10%, var(--color-surface));
 }
 
 * {
@@ -97,6 +176,48 @@ body {
   );
 }
 
+/* ── U3 depth: glass surfaces for sticky headers and the top bar ─────────────── */
+.glass {
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+}
+.glass-2 {
+  background: color-mix(in srgb, var(--color-surface-2) 82%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+}
+
+/* Layered card shadow: 1px inner highlight + soft drop. Lightened in dark. */
+.card-shadow {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 8px 24px -12px rgba(10, 22, 38, 0.25);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .card-shadow {
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.05) inset,
+      0 10px 30px -14px rgba(0, 0, 0, 0.65);
+  }
+}
+:root[data-theme='dark'] .card-shadow {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 10px 30px -14px rgba(0, 0, 0, 0.65);
+}
+
+/* ── U3 motion: shared interaction easing ───────────────────────────────────── */
+.motion {
+  transition:
+    background-color 160ms ease-out,
+    border-color 160ms ease-out,
+    color 160ms ease-out,
+    box-shadow 160ms ease-out,
+    transform 160ms ease-out,
+    opacity 160ms ease-out;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -109,6 +230,34 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #a9b8ca;
 }
+:root[data-theme='dark'] ::-webkit-scrollbar-thumb,
+html[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background: #3a4d6b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) ::-webkit-scrollbar-thumb {
+    background: #3a4d6b;
+  }
+  :root:not([data-theme='light']) .hatch {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.04) 0,
+      rgba(255, 255, 255, 0.04) 1px,
+      transparent 1px,
+      transparent 8px
+    );
+  }
+}
+:root[data-theme='dark'] .hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.04) 0,
+    rgba(255, 255, 255, 0.04) 1px,
+    transparent 1px,
+    transparent 8px
+  );
+}
+
 
 /* ── U1 game-day field: broadcast motion (SVG + CSS only) ───────────────────── */
 @keyframes gd-toast {
@@ -164,6 +313,9 @@ body {
     animation: none;
   }
   .gd-pill-slide {
+    transition: none;
+  }
+  .motion {
     transition: none;
   }
 }

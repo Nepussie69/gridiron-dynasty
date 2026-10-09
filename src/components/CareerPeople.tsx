@@ -104,7 +104,7 @@ export function CareerPeople() {
           <RatingBar
             value={legacyPct}
             height={6}
-            color={legacy.inducted ? '#9a7418' : 'var(--team)'}
+            color={legacy.inducted ? 'var(--color-gold-ink)' : 'var(--team)'}
           />
         </div>
         <p className="mt-2 text-[11px] leading-snug text-muted">

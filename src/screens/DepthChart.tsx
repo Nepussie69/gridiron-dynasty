@@ -195,8 +195,8 @@ function Unit({
                           <span
                             className="grid h-5 w-5 shrink-0 place-items-center rounded font-cond text-[10px] font-700"
                             style={{
-                              background: starter ? accent : '#eaf0f8',
-                              color: starter ? '#fff' : '#5c6f86',
+                              background: starter ? accent : 'var(--color-surface-3)',
+                              color: starter ? '#fff' : 'var(--color-muted)',
                             }}
                           >
                             {i + 1}

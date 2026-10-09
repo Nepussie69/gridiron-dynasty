@@ -120,7 +120,7 @@ export function Ledger() {
                 onClick={() => setTab(t)}
                 className={cn(
                   'rounded-md px-4 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  tab === t ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {t === 'calls' ? 'All Calls' : t === 'guys' ? `My Guys (${guys.length})` : 'Trade Tree'}
@@ -161,7 +161,7 @@ export function Ledger() {
                 <button
                   key={f}
                   onClick={() => setFilter(f)}
-                  className={cn('rounded-md px-3 py-1 font-cond text-[11px] font-700 uppercase', filter === f ? 'bg-white text-ink shadow-sm' : 'text-muted')}
+                  className={cn('rounded-md px-3 py-1 font-cond text-[11px] font-700 uppercase', filter === f ? 'bg-surface text-ink shadow-sm' : 'text-muted')}
                 >
                   {f === 'all' ? 'All' : `Coaching (${coaching.length})`}
                 </button>

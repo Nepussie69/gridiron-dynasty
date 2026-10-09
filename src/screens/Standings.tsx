@@ -400,7 +400,7 @@ function SeedPill({ n, leader }: { n: number; leader?: boolean }) {
       className={cn(
         'grid h-5 w-5 shrink-0 place-items-center rounded font-cond text-[10px] font-700',
       )}
-      style={leader ? { background: 'var(--team)', color: 'var(--team-ink)' } : { background: '#eaf0f8', color: '#5c6f86' }}
+      style={leader ? { background: 'var(--team)', color: 'var(--team-ink)' } : { background: 'var(--color-surface-3)', color: 'var(--color-muted)' }}
     >
       {n}
     </span>

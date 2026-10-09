@@ -78,7 +78,7 @@ export function RoomCard({ className }: { className?: string }) {
               key={p}
               onClick={() => setRoomPlan(p)}
               className={`px-3 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition ${
-                plan === p ? 'bg-[var(--team)] text-white' : 'bg-surface-2 text-muted hover:text-ink'
+                plan === p ? 'bg-[var(--team)] text-[var(--team-ink)]' : 'bg-surface-2 text-muted hover:text-ink'
               }`}
             >
               {p === 'concentrate' ? 'Concentrate' : 'Spread'}

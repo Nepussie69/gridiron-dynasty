@@ -63,7 +63,7 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
 
   return (
     <div
-      className="fixed inset-0 z-[60] grid place-items-center bg-ink/60 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] grid place-items-center bg-black/60 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -113,7 +113,7 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
         </div>
 
         {closed ? (
-          <p className="rounded-lg bg-[#fdeaec] p-3 text-sm text-loss">
+          <p className="rounded-lg bg-loss-soft p-3 text-sm text-loss">
             His camp has stopped taking calls this season.
           </p>
         ) : (

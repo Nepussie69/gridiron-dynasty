@@ -1,7 +1,114 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Monitor, Moon, Sun } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { gradeColor, inkOn, tint } from '../lib/format'
 import type { Team } from '../game/types'
+
+// ── Theme preference (U3) ────────────────────────────────────────────────────
+type ThemePref = 'system' | 'light' | 'dark'
+
+function getStoredTheme(): ThemePref {
+  try {
+    const v = localStorage.getItem('gd.theme')
+    if (v === 'light' || v === 'dark' || v === 'system') return v
+  } catch {
+    /* ignore */
+  }
+  return 'system'
+}
+
+function applyTheme(pref: ThemePref) {
+  try {
+    localStorage.setItem('gd.theme', pref)
+  } catch {
+    /* ignore */
+  }
+  const el = document.documentElement
+  if (pref === 'system') el.removeAttribute('data-theme')
+  else el.setAttribute('data-theme', pref)
+}
+
+/** System / Light / Dark switch, shown in the sidebar footer. */
+export function ThemeToggle({ compact = false }: { compact?: boolean }) {
+  const [pref, setPref] = useState<ThemePref>(getStoredTheme)
+  useEffect(() => {
+    applyTheme(pref)
+  }, [pref])
+  const options: { id: ThemePref; label: string; Icon: typeof Sun }[] = [
+    { id: 'system', label: 'System theme', Icon: Monitor },
+    { id: 'light', label: 'Light theme', Icon: Sun },
+    { id: 'dark', label: 'Dark theme', Icon: Moon },
+  ]
+  if (compact) {
+    const idx = options.findIndex((o) => o.id === pref)
+    const cur = options[idx]
+    return (
+      <button
+        type="button"
+        title={`Theme: ${cur.label} (click to change)`}
+        onClick={() => setPref(options[(idx + 1) % options.length].id)}
+        className="motion grid h-8 w-full place-items-center rounded-md border border-line bg-surface text-muted hover:text-ink"
+      >
+        <cur.Icon size={15} />
+      </button>
+    )
+  }
+  return (
+    <div className="grid grid-cols-3 gap-1 rounded-lg border border-line bg-surface p-0.5">
+      {options.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          type="button"
+          title={label}
+          onClick={() => setPref(id)}
+          className={cn(
+            'motion flex items-center justify-center gap-1 rounded-md px-1 py-1 font-cond text-[10px] font-700 uppercase tracking-wide',
+            pref === id ? 'bg-surface-2 text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+          )}
+        >
+          <Icon size={12} /> {id}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── Number tween (U3) ────────────────────────────────────────────────────────
+/** Eases a changing number over ~420ms. Skipped under prefers-reduced-motion. */
+function useCountUp(value: number, duration = 420): number {
+  const [shown, setShown] = useState(value)
+  const fromRef = useRef(value)
+  const rafRef = useRef(0)
+  useEffect(() => {
+    const from = fromRef.current
+    const reduce =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reduce || from === value) {
+      fromRef.current = value
+      setShown(value)
+      return
+    }
+    const start = performance.now()
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - start) / duration)
+      const eased = 1 - Math.pow(1 - p, 3)
+      setShown(from + (value - from) * eased)
+      if (p < 1) rafRef.current = requestAnimationFrame(tick)
+      else fromRef.current = value
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [value, duration])
+  return shown
+}
+
+/** A numeric value that tweens between updates. */
+export function TweenNumber({ value, format }: { value: number; format?: (n: number) => string }) {
+  const shown = useCountUp(value)
+  return <>{format ? format(shown) : Math.round(shown)}</>
+}
 
 // ── Layout primitives ────────────────────────────────────────────────────────
 export function Card({
@@ -16,7 +123,7 @@ export function Card({
   return (
     <div
       className={cn(
-        'rounded-xl border border-line bg-surface shadow-[0_1px_2px_rgba(10,22,38,0.05)]',
+        'motion card-shadow rounded-2xl border border-line bg-surface',
         pad && 'p-4',
         className,
       )}
@@ -94,11 +201,11 @@ type Tone = 'neutral' | 'team' | 'win' | 'loss' | 'warn' | 'gold' | 'info'
 const TONES: Record<Tone, string> = {
   neutral: 'bg-surface-3 text-ink-2 border-line',
   team: 'text-[var(--team-ink)] border-transparent',
-  win: 'bg-[#e5f6ec] text-win border-[#bfe6cf]',
-  loss: 'bg-[#fdeaec] text-loss border-[#f6c9ce]',
-  warn: 'bg-[#fdf0dc] text-warn border-[#f3ddb8]',
-  gold: 'bg-[#fbf3de] text-[#9a7418] border-[#ecd9a8]',
-  info: 'bg-[#e7efff] text-brand border-[#c6dcff]',
+  win: 'bg-win-soft text-win border-win/30',
+  loss: 'bg-loss-soft text-loss border-loss/30',
+  warn: 'bg-warn-soft text-warn border-warn/30',
+  gold: 'bg-gold-soft text-gold-ink border-gold/30',
+  info: 'bg-brand-soft text-brand border-brand/30',
 }
 
 export function Badge({
@@ -142,7 +249,7 @@ export function DevBadge({ dev }: { dev: string }) {
     'X-Factor': 'bg-[#101820] text-white',
     Superstar: 'bg-[#e31837] text-white',
     Star: 'bg-[#0b62ff] text-white',
-    Starter: 'bg-[#e5f6ec] text-win',
+    Starter: 'bg-win-soft text-win',
     Depth: 'bg-surface-3 text-muted',
     Backup: 'bg-surface-3 text-faint',
   }
@@ -261,7 +368,9 @@ export function Stat({
   return (
     <div>
       <div className="label mb-0.5">{label}</div>
-      <div className={cn('font-display text-2xl font-700 tnum leading-none', color)}>{value}</div>
+      <div className={cn('font-display text-2xl font-700 tnum leading-none', color)}>
+        {typeof value === 'number' ? <TweenNumber value={value} /> : value}
+      </div>
       {sub && <div className="mt-0.5 text-xs text-muted">{sub}</div>}
     </div>
   )
@@ -314,7 +423,7 @@ export function Donut({
   return (
     <div className="relative grid place-items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e6ecf4" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-surface-3)" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -404,9 +513,9 @@ export function Button({
 }) {
   const variants: Record<string, string> = {
     default: 'bg-surface border border-line hover:bg-surface-2 text-ink',
-    primary: 'bg-ink text-white hover:opacity-90 border border-transparent',
+    primary: 'bg-ink text-canvas hover:opacity-90 border border-transparent',
     ghost: 'bg-transparent hover:bg-surface-2 text-ink-2 border border-transparent',
-    danger: 'bg-[#fdeaec] text-loss border border-[#f6c9ce] hover:bg-[#fbdde1]',
+    danger: 'bg-loss-soft text-loss border border-loss/30 hover:bg-loss/15',
     team: 'text-[var(--team-ink)] border border-transparent hover:opacity-90',
   }
   const sizes: Record<string, string> = {
@@ -421,7 +530,7 @@ export function Button({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex items-center justify-center gap-1.5 rounded-lg font-cond font-700 uppercase tracking-wide transition disabled:cursor-not-allowed disabled:opacity-40',
+        'motion inline-flex items-center justify-center gap-1.5 rounded-lg font-cond font-700 uppercase tracking-wide active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
         variants[variant],
         sizes[size],
         className,

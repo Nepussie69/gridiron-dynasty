@@ -124,7 +124,7 @@ export function Roster() {
                 }}
                 className={cn(
                   'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {t.label}
@@ -139,7 +139,7 @@ export function Roster() {
                 onClick={() => setSide(s.id)}
                 className={cn(
                   'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  side === s.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  side === s.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {s.label}

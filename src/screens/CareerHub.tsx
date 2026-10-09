@@ -162,7 +162,7 @@ export function CareerHub() {
         {/* Hero */}
         <div>
           <div className="mb-6 flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink text-white">
+            <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink text-canvas">
               <Shield size={24} strokeWidth={2.4} />
             </div>
             <div>
@@ -194,7 +194,7 @@ export function CareerHub() {
                 onClick={() => choosePath(p)}
                 className={cn(
                   'flex-1 rounded-md px-3 py-2 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  path === p ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  path === p ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {p === 'coach' ? 'Coaching Ladder' : 'Personnel Ladder'}
@@ -218,7 +218,7 @@ export function CareerHub() {
                       active ? 'bg-surface' : 'bg-surface hover:bg-surface-2',
                     )}
                   >
-                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-ink font-display text-base font-700 text-white">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-ink font-display text-base font-700 text-canvas">
                       {i + 1}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -258,7 +258,7 @@ export function CareerHub() {
             })}
           </div>
 
-          <div className="mt-6 flex items-center gap-2 rounded-xl bg-[#e7efff] p-3.5 text-sm text-brand">
+          <div className="mt-6 flex items-center gap-2 rounded-xl bg-brand-soft p-3.5 text-sm text-brand">
             <Shield size={18} />
             <span>
               <strong className="font-600">One living league:</strong> the prospects you grade today become
@@ -276,7 +276,7 @@ export function CareerHub() {
                 {saveInfo.usedBackup && <Badge tone="warn">Recovered from backup</Badge>}
               </div>
               <div className="flex items-center gap-3">
-                <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink text-white">
+                <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink text-canvas">
                   <Play size={20} />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -306,7 +306,7 @@ export function CareerHub() {
           )}
 
           {saveError && !saveInfo && (
-            <div className="flex items-start gap-2 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-xs text-warn">
+            <div className="flex items-start gap-2 rounded-xl border border-warn/30 bg-warn-soft p-3 text-xs text-warn">
               <TriangleAlert size={15} className="mt-0.5 shrink-0" />
               <span>{saveError}</span>
             </div>
@@ -336,7 +336,7 @@ export function CareerHub() {
                   className={cn(
                     'rounded-lg border px-3 py-2.5 text-left transition',
                     scenarioLocked && 'cursor-not-allowed opacity-60',
-                    path === p ? 'border-transparent bg-ink text-white' : 'border-line bg-surface-2 text-ink hover:border-line-strong',
+                    path === p ? 'border-transparent bg-ink text-canvas' : 'border-line bg-surface-2 text-ink hover:border-line-strong',
                   )}
                 >
                   <div className="font-display text-base font-700 uppercase leading-none">
@@ -414,7 +414,7 @@ export function CareerHub() {
                       className={cn(
                         'rounded-md border px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
                         scenarioLocked && 'cursor-not-allowed opacity-60',
-                        level === r.level ? 'border-transparent text-white' : 'border-line text-muted hover:bg-surface-2',
+                        level === r.level ? 'border-transparent text-[var(--team-ink)]' : 'border-line text-muted hover:bg-surface-2',
                       )}
                       style={level === r.level ? { background: 'var(--team)' } : undefined}
                     >
@@ -453,7 +453,7 @@ export function CareerHub() {
                     className={cn(
                       'flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition',
                       scenario.forceLowestPrestige && 'cursor-not-allowed opacity-60',
-                      teamId === t.id ? 'bg-white shadow-sm ring-1 ring-[var(--team)]' : 'hover:bg-white/60',
+                      teamId === t.id ? 'bg-surface shadow-sm ring-1 ring-[var(--team)]' : 'hover:bg-surface-2',
                     )}
                   >
                     <TeamCrest team={t} size={22} />

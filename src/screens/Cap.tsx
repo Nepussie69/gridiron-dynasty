@@ -99,7 +99,7 @@ export function Cap() {
       />
 
       {!canMove && (
-        <div className="mb-4 rounded-xl border border-[#f3ddb8] bg-[#fdf0dc] p-3 text-sm text-warn">
+        <div className="mb-4 rounded-xl border border-warn/30 bg-warn-soft p-3 text-sm text-warn">
           {access === 'advise'
             ? 'The cap is the GM\u2019s department. You can review the books and shape the plan \u2014 the GM makes the final call on contracts.'
             : 'Contract moves unlock at Director of Player Personnel. You can review the books now.'}

@@ -45,7 +45,7 @@ export function CareerRhythm() {
       )}
 
       {stretch && !stretch.accepted && (
-        <Card className="border-[#f3ddb8] bg-[#fdf0dc]">
+        <Card className="border-warn/30 bg-warn-soft">
           <div className="mb-1 flex items-center gap-2">
             <Handshake size={16} className="text-warn" />
             <h3 className="font-display text-lg font-700 uppercase tracking-wide text-ink">

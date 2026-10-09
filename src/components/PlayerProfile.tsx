@@ -55,7 +55,7 @@ export function PlayerProfile() {
       : `Ceiling ${player.pot} · needs snaps to grow`
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-ink/40 backdrop-blur-[1px]" onClick={close}>
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/40 backdrop-blur-[1px]" onClick={close}>
       <div
         className="h-full w-full max-w-[520px] overflow-y-auto bg-canvas shadow-2xl"
         onClick={(e) => e.stopPropagation()}

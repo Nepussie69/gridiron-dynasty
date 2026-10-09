@@ -11,6 +11,15 @@
       rel="stylesheet"
     />
     <title>Gridiron Dynasty — Front Office</title>
+    <script>
+      // U3: apply the saved theme before first paint to avoid a flash.
+      (function () {
+        try {
+          var t = localStorage.getItem('gd.theme')
+          if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t)
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -159,7 +159,7 @@ export function Trades() {
             onClick={() => setTab(id)}
             className={cn(
               'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-              tab === id ? 'bg-white text-ink shadow-sm' : 'text-muted',
+              tab === id ? 'bg-surface text-ink shadow-sm' : 'text-muted',
             )}
           >
             {label}
@@ -237,7 +237,7 @@ export function Trades() {
         />
 
         <div className="flex flex-col items-center justify-center gap-3">
-          <div className="grid h-14 w-14 place-items-center rounded-full bg-ink text-white">
+          <div className="grid h-14 w-14 place-items-center rounded-full bg-ink text-canvas">
             <ArrowLeftRight size={22} />
           </div>
           <div className="w-full rounded-xl border border-line bg-surface p-4 text-center">
@@ -258,7 +258,7 @@ export function Trades() {
                 'mt-3 rounded-lg px-3 py-2 font-cond text-sm font-700 uppercase',
                 !give.length && !get.length
                   ? 'bg-surface-2 text-muted'
-                  : verdict.verdict === 'accept' ? 'bg-[#e5f6ec] text-win' : verdict.verdict === 'close' ? 'bg-[#fdf0dc] text-warn' : 'bg-[#fdeaec] text-loss',
+                  : verdict.verdict === 'accept' ? 'bg-win-soft text-win' : verdict.verdict === 'close' ? 'bg-warn-soft text-warn' : 'bg-loss-soft text-loss',
               )}
             >
               {!give.length && !get.length
@@ -731,7 +731,7 @@ function DealAssetRow({ world, asset }: { world: World; asset: TradeAsset }) {
   const via = world.byId[pk.originalTeam]
   return (
     <div className="flex items-center gap-2">
-      <span className="grid h-6 w-6 place-items-center rounded-md bg-ink font-display text-[10px] font-700 text-white">
+      <span className="grid h-6 w-6 place-items-center rounded-md bg-ink font-display text-[10px] font-700 text-canvas">
         R{pk.round}
       </span>
       <div className="min-w-0 flex-1">
@@ -974,7 +974,7 @@ function AssetColumn({
                   {a.kind === 'player' ? (
                     <OvrBadge value={a.ovr!} pot={a.pot} size={30} />
                   ) : (
-                    <span className="grid h-7 w-7 place-items-center rounded-md bg-ink font-display text-xs font-700 text-white">
+                    <span className="grid h-7 w-7 place-items-center rounded-md bg-ink font-display text-xs font-700 text-canvas">
                       R{a.round}
                     </span>
                   )}

@@ -100,7 +100,7 @@ function Th({
       title={title}
       onClick={sort && onSort ? () => onSort(sort) : undefined}
       className={cn(
-        'label whitespace-nowrap border-b border-line bg-surface-2 px-2 py-2 font-700',
+        'label whitespace-nowrap border-b border-line glass-2 px-2 py-2 font-700',
         sort && 'cursor-pointer select-none hover:text-ink-2',
         active && 'text-ink',
         className,
@@ -227,11 +227,11 @@ export function RatingsTable({
             <table className="min-w-full border-collapse text-sm tnum">
             <thead>
               <tr className="text-left">
-                <Th {...hdr('name')} title="Player name" className="sticky left-0 top-0 z-30 bg-surface-2">Name</Th>
+                <Th {...hdr('name')} title="Player name" className="sticky left-0 top-0 z-30 glass-2">Name</Th>
                 {showTeam && <Th className="sticky top-0 z-20">Team</Th>}
                 <Th {...hdr('pos')} className="sticky top-0 z-20">Pos</Th>
                 <Th {...hdr('age')} className="sticky top-0 z-20">Age</Th>
-                <th className="label sticky top-0 z-20 whitespace-nowrap border-b border-line bg-surface-2 px-2 py-2 font-700">
+                <th className="label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 py-2 font-700">
                   <span className="inline-flex items-center gap-1">
                     {([['ovr', 'OVR', 'Sort by overall'], ['pot', 'POT', 'Sort by potential']] as const).map(([k, label, tip], i) => (
                       <span key={k} className="inline-flex items-center gap-1">

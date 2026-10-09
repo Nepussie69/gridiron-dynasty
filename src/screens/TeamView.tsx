@@ -184,7 +184,7 @@ export function TeamView() {
                 }}
                 className={cn(
                   'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t.id ? 'bg-white text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+                  tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
                 )}
               >
                 {t.label}

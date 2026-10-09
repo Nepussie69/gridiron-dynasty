@@ -27,7 +27,7 @@ export function Awards() {
           <div className="flex gap-2">
             <div className="flex rounded-lg bg-surface-2 p-0.5">
               {(['honors', 'hof'] as const).map((t) => (
-                <button key={t} onClick={() => setTab(t)} className={cn('rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition', tab === t ? 'bg-white text-ink shadow-sm' : 'text-muted')}>
+                <button key={t} onClick={() => setTab(t)} className={cn('rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition', tab === t ? 'bg-surface text-ink shadow-sm' : 'text-muted')}>
                   {t === 'honors' ? 'Season Honors' : 'Hall of Fame'}
                 </button>
               ))}
@@ -342,9 +342,9 @@ function HofCard({ ind, world }: { ind: HofInductee; world: ReturnType<typeof us
   const world2 = Object.values(world.byId).find((t) => t.name === (ind as unknown as { team?: string }).team)
   void world2
   return (
-    <Card className="border-[#ecd9a8] bg-[#fbf3de]">
+    <Card className="border-gold/30 bg-gold-soft">
       <div className="flex items-start gap-3">
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-[#9a7418] text-white">
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-gold text-on-accent">
           <Trophy size={20} />
         </div>
         <div className="min-w-0 flex-1">
@@ -372,8 +372,8 @@ function HofCard({ ind, world }: { ind: HofInductee; world: ReturnType<typeof us
 
 function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg border border-[#ecd9a8] py-1.5">
-      <div className="label !text-[9px] !text-[#9a7418]">{label}</div>
+    <div className="rounded-lg border border-gold/30 py-1.5">
+      <div className="label !text-[9px] !text-gold-ink">{label}</div>
       <div className="font-display text-base font-700 tnum text-ink">{value}</div>
     </div>
   )

@@ -404,7 +404,7 @@ export function StatsHub() {
                 onClick={() => applyScope({ kind: 'live' })}
                 className={cn(
                   'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-                  scope.kind === 'live' ? 'bg-white text-ink shadow-sm' : 'text-muted',
+                  scope.kind === 'live' ? 'bg-surface text-ink shadow-sm' : 'text-muted',
                 )}
               >
                 Season {world.season}
@@ -413,7 +413,7 @@ export function StatsHub() {
                 onClick={() => applyScope({ kind: 'career' })}
                 className={cn(
                   'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-                  scope.kind === 'career' ? 'bg-white text-ink shadow-sm' : 'text-muted',
+                  scope.kind === 'career' ? 'bg-surface text-ink shadow-sm' : 'text-muted',
                 )}
               >
                 Career
