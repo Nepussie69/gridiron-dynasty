@@ -371,7 +371,7 @@ function settle(mv: Mover) {
 }
 
 /** Spot (offense frame) where the next possession started, if the other club has it. */
-function changeSpot(play: Play, next?: Play): number | null {
+export function changeSpot(play: Play, next?: Play): number | null {
   if (!next || next.offId === play.offId) return null
   if (next.type === 'end') return null
   return 10 + (100 - next.startYard)
@@ -981,29 +981,46 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   f.s0 = { ...f.s0, x: los + 40, y: MID_Y - 4, role: 'PR' }
   const m = startMovers(f, ctx)
   const seed = play.n * 19 + play.startYard
-  const finalX = clampX(changeSpot(play, ctx.next) ?? 10 + play.startYard + play.yards)
-  const ret = Math.max(0, Math.round(hash(seed) * 10) - 2)
-  const landX = clampX(Math.min(108, finalX + ret))
+  const kind = play.returnKind
+  const touchback = kind === 'touchback'
+  const isReturn = kind === 'return' && !!play.returnerId
+  const retYds = play.returnYards ?? 0
+  // R6: the returner's end spot is exactly what the sim recorded — the next
+  // possession's snap (or the goal line on a return score). The catch spot is
+  // backed out from the recorded return yardage so the animation's return
+  // distance matches the box score.
+  const finalX = play.returnTD
+    ? 110
+    : clampX(changeSpot(play, ctx.next) ?? 10 + play.startYard + play.yards)
+  const landX = touchback ? 108 : isReturn ? clampX(finalX - retYds) : finalX
   const landY = clampY(MID_Y + (hash(seed + 1) - 0.5) * 14)
   const kpw = attrOf(m.qb.player, 'KPW')
   const flight = clampN(1.1 - (kpw - 70) * 0.004, 0.6, 1.5)
   const kickT = 0.35
   const landT = kickT + flight
-  // The returner gets to the landing spot (his pace), then runs the return back.
+  // The returner gets to the landing spot (his pace), catches, then returns to
+  // the recorded end spot. A fair catch / downed punt stops where it lands; a
+  // touchback never catches the ball.
   m.s0.reset(f.s0.x, f.s0.y)
-  m.s0.run([{ x: landX, y: landY }], { stop: false })
-  if (m.s0.t > landT) seek(m.s0, landT)
-  else m.s0.hold(landT - m.s0.t)
-  m.s0.run([{ x: finalX, y: clampY(landY + (hash(seed + 2) - 0.5) * 8) }], { stop: true })
+  if (touchback) {
+    m.s0.run([{ x: clampX(los + 32), y: f.s0.y }], { stop: true })
+  } else {
+    m.s0.run([{ x: landX, y: landY }], { stop: false })
+    if (m.s0.t > landT) seek(m.s0, landT)
+    else m.s0.hold(landT - m.s0.t)
+    if (isReturn) m.s0.run([{ x: finalX, y: clampY(landY + (hash(seed + 2) - 0.5) * 8) }], { stop: true })
+  }
   const retT = m.s0.t
   const blockers = ['wr0', 'wr1', 'te', 'ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'wr2']
   blockers.forEach((k, i) => m[k].run([{ x: clampX(finalX + 1 + (i % 3)), y: clampY(f[k].y + (posAt(m.s0.path, retT).y - f[k].y) * 0.7) }], { stop: true }))
   DEF_KEYS.filter((k) => k !== 's0').forEach((k, i) => m[k].run([{ x: clampX(los + 12 + i * 2), y: f[k].y }], { stop: true }))
   const punterPath = snapBall(m, los, kickT)
-  const ball: WP[] = [...punterPath, { t: landT, x: landX, y: landY }, ...shadow(m.s0.path, landT).slice(1)]
+  const ball: WP[] = touchback
+    ? [...punterPath, { t: landT, x: 116, y: MID_Y }]
+    : [...punterPath, { t: landT, x: landX, y: landY }, ...shadow(m.s0.path, landT).slice(1)]
   return finish(f, m, {
     ball,
-    holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: kickT, key: null }, { t: landT, key: 's0' }],
+    holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: kickT, key: null }, ...(touchback ? [] : [{ t: landT, key: 's0' }])],
     flights: [{ t0: kickT, t1: landT, height: 1 }],
   })
 }
@@ -1040,10 +1057,13 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   const kickX = 75
   const endX = clampX(10 + play.endYard)
   const touchback = play.result === 'Touchback'
-  const catchX = touchback ? 4 : Math.max(6, endX - 18)
+  const retYds = play.returnYards ?? 0
+  // R6: the catch spot is backed out of the recorded return so the run to the
+  // recorded end (endX) matches the box score. A touchback kneels in the end zone.
+  const catchX = touchback ? 4 : clampX(endX - retYds)
   DEF_KEYS.forEach((k, i) => {
     m[k].reset(kickX + 1, 3 + i * 4.7)
-    m[k].run([{ x: Math.max(endX + 3, catchX + 10 + (i % 4) * 3), y: clampY(3 + i * 4.7 + (MID_Y - (3 + i * 4.7)) * 0.4) }], { stop: true })
+    m[k].run([{ x: Math.max(endX + 3, catchX + 8 + (i % 4) * 3), y: clampY(3 + i * 4.7 + (MID_Y - (3 + i * 4.7)) * 0.4) }], { stop: true })
   })
   m.rb.reset(8, MID_Y)
   m.rb.run([{ x: catchX, y: MID_Y }], { stop: false })

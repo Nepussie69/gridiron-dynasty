@@ -73,6 +73,38 @@ export const COL_RTG: StatCol = {
   fmt: (s) => (s && s.passAtt > 0 ? passerRating(s).toFixed(1) : '—'),
 }
 
+export const COL_PASS_SK: StatCol = {
+  id: 'passSk',
+  label: 'SK',
+  title: 'Times sacked (sacks are not pass attempts)',
+  get: (s) => s?.sk ?? null,
+  fmt: (s) => num(s?.sk),
+}
+
+export const COL_PASS_SKY: StatCol = {
+  id: 'passSky',
+  label: 'SKY',
+  title: 'Sack yards lost (not subtracted from passing yards)',
+  get: (s) => s?.sky ?? null,
+  fmt: (s) => num(s?.sky),
+}
+
+export const COL_PASS_PRESSURED: StatCol = {
+  id: 'pressured',
+  label: 'PRS%',
+  title: 'Pressured % (pressures faced ÷ dropbacks = pass attempts + times sacked)',
+  get: (s) => {
+    if (!s) return null
+    const db = (s.passAtt ?? 0) + (s.sk ?? 0)
+    return db > 0 ? ((s.pressured ?? 0) / db) * 100 : null
+  },
+  fmt: (s) => {
+    if (!s) return '—'
+    const db = (s.passAtt ?? 0) + (s.sk ?? 0)
+    return db > 0 ? `${(((s.pressured ?? 0) / db) * 100).toFixed(1)}%` : '—'
+  },
+}
+
 export const COL_RUSH_ATT: StatCol = {
   id: 'rushAtt',
   label: 'CAR',
@@ -169,6 +201,70 @@ export const COL_DROP: StatCol = {
   fmt: (s) => num(s?.drops),
 }
 
+export const COL_KR: StatCol = {
+  id: 'kr',
+  label: 'KR',
+  title: 'Kickoff returns',
+  get: (s) => s?.kickRet ?? null,
+  fmt: (s) => num(s?.kickRet),
+}
+
+export const COL_KR_YDS: StatCol = {
+  id: 'krYds',
+  label: 'KR YDS',
+  title: 'Kickoff return yards',
+  get: (s) => s?.kickRetYds ?? null,
+  fmt: (s) => num(s?.kickRetYds),
+}
+
+export const COL_KR_AVG: StatCol = {
+  id: 'krAvg',
+  label: 'KR AVG',
+  title: 'Yards per kickoff return',
+  get: (s) => (s && (s.kickRet ?? 0) > 0 ? (s.kickRetYds ?? 0) / (s.kickRet ?? 1) : null),
+  fmt: (s) => (s && (s.kickRet ?? 0) > 0 ? ((s.kickRetYds ?? 0) / (s.kickRet ?? 1)).toFixed(1) : '—'),
+}
+
+export const COL_PR: StatCol = {
+  id: 'pr',
+  label: 'PR',
+  title: 'Punt returns',
+  get: (s) => s?.puntRet ?? null,
+  fmt: (s) => num(s?.puntRet),
+}
+
+export const COL_PR_YDS: StatCol = {
+  id: 'prYds',
+  label: 'PR YDS',
+  title: 'Punt return yards',
+  get: (s) => s?.puntRetYds ?? null,
+  fmt: (s) => num(s?.puntRetYds),
+}
+
+export const COL_PR_AVG: StatCol = {
+  id: 'prAvg',
+  label: 'PR AVG',
+  title: 'Yards per punt return',
+  get: (s) => (s && (s.puntRet ?? 0) > 0 ? (s.puntRetYds ?? 0) / (s.puntRet ?? 1) : null),
+  fmt: (s) => (s && (s.puntRet ?? 0) > 0 ? ((s.puntRetYds ?? 0) / (s.puntRet ?? 1)).toFixed(1) : '—'),
+}
+
+export const COL_RET_TD: StatCol = {
+  id: 'retTD',
+  label: 'RET TD',
+  title: 'Kickoff and punt return touchdowns',
+  get: (s) => s?.retTD ?? null,
+  fmt: (s) => num(s?.retTD),
+}
+
+export const COL_DEF_TD: StatCol = {
+  id: 'defTD',
+  label: 'DEF TD',
+  title: 'Defensive touchdowns (pick-six, fumble return)',
+  get: (s) => s?.defTD ?? null,
+  fmt: (s) => num(s?.defTD),
+}
+
 export const COL_TFL: StatCol = {
   id: 'tfl',
   label: 'TFL',
@@ -181,6 +277,30 @@ export const COL_SCK: StatCol = {
   label: 'SCK',
   get: (s) => s?.defSacks ?? null,
   fmt: (s) => num(s?.defSacks),
+}
+
+export const COL_PRS: StatCol = {
+  id: 'prs',
+  label: 'PRS',
+  title: 'Pressures (SCK + QBH + HUR)',
+  get: (s) => s?.prs ?? null,
+  fmt: (s) => num(s?.prs),
+}
+
+export const COL_QBH: StatCol = {
+  id: 'qbh',
+  label: 'QBH',
+  title: 'QB hits (knocked down as or after he throws)',
+  get: (s) => s?.qbHits ?? null,
+  fmt: (s) => num(s?.qbHits),
+}
+
+export const COL_HUR: StatCol = {
+  id: 'hur',
+  label: 'HUR',
+  title: 'Hurries (forced to throw or move early)',
+  get: (s) => s?.hurries ?? null,
+  fmt: (s) => num(s?.hurries),
 }
 
 export const COL_DEF_INT: StatCol = {

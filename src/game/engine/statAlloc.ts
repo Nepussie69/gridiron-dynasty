@@ -20,6 +20,7 @@ import { carrierMissRate, defenderMissRate } from './playsim'
 import { leagueMasteryMeans, masteryGroup, type MasteryMeans } from './playbook'
 import { POS_MEAN } from './ratingMeans'
 import { styleProfile } from './style'
+import { clubReturners } from './returns'
 
 const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
   QB: 'OFF', RB: 'OFF', FB: 'OFF', WR: 'OFF', TE: 'OFF', OT: 'OFF', OG: 'OFF', C: 'OFF',
@@ -76,6 +77,24 @@ function split(_rng: Rng, total: number, weights: number[]): number[] {
   const out = raw.map((v) => Math.floor(v))
   let rem = total - out.reduce((a, b) => a + b, 0)
   const order = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac)
+  for (let k = 0; k < rem && order.length; k++) out[order[k % order.length].i] += 1
+  return out
+}
+
+/**
+ * R7/R9: a deterministic weighted split into integers summing to `total`. Used by
+ * the fast-sim coverage and pressure allocation, which must not consume rng() so
+ * the seed stream (and every other allocated stat) is unchanged. Largest-fraction
+ * gets the remainder, with a per-item hash as the tie-break.
+ */
+function detSplit(total: number, weights: number[], key: string): number[] {
+  const sum = weights.reduce((a, b) => a + b, 0) || 1
+  const raw = weights.map((w) => (w / sum) * total)
+  const out = raw.map((v) => Math.floor(v))
+  let rem = total - out.reduce((a, b) => a + b, 0)
+  const order = raw
+    .map((v, i) => ({ i, frac: v - Math.floor(v), tie: hashUnit(`${key}:${i}`) }))
+    .sort((a, b) => b.frac - a.frac || a.tie - b.tie)
   for (let k = 0; k < rem && order.length; k++) out[order[k % order.length].i] += 1
   return out
 }
@@ -153,8 +172,14 @@ export function allocateTeamGame(
     // ~66% of those through the air: 22.6 pts -> ~1.55 passing TDs (2015-2024).
     const td = Math.max(0, Math.round((points / 7) * 0.48 * (0.7 + rng() * 0.6)))
     const ints = rng() < 0.42 ? (rng() < 0.7 ? 1 : 2) : 0
+    // R8: sacks taken by the QB (SK) and sack yards lost (SKY). The fast sim has no
+    // play-by-play, so the club's sack total is a plausible deterministic count; the
+    // offense's dropback count (att + sk) is what the defence's pressure rate uses.
+    const qbSacks = clamp(Math.round(2.4 + (hashUnit(`${gameKey}:${teamId}:skt`) - 0.5) * 2.6), 0, 7)
+    const qbSackYds = qbSacks * (5 + Math.round(hashUnit(`${gameKey}:${teamId}:sky`) * 4))
     addOff(qb.id, {
       playerId: qb.id, passAtt: att, passComp: comp, passYds, passTD: td, ints,
+      sk: qbSacks, sky: qbSackYds,
     })
   }
 
@@ -275,7 +300,145 @@ export function allocateTeamGame(
     })
   }
 
+  // ── R6: returns ──
+  // The club's automatic KR/PR (or the depth-chart override) gets a plausible
+  // deterministic return line so simmed seasons show KR / PR production. The
+  // events are hash-drawn (no rng) and fold onto the player's existing line.
+  const rets = clubReturners(world, teamId)
+  const addRet = (playerId: string, fields: Partial<GameStatLine>) => {
+    const line = out.find((o) => o.playerId === playerId)?.line
+    if (line) {
+      for (const [k, v] of Object.entries(fields)) {
+        if (typeof v === 'number') {
+          const rec = line as unknown as Record<string, number>
+          rec[k] = (rec[k] ?? 0) + v
+        }
+      }
+    } else {
+      addLine(playerId, { playerId, ...fields })
+    }
+  }
+  if (rets.kr) {
+    const krN = 1 + (hashUnit(`${gameKey}:${rets.kr.id}:krn`) < 0.35 ? 1 : 0)
+    addRet(rets.kr.id, {
+      kickRet: krN,
+      kickRetYds: Math.round(krN * (20 + hashUnit(`${gameKey}:${rets.kr.id}:kry`) * 8)),
+      retTD: hashUnit(`${gameKey}:${rets.kr.id}:krtd`) < 0.003 ? 1 : 0,
+    })
+  }
+  if (rets.pr) {
+    const prN = 1 + (hashUnit(`${gameKey}:${rets.pr.id}:prn`) < 0.55 ? 1 : 0)
+    addRet(rets.pr.id, {
+      puntRet: prN,
+      puntRetYds: Math.round(prN * (6 + hashUnit(`${gameKey}:${rets.pr.id}:pry`) * 7)),
+      ...(rets.pr.id === rets.kr?.id ? {} : { retTD: hashUnit(`${gameKey}:${rets.pr.id}:prtd`) < 0.006 ? 1 : 0 }),
+    })
+  }
+  // R6: defensive touchdowns (pick-six / fumble return) go to a defender.
+  if (defenders.length) {
+    const scorer = defenders[hash32(`${gameKey}:${teamId}:deftd`) % defenders.length]
+    if (scorer && hashUnit(`${gameKey}:${teamId}:deftdr`) < 0.09) {
+      const line = out.find((o) => o.playerId === scorer.id)?.line
+      if (line) line.defTD = (line.defTD ?? 0) + 1
+    }
+  }
+
   return { lines: out, offense, defMissed }
+}
+
+/**
+ * R7/R9: allocate the fast-sim coverage and pressure stats that the play-by-play
+ * credits via `coverId` / pressure credit. Deterministic (hashes only, no rng()),
+ * so the seed stream for every other allocated stat is untouched. Coverage allowed
+ * by a defence equals the opponent offence's passing production, so simmed seasons
+ * have consistent REC allowed / YDS ALW / COV; pressures come from the same
+ * pressureEdge-style rate and are split among the rushers by max(PMV, FMV).
+ */
+function allocateCoverageAndPressure(
+  world: World,
+  alloc: { lines: { playerId: string; line: GameStatLine }[]; offense: { playerId: string; line: GameStatLine }[] },
+  opp: { lines: { playerId: string; line: GameStatLine }[]; offense: { playerId: string; line: GameStatLine }[] },
+  key: string,
+) {
+  const playerById = new Map(world.players.map((p) => [p.id, p]))
+  // The passing this defence allowed = the opponent offence's totals.
+  let tgt = 0
+  let comp = 0
+  let yds = 0
+  let td = 0
+  let ints = 0
+  for (const { line } of opp.offense) {
+    tgt += line.passAtt ?? 0
+    comp += line.passComp ?? 0
+    yds += line.passYds ?? 0
+    td += line.passTD ?? 0
+    ints += line.ints ?? 0
+  }
+  const oppQb = opp.offense.find((o) => playerById.get(o.playerId)?.pos === 'QB')
+  const dropbacks = tgt + (oppQb?.line.sk ?? 0)
+
+  const covRows = alloc.lines.filter((l) => {
+    const p = playerById.get(l.playerId)
+    return !!p && (p.pos === 'CB' || p.pos === 'S' || p.pos === 'LB')
+  })
+  const rushRows = alloc.lines.filter((l) => {
+    const p = playerById.get(l.playerId)
+    return !!p && (p.pos === 'DE' || p.pos === 'DT' || p.pos === 'LB')
+  })
+
+  // ── R9: coverage ──
+  if (covRows.length) {
+    const covW = covRows.map(({ playerId }) => {
+      const p = playerById.get(playerId)!
+      const a = mkAttrs(p)
+      const mcv = a.MCV ?? 70
+      const zcv = a.ZCV ?? 70
+      if (p.pos === 'CB') return Math.max(1, (mcv * 0.6 + zcv * 0.4) * 2.4)
+      if (p.pos === 'S') return Math.max(1, (mcv * 0.4 + zcv * 0.6) * 1.3)
+      return Math.max(1, (mcv * 0.3 + zcv * 0.7) * 0.9)
+    })
+    const tgts = detSplit(tgt, covW, `${key}:ctgt`)
+    const comps = detSplit(comp, covW, `${key}:ccmp`)
+    const ydsA = detSplit(yds, covW, `${key}:cyds`)
+    const tds = detSplit(td, covW, `${key}:ctd`)
+    const intsCov = detSplit(ints, covW, `${key}:cint`)
+    covRows.forEach((row, i) => {
+      row.line.defTargets = (row.line.defTargets ?? 0) + tgts[i]
+      row.line.defComp = (row.line.defComp ?? 0) + Math.min(tgts[i], comps[i])
+      row.line.defYdsAllowed = (row.line.defYdsAllowed ?? 0) + ydsA[i]
+      row.line.defTDAllowed = (row.line.defTDAllowed ?? 0) + tds[i]
+      row.line.defIntsCov = (row.line.defIntsCov ?? 0) + intsCov[i]
+    })
+  }
+
+  // ── R7: pressures ──
+  const edges: number[] = []
+  const rushW = rushRows.map(({ playerId }) => {
+    const p = playerById.get(playerId)!
+    const a = mkAttrs(p)
+    const edge = Math.max(a.PMV ?? 70, a.FMV ?? 70)
+    if (p.pos === 'DE' || p.pos === 'DT') edges.push(edge)
+    return p.pos === 'LB' ? Math.max(1, edge * 0.45) : Math.max(1, edge)
+  })
+  const avgEdge = edges.length ? edges.reduce((s, w) => s + w, 0) / edges.length : 72
+  const rate = clamp(0.30 + (avgEdge - 72) * 0.005, 0.22, 0.42)
+  const totalPrs = clamp(Math.round(dropbacks * rate), 0, dropbacks)
+  if (rushRows.length) {
+    const totalSck = rushRows.reduce((s, r) => s + (r.line.defSacks ?? 0), 0)
+    const nonSack = Math.max(0, totalPrs - totalSck)
+    const qbhTotal = Math.round(nonSack * 0.225)
+    const hurTotal = nonSack - qbhTotal
+    const hits = detSplit(qbhTotal, rushW, `${key}:qbh`)
+    const hurs = detSplit(hurTotal, rushW, `${key}:hur`)
+    rushRows.forEach((row, i) => {
+      const sck = row.line.defSacks ?? 0
+      row.line.qbHits = (row.line.qbHits ?? 0) + hits[i]
+      row.line.hurries = (row.line.hurries ?? 0) + hurs[i]
+      row.line.prs = (row.line.prs ?? 0) + sck + hits[i] + hurs[i]
+    })
+  }
+  // The opponent QB faced this defence's pressures.
+  if (oppQb) oppQb.line.pressured = (oppQb.line.pressured ?? 0) + totalPrs
 }
 
 /**
@@ -315,6 +478,10 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
   const awayAlloc = allocateTeamGame(world, game.awayId, game.awayScore, game.homeScore, rng, `${game.week}:${game.awayId}`)
   reconcileForced(homeAlloc.offense, awayAlloc.defMissed)
   reconcileForced(awayAlloc.offense, homeAlloc.defMissed)
+  // R7/R9: coverage allowed and pressures generated by each defence, from the
+  // opponent's passing production. Deterministic, so the rng stream is unchanged.
+  allocateCoverageAndPressure(world, homeAlloc, awayAlloc, `${game.week}:${game.homeId}:cov`)
+  allocateCoverageAndPressure(world, awayAlloc, homeAlloc, `${game.week}:${game.awayId}:cov`)
   const sim: GameSim = {
     homeId: game.homeId,
     awayId: game.awayId,
@@ -360,8 +527,101 @@ function recordAllocatedStats(world: World, sim: GameSim, season: number, level:
       entry.missedTackles = (entry.missedTackles ?? 0) + (line.missedTackles ?? 0)
       entry.forcedMissed = (entry.forcedMissed ?? 0) + (line.forcedMissed ?? 0)
       entry.drops = (entry.drops ?? 0) + (line.drops ?? 0)
+      // R6: returns and defensive touchdowns.
+      entry.kickRet = (entry.kickRet ?? 0) + (line.kickRet ?? 0)
+      entry.kickRetYds = (entry.kickRetYds ?? 0) + (line.kickRetYds ?? 0)
+      entry.puntRet = (entry.puntRet ?? 0) + (line.puntRet ?? 0)
+      entry.puntRetYds = (entry.puntRetYds ?? 0) + (line.puntRetYds ?? 0)
+      entry.retTD = (entry.retTD ?? 0) + (line.retTD ?? 0)
+      entry.defTD = (entry.defTD ?? 0) + (line.defTD ?? 0)
+      // R7/R8: pressure credit (defence) and sacks taken / pressures faced (QB).
+      entry.prs = (entry.prs ?? 0) + (line.prs ?? 0)
+      entry.qbHits = (entry.qbHits ?? 0) + (line.qbHits ?? 0)
+      entry.hurries = (entry.hurries ?? 0) + (line.hurries ?? 0)
+      entry.sk = (entry.sk ?? 0) + (line.sk ?? 0)
+      entry.sky = (entry.sky ?? 0) + (line.sky ?? 0)
+      entry.pressured = (entry.pressured ?? 0) + (line.pressured ?? 0)
+      // R9: coverage allowed, so simmed seasons show REC allowed / YDS ALW / COV.
+      entry.defTargets = (entry.defTargets ?? 0) + (line.defTargets ?? 0)
+      entry.defComp = (entry.defComp ?? 0) + (line.defComp ?? 0)
+      entry.defYdsAllowed = (entry.defYdsAllowed ?? 0) + (line.defYdsAllowed ?? 0)
+      entry.defTDAllowed = (entry.defTDAllowed ?? 0) + (line.defTDAllowed ?? 0)
+      entry.defIntsCov = (entry.defIntsCov ?? 0) + (line.defIntsCov ?? 0)
     }
   }
 }
 
 export { recordGameStats }
+
+/**
+ * Dev-only probe (R7/R8/R9): run the fast allocator over fabricated games and
+ * report per-team-per-game coverage / pressure / sack rates so they can be checked
+ * against the play-by-play. Pure: it records nothing and consumes its own rng.
+ */
+export function allocProbe(world: World, games = 200) {
+  const rng = makeRng(world.seed + 424242)
+  const teams = world.teams.filter((t) => t.tier === 'NFL')
+  let covTgt = 0
+  let covComp = 0
+  let covYds = 0
+  let covTD = 0
+  let covInt = 0
+  let prs = 0
+  let qbh = 0
+  let hur = 0
+  let sck = 0
+  let sk = 0
+  let sky = 0
+  let pressured = 0
+  let dropbacks = 0
+  let gamesRun = 0
+  const offTotals = (lines: { playerId: string; line: GameStatLine }[]) => {
+    let att = 0
+    let sacksTaken = 0
+    for (const { playerId, line } of lines) {
+      const p = world.players.find((x) => x.id === playerId)
+      if (p?.pos === 'QB') { att += line.passAtt ?? 0; sacksTaken += line.sk ?? 0 }
+    }
+    return att + sacksTaken
+  }
+  for (let i = 0; i < games; i++) {
+    const h = teams[i % teams.length]
+    const a = teams[(i * 7 + 3) % teams.length]
+    if (!h || !a || h.id === a.id) continue
+    const hs = 17 + Math.floor(rng() * 21)
+    const as = 17 + Math.floor(rng() * 21)
+    const ha = allocateTeamGame(world, h.id, hs, as, rng, `probe:${i}:h`)
+    const aa = allocateTeamGame(world, a.id, as, hs, rng, `probe:${i}:a`)
+    allocateCoverageAndPressure(world, ha, aa, `probe:${i}:hc`)
+    allocateCoverageAndPressure(world, aa, ha, `probe:${i}:ac`)
+    dropbacks += offTotals(ha.offense) + offTotals(aa.offense)
+    for (const { line } of [...ha.lines, ...aa.lines]) {
+      covTgt += line.defTargets ?? 0
+      covComp += line.defComp ?? 0
+      covYds += line.defYdsAllowed ?? 0
+      covTD += line.defTDAllowed ?? 0
+      covInt += line.defIntsCov ?? 0
+      prs += line.prs ?? 0
+      qbh += line.qbHits ?? 0
+      hur += line.hurries ?? 0
+      sck += line.defSacks ?? 0
+      sk += line.sk ?? 0
+      sky += line.sky ?? 0
+      pressured += line.pressured ?? 0
+    }
+    gamesRun += 2
+  }
+  const per = (x: number) => +(x / (gamesRun || 1)).toFixed(2)
+  return {
+    games: gamesRun,
+    coverage: { targets: per(covTgt), comp: per(covComp), yds: per(covYds), td: per(covTD), ints: per(covInt) },
+    pressures: per(prs),
+    qbHits: per(qbh),
+    hurries: per(hur),
+    sacks: per(sck),
+    qbSacks: per(sk),
+    qbSackYds: +(sky / (gamesRun || 1)).toFixed(1),
+    pressured: per(pressured),
+    pressureRatePct: +((prs / (dropbacks || 1)) * 100).toFixed(1),
+  }
+}

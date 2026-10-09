@@ -14,6 +14,7 @@ import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../da
 import { coachEffect } from './coaching'
 import { depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseReceivers, personnelEdge } from './personnel'
+import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
@@ -123,12 +124,57 @@ export const R2 = {
 }
 
 /**
+ * R7: QB pressure model. On every dropback the existing `pressureEdge` decides
+ * pressure/no-pressure through a deterministic per-play hash (no rng() draw), and
+ * the classification (sack / QB hit / hurry) is likewise hash-derived. This is a
+ * stats-only layer: it never feeds the completion, sack or INT probabilities, so
+ * calibration is unchanged. League pressure rate ≈ 30–35% of dropbacks.
+ */
+export const PRESSURE = {
+  /** Base pressure probability at a league-average matchup (edge 0). */
+  base: 0.235,
+  /** Extra pressure per point of pressureEdge above that baseline. */
+  slope: 0.011,
+  lo: 0.12,
+  hi: 0.62,
+  /** Share of non-sack pressures classified as a QB hit (the rest are hurries). */
+  hitRate: 0.225,
+}
+
+/**
  * R2: penalty yardage from a deterministic hash — 5 / 10 / 15-yard flags mixing
  * to the real ≈ 8.7-yard average. No rng() draw is added or removed.
  */
 function penaltyYards(key: string): number {
   const r = hash32(key) % 10
   return r < 5 ? 5 : r < 8 ? 10 : 15
+}
+
+/**
+ * R6: a deterministic uniform in [0,1) from a string key — never an rng() draw.
+ * All R6 randomness (returns, defensive scores, safeties) is derived this way so
+ * the seed stream and the play-by-play/coached equivalence are unchanged.
+ */
+function h01(key: string): number {
+  return (hash32(key) >>> 0) / 4294967296
+}
+
+/** "Dorian Smith" → "D. Smith" for play text. */
+function shortName(name: string | undefined): string {
+  if (!name) return ''
+  const parts = name.trim().split(/\s+/)
+  return parts.length > 1 ? `${parts[0][0]}. ${parts.slice(1).join(' ')}` : name
+}
+
+/**
+ * R6: return yardage from the returner's score vs the cover team, drawn from a
+ * bell-shaped deterministic hash (no rng draw). `spread` sets the range; the
+ * talent edge shifts the mean by about a yard per 7 points of score difference.
+ */
+function returnYards(key: string, retScore: number, covScore: number, base: number, spread: number): number {
+  const bell = (h01(`${key}:y1`) + h01(`${key}:y2`) + h01(`${key}:y3`)) / 3 - 0.5
+  const edge = (retScore - covScore) * 0.14
+  return Math.round(clamp(base + bell * spread + edge, -4, 45))
 }
 
 export interface Play {
@@ -177,6 +223,23 @@ export interface Play {
   forcedMissedIds?: string[]
   /** R5: the targeted receiver charged with a drop on this incompletion. */
   dropId?: string
+  // ── R6: special teams / defensive scoring ──────────────────────────────────
+  /** R6: the returner on a kickoff or punt (the receiving club's player). */
+  returnerId?: string
+  /** R6: yards the returner gained on a kick or punt return. */
+  returnYards?: number
+  /** R6: the return was taken back for a touchdown. */
+  returnTD?: boolean
+  /** R6: the return outcome (drives the play text and the animation). */
+  returnKind?: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff'
+  /** R6: a defensive touchdown (pick-six or fumble return). */
+  defTD?: boolean
+  /** R6: a safety (two points for this play's defense). */
+  safety?: boolean
+  /** R7: the defender credited with the pressure (sack, QB hit or hurry). */
+  pressureId?: string
+  /** R7: how the pressure is classified. A sack is always a pressure. */
+  pressureType?: 'sack' | 'hit' | 'hurry'
 }
 
 export interface GameSim {
@@ -627,6 +690,16 @@ interface PlayOutcome {
   forcedMissedIds?: string[]
   /** R5: the targeted receiver marked with a drop (the result stays Incomplete). */
   dropId?: string
+  // ── R6 ─────────────────────────────────────────────────────────────────────
+  returnerId?: string
+  returnYards?: number
+  returnTD?: boolean
+  returnKind?: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff'
+  defTD?: boolean
+  /** R7: the defender credited with the pressure (sack, QB hit or hurry). */
+  pressureId?: string
+  /** R7: how the pressure is classified. A sack is always a pressure. */
+  pressureType?: 'sack' | 'hit' | 'hurry'
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -743,7 +816,13 @@ export function aiTendency(world: World, teamId: string, bucket: Bucket): { off:
   let stack = Math.max(0, d.runFit - 1) * 4
   if (bucket === '3rd-long') blitz *= 1.35
   if (bucket === 'redzone') stack += 0.15
-  const defRaw: Record<DefCall, number> = { blitz, man: d.manCoverage, zone: 1 - d.manCoverage, stack }
+  // R10: a two-high shell (Cover 2/4) is a zone-leaning DC's answer on passing
+  // downs — more safeties deep, softer vs the run. Scale by zone lean.
+  const zoneLean = clamp(1 - d.manCoverage, 0, 1)
+  let twoHigh = zoneLean * 0.3
+  if (bucket === '2nd-long' || bucket === '3rd-long') twoHigh *= 1.7
+  else if (bucket === '3rd-mid') twoHigh *= 1.3
+  const defRaw: Record<DefCall, number> = { blitz, man: d.manCoverage, zone: 1 - d.manCoverage, stack, twoHigh }
   return { off: normalizeDist(offRaw, OFF_CLASSES), def: normalizeDist(defRaw, DEF_CALLS) }
 }
 
@@ -814,7 +893,7 @@ function downDistance(down: number, distance: number, yard: number): string {
 
 /** G8: the scouted read shown on a card (fuzzy ±15%, sharp ±5%). */
 /** Read-line verbs for a defense's habit (the DEF_CALL_LABELs stay as button text). */
-const DEF_VERB: Record<DefCall, string> = { blitz: 'blitz', man: 'play man coverage', zone: 'play zone coverage', stack: 'stack the box' }
+const DEF_VERB: Record<DefCall, string> = { blitz: 'blitz', man: 'play man coverage', zone: 'play zone coverage', stack: 'stack the box', twoHigh: 'play two-high coverage' }
 
 /** L11.5 Q1: one-line description of each defensive call for the moment card. */
 const DEF_CALL_DESC: Record<DefCall, string> = {
@@ -822,6 +901,7 @@ const DEF_CALL_DESC: Record<DefCall, string> = {
   man: 'Man coverage — tight on the receivers, back to the ball',
   zone: 'Zone coverage — keep everything in front',
   stack: 'Stack the box — sell out to stop the run',
+  twoHigh: 'Two deep safeties — take away the deep ball, softer against the run',
 }
 
 function tendencyRead(world: World, s: GameState, oppId: string, side: 'off' | 'def', bucket: Bucket): string {
@@ -1091,6 +1171,23 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
   const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)), 0.02, 0.13)
 
+  // ── R7: per-dropback pressure decision (stats only) ─────────────────────────
+  // Derived from the existing `pressureEdge` by a per-play hash, so no rng() draw
+  // is spent and the play outcome (completion / sack / INT / yards) is untouched.
+  const pressured = h01(`${n}:${offId}:press`) < clamp(PRESSURE.base + pressureEdge * PRESSURE.slope, PRESSURE.lo, PRESSURE.hi)
+  const pressureIsHit = h01(`${n}:${offId}:phit`) < PRESSURE.hitRate
+  // One rusher per pressure: the DL weighted by max(PMV, FMV); on a blitz an LB
+  // can steal the credit exactly as sack credit does (hash-gated). Never an rng.
+  const pressureRusherId = (): string | undefined => {
+    if (blitz && lbs.length && hash32(`${n}:${defId}:presslb`) % 100 < 55) {
+      return lbs[hash32(`${n}:${defId}:presslbid`) % lbs.length]?.id
+    }
+    const pool = dl.length ? dl : lbs
+    return hashPick(pool, (p) => Math.max(1, Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70)), hash32(`${n}:${defId}:presspick`))?.id
+  }
+  const pressureFields = (type: 'sack' | 'hit' | 'hurry', id?: string): Pick<PlayOutcome, 'pressure' | 'pressureType' | 'pressureId'> =>
+    ({ pressure: true, pressureType: type, pressureId: id })
+
   // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
   // more looks, but the ball is spread by a softmax draw over those scores rather
   // than an argmax. No rng draw is added or removed: the scored map keeps its one
@@ -1152,7 +1249,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       ? lbs[hash32(`${n}:${defId}:blitzlb`) % lbs.length]?.id
       : undefined
     const sackId = blitzLb ?? dlPick
-    return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, pressure: true, blitz, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId, coverId }
+    return { type: 'pass', concept: concept.name, yards: y, result: blitz ? 'Sack (blitz)' : 'Sack', turnover: false, ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12), qbId: qb?.id, sackId, coverId }
   }
 
   const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
@@ -1260,10 +1357,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const fallback = hashPick(dbPool, hawkWeight, hash32(`${n}:${defId}:inthawk`))?.id
     const takeCover = !!coverId && (coverIsLb ? ir < 32 : coverIsS ? ir < 80 : ir < 42)
     const intId = takeCover ? coverId : fallback
+    // R6: real NFL pick-six rate ≈ 10–11% of interceptions (deterministic hash).
+    const pickSix = h01(`${n}:${defId}:pick6`) < 0.105
     return {
-      type: 'pass', concept: concept.name, yards: 0, result: 'Interception!', turnover: true, blitz,
-      timeUsed: 22 + Math.floor(rng() * 12), pressure: pressureEdge > 6, qbId: qb?.id, intId, coverId,
-      targetId: target?.id,
+      type: 'pass', concept: concept.name, yards: 0,
+      result: pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!',
+      turnover: true, blitz,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), qbId: qb?.id, intId, coverId,
+      targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
+      scorerId: pickSix ? intId : undefined,
     }
   }
   if (rng() < compProb) {
@@ -1316,16 +1418,21 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     }
     const big = gain >= 25
     const forceFumble = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)
+    // R6: a strip-sack-style catch fumble is scooped and returned for a TD
+    // ~7–8% of the time (deterministic hash, no rng).
+    const fumTD = forceFumble && h01(`${n}:${defId}:passtd`) < 0.075
     return {
       type: 'pass', concept: concept.name, yards: gain, blitz,
-      result: forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete',
+      result: fumTD ? 'Fumble returned for a TOUCHDOWN!' : forceFumble ? 'Fumble!' : big ? 'Explosive play!' : 'Complete',
       turnover: forceFumble, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !forceFumble && big,
       fumbleId: forceFumble ? stopper : undefined,
+      defTD: fumTD, returnerId: fumTD ? stopper : undefined, scorerId: fumTD ? stopper : undefined,
+      ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}),
       timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopper ? [stopper] : undefined,
       missedTackleIds, forcedMissedIds,
     }
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, pressure: pressureEdge > 6, timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -1473,14 +1580,29 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   }
   const isBig = gain >= 20
   const tackleIds = tackler ? [tackler] : []
+  // R6: a lost fumble is returned for a touchdown ~7–8% of the time (hash, no rng).
+  let fumbleTD = false
+  let recoverer: Player | undefined
+  if (fumble) {
+    fumbleTD = h01(`${n}:${defId}:fumtd`) < 0.075
+    if (fumbleTD) {
+      const pool = [...lbs, ...dl, ...cbs, ...saf]
+      recoverer = hashPick(pool, (p) => {
+        const a = mkAttrs(p)
+        return Math.max(1, (a.TAK ?? 70) * 0.6 + (a.PUR ?? 70) * 0.4)
+      }, hash32(`${n}:${defId}:fumrec`))
+    }
+  }
   return {
-    type: 'run', concept: concept.name, yards: gain, result: isBig ? 'Big run!' : 'Rush',
+    type: 'run', concept: concept.name, yards: gain,
+    result: fumbleTD ? 'Fumble returned for a TOUCHDOWN!' : isBig ? 'Big run!' : 'Rush',
     turnover: fumble, carrierId: carrier?.id, bigPlay: isBig,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
+    defTD: fumbleTD, returnerId: recoverer?.id, scorerId: recoverer?.id,
   }
 }
 
-function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'fg', yard: number, env?: SimEnv, margin = 0): PlayOutcome {
+function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'fg', yard: number, env?: SimEnv, margin = 0, n = 0, defId?: string): PlayOutcome {
   if (type === 'fg') {
     const k = topGroup(world, offId, ['K'], 1)[0]
     const kA = k ? mkAttrs(k) : {}
@@ -1497,8 +1619,53 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
   }
   const p = topGroup(world, offId, ['P'], 1)[0]
   const pA = p ? mkAttrs(p) : {}
-  const net = 38 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14)
-  return { type: 'punt', concept: 'Punt', yards: net, result: `${net}-yard punt`, turnover: true, timeUsed: 6 }
+  // R6: the existing distance formula is the GROSS punt; the return (or a
+  // touchback) comes out of it, so the net lands at ~40–41 with ~9-yard
+  // returns. The lone rng() draw is unchanged; the outcome is a per-play hash.
+  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14)
+  const key = `${n}:${offId}:punt`
+  const u = h01(`${key}:kind`)
+  const pr = defId ? clubReturners(world, defId).pr : undefined
+  let kind: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff'
+  if (u < 0.25) kind = 'fairCatch'
+  else if (u < 0.45) kind = 'downed'
+  else if (u < 0.53) kind = 'touchback'
+  else if (u < 0.54) kind = 'muff'
+  else kind = 'return'
+  // A touchback only fits a punt that can actually reach the end zone.
+  if (kind === 'touchback' && yard < 45) kind = 'downed'
+  // A fair catch / downed punt that would cross the goal line becomes a touchback.
+  if ((kind === 'fairCatch' || kind === 'downed') && yard + gross >= 100) kind = 'touchback'
+  let retYds = 0
+  let returnTD = false
+  let returnerId: string | undefined
+  if ((kind === 'return' || kind === 'fairCatch' || kind === 'muff') && pr) returnerId = pr.id
+  if (kind === 'return' && pr) {
+    const cov = defId ? coverageScore(world, defId) : 72
+    retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 9, 14))
+    returnTD = h01(`${key}:td`) < 0.006
+    // A return touchdown is caught at the punt's landing spot and taken the rest
+    // of the way, so its recorded yardage runs to the goal line.
+    if (returnTD) retYds = Math.max(retYds, 100 - clamp(yard + gross, 1, 99))
+  }
+  const spot =
+    returnTD ? 100
+      : kind === 'touchback' ? 80
+        : kind === 'return' ? clamp(yard + gross - retYds, 1, 99)
+          : kind === 'muff' ? clamp(yard + gross - Math.round(h01(`${key}:muff`) * 6), 1, 99)
+            : clamp(yard + gross, 1, 99)
+  const net = clamp(spot - yard, -20, 80)
+  const name = shortName(pr?.name)
+  const result =
+    kind === 'touchback' ? `${gross}-yard punt, touchback`
+      : kind === 'fairCatch' ? `${gross}-yard punt, fair catch by ${name}`
+        : kind === 'muff' ? `${gross}-yard punt, muffed`
+          : kind === 'downed' ? `${gross}-yard punt, downed`
+            : `Punt ${gross} yds, returned ${retYds} by ${name}${returnTD ? ' TOUCHDOWN!' : ''}`
+  return {
+    type: 'punt', concept: 'Punt', yards: net, result, turnover: true, timeUsed: 6,
+    returnerId, returnYards: kind === 'return' ? retYds : undefined, returnTD, returnKind: kind,
+  }
 }
 
 function resolvePAT(world: World, rng: Rng, offId: string): PlayOutcome {
@@ -1511,6 +1678,73 @@ function resolvePAT(world: World, rng: Rng, offId: string): PlayOutcome {
     result: good ? 'Extra point good' : 'Extra point MISSED',
     turnover: !good, timeUsed: 4,
   }
+}
+
+/**
+ * R6: resolve a kickoff (opening kick, after a score, or a post-safety free
+ * kick). `s.offId` is the receiving club and `s.defId` the kicking club. Whether
+ * it is a touchback or a return is decided from the kicker's KPW and a per-play
+ * hash; a return sets the receiving club's start spot to the return's end. Rare
+ * return touchdowns and lost fumbles are handled here. No rng() draw is added or
+ * removed.
+ */
+function resolveKickoff(world: World, s: GameState): { scored: boolean } {
+  const receiving = s.offId
+  const kicking = s.defId
+  const k = topGroup(world, kicking, ['K'], 1)[0]
+  const kA = k ? mkAttrs(k) : {}
+  const base = `${s.n}:${kicking}:ko`
+  const pTb = clamp(0.57 + ((kA.KPW ?? 80) - 78) * 0.012, 0.45, 0.72)
+  const returner = clubReturners(world, receiving).kr
+  const touchback = !returner || h01(`${base}:tb`) < pTb
+  let retYds = 0
+  let returnTD = false
+  let fumble = false
+  let catchYard = 0
+  if (!touchback && returner) {
+    catchYard = clamp(2 + Math.round(h01(`${base}:cy`) * 7), 0, 9)
+    const cov = coverageScore(world, kicking)
+    retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 22, 26))
+    returnTD = h01(`${base}:td`) < 0.003
+    fumble = !returnTD && h01(`${base}:fum`) < 0.005
+    if (returnTD) retYds = 100 - catchYard
+  }
+  const start = touchback ? R2.kickoffYard : returnTD ? 100 : clamp(catchYard + retYds, 1, 99)
+  const rname = shortName(returner?.name)
+  const kickAbbr = world.byId[kicking]?.abbr ?? kicking
+  const result = touchback
+    ? 'Touchback'
+    : returnTD
+      ? `Kickoff returned ${retYds} yds by ${rname} TOUCHDOWN!`
+      : fumble
+        ? `Kickoff returned ${retYds} yds, fumbled, recovered by ${kickAbbr}`
+        : `Kickoff returned ${retYds} yds by ${rname}`
+  pushPlay(s, {
+    type: 'kickoff', concept: 'Kickoff', yards: 0, result,
+    startYard: start, endYard: returnTD ? 100 : start, down: null, distance: null, timeUsed: 5,
+    returnerId: touchback ? undefined : returner?.id,
+    returnYards: touchback ? undefined : retYds,
+    returnTD, returnKind: touchback ? 'touchback' : 'return', turnover: fumble,
+    scorerId: returnTD ? returner?.id : undefined,
+  })
+  if (returnTD) {
+    if (receiving === s.homeId) s.homeScore += 6
+    else s.awayScore += 6
+    statFor(s, receiving).points += 6
+    return { scored: true }
+  }
+  if (fumble) {
+    // The kicking club recovers at the return spot and takes over on offense.
+    swapPossession(s)
+    s.yard = clamp(100 - start, 1, 99)
+    s.down = 1
+    s.distance = 10
+    return { scored: false }
+  }
+  s.yard = start
+  s.down = 1
+  s.distance = 10
+  return { scored: false }
 }
 
 // ── Game driver ───────────────────────────────────────────────────────────────
@@ -2134,8 +2368,8 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
   }
   // G10: if the user receives the opening kick, this is their first drive.
   if (ctx && s.offId === ctx.userTeamId) s.userDrive = 1
-  // opening kickoff
-  pushPlay(s, { type: 'kickoff', concept: 'Kickoff', yards: 0, result: 'Touchback', startYard: R2.kickoffYard, endYard: R2.kickoffYard, down: null, distance: null, timeUsed: 5 })
+  // R6: opening kickoff — a touchback or a real return.
+  if (resolveKickoff(world, s).scored) s.phase = 'try'
   return s
 }
 
@@ -2236,11 +2470,10 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
   }
 
   swapPossession(s)
-  s.yard = R2.kickoffYard
   s.down = 1
   s.distance = 10
-  pushPlay(s, { type: 'kickoff', concept: 'Kickoff', yards: 0, result: 'Touchback', startYard: R2.kickoffYard, endYard: R2.kickoffYard, down: null, distance: null, timeUsed: 5 })
-  s.phase = 'play'
+  // R6: kick off for real — a touchback or a return (and the rare return score).
+  s.phase = resolveKickoff(world, s).scored ? 'try' : 'play'
   return 'continue'
 }
 
@@ -2453,10 +2686,32 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       s.distance = 10
       return 'continue'
     }
-    const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
+    const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore, s.n, defId)
     s.clock -= out.timeUsed * s.pace
     const newYard = clamp(s.yard + out.yards, 1, 99)
-    pushPlay(s, { ...out, startYard: s.yard, endYard: newYard, down: 4, distance: s.distance })
+    pushPlay(s, { ...out, startYard: s.yard, endYard: out.returnTD ? 100 : newYard, down: 4, distance: s.distance })
+    if (out.returnTD) {
+      // R6: the receiving club took the punt back for a touchdown.
+      if (defId === s.homeId) s.homeScore += 6
+      else s.awayScore += 6
+      statFor(s, defId).points += 6
+      swapPossession(s)
+      s.down = 1
+      s.distance = 10
+      if (s.qtr <= 4) {
+        s.phase = 'try'
+        return 'continue'
+      }
+      pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+      return 'done'
+    }
+    if (out.returnKind === 'muff') {
+      // R6: the punting club recovers its own muffed punt and keeps the ball.
+      s.yard = newYard
+      s.down = 1
+      s.distance = 10
+      return 'continue'
+    }
     swapPossession(s)
     s.yard = 100 - newYard
     s.down = 1
@@ -2492,13 +2747,53 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   offS.top += out.timeUsed * s.pace
   if (s.down === 3) offS.thirdDownAtt += 1
 
-  const endYard = clamp(s.yard + out.yards, 0, 100)
-  const scored = endYard >= 100 && !out.turnover
+  // R6: a safety — a run or sack stopped in the end zone when the offense started
+  // inside its own 3 (deterministic hash, ~0.04 per team-game).
+  const safety = !out.turnover && !out.defTD && (out.type === 'run' || isSack(out)) &&
+    s.yard <= 3 && s.yard + out.yards <= 0 && h01(`${s.n}:${offId}:safety`) < 0.5
+  const gainedYard = clamp(s.yard + out.yards, 0, 100)
+  const endYard = out.defTD ? 100 : safety ? 0 : gainedYard
+  const scored = endYard >= 100 && !out.turnover && !out.defTD
   if (!out.turnover && (scored || out.yards >= s.distance)) {
     offS.firstDowns += 1
     if (s.down === 3) offS.thirdDownConv += 1
   }
-  pushPlay(s, { ...out, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
+  pushPlay(s, { ...out, result: safety ? 'Safety!' : out.result, safety, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
+
+  if (out.defTD) {
+    // R6: a takeaway returned for a touchdown (pick-six / fumble return).
+    const scoring = defId
+    if (scoring === s.homeId) s.homeScore += 6
+    else s.awayScore += 6
+    statFor(s, scoring).points += 6
+    const last = s.plays[s.plays.length - 1]
+    last.result = 'TOUCHDOWN!'
+    last.scorerId = out.scorerId
+    last.scorerName = world.players.find((p) => p.id === out.scorerId)?.name ?? ''
+    // The scoring club attempts the extra point, then kicks off (handled by `try`).
+    swapPossession(s)
+    s.down = 1
+    s.distance = 10
+    if (s.qtr <= 4) {
+      s.phase = 'try'
+      return 'continue'
+    }
+    pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+    return 'done'
+  }
+
+  if (safety) {
+    // R6: two points to the defense; the club that gave it up free-kicks away.
+    const scoring = defId
+    if (scoring === s.homeId) s.homeScore += 2
+    else s.awayScore += 2
+    statFor(s, scoring).points += 2
+    swapPossession(s)
+    s.down = 1
+    s.distance = 10
+    if (resolveKickoff(world, s).scored) s.phase = 'try'
+    return 'continue'
+  }
 
   if (out.turnover) {
     swapPossession(s)

@@ -9,18 +9,28 @@ import {
   COL_COV_TGT,
   COL_COV_YDS,
   COL_DEF_INT,
+  COL_DEF_TD,
   COL_DROP,
   COL_FMT,
   COL_GP,
+  COL_KR,
   COL_MAIN,
   COL_MT,
   COL_PASS_ATT,
   COL_PASS_INT,
+  COL_PASS_PRESSURED,
+  COL_PASS_SK,
+  COL_PASS_SKY,
   COL_PASS_TD,
   COL_PASS_YDS,
+  COL_PR,
+  COL_PRS,
+  COL_QBH,
+  COL_HUR,
   COL_REC,
   COL_REC_TD,
   COL_REC_YDS,
+  COL_RET_TD,
   COL_RTG,
   COL_RUSH_ATT,
   COL_RUSH_AVG,
@@ -38,15 +48,15 @@ import { Badge, DensityToggle, OvrBadge, TeamCrest, useDensity } from '../ui/kit
 type Dir = 'asc' | 'desc'
 type SortKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | `col:${string}`
 
-const QB_COLS: StatCol[] = [COL_PASS_ATT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_RTG]
+const QB_COLS: StatCol[] = [COL_PASS_ATT, COL_PASS_YDS, COL_PASS_TD, COL_PASS_INT, COL_PASS_SK, COL_PASS_SKY, COL_RTG, COL_PASS_PRESSURED]
 
-const RB_COLS: StatCol[] = [COL_RUSH_ATT, COL_RUSH_YDS, COL_RUSH_AVG, COL_RUSH_TD, COL_FMT, COL_REC, COL_REC_YDS]
+const RB_COLS: StatCol[] = [COL_RUSH_ATT, COL_RUSH_YDS, COL_RUSH_AVG, COL_RUSH_TD, COL_FMT, COL_REC, COL_REC_YDS, COL_KR, COL_PR, COL_RET_TD]
 
-const WR_COLS: StatCol[] = [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_TD, COL_FMT, COL_DROP]
+const WR_COLS: StatCol[] = [COL_TGT, COL_REC, COL_REC_YDS, COL_REC_TD, COL_FMT, COL_DROP, COL_KR, COL_PR, COL_RET_TD]
 
-const FRONT_COLS: StatCol[] = [COL_TCK, COL_MT, COL_TFL, COL_SCK]
+const FRONT_COLS: StatCol[] = [COL_TCK, COL_MT, COL_TFL, COL_SCK, COL_PRS, COL_QBH, COL_HUR, COL_DEF_TD]
 
-const DB_COLS: StatCol[] = [COL_TCK, COL_MT, COL_DEF_INT, COL_COV_TGT, COL_COV_YDS, COL_COV]
+const DB_COLS: StatCol[] = [COL_TCK, COL_MT, COL_DEF_INT, COL_COV_TGT, COL_COV_YDS, COL_COV, COL_KR, COL_PR, COL_RET_TD, COL_DEF_TD]
 
 /** Columns for a stats-tab group. Empty groups (OL, K/P) fall back to GP. */
 function columnsFor(group: string): StatCol[] {

@@ -11,7 +11,7 @@
 
 import type { World } from './generate'
 import { simulatePlayByPlay, type Play } from './playsim'
-import { buildPlayAnim, posAt, targetKey, attrOf, type PlayAnim, type AnimContext } from '../../components/playAnim'
+import { buildPlayAnim, changeSpot, posAt, targetKey, attrOf, type PlayAnim, type AnimContext } from '../../components/playAnim'
 import { actorPlayers } from '../../components/jersey'
 import type { Player } from '../types'
 
@@ -82,6 +82,24 @@ export function animProbe(world: World, games = 2, seeds?: number[]) {
     const sim = simulatePlayByPlay(world, home.id, away.id, seed)
     for (let i = 0; i < sim.plays.length; i++) {
       const play = sim.plays[i] as Play
+      const specialDef = play.offId === home.id ? away.id : home.id
+      // R6: the real returner catches and returns to the recorded end spot.
+      if ((play.type === 'kickoff' || play.type === 'punt') && play.returnKind === 'return' && play.returnerId) {
+        const actors = actorPlayers(world, play, specialDef, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const key = play.type === 'kickoff' ? 'rb' : 's0'
+        const want = play.type === 'kickoff'
+          ? clampX(10 + play.endYard)
+          : play.returnTD
+            ? 110
+            : clampX(changeSpot(play, sim.plays[i + 1]) ?? 10 + play.startYard + play.yards)
+        const path = anim.actors.find((a) => a.key === key)?.path
+        const got = path ? posAt(path, 1).x : NaN
+        endTotal++
+        if (Math.abs(got - want) < 1e-3) endMatch++
+        plays++
+        continue
+      }
       if (play.type !== 'run' && play.type !== 'pass') continue
       if (play.type === 'pass' && play.result.startsWith('Sack')) continue
       const defId = play.offId === home.id ? away.id : home.id

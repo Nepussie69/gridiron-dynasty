@@ -86,9 +86,30 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
   }
 
   for (const play of sim.plays) {
-    if (play.type === 'end' || play.type === 'kickoff' || play.type === 'penalty') continue
+    if (play.type === 'end' || play.type === 'penalty') continue
     const off = play.offId
     const def = play.defId
+
+    // R6: a takeaway returned for a touchdown (pick-six / fumble return).
+    if (play.defTD && play.scorerId) add(play.scorerId, def, 'defTD', 1)
+    // R6: kickoff returns — the receiving club is `off` on a kickoff play.
+    if (play.type === 'kickoff') {
+      if (play.returnKind === 'return' && play.returnerId) {
+        add(play.returnerId, off, 'kickRet', 1)
+        add(play.returnerId, off, 'kickRetYds', play.returnYards ?? 0)
+        if (play.returnTD) add(play.returnerId, off, 'retTD', 1)
+      }
+      continue
+    }
+    // R6: punt returns — the receiving club is `def` on a punt play.
+    if (play.type === 'punt') {
+      if (play.returnKind === 'return' && play.returnerId) {
+        add(play.returnerId, def, 'puntRet', 1)
+        add(play.returnerId, def, 'puntRetYds', play.returnYards ?? 0)
+        if (play.returnTD) add(play.returnerId, def, 'retTD', 1)
+      }
+      continue
+    }
 
     const isComp = play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId
     if (play.type === 'pass') {
@@ -103,6 +124,21 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
           if (play.result === 'TOUCHDOWN!') add(qb, off, 'passTD', 1)
         }
         if (play.result === 'Interception!') add(qb, off, 'ints', 1)
+        // R8: sacks taken by the QB (SK) and sack yards lost (SKY). A sack is not
+        // a pass attempt and its yards are not subtracted from passing yards.
+        if (/^Sack/.test(play.result)) {
+          add(qb, off, 'sk', 1)
+          add(qb, off, 'sky', Math.abs(play.yards ?? 0))
+        }
+        // R7: pressures the QB faced (denominator = pass attempts + SK, so the
+        // "pressured %" column divides this by (passAtt + sk)).
+        if (play.pressure) add(qb, off, 'pressured', 1)
+      }
+      // R7: one rusher is credited per pressure — sack, QB hit or hurry.
+      if (play.pressureId && play.pressureType) {
+        add(play.pressureId, def, 'prs', 1)
+        if (play.pressureType === 'hit') add(play.pressureId, def, 'qbHits', 1)
+        else if (play.pressureType === 'hurry') add(play.pressureId, def, 'hurries', 1)
       }
       if (play.sackId) {
         add(play.sackId, def, 'defSacks', 1)
@@ -199,6 +235,20 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.missedTackles = (season.missedTackles ?? 0) + (line.missedTackles ?? 0)
   season.forcedMissed = (season.forcedMissed ?? 0) + (line.forcedMissed ?? 0)
   season.drops = (season.drops ?? 0) + (line.drops ?? 0)
+  // R6: kick/punt returns and defensive touchdowns.
+  season.kickRet = (season.kickRet ?? 0) + (line.kickRet ?? 0)
+  season.kickRetYds = (season.kickRetYds ?? 0) + (line.kickRetYds ?? 0)
+  season.puntRet = (season.puntRet ?? 0) + (line.puntRet ?? 0)
+  season.puntRetYds = (season.puntRetYds ?? 0) + (line.puntRetYds ?? 0)
+  season.retTD = (season.retTD ?? 0) + (line.retTD ?? 0)
+  season.defTD = (season.defTD ?? 0) + (line.defTD ?? 0)
+  // R7/R8: pressures (defense) and sacks taken / pressures faced (passing).
+  season.prs = (season.prs ?? 0) + (line.prs ?? 0)
+  season.qbHits = (season.qbHits ?? 0) + (line.qbHits ?? 0)
+  season.hurries = (season.hurries ?? 0) + (line.hurries ?? 0)
+  season.sk = (season.sk ?? 0) + (line.sk ?? 0)
+  season.sky = (season.sky ?? 0) + (line.sky ?? 0)
+  season.pressured = (season.pressured ?? 0) + (line.pressured ?? 0)
 }
 
 /** Get or create this season's stat line for a player at a level. */
@@ -286,6 +336,18 @@ export function careerTotals(p: Player) {
     t.missedTackles = (t.missedTackles ?? 0) + (s.missedTackles ?? 0)
     t.forcedMissed = (t.forcedMissed ?? 0) + (s.forcedMissed ?? 0)
     t.drops = (t.drops ?? 0) + (s.drops ?? 0)
+    t.kickRet = (t.kickRet ?? 0) + (s.kickRet ?? 0)
+    t.kickRetYds = (t.kickRetYds ?? 0) + (s.kickRetYds ?? 0)
+    t.puntRet = (t.puntRet ?? 0) + (s.puntRet ?? 0)
+    t.puntRetYds = (t.puntRetYds ?? 0) + (s.puntRetYds ?? 0)
+    t.retTD = (t.retTD ?? 0) + (s.retTD ?? 0)
+    t.defTD = (t.defTD ?? 0) + (s.defTD ?? 0)
+    t.prs = (t.prs ?? 0) + (s.prs ?? 0)
+    t.qbHits = (t.qbHits ?? 0) + (s.qbHits ?? 0)
+    t.hurries = (t.hurries ?? 0) + (s.hurries ?? 0)
+    t.sk = (t.sk ?? 0) + (s.sk ?? 0)
+    t.sky = (t.sky ?? 0) + (s.sky ?? 0)
+    t.pressured = (t.pressured ?? 0) + (s.pressured ?? 0)
   }
   return t
 }

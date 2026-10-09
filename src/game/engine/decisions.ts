@@ -120,7 +120,7 @@ export function aiCallSheet(world: World, teamId: string): CallSheet {
 
 export type Bucket = '1st' | '2nd-short' | '2nd-long' | '3rd-short' | '3rd-mid' | '3rd-long' | 'redzone'
 export type OffClass = 'run' | 'short' | 'deep'
-export type DefCall = 'blitz' | 'man' | 'zone' | 'stack'
+export type DefCall = 'blitz' | 'man' | 'zone' | 'stack' | 'twoHigh'
 export interface TendencyBook {
   off: Record<Bucket, Record<OffClass, number>>
   def: Record<Bucket, Record<DefCall, number>>
@@ -128,7 +128,7 @@ export interface TendencyBook {
 
 export const BUCKETS: Bucket[] = ['1st', '2nd-short', '2nd-long', '3rd-short', '3rd-mid', '3rd-long', 'redzone']
 export const OFF_CLASSES: OffClass[] = ['run', 'short', 'deep']
-export const DEF_CALLS: DefCall[] = ['blitz', 'man', 'zone', 'stack']
+export const DEF_CALLS: DefCall[] = ['blitz', 'man', 'zone', 'stack', 'twoHigh']
 
 export const BUCKET_LABEL: Record<Bucket, string> = {
   '1st': '1st down',
@@ -142,7 +142,7 @@ export const BUCKET_LABEL: Record<Bucket, string> = {
 
 export const OFF_CLASS_LABEL: Record<OffClass, string> = { run: 'run', short: 'throw short', deep: 'throw deep' }
 export const DEF_CALL_LABEL: Record<DefCall, string> = {
-  blitz: 'Blitz', man: 'Man coverage', zone: 'Zone coverage', stack: 'Stack the box',
+  blitz: 'Blitz', man: 'Man coverage', zone: 'Zone coverage', stack: 'Stack the box', twoHigh: 'Two-high (Cover 2/4)',
 }
 
 /** The down-and-distance bucket a snap belongs to. `yard` is 0–100 from the offense's own goal. */
@@ -165,16 +165,16 @@ export function emptyBook(): TendencyBook {
   const def = {} as Record<Bucket, Record<DefCall, number>>
   for (const b of BUCKETS) {
     off[b] = { run: 0, short: 0, deep: 0 }
-    def[b] = { blitz: 0, man: 0, zone: 0, stack: 0 }
+    def[b] = { blitz: 0, man: 0, zone: 0, stack: 0, twoHigh: 0 }
   }
   return { off, def }
 }
 
 /** Zero-sum call matrix (the edge is added to the offense). */
 const CALL_MATRIX: Record<OffClass, Record<DefCall, number>> = {
-  run: { blitz: 2, man: 1, zone: 0, stack: -3 },
-  short: { blitz: 3, man: -2, zone: 1, stack: -2 },
-  deep: { blitz: -1, man: 2, zone: -3, stack: 2 },
+  run: { blitz: 2, man: 1, zone: 0, stack: -3, twoHigh: 2 },
+  short: { blitz: 3, man: -2, zone: 1, stack: -2, twoHigh: 1 },
+  deep: { blitz: -1, man: 2, zone: -3, stack: 2, twoHigh: -3 },
 }
 
 export interface CallEffect { edge: number; sackMult: number }
