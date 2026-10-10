@@ -3,7 +3,7 @@ import { cn } from '../lib/cn'
 import { INSTALL_OPTIONS, canInstall, installEdge, type InstallPlan } from '../game/engine/install'
 import { can } from '../game/engine/capabilities'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card } from '../ui/kit'
+import { Badge, Card, OptionCard, OptionGroup } from '../ui/kit'
 
 /** The plain-language status of an active install, in season. */
 function installStatus(plan: InstallPlan, week: number): string {
@@ -20,8 +20,9 @@ function installStatus(plan: InstallPlan, week: number): string {
  * chooses how much of the system to put in. Lean starts fast and flattens; Full
  * starts slowly and finishes strongest. Once the season starts the card shrinks
  * to a status line so you can see where the curve is this week.
+ * D6: the offseason choice is a kit OptionGroup.
  */
-export function InstallCard({ className }: { className?: string }) {
+export function InstallCard({ className, disabled = false }: { className?: string; disabled?: boolean }) {
   const career = useGame((s) => s.career)!
   const world = useWorld()
   const chooseInstall = useGame((s) => s.chooseInstall)
@@ -34,44 +35,31 @@ export function InstallCard({ className }: { className?: string }) {
     const open = canInstall(world, career)
     return (
       <Card className={className}>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
-            <Wrench size={15} className="text-[var(--team)]" /> Install plan
+            <Wrench size={15} className="text-[var(--team-accent)]" aria-hidden /> Install plan
           </h3>
-          <Badge tone={chosen ? 'win' : 'team'}>
+          <Badge tone={chosen ? 'win' : 'neutral'}>
             {chosen ? 'Locked in' : `Season ${world.season + 1}`}
           </Badge>
         </div>
-        <p className="mb-3 text-xs leading-snug text-muted">
+        <p className="mb-3 text-small leading-snug text-muted">
           {chosen
             ? `Your ${chosen === 'lean' ? 'Lean' : 'Full'} install is set for next season.`
             : 'Choose how much of the system to put in before next season. This locks once you pick.'}
         </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {INSTALL_OPTIONS.map((o) => {
-            const isChosen = chosen === o.id
-            const disabled = !open
-            return (
-              <button
-                key={o.id}
-                type="button"
-                disabled={disabled}
-                onClick={() => chooseInstall(o.id)}
-                className={cn(
-                  'rounded-lg border p-3 text-left transition',
-                  isChosen
-                    ? 'border-[var(--team)] bg-[var(--team-soft)]'
-                    : disabled
-                      ? 'border-line bg-surface-2 opacity-60'
-                      : 'border-line bg-surface-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
-                )}
-              >
-                <span className="block text-sm font-600 text-ink">{o.label}</span>
-                <span className="mt-0.5 block text-[11px] leading-snug text-muted">{o.blurb}</span>
-              </button>
-            )
-          })}
-        </div>
+        <OptionGroup label="Install plan" className="sm:grid-cols-2">
+          {INSTALL_OPTIONS.map((o) => (
+            <OptionCard
+              key={o.id}
+              selected={chosen === o.id}
+              disabled={!open || disabled}
+              onSelect={() => chooseInstall(o.id)}
+              title={o.label}
+              description={o.blurb}
+            />
+          ))}
+        </OptionGroup>
       </Card>
     )
   }
@@ -83,8 +71,8 @@ export function InstallCard({ className }: { className?: string }) {
   const chip = edge > 0 ? `+${edge.toFixed(1)}` : edge.toFixed(1)
   return (
     <Card pad={false} className={cn('flex items-center gap-2 px-4 py-2.5', className)}>
-      <Wrench size={14} className="shrink-0 text-muted" />
-      <span className="text-xs text-muted">
+      <Wrench size={14} className="shrink-0 text-muted" aria-hidden />
+      <span className="text-small text-muted">
         Install: <strong className="text-ink">{active.plan === 'lean' ? 'Lean' : 'Full'}</strong> —{' '}
         {installStatus(active.plan, world.week)}
       </span>
