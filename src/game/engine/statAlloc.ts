@@ -199,12 +199,24 @@ function finalizeTeamLines(world: World, teamId: string, lines: { playerId: stri
     if (snapShare(world, teamId, p) < FAST_SNAP_MIN) continue
     byId.set(p.id, { playerId: p.id })
   }
+  // Backlog 149: the club's active kicker and punter take the field every game
+  // (kickoffs, punts, FG/PAT), so each is credited exactly one game even though
+  // he has no scrimmage snap and the allocator tracks no kicking stats. A GP-only
+  // line; no other stat and no rng() draw is added.
+  for (const pos of ['K', 'P'] as Position[]) {
+    const sp = depthGroup(world, teamId, [pos], 1)[0]
+    if (sp && !byId.has(sp.id)) byId.set(sp.id, { playerId: sp.id })
+  }
   const out: { playerId: string; line: GameStatLine }[] = []
   for (const [id, line] of byId) {
     const p = byPlayer.get(id)
     if (!p || p.injured) continue
     const share = snapShare(world, teamId, p)
-    if (share <= 0) continue
+    // Backlog 149: kickers/punters keep their GP-only line (share 0 by design).
+    if (share <= 0) {
+      if (p.pos === 'K' || p.pos === 'P') out.push({ playerId: id, line })
+      continue
+    }
     line.snaps = Math.round(FAST_SIDE_SNAPS * share)
     line.snapSide = FAST_SIDE_SNAPS
     line.snapPct = Math.max(0, Math.min(100, Math.round(share * 1000) / 10))
