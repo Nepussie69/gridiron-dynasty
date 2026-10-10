@@ -275,6 +275,51 @@ export function onTeamChange(p: Player, newTeamId: string, newScheme: string, st
   return initPlaybook(p, newTeamId, newScheme, p.playbook, staffTenure, 1)
 }
 
+/** The stable coordinator identity a tenure tick remembers per club+side. */
+export interface StaffTenureRef {
+  id: string
+  scheme: string
+}
+
+/** The slice of the world the tenure tick reads/writes. */
+export interface TenureWorld {
+  staff: Record<string, StaffMember[]>
+  staffTenure: Record<string, number>
+  /** Optional: legacy saves have none until the first tick records it. */
+  staffTenureRef?: Record<string, StaffTenureRef>
+}
+
+/**
+ * Backlog 185: advance one season of coordinator continuity.
+ *
+ * `world.staffTenure[key]` (key `${teamId}:off|def`) counts consecutive seasons
+ * the coordinator on that side has held the job. It must reset to 1 when the MAN
+ * changes OR when the same man switches scheme — otherwise a new system keeps
+ * inheriting the old staff's cohesion and mastery cap keeps climbing.
+ *
+ * `staffTenureRef` remembers the id+scheme the last tick saw. Migration-safe: an
+ * old save has no ref entry, so the current coordinator is treated as unchanged
+ * (no spurious reset) and simply recorded. A vacancy records a blank sentinel so
+ * that whoever is hired next resets the count rather than inheriting it.
+ */
+export function advanceStaffTenure(world: TenureWorld): void {
+  const refs = (world.staffTenureRef ??= {})
+  for (const key of Object.keys(world.staffTenure)) {
+    const [teamId, side] = key.split(':')
+    const role = side === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
+    const coach = (world.staff[teamId] ?? []).find((s) => s.role === role)
+    if (!coach) {
+      world.staffTenure[key] = 1
+      refs[key] = { id: '', scheme: '' }
+      continue
+    }
+    const prev = refs[key]
+    const changed = !!prev && (prev.id !== coach.id || prev.scheme !== coach.scheme)
+    world.staffTenure[key] = changed ? 1 : (world.staffTenure[key] ?? 1) + 1
+    refs[key] = { id: coach.id, scheme: coach.scheme }
+  }
+}
+
 /**
  * Production multiplier from mastery. 0% = 0.90 (still learning), 100% = 1.18.
  */

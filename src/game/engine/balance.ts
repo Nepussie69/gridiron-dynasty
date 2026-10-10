@@ -27,7 +27,7 @@ import {
   type World,
 } from './generate'
 import { refreshProspectClass, developPlayers, evaluateScouting, runAIFreeAgency, runAIResign, runAITrades, enforceCapCompliance, tickAllContracts } from './progress'
-import { gainSeasonTraining, refreshCohesion, teamCohesion } from './playbook'
+import { gainSeasonTraining, refreshCohesion, teamCohesion, advanceStaffTenure } from './playbook'
 import { awardCompensatoryPicks, initDraft, runUDFAs, simulateRestOfDraft } from './draft'
 import { readRookieRanges } from './evaluation'
 import { ensureDraftWindow } from './picks'
@@ -164,12 +164,9 @@ function simulateScouting(world: World, career: CareerState, rng: Rng) {
 
 /** Advance coaching continuity the way the store does at season end. */
 function advanceTenure(world: World) {
-  for (const key of Object.keys(world.staffTenure)) {
-    const [teamId, side] = key.split(':')
-    const role = side === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
-    const coach = (world.staff[teamId] ?? []).find((s) => s.role === role)
-    world.staffTenure[key] = coach ? (world.staffTenure[key] ?? 1) + 1 : 1
-  }
+  // Backlog 185: share the store's rule (new man or scheme change resets to 1),
+  // via the same helper, so the harness and the game stay in lock-step.
+  advanceStaffTenure(world)
 }
 
 /** Recompute every player's cohesion cap after roster/staff changes. */

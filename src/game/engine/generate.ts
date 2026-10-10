@@ -53,6 +53,10 @@ export interface World {
   week: number
   /** Consecutive seasons each coordinator has held his job, keyed `${teamId}:${side}`. */
   staffTenure: Record<string, number>
+  /** Backlog 185: the coordinator id+scheme the last tenure tick saw, keyed
+   *  `${teamId}:${side}`. Optional (legacy saves): a missing entry means
+   *  "unchanged", so the current coach is recorded without a spurious reset. */
+  staffTenureRef?: Record<string, import('./playbook').StaffTenureRef>
   phase: 'regular' | 'offseason'
   /** L12.7: set once real-data rookies are on the NFL rookie scale (old saves are rescaled on load). */
   rookieScaleV2?: boolean

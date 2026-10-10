@@ -11,7 +11,7 @@ import { playerAttrs } from '../data/ratings'
 import { unscaleOvr } from './ovrScale'
 import { POS_MEAN } from './ratingMeans'
 import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
-import { coachEffect } from './coaching'
+import { NO_USER_BONUS, coachEffect } from './coaching'
 import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, returnScore } from './returns'
@@ -25,7 +25,7 @@ import { mod, schemeFit, styleProfile } from './style'
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
 // threading it through each resolver signature.
-let USER_COACH: { teamId: string; off: number; def: number; development: number; situational: number } | null = null
+let USER_COACH: { teamId: string; off: number; def: number; development: number; situational: number; seat?: 'off' | 'def' | 'both' } | null = null
 export function setUserCoaching(ctx: typeof USER_COACH) {
   USER_COACH = ctx
 }
@@ -40,8 +40,10 @@ export function getStamina(): boolean {
   return STAMINA_ON
 }
 function ocEffect(world: World, teamId: string) {
-  const base = coachEffect(world, teamId)
   if (USER_COACH && USER_COACH.teamId === teamId) {
+    // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
+    // not charged the vacancy floor; the skill bonuses are added below.
+    const base = coachEffect(world, teamId, { ...NO_USER_BONUS, seat: USER_COACH.seat })
     return {
       ...base,
       offEdge: base.offEdge + USER_COACH.off,
@@ -50,7 +52,7 @@ function ocEffect(world: World, teamId: string) {
       situational: base.situational + USER_COACH.situational,
     }
   }
-  return base
+  return coachEffect(world, teamId)
 }
 
 /** Cohesion + head-coach situational edge, applied on money downs and in the red zone. */
