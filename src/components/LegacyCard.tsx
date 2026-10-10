@@ -18,15 +18,15 @@ export function LegacyCard({ className }: { className?: string }) {
   return (
     <Card className={className}>
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Your Legacy</h3>
+        <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">Your Legacy</h3>
         <Badge tone="gold">{leader.title}</Badge>
       </div>
-      <p className="mb-1 text-xs leading-snug text-muted">{leader.blurb}</p>
+      <p className="mb-1 text-small leading-snug text-muted">{leader.blurb}</p>
       {leader.evidence.length > 0 && (
         <ul className="mb-3 space-y-0.5">
           {leader.evidence.map((e) => (
-            <li key={e} className="flex items-center gap-1.5 text-[11px] text-ink-2">
-              <span className="h-1 w-1 rounded-full bg-[var(--team)]" />
+            <li key={e} className="flex items-center gap-1.5 text-label text-ink-2">
+              <span className="h-1 w-1 rounded-full bg-[var(--team-accent)]" aria-hidden />
               {e}
             </li>
           ))}
@@ -37,20 +37,20 @@ export function LegacyCard({ className }: { className?: string }) {
           <div key={p.id} className="flex items-center gap-2">
             <span
               className={cn(
-                'w-24 truncate font-cond text-[10px] font-700 uppercase tracking-wide',
+                'w-24 truncate font-cond text-label font-700 uppercase tracking-[0.06em]',
                 p.id === leader.id ? 'text-ink' : 'text-faint',
               )}
             >
               {p.title.replace('The ', '')}
             </span>
             <div className="flex-1">
-              <RatingBar value={p.score} color={p.id === leader.id ? 'var(--team)' : 'var(--color-line)'} />
+              <RatingBar value={p.score} color={p.id === leader.id ? 'var(--team-accent)' : 'var(--color-line)'} />
             </div>
-            <span className="w-6 text-right font-cond text-[10px] font-700 tnum text-muted">{p.score}</span>
+            <span className="w-6 text-right font-cond text-label font-700 tnum text-muted">{p.score}</span>
           </div>
         ))}
       </div>
-      <p className="mt-3 text-[10px] leading-snug text-faint">
+      <p className="mt-3 text-label leading-snug text-faint">
         {profile.seasons} season{profile.seasons === 1 ? '' : 's'} on the résumé. Five different ways to be
         remembered — pick one and chase it.
       </p>

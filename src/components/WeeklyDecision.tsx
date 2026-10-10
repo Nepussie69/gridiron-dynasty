@@ -1,8 +1,8 @@
+import { useState } from 'react'
 import { AlertTriangle, Gavel } from 'lucide-react'
-import { cn } from '../lib/cn'
 import { useGame, useWorld } from '../store/gameStore'
 import { currentDilemma } from '../game/engine/dilemma'
-import { Badge, Card } from '../ui/kit'
+import { Card, ConfirmSheet, OptionCard, OptionGroup, VerdictChip, type Consequence } from '../ui/kit'
 
 /**
  * The week's ONE big decision (#2).
@@ -16,52 +16,75 @@ export function WeeklyDecision({ className }: { className?: string }) {
   const career = useGame((s) => s.career)!
   const league = useWorld()
   const resolveDilemma = useGame((s) => s.resolveDilemma)
+  const [pending, setPending] = useState<string | null>(null)
   const card = currentDilemma(league, career)
   if (!card) return null
 
   const resolved = card.resolved ? card.choices.find((c) => c.id === card.resolved) : null
+  const choice = pending ? card.choices.find((c) => c.id === pending) ?? null : null
+  const consequences: Consequence[] = choice
+    ? [
+        { label: 'Your call', value: choice.label },
+        { label: 'What it trades', value: choice.blurb },
+        { label: 'When it lands', value: 'Immediately — this week, and it stays on your record' },
+      ]
+    : []
 
   return (
-    <Card className={cn('overflow-hidden border-[var(--team)]', className)} pad={false}>
-      <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-2">
-        <Gavel size={15} className="text-[var(--team)]" />
-        <span className="label">The Decision · Week {card.week}</span>
-        <Badge tone={resolved ? 'win' : 'warn'} className="ml-auto">
-          {resolved ? 'Resolved' : 'Needs a call'}
-        </Badge>
-      </div>
+    <>
+      <Card tier="call" callLabel={resolved ? 'Resolved' : 'Needs a call'} className={className}>
+        <div className="flex items-center gap-2">
+          <Gavel size={15} className="text-warn" aria-hidden />
+          <span className="label">The Decision · Week {card.week}</span>
+          <span className="ml-auto">
+            <VerdictChip tone={resolved ? 'win' : 'warn'}>{resolved ? 'Resolved' : 'Needs a call'}</VerdictChip>
+          </span>
+        </div>
 
-      <div className="p-4">
-        <h3 className="font-display text-xl font-700 uppercase tracking-wide text-ink">{card.title}</h3>
-        <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted">{card.body}</p>
+        <h3 className="mt-2 font-display text-xl font-800 italic uppercase leading-none text-ink">{card.title}</h3>
+        <p className="mt-1.5 max-w-3xl text-body leading-relaxed text-muted">{card.body}</p>
 
         {!resolved && (
-          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <OptionGroup label="Your call" className="mt-4 sm:grid-cols-2">
             {card.choices.map((c) => (
-              <button
+              <OptionCard
                 key={c.id}
-                onClick={() => resolveDilemma(c.id)}
-                className="group rounded-xl border border-line bg-surface p-3 text-left transition hover:border-[var(--team)] hover:bg-[var(--team-soft)]"
-              >
-                <div className="font-cond text-sm font-700 uppercase tracking-wide text-ink">{c.label}</div>
-                <div className="mt-1 text-xs leading-relaxed text-muted">{c.blurb}</div>
-                <div className="mt-2 text-[10px] font-700 uppercase tracking-wide text-[var(--team)] opacity-0 transition group-hover:opacity-100">
-                  Make the call →
-                </div>
-              </button>
+                selected={false}
+                title={c.label}
+                description={c.blurb}
+                onSelect={() => setPending(c.id)}
+              />
             ))}
-          </div>
+          </OptionGroup>
         )}
 
         {resolved && (
-          <div className="mt-3 flex items-start gap-2 rounded-xl bg-surface-2 p-3">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warn" />
-            <div className="text-sm leading-relaxed text-ink-2">
+          <div className="mt-3 flex items-start gap-2 rounded-[var(--r-md)] bg-surface-2 p-3">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warn" aria-hidden />
+            <div className="text-body leading-relaxed text-ink-2">
               <strong className="font-600 text-ink">{resolved.label}:</strong> {resolved.outcome}
             </div>
           </div>
         )}
-      </div>
-    </Card>
+      </Card>
+
+      {/* The call is one-way: review it before it lands on the record. */}
+      <ConfirmSheet
+        open={!!choice}
+        onClose={() => setPending(null)}
+        eyebrow={`Week ${card.week}`}
+        title={card.title}
+        subtitle="Your one call this week — it can't be taken back."
+        consequences={consequences}
+        destructive={false}
+        confirmLabel={choice ? `Make the call: ${choice.label}` : 'Make the call'}
+        ledgerNote="Logged on your record"
+        onConfirm={() => {
+          if (!pending) return
+          resolveDilemma(pending)
+          setPending(null)
+        }}
+      />
+    </>
   )
 }
