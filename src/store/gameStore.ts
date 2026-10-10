@@ -5973,6 +5973,10 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
       if (p.type === 'run' || p.type === 'pass') {
         mtAttempts += p.missedTackleIds?.length ?? 0
         if (p.result !== 'TOUCHDOWN!') mtAttempts += p.tackleIds?.length ?? 0
+        // R5 accounting: a sack is a tackle the defence actually made — it is
+        // credited to the sacker via `sackId`, not `tackleIds`, so without this
+        // the sacker's stop is the one real tackle missing from the denominator.
+        if (p.type === 'pass' && isSack(p)) mtAttempts += 1
       }
       if (inRZ) {
         if (p.result === 'TOUCHDOWN!') { rzTD += 1; inRZ = false }

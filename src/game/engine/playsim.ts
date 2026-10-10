@@ -77,7 +77,7 @@ import { clamp, hash32, makeRng, type Rng } from './rng'
 // added or removed — these only move the league-average baseline the terms sit on.
 export const R2 = {
   /** Completion-probability base (real NFL completion % ≈ 64.3). */
-  compBase: 0.569,
+  compBase: 0.5675,
   /** Completion penalty as the field compresses toward the goal line (0 at the 20). */
   rzCompDamp: 0,
   /** Fraction of a would-be scoring run shaved by the compressed, crowded front. */
@@ -85,12 +85,12 @@ export const R2 = {
   /** Fraction of a would-be scoring catch shaved by the compressed, crowded front. */
   rzPassDamp: 0,
   /** Multiplier on explosive gains (20+ yards) to tune the long-TD rate. */
-  explosiveCal: 1.3,
+  explosiveCal: 1.325,
   /** R2: red-zone pass lean — clubs throw more inside the 20 than between them. */
-  rzPassBias: 0.03,
+  rzPassBias: 0.015,
   /** R2: money-down conversion — on 3rd down the throw is schemed to the sticks, so
-   *  it converts a little more often than the same matchup on 1st/2nd (≈ +4%). */
-  moneyComp: 0.03,
+   *  it converts a little more often than the same matchup on 1st/2nd. */
+  moneyComp: 0.045,
   /** R2: money-down yards — a 3rd-down completion/run is worked back to the marker. */
   moneyYards: 1.0,
   /** R5: missed-tackle grading. Both sides are centred on the measured league-average
@@ -99,7 +99,7 @@ export const R2 = {
    *  open-field bump. Sized so TAK 90+ defenders miss under 6% of attempts, TAK under 65
    *  over 18%, the league near 12%, an average RB ≈ 0.10–0.12 forced per carry and an
    *  elusive back 0.18–0.25 (see the tackle probe). */
-  missBase: 0.061,
+  missBase: 0.0645,
   missGain: 0.004,
   missDefDiff: 0.016,
   missCarDiff: 0.015,
@@ -112,12 +112,16 @@ export const R2 = {
   sackBase: 0.12,
   /** Base interception chance. */
   intBase: 0.0118,
-  /** Multiplier on a positive run gain after the real distribution is sampled. */
-  runGainCal: 0.74,
+  /** Multiplier on a positive run gain after the real distribution is sampled.
+   *  R2 variance fix: trimmed so the league ypc sits on the 4.27 target instead of
+   *  ~4.34, which also kept the run-heaviest seed's rushing yards above band. */
+  runGainCal: 0.726,
   /** Multiplier on the yards-after-catch / style bonus on completions. */
   yacCal: 1,
-  /** Multiplier on a positive pass gain after the real distribution is sampled. */
-  passGainCal: 1.06,
+  /** Multiplier on a positive pass gain after the real distribution is sampled.
+   *  R2 variance fix: trimmed so the pass-heaviest league's gross/net passing yards
+   *  and passing TDs sit inside their bands instead of riding the top edge. */
+  passGainCal: 1.055,
   /** Game-clock seconds consumed per second of play time (pace). */
   pace: 0.835,
   /** Where a drive starts after a touchback (2015–2024 average ≈ the 27). */
@@ -2117,11 +2121,16 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const oob = oobSituation(env) && !fumble && gain > -3 && yard + gain < 100 &&
     h01(`${n}:${offId}:oob`) < oobChance(concept, carrier?.pos)
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
-  let tackler = fumble || oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
+  // R5: the attempt exists on every in-bounds run — including a fumble, where the
+  // defender's contact is what jars the ball loose, so the forcer is the real
+  // stopping tackler just as the strip/pass path credits its stopper. The forcer
+  // only ever comes from the actual defence on the field.
+  let tackler = oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
   let missedTackleIds: string[] | undefined
   let forcedMissedIds: string[] | undefined
   // R5: the first defender attempts the tackle. A deterministic miss adds yards
   // and a second defender finishes the play (no rng draw is added or removed).
+  // A fumble is decided by contact, so its forcer is never charged a miss.
   if (tackler && !fumble && gain > -3) {
     const first = [...lbs, ...dl, ...saf, ...cbs].find((p) => p.id === tackler)
     if (hash32(`${n}:${defId}:runmt`) / 4294967296 < tackleMissChance(first, carrier, gain, false)) {
@@ -2132,6 +2141,10 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
       forcedMissedIds = carrier ? [carrier.id] : undefined
     }
   }
+  // A run that reaches the end zone has no stopping tackler (matching the pass
+  // path) — nobody is credited with a tackle in the end zone. A fumble the
+  // defence recovers keeps its forcing tackler.
+  if (!lost && yard + gain >= 100) tackler = undefined
   const isBig = gain >= 20
   const tackleIds = tackler ? [tackler] : []
   // R6: a lost fumble is returned for a touchdown ~7–8% of the time (hash, no rng).
@@ -2155,6 +2168,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     turnover: lost, carrierId: carrier?.id, bigPlay: !lost && isBig,
     outOfBounds: oob || undefined,
     fumbleCause: fumble ? 'run' : undefined, fumbleRecoveredBy: recovery,
+    // R5: the defender whose contact forced the ball loose (real actor on the 11).
+    fumbleId: fumble ? tackler : undefined,
     goalLineFumble: fumble && yard >= R16.goalLineYard ? true : undefined,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
     defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : undefined,

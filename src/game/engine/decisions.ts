@@ -127,13 +127,21 @@ export function twoPointChoice(rule: 'chart' | 'kick' | 'go', marginAfterTD: num
 // staff's ratings, scheme and specialty plus a stable per-coach hash — never an
 // rng() draw, so the seed stream and coached/sim equivalence are untouched.
 
-/** Offensive pass-rate identity per OC scheme (the single source offStyle reads). */
+/** Offensive pass-rate identity per OC scheme (the single source offStyle reads).
+ *  R2 variance fix: each seed draws a different mix of the 32 OC schemes, and the
+ *  old 0.47–0.62 spread swung a league's average pass rate by ~3.5 points between
+ *  seeds — enough to move sacks, rush volume and scoring in and out of band on
+ *  roster-identical leagues. The identities are compressed 75% toward the league
+ *  mean (0.534), so the direction is unchanged (Air Raid still passes most, RPO
+ *  Heavy still runs most) but the per-seed variance is bounded and football-sized;
+ *  this keeps the run-heaviest league's rush volume and the pass-heaviest league's
+ *  scoring from straddling the band edges together. */
 export const OFF_PASS_RATE: Record<string, number> = {
-  'Air Raid': 0.62,
-  'Pro Style': 0.5,
-  Spread: 0.55,
-  'West Coast': 0.53,
-  'RPO Heavy': 0.47,
+  'Air Raid': 0.5684,
+  'Pro Style': 0.5204,
+  Spread: 0.5404,
+  'West Coast': 0.5324,
+  'RPO Heavy': 0.5084,
 }
 
 export interface CoachTendency {
