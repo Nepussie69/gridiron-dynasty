@@ -13,6 +13,7 @@ import { makeScoutBias } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
 import { rescaleOvr, rescaleQuantile, unscaleOvr } from './ovrScale'
 import { assignSlots } from './primetime'
+import { buildNflSchedule, divisionFinishFromStandings, type DivisionFinish } from './schedule'
 import { STARS } from './starSeed'
 import type { RealCfbPlayer, RealCfbTeam, RealData, RealNflPlayer } from '../data/realData'
 import type { PlayerBoxScore } from './stats'
@@ -79,6 +80,10 @@ export interface World {
    *  save field — a legacy save gets it on load. */
   analyticsPool?: StaffMember[]
   standings: Record<string, TeamRecord>
+  /** Backlog 227: last completed season's division finish (1–4) per club, used
+   *  by the schedule's same-finish games. Missing (first season / old save)
+   *  falls back to prestige order within the division. */
+  divisionFinish?: DivisionFinish
   news: NewsItem[]
   /** NFL draft pool — draft-eligible COLLEGE players. */
   draft: DraftProspect[]
@@ -751,7 +756,11 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     deadMoney[t.id] = Math.round(rng() * 22_000_000)
   }
 
-  const schedule = buildSchedule(rng, NFL_TEAMS, 18, 1, true)
+  // Backlog 227: the old random builder still runs so the main world rng stream
+  // (and therefore every other world field) stays byte-identical to before; only
+  // the returned slate is replaced by the NFL-formula one.
+  buildSchedule(rng, NFL_TEAMS, 18, 1, true)
+  const schedule = buildNflSchedule(seed, season)
 
   // Z1b: free agents cut from the starting rosters must also live in `players`,
   // or they never age/develop/retire and can't be found by trades or the ledger.
@@ -866,8 +875,20 @@ function seedStaffTenure(rng: Rng): Record<string, number> {
 }
 
 export function regenerateSchedule(world: World) {
-  const rng = makeRng(world.seed + world.season * 8161)
-  world.schedule = buildSchedule(rng, NFL_TEAMS, 18, 1, true)
+  try {
+    world.schedule = buildNflSchedule(world.seed, world.season, world.divisionFinish)
+  } catch {
+    // Never strand a save at a season rollover: fall back to the old random slate.
+    world.schedule = buildSchedule(makeRng(world.seed + world.season * 8161), NFL_TEAMS, 18, 1, true)
+  }
   // FUTURES #8: re-slot the fresh season (hash-based; no rng draws).
   assignSlots(world)
+}
+
+/**
+ * Backlog 227: snapshot the division order before standings are zeroed for a new
+ * season, so the next schedule's same-finish games read last season's finish.
+ */
+export function captureDivisionFinish(world: World): void {
+  world.divisionFinish = divisionFinishFromStandings(world)
 }
