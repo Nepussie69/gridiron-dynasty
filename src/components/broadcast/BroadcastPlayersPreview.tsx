@@ -4,7 +4,10 @@
 // loaded world (never the live one; nothing is saved), lets you pick sample
 // plays by kind (pass, run, sack, punt, kickoff, FG …) and play / scrub them
 // through buildPlayAnim → ActorLayer → BroadcastRenderer. A simple follow
-// camera stands in for B5's director. Mounted only in the hidden #/kit page.
+// camera stands in for B5's director. B6a: a Graphics toggle layers the
+// broadcast graphics (chip, play clock, lower third, result toast, callouts)
+// on the overlay hook; with graphics on the clock also runs the pre-snap lead
+// and holds for the toast. Mounted only in the hidden #/kit page.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NFL_TEAMS } from '../../game/data/nflTeams'
@@ -16,6 +19,8 @@ import { useMediaQuery, useResolvedTheme } from '../../ui/hooks'
 import { ActorLayer, type ActorPlay } from './actors'
 import type { BroadcastAnim } from './animData'
 import { MID_WIDTH, offenseToWorld, orbitPose, type CameraPose, type Direction } from './camera'
+import { buildGraphicsTimeline, type GraphicsMode, type GraphicsTimeline, type PersonInfo } from './graphics'
+import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { posAt } from './interp'
 import { BroadcastRenderer, FrameWindow } from './renderer'
 
@@ -52,6 +57,8 @@ interface Built {
   fd: number | null
   turfText: string | null
   possession: 'home' | 'away'
+  /** B6a graphics timeline for this play. */
+  tl: GraphicsTimeline
 }
 
 const ord = (n: number) => (n === 1 ? '1ST' : n === 2 ? '2ND' : n === 3 ? '3RD' : `${n}TH`)
@@ -108,6 +115,12 @@ async function buildSample(s: Sample, idx: number): Promise<Built> {
     if (n != null) numbers[a.key] = n
   }
   const club = (id: string) => NFL_TEAMS.find((t) => t.id === id) ?? NFL_TEAMS[0]
+  const people: Record<string, PersonInfo> = {}
+  for (const a of anim.actors) {
+    const p = actors.get(a.key)
+    if (p) people[a.key] = { name: p.name, pos: p.pos, number: numbers[a.key] }
+  }
+  const tl = buildGraphicsTimeline({ anim, play, offense: club(play.offId), defense: club(defId), people })
   const offHome = play.offId === s.homeId
   const scrimmage = play.type === 'run' || play.type === 'pass'
   const los = play.type === 'kickoff' ? null : 10 + snapYard(play)
@@ -120,6 +133,7 @@ async function buildSample(s: Sample, idx: number): Promise<Built> {
     fd: fd != null && fd >= 110 ? null : fd,
     turfText: scrimmage && play.down != null && play.distance != null ? `${ord(play.down)} & ${play.startYard + play.distance >= 100 ? 'GOAL' : play.distance}` : null,
     possession: offHome ? 'home' : 'away',
+    tl,
   }
 }
 
@@ -151,6 +165,9 @@ interface Readout {
   w: number
   h: number
   dpr: number
+  /** Graphics layer cost (ms). */
+  gfxAvg: number
+  gfxP95: number
   /** Nothing changed since the last report (paused / settled): no frames drawn. */
   idle: boolean
 }
@@ -170,11 +187,12 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
   const [playing, setPlaying] = useState(true)
   const [speed, setSpeed] = useState(1)
   const [sprites, setSprites] = useState(true)
+  const [graphics, setGraphics] = useState<GraphicsMode>('full')
   const [scrub, setScrub] = useState(0)
   const [readout, setReadout] = useState<Readout | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tRef = useRef(0)
-  const live = useRef({ built: null as Built | null, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, scrubbing: false })
+  const live = useRef({ built: null as Built | null, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, scrubbing: false, graphics, reduced })
 
   // Simulate a game when the matchup changes (results are keyed by matchup, so
   // a stale one simply reads as "loading").
@@ -214,16 +232,25 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
   const built = builtState && builtState.sample === sample && builtState.idx === playIdx ? builtState.b : null
   const error = errorState && errorState.key === matchKey ? errorState.msg : null
   useEffect(() => {
-    live.current = { ...live.current, built, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme }
-  }, [built, shot, playing, reduced, speed, sprites, size, homeId, awayId, theme])
+    live.current = { ...live.current, built, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, graphics, reduced }
+  }, [built, shot, playing, reduced, speed, sprites, size, homeId, awayId, theme, graphics])
 
   // Renderer + actor layer + loop.
   useEffect(() => {
     const cv = canvasRef.current
     if (!cv) return
-    const r = new BroadcastRenderer(cv, { goalposts: false })
+    // The graphics layer paints the vignette under the HUD (renderer's off).
+    const r = new BroadcastRenderer(cv, { goalposts: false, vignette: false })
     const layer = new ActorLayer()
     r.hooks.actors = layer.hook
+    const gfx = new GraphicsLayer(layer, readGfxTokens(cv))
+    gfx.vignette = true
+    r.hooks.overlay = gfx.hook
+    const gwin = new FrameWindow(120)
+    // Graphics clock (seconds; negative = pre-snap) and the play time it last drove.
+    let sec = 0
+    let drivenT = 0
+    let pendingSec: number | null = null
     const win = new FrameWindow(120)
     const act = new FrameWindow(120)
     const gaps = new FrameWindow(120)
@@ -247,12 +274,19 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
     ;(window as unknown as Record<string, unknown>).__broadcastB3 = {
       renderer: r,
       layer,
+      gfx,
       win,
       act,
+      gwin,
       /** Freeze at play time t (0..1); seek(null) resumes. */
       seek: (t: number | null) => {
         live.current.scrubbing = t != null
         if (t != null) tRef.current = t
+      },
+      /** Freeze at a graphics second (negative = pre-snap; past the play = toast hold). */
+      seekSec: (s: number) => {
+        live.current.scrubbing = true
+        pendingSec = s
       },
     }
     const loop = (now: number) => {
@@ -270,6 +304,9 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         loaded = b
         builtGen++
         layer.setPlay(b.actorPlay)
+        gfx.setTimeline(b.tl)
+        sec = L.graphics === 'full' && !L.reduced ? b.tl.start : 0
+        drivenT = tRef.current
         const p0 = b.anim.ball[0] ?? { x: 60, y: MID_WIDTH }
         focus = offenseToWorld(p0.x, p0.y, b.dir)
         hold = 0
@@ -280,9 +317,29 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
       }
       layer.useSprites = L.sprites
       let settling = false
+      if (b && pendingSec != null) {
+        sec = pendingSec
+        pendingSec = null
+        tRef.current = Math.max(0, Math.min(1, sec / b.tl.duration))
+        drivenT = tRef.current
+      } else if (b && L.graphics === 'full' && L.playing && !L.scrubbing) {
+        // Graphics clock: pre-snap lead → play → toast hold, then loop.
+        if (tRef.current !== drivenT) sec = tRef.current * b.tl.duration
+        sec += dt * L.speed
+        if (sec > b.tl.end + 0.4) sec = b.tl.start
+        tRef.current = Math.max(0, Math.min(1, sec / b.tl.duration))
+        drivenT = tRef.current
+      } else if (b && tRef.current !== drivenT) {
+        // Scrubbed / seeked: the graphics follow the play time.
+        sec = tRef.current * b.tl.duration
+        drivenT = tRef.current
+      }
+      gfx.mode = L.graphics
+      gfx.reducedMotion = L.reduced
+      gfx.sec = sec
       if (b) {
         const D = layer.duration
-        if (L.playing && !L.scrubbing) {
+        if (L.playing && !L.scrubbing && L.graphics !== 'full') {
           if (tRef.current >= 1) {
             hold += dt
             if (hold > 1.4) {
@@ -290,6 +347,9 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
               hold = 0
             }
           } else tRef.current = Math.min(1, tRef.current + (dt * L.speed) / D)
+          sec = tRef.current * b.tl.duration
+          drivenT = tRef.current
+          gfx.sec = sec
         }
         layer.t = tRef.current
         // Follow the ball (B5 replaces this with the camera director).
@@ -299,7 +359,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         const k = 1 - Math.pow(0.02, dt)
         focus = { x: focus.x + (bw.x - focus.x) * k, y: focus.y + (bw.y - focus.y) * k }
       }
-      const sig = `${builtGen}|${tRef.current}|${L.shot}|${L.phone}|${L.sprites}|${L.homeId}|${L.awayId}|${L.theme}|${cv.clientWidth}x${cv.clientHeight}@${window.devicePixelRatio}|${layer.sprites.ready}`
+      const sig = `${builtGen}|${tRef.current}|${sec}|${L.graphics}|${L.shot}|${L.phone}|${L.sprites}|${L.homeId}|${L.awayId}|${L.theme}|${cv.clientWidth}x${cv.clientHeight}@${window.devicePixelRatio}|${layer.sprites.ready}`
       const dirty = settling || sig !== lastSig
       lastSig = sig
       if (dirty) {
@@ -326,6 +386,8 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
             w: cv.width,
             h: cv.height,
             dpr: r.pixelRatio,
+            gfxAvg: gwin.avg,
+            gfxP95: gwin.p95,
             idle: false,
           })
         } else if (!reportedIdle) {
@@ -353,6 +415,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         turfTextAlpha: Math.max(0, 1 - tRef.current * 8),
         time: tRef.current,
       })
+      gwin.push(gfx.stats.ms)
       if (b) {
         act.push(layer.stats.ms)
         hits += layer.stats.spriteHits
@@ -382,7 +445,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
     <div className="font-cond text-small tabular-nums text-muted" aria-live="off">
       {readout.idle ? 'idle (nothing changed; not redrawing)' : `${readout.fps.toFixed(0)} fps`} · frame {readout.avg.toFixed(2)} ms avg / {readout.p95.toFixed(2)} p95 · players {readout.actAvg.toFixed(2)} ms avg /{' '}
       {readout.actP95.toFixed(2)} p95 / {readout.actWorst.toFixed(1)} worst · {readout.drawn}/{readout.figures} figures drawn · sprites {readout.sprites} (
-      {(readout.hitRate * 100).toFixed(0)}% hit) · {readout.w}×{readout.h} @{readout.dpr}x
+      {(readout.hitRate * 100).toFixed(0)}% hit) · graphics {readout.gfxAvg.toFixed(2)} ms avg / {readout.gfxP95.toFixed(2)} p95 · {readout.w}×{readout.h} @{readout.dpr}x
     </div>
   )
 
@@ -490,6 +553,17 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
             { id: 'off', label: 'Direct paint' },
           ]}
         />
+        <SegmentedControl
+          label="Graphics"
+          size="sm"
+          value={graphics}
+          onChange={setGraphics}
+          options={[
+            { id: 'full', label: 'Graphics' },
+            { id: 'fast', label: 'Sim-to-end' },
+            { id: 'off', label: 'Off' },
+          ]}
+        />
       </div>
       {error && <div className="text-small text-loss">Could not build the sample: {error}</div>}
       {!sample && !error && <div className="label">Simulating a sample game…</div>}
@@ -501,7 +575,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
       {stats}
       <div
         className={cn(
-          'overflow-hidden bg-canvas',
+          'broadcast overflow-hidden bg-canvas',
           size === 'full' ? 'fixed inset-0 z-50' : 'relative rounded-[var(--r-lg)] border border-line',
           size === 'wide' && 'aspect-video w-full max-w-[1280px]',
           size === 'phone' && 'h-[410px] w-[375px] max-w-full',
