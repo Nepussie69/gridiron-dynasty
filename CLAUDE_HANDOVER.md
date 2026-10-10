@@ -29,7 +29,7 @@ A Mac reboot at ~18:35 wiped /private/tmp (old harness, logs, worktrees). The ol
 | `anim.mjs` | `REPO=<tree> … anim.mjs 33333 1` → ANIM line, endSpot match/total |
 | `passid.mjs` | team pass-share spread per seed (identity check for realism) |
 | `gpprobe.mjs` | GP vs team games by position after 13 weeks |
-| `ds-wt <name> <prompt> [base]` | worktree `wt/<name>` (reuses branch `wt-<name>` if it exists, else new off base/main), launches ds-push detached; log `logs/<name>.log`, events `logs/events/<name>.tryN.jsonl` |
+| `ds-wt <name> <ABSOLUTE prompt path> [base]` (a relative path silently sends an empty task) | worktree `wt/<name>` (reuses branch `wt-<name>` if it exists, else new off base/main), launches ds-push detached; log `logs/<name>.log`, events `logs/events/<name>.tryN.jsonl` |
 | `queue-launch.sh <name> <prompt> [base]` | waits for <4 running DeepSeek jobs, launches, holds `caffeinate`, prints exit |
 | `prompts/` | every prompt sent this session |
 | `logs/` | worker verify outputs (`*-verify.out`) and my review logs (`rv-*`) |
