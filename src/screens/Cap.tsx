@@ -19,7 +19,7 @@ import { GmRestructureRequest } from '../components/GmRestructureRequest'
 import { CapPlanner } from '../components/CapPlanner'
 import { ContractLifeCard } from '../components/ContractLifeCard'
 
-type LedgerKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'pct'
+type LedgerKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'freed' | 'pct'
 const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
   name: (p) => p.name,
   pos: (p) => p.pos,
@@ -31,11 +31,24 @@ const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
   guaranteed: (p) => p.contract.guaranteed,
   years: (p) => p.contract.years,
   dead: (p) => deadMoney(p.contract),
+  freed: (p) => capSavings(p.contract),
   pct: (p) => p.contract.capHit,
 }
-const LEDGER_COLS: [string, LedgerKey | null][] = [
+const FREED_TITLE = 'Cap space freed this season if released now (cap hit \u2212 dead money). Negative = releasing costs cap space.'
+// Money below this reads as "no meaningful change" and shows a muted $0.
+const FREED_EPSILON = 50_000
+/** Signed cap-space-freed money with a real minus sign; muted "$0" near zero. */
+function freedMoney(n: number) {
+  if (Math.abs(n) < FREED_EPSILON) return money(0)
+  return `${n > 0 ? '+' : '\u2212'}${money(Math.abs(n))}`
+}
+function freedTone(n: number) {
+  if (Math.abs(n) < FREED_EPSILON) return 'text-muted'
+  return n > 0 ? 'text-win' : 'text-loss'
+}
+const LEDGER_COLS: [string, LedgerKey | null, string?][] = [
   ['Player', 'name'], ['Pos', 'pos'], ['Age', 'age'], ['OVR', 'ovr'], ['POT', 'pot'], ['Cap Hit', 'capHit'], ['AAV', 'annual'],
-  ['Guaranteed', 'guaranteed'], ['Yrs', 'years'], ['Dead $', 'dead'], ['% Cap', 'pct'], ['', null],
+  ['Guaranteed', 'guaranteed'], ['Yrs', 'years'], ['Dead $', 'dead'], ['Cap Freed', 'freed', FREED_TITLE], ['% Cap', 'pct'], ['', null],
 ]
 import type { Position } from '../game/types'
 
@@ -195,14 +208,14 @@ export function Cap() {
           <table className="w-full text-sm tnum">
             <thead>
               <tr className="border-b border-line text-left">
-                {LEDGER_COLS.map(([h, k]) => (
+                {LEDGER_COLS.map(([h, k, tip]) => (
                   <th key={h} className="label whitespace-nowrap px-3 py-2">
                     {k ? (
                       <button
                         type="button"
                         onClick={() => sortBy(k)}
                         className={cn('inline-flex items-center gap-1 uppercase hover:text-ink', sortKey === k && 'text-ink')}
-                        title={`Sort by ${h}`}
+                        title={tip ?? `Sort by ${h}`}
                       >
                         {h}
                         <span className="text-[9px]">{sortKey === k ? (sortDir === 1 ? '▲' : '▼') : ''}</span>
@@ -231,6 +244,7 @@ export function Cap() {
                     <td className="px-3 py-1.5 text-muted">{money(p.contract.guaranteed)}</td>
                     <td className="px-3 py-1.5 text-ink-2">{p.contract.years}</td>
                     <td className={cn('px-3 py-1.5', dead > p.contract.capHit ? 'text-loss' : 'text-muted')}>{money(dead)}</td>
+                    <td className={cn('px-3 py-1.5 font-cond font-700 tnum', freedTone(save))}>{freedMoney(save)}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-2">
                         <div className="w-12">
@@ -249,7 +263,7 @@ export function Cap() {
                             <Button size="sm" variant="ghost" disabled={!canMove || (canNegotiate && p.contract.years > 2)} onClick={() => (canNegotiate ? setTalkId(p.id) : extendPlayer(p.id))}>
                               Extend
                             </Button>
-                            <Button size="sm" variant="danger" disabled={!canMove} title={`Savings ${money(save)}`} onClick={() => releasePlayer(p.id)}>
+                            <Button size="sm" variant="danger" disabled={!canMove} title={`Savings ${freedMoney(save)}`} onClick={() => releasePlayer(p.id)}>
                               Cut
                             </Button>
                           </>
