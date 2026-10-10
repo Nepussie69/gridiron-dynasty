@@ -154,9 +154,13 @@ export interface ProjectedBox {
   anyNull: boolean
 }
 
-const FAR = 1e6
-
-/** Screen-space bounds of a set of watched points; a near-plane miss widens the box. */
+/**
+ * Screen-space bounds of a set of watched points. A point behind the near plane
+ * is SKIPPED (and flagged with `anyNull`): panning cannot help it — the previous
+ * version widened the box to ±1e6, which made containment march the focus to
+ * infinity whenever a watched ball sat above the camera horizon (punt/kickoff
+ * apex). `bounds` is the box of the projectable points only.
+ */
 export function projectBox(cam: Camera, watch: readonly Pt3[]): ProjectedBox {
   let minX = Infinity
   let minY = Infinity
@@ -167,12 +171,6 @@ export function projectBox(cam: Camera, watch: readonly Pt3[]): ProjectedBox {
     const s = project(cam, p.x, p.y, p.z ?? 0)
     if (!s) {
       anyNull = true
-      if (minX > -FAR) {
-        minX = -FAR
-        maxX = FAR
-        minY = -FAR
-        maxY = FAR
-      }
       continue
     }
     if (s.x < minX) minX = s.x
@@ -241,34 +239,69 @@ export interface ContainResult<S> {
   overflowY: number
 }
 
+/** Screen-space overflow of `box` outside `safe` (px, 0 when it fits). */
+function overflowOf(box: Box, safe: Box): number {
+  return Math.max(0, safe.minX - box.minX, box.maxX - safe.maxX, safe.minY - box.minY, box.maxY - safe.maxY)
+}
+
 /**
  * Rule 5: shift a shot minimally, then widen, until the watched points fit the
  * safe frame. Uses B2's projection for both the test and the shift (a finite-
  * difference Jacobian at the focus), so it is correct at any yaw/tilt.
  * Never mutates `shot`.
+ *
+ * Robustness (B5b fix for the kick/punt runaway):
+ *   • Points behind the near plane, and points absurdly far outside the screen
+ *     (a ball above the camera horizon), are ignored: panning cannot frame them.
+ *   • Each pass may only move the focus by what is left of a TOTAL `maxShift`
+ *     budget for the call — never `iterations × maxShift`.
+ *   • A pass that does not reduce the overflow stops the loop, so containment can
+ *     never march the focus off the field hunting an unfittable watch set.
  */
 export function containShot<S extends ShotGeom>(shot: S, watch: readonly Pt3[], o: ContainOpts<S>): ContainResult<S> {
   const { width: w, height: h } = o.viewport
   const safe = safeBox(w, h, o.insetX, o.insetY)
   const maxShift = o.maxShift ?? 60
   const iters = o.iterations ?? 12
+  // A point this far outside the viewport is not fixable by panning; drop it.
+  const guardX = w * 1.5
+  const guardY = h * 1.5
   let cur: S = shot
   let shifted = false
   let widened = false
-  let overflowX = 0
-  let overflowY = 0
+  let used = 0
+  let prev = Infinity
   for (let it = 0; it < iters; it++) {
     const cam = makeCamera(o.poseFor(cur), o.viewport)
-    const { box } = projectBox(cam, watch)
-    const needX = axisShift(box.minX, box.maxX, safe.minX, safe.maxX)
-    const needY = axisShift(box.minY, box.maxY, safe.minY, safe.maxY)
-    if (needX === 0 && needY === 0) {
-      overflowX = 0
-      overflowY = 0
-      return { shot: cur, shifted, widened, ok: true, overflowX, overflowY }
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let any = false
+    for (const p of watch) {
+      const s = project(cam, p.x, p.y, p.z ?? 0)
+      if (!s) continue
+      if (s.x < -guardX || s.x > w + guardX || s.y < -guardY || s.y > h + guardY) continue
+      any = true
+      if (s.x < minX) minX = s.x
+      if (s.x > maxX) maxX = s.x
+      if (s.y < minY) minY = s.y
+      if (s.y > maxY) maxY = s.y
     }
-    const fW = box.maxX - box.minX
-    const fH = box.maxY - box.minY
+    if (!any) break
+    const box = { minX, minY, maxX, maxY }
+    const needX = axisShift(minX, maxX, safe.minX, safe.maxX)
+    const needY = axisShift(minY, maxY, safe.minY, safe.maxY)
+    if (needX === 0 && needY === 0) {
+      return { shot: cur, shifted, widened, ok: true, overflowX: 0, overflowY: 0 }
+    }
+    const overflow = overflowOf(box, safe)
+    // No progress since the last pass: stop. This is what makes the loop safe
+    // when the watch set simply cannot fit (a high ball on a narrow shot).
+    if (overflow > prev - 1e-6) break
+    prev = overflow
+    const fW = maxX - minX
+    const fH = maxY - minY
     const sW = safe.maxX - safe.minX
     const sH = safe.maxY - safe.minY
     // Content larger than the safe frame: widen first (it cannot be fixed by a shift).
@@ -281,12 +314,19 @@ export function containShot<S extends ShotGeom>(shot: S, watch: readonly Pt3[], 
         continue
       }
     }
+    if (used >= maxShift) break
     const jac = focusJacobian(cam, cur.cx, cur.cy)
     if (!jac) break
     const delta = screenShiftToWorld(cam, jac, needX, needY)
     if (!delta) break
-    const dx = clamp(delta.x, -maxShift, maxShift)
-    const dy = clamp(delta.y, -maxShift, maxShift)
+    let dx = clamp(delta.x, -maxShift, maxShift)
+    let dy = clamp(delta.y, -maxShift, maxShift)
+    const mag = Math.hypot(dx, dy)
+    if (mag > maxShift - used) {
+      const k = (maxShift - used) / mag
+      dx *= k
+      dy *= k
+    }
     if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) {
       // Nothing left to shift: widen a touch and retry.
       const next = Math.min(o.spanMax, cur.span * 1.05)
@@ -296,12 +336,13 @@ export function containShot<S extends ShotGeom>(shot: S, watch: readonly Pt3[], 
       continue
     }
     cur = { ...cur, cx: cur.cx + dx, cy: cur.cy + dy }
+    used += Math.hypot(dx, dy)
     shifted = true
   }
   // Final measure for the overflow report.
   const cam = makeCamera(o.poseFor(cur), o.viewport)
   const { box } = projectBox(cam, watch)
-  overflowX = Math.max(0, safe.minX - box.minX, box.maxX - safe.maxX)
-  overflowY = Math.max(0, safe.minY - box.minY, box.maxY - safe.maxY)
+  const overflowX = Math.max(0, safe.minX - box.minX, box.maxX - safe.maxX)
+  const overflowY = Math.max(0, safe.minY - box.minY, box.maxY - safe.maxY)
   return { shot: cur, shifted, widened, ok: overflowX === 0 && overflowY === 0, overflowX, overflowY }
 }
