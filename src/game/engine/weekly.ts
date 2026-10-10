@@ -81,15 +81,16 @@ export function currentSetPiece(world: World, career: CareerState): SetPiece | n
     if (career.level >= 8)
       return {
         id: 'capCrunch',
-        title: 'March Cap Crunch',
-        blurb: 'The league year opens. How do you create flexibility?',
+        title: 'Deadline Cap Room',
+        blurb: 'The trade deadline is here. How do you create room for a move?',
         options: [
-          { id: 'restructure', label: 'Restructure the vets', blurb: 'Space now, dead money later.' },
+          { id: 'restructure', label: 'Restructure the vets', blurb: 'Create room for a deadline deal. Dead money later.' },
           { id: 'stand', label: 'Hold the line', blurb: 'Keep clean books and future flexibility.' },
         ],
       }
   } else {
-    if (career.level <= 1)
+    // Levels 0–1 and 5 are position-level rooms: Install Week.
+    if (career.level <= 1 || career.level === 5)
       return {
         id: 'install',
         title: 'Install Week',
@@ -99,14 +100,26 @@ export function currentSetPiece(world: World, career: CareerState): SetPiece | n
           { id: 'fundamentals', label: 'Fundamentals', blurb: 'Clean, disciplined, low-risk.' },
         ],
       }
-    if (career.level >= 3)
+    // NFL Coordinator: the bye week is for turning the mirror on your own tape.
+    if (career.level === 6)
       return {
-        id: 'signingDay',
-        title: 'Signing Day',
-        blurb: 'The class is on the line. How do you close?',
+        id: 'selfScout',
+        title: 'Bye-Week Self-Scout',
+        blurb: 'The bye is here. How do you use the extra week to sharpen the plan?',
         options: [
-          { id: 'stars', label: 'Chase the stars', blurb: 'Big swings at blue-chips.' },
-          { id: 'fit', label: 'Fit and culture', blurb: 'Players who build the program.' },
+          { id: 'tendencies', label: 'Break your tendencies', blurb: 'Install new wrinkles. Higher variance.' },
+          { id: 'double', label: 'Double down on what works', blurb: 'Lean into your identity. Steadier.' },
+        ],
+      }
+    // NFL Head Coach: the deadline is the GM's pen, but you can push.
+    if (career.level === 7)
+      return {
+        id: 'tradeDeadline',
+        title: 'Trade Deadline',
+        blurb: 'The deadline is days away. The GM holds the pen — how hard do you push?',
+        options: [
+          { id: 'buy', label: 'Push the GM to buy', blurb: 'Win now. Add a piece for the stretch run.' },
+          { id: 'stand', label: 'Trust this roster', blurb: 'Stay the course and bank the locker room.' },
         ],
       }
   }
@@ -134,6 +147,14 @@ export function resolveSetPiece(
     install: choice === 'attack'
       ? { repDelta: { results: 3, profile: 2 }, note: 'You attacked their weakness. The install paid off on film.' }
       : { repDelta: { leadership: 2, results: 1 }, note: 'You kept it simple. A clean, disciplined week.' },
+    selfScout: choice === 'tendencies'
+      ? { repDelta: { results: 3, profile: 1, leadership: -1 }, note: 'You broke your tendencies and caught the next opponent off guard — but the room had to unlearn old habits.' }
+      : { repDelta: { leadership: 3, results: 1 }, note: 'You doubled down on what works. The unit trusted the plan and executed.' },
+    tradeDeadline: choice === 'buy'
+      ? { repDelta: { results: 3, profile: 1, leadership: -1 }, note: 'You pushed the GM to buy. A win-now move, but a few in the room felt the squeeze.' }
+      : { repDelta: { leadership: 3, roster: 1 }, note: 'You trusted this roster. The locker room noticed you believe in it.' },
+    // Legacy: only reachable by old saves whose career sat on a removed rung.
+    // Never offered by currentSetPiece anymore.
     signingDay: choice === 'stars'
       ? { repDelta: { profile: 3, roster: 1 }, note: 'You chased the stars and won a couple of headline battles.' }
       : { repDelta: { leadership: 3, roster: 1 }, note: 'You prioritized fit and culture. The class is built the right way.' },
