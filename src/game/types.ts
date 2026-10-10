@@ -740,6 +740,8 @@ export interface CareerState {
   scenario?: ScenarioId
   /** L10 G2: the head coach's standing orders for 4th down and 2-point tries. */
   callSheet?: import('./engine/decisions').CallSheet
+  /** FUTURES #4: special-teams kick and return strategies (default = pre-feature sim). */
+  specialTeams?: import('./engine/specialCalls').SpecialTeamsPlan
   /** L10 G8: this week's opponent film read (a second purchase this week makes it sharp). */
   oppRead?: { week: number; oppId: string; sharp: boolean }
   /** L10 G10: the opening script, an ordered list of concept names (max 8). */

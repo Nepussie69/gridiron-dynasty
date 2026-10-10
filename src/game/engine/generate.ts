@@ -106,6 +106,8 @@ export interface World {
   lastWins?: Record<string, number>
   /** L10 G8: the user's tendency book for this season (offense classes + defensive calls). */
   userBook?: { season: number; teamId: string; book: import('./decisions').TendencyBook }
+  /** FUTURES #4: per-club special-teams surprises this season, for opponent scouting. */
+  stMemory?: import('./specialCalls').STMemory
   /** L11 W2: players placed on waivers this season, awaiting the Tuesday turn. */
   waivers?: WaiverEntry[]
   /** L12.6 C1: the step of the offseason calendar (resign → free agency → draft → camp). */
