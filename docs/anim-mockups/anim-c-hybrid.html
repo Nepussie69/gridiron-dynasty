@@ -1,0 +1,1233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hybrid Broadcast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,600;1,700;1,800&family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --canvas:#090D14; --surface:#111723; --surface-2:#171F2E; --surface-3:#202A3B;
+  --line:#263146; --line-strong:#4B5A74;
+  --ink:#F3F6FB; --ink-2:#C5CEDC; --muted:#97A3B6;
+  --team:#FF4A12; --team-text:#FF7448; --gold:#F3B53F; --win:#3CCB82;
+  --font-display:'Barlow Condensed',system-ui,sans-serif;
+  --font-cond:'Barlow Semi Condensed',system-ui,sans-serif;
+  --font-sans:'Inter',system-ui,sans-serif;
+  --ease-wipe:cubic-bezier(.2,.8,.2,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1328px;margin:0 auto;padding:24px 24px 64px}
+header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.kicker{font:600 12px/16px var(--font-cond);letter-spacing:.08em;text-transform:uppercase;color:var(--team-text)}
+h1{margin:2px 0 0;font:italic 800 40px/40px var(--font-display);text-transform:uppercase;letter-spacing:.01em}
+.sub{margin:6px 0 0;color:var(--ink-2);font-size:14px;line-height:20px;max-width:760px}
+.stage{position:relative;width:100%;max-width:1280px;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#000;
+  box-shadow:0 18px 40px -12px rgba(0,0,0,.65),0 0 0 1px rgba(255,255,255,.06)}
+.stage canvas,.phone canvas{display:block;width:100%;height:100%}
+.controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 28px;padding:10px 12px;background:var(--surface);
+  border:1px solid var(--line);border-radius:10px}
+button,.seg button{font:700 13px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--surface-2);
+  border:1px solid var(--line-strong);border-radius:6px;height:34px;padding:0 14px;cursor:pointer}
+button:hover{background:var(--surface-3)}
+button:focus-visible{outline:2px solid #7FB0FF;outline-offset:2px}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg button{border:0;border-radius:0;height:32px}
+.seg button[aria-pressed="true"]{background:var(--ink);color:#0B1220}
+.toggle{display:inline-flex;align-items:center;gap:8px;font:600 13px var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);cursor:pointer;user-select:none}
+.toggle input{appearance:none;width:36px;height:20px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line-strong);position:relative;cursor:pointer;margin:0}
+.toggle input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--ink-2);transition:left .18s var(--ease-wipe)}
+.toggle input:checked{background:var(--team)}
+.toggle input:checked::after{left:18px;background:#fff}
+.scrub{flex:1;min-width:220px;display:flex;flex-direction:column;gap:4px}
+.scrub input{width:100%;accent-color:var(--team)}
+.phases{position:relative;height:16px;font:600 11px/16px var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.phases span{position:absolute;top:0;white-space:nowrap}
+.now{font:italic 800 20px/1 var(--font-display);min-width:150px;text-align:right;text-transform:uppercase}
+.row{display:grid;grid-template-columns:auto 1fr;gap:32px;align-items:start}
+.phone{width:390px;max-width:calc(100vw - 48px);aspect-ratio:390/844;border-radius:54px;padding:11px;background:#04060a;position:relative;
+  box-shadow:0 30px 60px -20px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.08),inset 0 0 0 2px #1a2130}
+.phone .screen{width:100%;height:100%;border-radius:44px;overflow:hidden;position:relative;background:#000}
+.phone .island{position:absolute;top:22px;left:50%;transform:translateX(-50%);width:118px;height:34px;border-radius:20px;background:#000;z-index:2}
+.notes h2{margin:0 0 8px;font:italic 800 28px/30px var(--font-display);text-transform:uppercase}
+.notes h3{margin:22px 0 8px;font:600 12px/16px var(--font-cond);letter-spacing:.08em;text-transform:uppercase;color:var(--team-text)}
+.notes ul{margin:0;padding-left:18px;color:var(--ink-2);font-size:14px;line-height:21px}
+.notes li{margin:0 0 6px}
+.notes b{color:var(--ink);font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px;font:500 13px/18px var(--font-cond);color:var(--ink-2)}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:50%;vertical-align:-2px;margin-right:6px}
+@media (max-width:900px){.row{grid-template-columns:1fr}.wrap{padding:16px}h1{font-size:32px;line-height:32px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="kicker">Gameplay animation · direction C</div>
+      <h1>Hybrid Broadcast</h1>
+      <p class="sub">Readable top-down chips for the live snap, a TV layer for the big moment: a key-matchup callout at the break, a tilted-camera instant replay with telestrator, and a Sunday Broadcast lower third with the stat line and win-probability swing.</p>
+    </div>
+  </header>
+
+  <div class="stage"><canvas id="wide" width="1280" height="720" aria-label="16:9 game view animation"></canvas></div>
+
+  <div class="controls" role="group" aria-label="Playback">
+    <button id="play" aria-label="Pause">❚❚ Pause</button>
+    <div class="seg" role="group" aria-label="Speed">
+      <button data-speed="0.5" aria-pressed="false">0.5×</button>
+      <button data-speed="1" aria-pressed="true">1×</button>
+    </div>
+    <label class="toggle"><input type="checkbox" id="skip"> Skip replay</label>
+    <button id="restart">↺ Restart</button>
+    <div class="scrub">
+      <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Timeline">
+      <div class="phases" id="phases"></div>
+    </div>
+    <div class="now" id="now">Live</div>
+  </div>
+
+  <div class="row">
+    <div class="phone"><div class="island"></div><div class="screen"><canvas id="phone" width="390" height="844" aria-label="Phone game view animation"></canvas></div></div>
+    <div class="notes">
+      <h2>3rd &amp; 6 · ATL 38 · Q2 7:42</h2>
+      <div class="legend">
+        <span><i style="background:#F7F4EF;box-shadow:inset 0 0 0 3px #FF3C00"></i>CLE offense (circle)</span>
+        <span><i style="background:#A71930;border-radius:3px;box-shadow:inset 0 0 0 2px #000"></i>ATL defense (square)</span>
+        <span><i style="background:#F3B53F"></i>Double team / ball carrier</span>
+        <span><i style="background:#FFE04A"></i>Telestrator</span>
+      </div>
+      <h3>What you are seeing</h3>
+      <ul>
+        <li><b>Live (≈6 s):</b> shaped chips with a facing wedge, motion trails on the skill players, white block links and a gold double-team ring on DE #97.</li>
+        <li><b>Key matchup at the break:</b> #1 (route running 94, elite) vs CB #24 (man coverage 78). The pill pins to the pair and flags the 2.4 yd win.</li>
+        <li><b>Ball flight:</b> the ball lifts off its ground shadow, and a landing ring marks the catch spot at ATL 24.</li>
+        <li><b>After the catch:</b> a burst for the broken tackle, red links for the gang tackle, then a gain carpet to ATL 21.</li>
+        <li><b>Instant replay:</b> the same paths in a tilted 2.5D camera, with a freeze-frame telestrator, slow motion on the catch and broken tackle, and a YAC arrow.</li>
+        <li><b>Lower third:</b> the stat line, CLE win probability 41% → 47%, then the chains move and the scorebug reads 1st &amp; 10.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+// ───────────────────────── constants ─────────────────────────
+const LOS = 72, FD = 78, SPOT = 89.1, CATCH = [86.0, 21.8];
+const COL = {
+  brown:'#311D00', orange:'#FF3C00', orangeHi:'#FF7448', red:'#A71930', redHi:'#E8475F', black:'#000',
+  white:'#F7F4EF', gold:'#F3B53F', win:'#3CCB82', tele:'#FFE04A', ink:'#F3F6FB', ink2:'#C5CEDC',
+  muted:'#97A3B6', surface:'#111723', surface2:'#171F2E', canvas:'#090D14', blue:'#5B96FA'
+};
+const FDISP = '"Barlow Condensed","Arial Narrow",sans-serif';
+const FCOND = '"Barlow Semi Condensed","Arial Narrow",sans-serif';
+const FSANS = 'Inter,system-ui,sans-serif';
+const fnt = (w, s, fam, it) => `${it ? 'italic ' : ''}${w} ${s}px ${fam}`;
+
+const lerp = (a, b, u) => a + (b - a) * u;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const c01 = v => clamp(v, 0, 1);
+const eOut = u => 1 - Math.pow(1 - c01(u), 3);
+const eWipe = u => 1 - Math.pow(1 - c01(u), 4);
+const eInOut = u => { u = c01(u); return u < .5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2; };
+const eBack = u => { u = c01(u); const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2); };
+
+// ───────────────────── keyframed tracks (Hermite) ─────────────────────
+// Keys: [t, v1, v2, ..., tangentScale?]. Hermite through the keys; a key that repeats its
+// neighbour's position gets a zero tangent (no pre-snap creep, clean stops).
+function track(keys, dims) {
+  const n = keys.length, m = [];
+  const same = (a, b) => { for (let d = 1; d <= dims; d++) if (Math.abs(a[d] - b[d]) > 1e-6) return false; return true; };
+  for (let i = 0; i < n; i++) {
+    const row = [];
+    for (let d = 1; d <= dims; d++) {
+      if (i === 0 || i === n - 1 || same(keys[i], keys[i - 1]) || same(keys[i], keys[i + 1])) { row.push(0); continue; }
+      const sc = keys[i][dims + 1] ?? 1;
+      row.push(sc * (keys[i + 1][d] - keys[i - 1][d]) / (keys[i + 1][0] - keys[i - 1][0]));
+    }
+    m.push(row);
+  }
+  return t => {
+    const out = new Array(dims);
+    if (t <= keys[0][0]) { for (let d = 0; d < dims; d++) out[d] = keys[0][d + 1]; return out; }
+    if (t >= keys[n - 1][0]) { for (let d = 0; d < dims; d++) out[d] = keys[n - 1][d + 1]; return out; }
+    let i = 0; while (i < n - 2 && t > keys[i + 1][0]) i++;
+    const a = keys[i], b = keys[i + 1], h = b[0] - a[0], u = (t - a[0]) / h, u2 = u * u, u3 = u2 * u;
+    const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+    for (let d = 0; d < dims; d++) out[d] = h00 * a[d + 1] + h10 * h * m[i][d] + h01 * b[d + 1] + h11 * h * m[i + 1][d];
+    return out;
+  };
+}
+
+// ───────────────────────── the play ─────────────────────────
+// Offense frame: moving right (+x). Offense's left = small y (top of the 16:9 view).
+// LOS ATL 38 = x 72. Snap at t = 0.5 s. Throw 3.1 (2.6 s after snap). Catch 3.9 at ATL 24. Down 5.45 at ATL 21.
+const P = {};
+const ORDER = [];
+function add(id, n, side, pos, keys, extra = {}) {
+  P[id] = Object.assign({ id, n, side, pos, at: track(keys, 2) }, extra);
+  ORDER.push(id);
+}
+const PI = Math.PI;
+// offense
+add('lt', 77, 'O', 'LT', [[0,70.8,23.45],[0.5,70.8,23.45],[0.9,70.0,22.3],[1.4,69.4,21.9],[3.6,69.0,22.0],[6,69.0,22.0]], { fixed: 0 });
+add('lg', 64, 'O', 'LG', [[0,71.0,25.05],[0.5,71.0,25.05],[0.9,70.2,24.4],[1.4,69.5,24.0],[3.6,69.1,24.0],[6,69.1,24.0]], { fixed: 0 });
+add('c',  61, 'O', 'C',  [[0,71.2,26.65],[0.5,71.2,26.65],[0.9,70.4,26.1],[1.4,70.0,25.9],[3.6,69.6,25.9],[6,69.6,25.9]], { fixed: 0 });
+add('rg', 65, 'O', 'RG', [[0,71.0,28.25],[0.5,71.0,28.25],[0.9,70.3,27.9],[1.4,70.0,27.8],[3.6,69.4,27.7],[6,69.4,27.7]], { fixed: 0 });
+add('rt', 70, 'O', 'RT', [[0,70.8,29.85],[0.5,70.8,29.85],[0.9,70.0,30.3],[1.4,69.4,30.4],[2.4,68.6,30.2],[3.4,67.6,29.2],[6,67.4,29.0]], { fixed: 0.25 });
+add('qb', 5, 'O', 'QB', [[0,67,26.65],[0.5,67,26.65],[0.66,67.1,26.6],[1.05,66.8,26.3],[1.45,64.9,26.3],[2.2,65.1,26.2],[2.75,65.6,26.2],[3.1,65.7,26.2],[3.5,66.1,26.0],[6,66.2,26.0]]);
+add('rb', 22, 'O', 'RB', [[0,67,24.9],[0.5,67,24.9],[0.75,67.4,25.7],[1.0,68.1,26.8],[1.3,68.8,29.0],[1.62,69.9,30.9],[1.9,70.2,31.4],[2.15,70.7,32.2],[2.8,72.4,36.4],[3.5,74.3,40.6],[4.3,75.4,42.8],[6,76.0,43.8]]);
+add('te', 85, 'O', 'TE', [[0,70.7,31.6],[0.5,70.7,31.6],[1.2,73.4,33.0],[2.2,78.3,35.3],[3.1,81.8,37.2],[4.0,83.8,38.2],[5.0,85.0,37.0],[6,85.4,36.4]]);
+add('wr1', 1, 'O', 'WR', [[0,71.5,6],[0.5,71.5,6],[0.9,73.4,6.5],[1.5,78.4,7.6],[2.05,82.6,8.9,0.35],[2.3,83.3,10.5],[3.0,84.6,15.6],[3.9,86.0,21.8],[4.15,86.5,23.0],[4.3,86.9,23.6],[4.7,88.1,25.0],[5.05,88.9,26.0],[5.45,89.1,26.5],[6,89.1,26.5]], { down: 5.35 });
+add('wr11', 11, 'O', 'WR', [[0,70.5,38],[0.5,70.5,38],[1.5,77,39],[2.2,81,40.8],[3.1,85,44.6],[4.0,87.2,46.4],[5.0,88.2,46.4],[6,88.4,46.2]]);
+add('wr13', 13, 'O', 'WR', [[0,70.5,47.5],[0.5,70.5,47.5],[1.5,77.2,47.9],[2.5,85,48.0],[3.5,92,47.6],[4.5,95.6,47.0],[5.4,96.6,46.6],[6,96.8,46.5]]);
+// defense
+add('de97', 97, 'D', 'DE', [[0,73,22.0],[0.5,73,22.0],[0.95,71.3,22.4],[1.4,70.6,22.9],[3.6,70.3,23.0],[6,70.3,23.0]]);
+add('dt94', 94, 'D', 'DT', [[0,73,25.4],[0.5,73,25.4],[0.95,71.7,25.7],[1.4,71.4,25.9],[3.6,71.0,25.9],[6,71.0,25.9]]);
+add('dt95', 95, 'D', 'DT', [[0,73,28.4],[0.5,73,28.4],[0.95,71.7,28.0],[1.4,71.4,27.8],[3.6,70.8,27.7],[6,70.8,27.7]]);
+add('de96', 96, 'D', 'DE', [[0,73,31.3],[0.5,73,31.3],[0.95,71.4,31.6],[1.4,70.6,31.7],[1.7,70.5,31.9],[2.2,69.9,31.8],[2.8,68.5,31.5],[3.2,67.4,31.0],[3.7,66.7,29.9],[6,66.6,29.6]]);
+add('lb45', 45, 'D', 'LB', [[0,77,23],[0.5,77,23],[0.8,76.3,23.4],[1.1,76.0,24.2],[1.7,76.0,28.0],[2.4,76.3,33.5],[3.1,76.9,37.6],[3.9,77.9,40.4],[4.6,79.3,40.2],[6,81.5,37.5]]);
+add('lb54', 54, 'D', 'LB', [[0,77,30],[0.5,77,30],[0.8,76.4,29.6],[1.1,76.1,29.3],[1.6,77.3,28.2],[2.2,79.0,26.8],[3.1,80.6,25.6],[3.9,83.4,26.4],[4.6,86.8,27.6],[5.05,88.2,27.5],[5.4,88.6,27.6],[6,88.6,27.6]], { down: 5.4, faceFn: p => (p > 0.5 && p < 3.1 ? PI : null) });
+add('cb24', 24, 'D', 'CB', [[0,77,6.4],[0.5,77,6.4],[0.9,77.5,6.6],[1.3,78.6,7.0],[1.8,81.4,7.9],[2.2,83.4,8.5],[2.45,83.9,9.1],[2.7,84.1,10.6],[3.3,84.7,15.6],[3.9,85.4,20.0],[4.15,86.0,21.9],[4.45,86.4,22.6],[6,86.4,22.6]], { down: 4.3, faceFn: p => (p > 0.5 && p < 1.05 ? PI : null) });
+add('cb21', 21, 'D', 'CB', [[0,77,47.3],[0.5,77,47.3],[1.0,77.9,47.4],[1.5,79.3,47.6],[2.5,86.2,47.6],[3.5,92.6,47.1],[4.5,96.2,46.4],[6,97,45.8]], { faceFn: p => (p > 0.5 && p < 1.1 ? PI : null) });
+add('n29', 29, 'D', 'NB', [[0,76.5,37.6],[0.5,76.5,37.6],[1.0,77.2,38.0],[1.5,78.2,38.8],[2.2,81.4,40.2],[3.1,84.6,44.0],[4.0,86.6,45.2],[5.0,87.8,43.6],[6,88.2,42.6]], { faceFn: p => (p > 0.5 && p < 1.1 ? PI : null) });
+add('s32', 32, 'D', 'S', [[0,91,27],[0.5,91,27],[1.3,92.2,26.4],[2.2,93,25.6],[3.1,93,25.2],[3.5,92.2,24.6],[3.9,91.4,24.4],[4.6,90.5,25.0],[5.05,90.0,25.4],[5.4,90.1,25.6],[6,90.1,25.6]], { down: 5.35, faceFn: p => (p < 3.15 ? PI : null) });
+add('s28', 28, 'D', 'S', [[0,80,33],[0.5,80,33],[1.0,79.7,33.4],[2.2,80.6,35.0],[3.1,82.6,36.4],[4.0,84.5,35.6],[5.0,86.6,31.0],[6,87.4,29.4]], { faceFn: p => (p < 1.0 ? PI : null) });
+P.qb.faceFn = p => {
+  if (p < 0.62) return 0;
+  if (p < 1.05) return 0.9;                       // turns to the mesh: play-action fake to #22
+  const w = P.wr1.at(Math.min(p, 3.9)), q = P.qb.at(p);
+  return clamp(Math.atan2(w[1] - q[1], w[0] - q[0]), -1.2, 1.2);
+};
+const OL = ['lt','lg','c','rg','rt'];
+const TRAIL = new Set(['wr1','cb24','rb','te','wr11','wr13','n29','cb21','s32','s28','lb54','lb45']);
+// Engagements: [a, b, t0, t1, kind]
+const LINKS = [
+  ['lt','de97',0.95,4.8,'dbl'], ['lg','de97',0.95,4.8,'dbl'],
+  ['c','dt94',0.95,4.8,'blk'], ['rg','dt95',0.95,4.8,'blk'], ['rt','de96',0.95,3.6,'blk'],
+  ['rb','de96',1.6,2.05,'chip'],
+  ['cb24','wr1',4.08,4.32,'miss'],
+  ['s32','wr1',5.0,6.5,'tkl'], ['lb54','wr1',5.02,6.5,'tkl'],
+];
+
+function facing(pl, p) {
+  if (pl.faceFn) { const a = pl.faceFn(p); if (a != null) return a; }
+  if (pl.fixed != null) return pl.fixed;
+  for (let tt = p; tt >= Math.max(0, p - 1.5); tt -= 0.1) {
+    const a = pl.at(tt - 0.06), b = pl.at(tt + 0.06), dx = b[0] - a[0], dy = b[1] - a[1];
+    if (Math.hypot(dx, dy) / 0.12 > 1.6) return Math.atan2(dy, dx);
+  }
+  return pl.side === 'O' ? 0 : PI;
+}
+const speedOf = (pl, p) => { const a = pl.at(p - 0.05), b = pl.at(p + 0.05); return Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.1; };
+const isDown = (pl, p) => pl.down != null && p >= pl.down;
+
+// Ball: snap → QB (held, PA fake) → throw at 3.1 → catch 3.9 → carried by #1 → down 5.45
+const THROW = 3.1, CATCHT = 3.9, DOWNT = 5.45;
+function ballAt(p) {
+  const c0 = P.c.at(0);
+  if (p < 0.5) return { x: c0[0] + 0.5, y: c0[1], z: 0.15 };
+  if (p < 0.64) {
+    const u = (p - 0.5) / 0.14, q = P.qb.at(0.64);
+    return { x: lerp(c0[0] + 0.5, q[0] + 0.3, u), y: lerp(c0[1], q[1], u), z: 0.15 + u * 0.85 + Math.sin(PI * u) * 0.3 };
+  }
+  if (p < THROW) {
+    const q = P.qb.at(p), f = facing(P.qb, p);
+    return { x: q[0] + Math.cos(f) * 0.35, y: q[1] + Math.sin(f) * 0.35, z: 1.0 };
+  }
+  if (p < CATCHT) {
+    const u = (p - THROW) / (CATCHT - THROW), q = P.qb.at(THROW), f = facing(P.qb, THROW);
+    const ax = q[0] + Math.cos(f) * 0.35, ay = q[1] + Math.sin(f) * 0.35;
+    return { x: lerp(ax, CATCH[0], u), y: lerp(ay, CATCH[1], u), z: lerp(1.0, 1.15, u) + 4 * u * (1 - u) * 3.4 };
+  }
+  const w = P.wr1.at(p), f = facing(P.wr1, Math.min(p, DOWNT));
+  const z = p < DOWNT ? 0.95 : lerp(0.95, 0.2, c01((p - DOWNT) / 0.25));
+  return { x: w[0] + Math.cos(f) * 0.3, y: w[1] + Math.sin(f) * 0.3, z };
+}
+const holderAt = p => (p >= 0.64 && p < THROW ? 'qb' : p >= CATCHT ? 'wr1' : null);
+
+// ───────────────────────── cameras ─────────────────────────
+const CX = track([[0,76.5],[2.0,76.5],[3.3,79],[4.4,83],[5.6,85],[7,85]], 1);
+const CY = track([[0,26.4],[1.6,26.0],[3.2,22.5],[4.5,23.5],[5.6,25],[7,25]], 1);
+const CZ = track([[0,1],[3.4,1],[4.6,1.14],[5.6,1.2],[7,1.2]], 1);
+
+function topCam(L, p, zoomOverride) {
+  const z = zoomOverride ?? CZ(p)[0], s = L.s * z, cx = CX(p)[0], cy = CY(p)[0], rot = L.phone;
+  const ox = L.W / 2, oy = L.phone ? L.H * 0.6 : L.H / 2;
+  return {
+    persp: false, s, near: 0,
+    view: (x, y) => rot ? [ox + (y - cy) * s, oy - (x - cx) * s, 10] : [ox + (x - cx) * s, oy + (y - cy) * s, 10],
+    proj: v => [v[0], v[1]],
+    ang: a => rot ? Math.atan2(-Math.cos(a), Math.sin(a)) : a,
+    kAt: () => s,
+  };
+}
+const norm = v => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+// Perspective camera. World: x along field, y across (down on the 16:9 view), z up.
+function perspCam(L, eye, tgt, focal, ocx, ocy) {
+  const f = norm([tgt[0] - eye[0], tgt[1] - eye[1], tgt[2] - eye[2]]);
+  const r = norm([-f[1], f[0], 0]);
+  const u = norm([-f[2] * f[0], -f[2] * f[1], 1 - f[2] * f[2]]);
+  const cam = {
+    persp: true, near: 0.8, focal, eye,
+    view: (x, y, z = 0) => { const d = [x - eye[0], y - eye[1], z - eye[2]]; return [dot(d, r), dot(d, u), dot(d, f)]; },
+    proj: v => [ocx + focal * v[0] / v[2], ocy - focal * v[1] / v[2]],
+    kAt: (x, y) => focal / Math.max(0.8, cam.view(x, y, 0)[2]),
+  };
+  return cam;
+}
+function scr(cam, x, y, z = 0) { const v = cam.view(x, y, z); if (cam.persp && v[2] < cam.near) return null; return cam.proj(v); }
+
+// ───────────────────────── canvas helpers ─────────────────────────
+function rr(ctx, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function slab(ctx, x, y, w, h, fill, sk = 0.18) {
+  const o = h * sk; ctx.beginPath(); ctx.moveTo(x + o, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w - o, y + h); ctx.lineTo(x, y + h); ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+}
+const HAS_LS = (() => { try { return 'letterSpacing' in document.createElement('canvas').getContext('2d'); } catch (e) { return false; } })();
+function txt(ctx, s, x, y, f, c, al = 'left', bl = 'middle', ls) {
+  ctx.font = f; ctx.fillStyle = c; ctx.textAlign = al; ctx.textBaseline = bl;
+  if (HAS_LS) ctx.letterSpacing = ls || '0px';
+  ctx.fillText(s, x, y);
+  if (HAS_LS) ctx.letterSpacing = '0px';
+}
+function tw(ctx, s, f, ls) { ctx.font = f; if (HAS_LS) ctx.letterSpacing = ls || '0px'; const w = ctx.measureText(s).width; if (HAS_LS) ctx.letterSpacing = '0px'; return w; }
+function clipNear(vs, n) {
+  const out = [];
+  for (let i = 0; i < vs.length; i++) {
+    const a = vs[i], b = vs[(i + 1) % vs.length], ain = a[2] >= n, bin = b[2] >= n;
+    if (ain) out.push(a);
+    if (ain !== bin) { const t = (n - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, n]); }
+  }
+  return out;
+}
+function poly(ctx, cam, pts, fill) {
+  let vs = pts.map(p => cam.view(p[0], p[1], p[2] || 0));
+  if (cam.persp) vs = clipNear(vs, cam.near);
+  if (vs.length < 3) return false;
+  ctx.beginPath();
+  vs.forEach((v, i) => { const s = cam.proj(v); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
+  ctx.closePath(); if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  return true;
+}
+const quad = (ctx, cam, x0, y0, x1, y1, fill) => poly(ctx, cam, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], fill);
+// Text laid on a world plane: o origin, ex = text-right (1 yd), ey = text-down (1 yd); cap = cap height in yd.
+function worldText(ctx, cam, o, ex, ey, cap, s, fill, font) {
+  const oz = o[2] || 0;
+  const v0 = cam.view(o[0], o[1], oz), vx = cam.view(o[0] + ex[0], o[1] + ex[1], oz + (ex[2] || 0)), vy = cam.view(o[0] + ey[0], o[1] + ey[1], oz + (ey[2] || 0));
+  if (cam.persp && (v0[2] < 2 || vx[2] < 2 || vy[2] < 2)) return;
+  const s0 = cam.proj(v0), sx = cam.proj(vx), sy = cam.proj(vy);
+  ctx.save();
+  ctx.transform(sx[0] - s0[0], sx[1] - s0[1], sy[0] - s0[0], sy[1] - s0[1], s0[0], s0[1]);
+  const k = cap / 70; ctx.scale(k, k);
+  ctx.font = font || fnt(700, 100, FDISP); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = fill;
+  ctx.fillText(s, 0, 0); ctx.restore();
+}
+
+// Pre-rendered textures
+function makeNoise(size, dots, palette, alphaMax) {
+  const c = document.createElement('canvas'); c.width = c.height = size; const g = c.getContext('2d');
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < dots; i++) {
+    g.fillStyle = palette[Math.floor(rnd() * palette.length)]; g.globalAlpha = rnd() * alphaMax;
+    const r = 0.5 + rnd() * 1.3; g.fillRect(rnd() * size, rnd() * size, r, r * (0.6 + rnd() * 1.8));
+  }
+  return c;
+}
+let grassTex = null, crowdTex = null;
+
+// ───────────────────────── field ─────────────────────────
+const GRASS_A = '#2E6C35', GRASS_B = '#28622F', SURROUND = '#1E4826', EZ = '#8F1429';
+function drawField(ctx, cam, L, o) {
+  quad(ctx, cam, -40, -30, 160, 85, SURROUND);
+  // white border (6 ft) round the field of play
+  quad(ctx, cam, -2, -2, 122, 0, '#E9EEE6'); quad(ctx, cam, -2, 53.3, 122, 55.3, '#E9EEE6');
+  quad(ctx, cam, -2, 0, 0, 53.3, '#E9EEE6'); quad(ctx, cam, 120, 0, 122, 53.3, '#E9EEE6');
+  quad(ctx, cam, 0, 0, 10, 53.3, EZ); quad(ctx, cam, 110, 0, 120, 53.3, EZ);
+  for (let x = 10, i = 0; x < 110; x += 5, i++) quad(ctx, cam, x, 0, x + 5, 53.3, i % 2 ? GRASS_B : GRASS_A);
+  if (o.carpet > 0) {
+    ctx.globalAlpha = o.carpet;
+    quad(ctx, cam, LOS, 0, SPOT, 53.3, 'rgba(255,255,255,.09)');
+    ctx.globalAlpha = 1;
+  }
+  // yard lines
+  const lineC = 'rgba(244,247,240,.88)';
+  for (let x = 10; x <= 110; x += 5) quad(ctx, cam, x - (x % 50 === 10 ? 0.12 : 0.08), 0.15, x + (x % 50 === 10 ? 0.12 : 0.08), 53.15, lineC);
+  // ticks: sideline + hashes
+  for (let x = 11; x < 110; x++) {
+    if (x % 5 === 0) continue;
+    quad(ctx, cam, x - 0.06, 0.3, x + 0.06, 1.0, lineC); quad(ctx, cam, x - 0.06, 52.3, x + 0.06, 53.0, lineC);
+    quad(ctx, cam, x - 0.06, 22.9, x + 0.06, 23.58, lineC); quad(ctx, cam, x - 0.06, 29.72, x + 0.06, 30.4, lineC);
+  }
+  // numbers
+  for (let x = 20; x <= 100; x += 10) {
+    const n = String(Math.min(x - 10, 110 - x));
+    worldText(ctx, cam, [x, 44.4], [1, 0], [0, 1], 2.0, n, 'rgba(244,247,240,.82)', fnt(700, 100, FDISP));
+    worldText(ctx, cam, [x, 8.9], [-1, 0], [0, -1], 2.0, n, 'rgba(244,247,240,.82)', fnt(700, 100, FDISP));
+  }
+  // end-zone wordmarks + midfield disc
+  worldText(ctx, cam, [115, 26.65], L.phone ? [0, 1] : [0, -1], L.phone ? [-1, 0] : [1, 0], 4.2, 'FALCONS', 'rgba(255,255,255,.92)', fnt(800, 100, FDISP, true));
+  worldText(ctx, cam, [5, 26.65], L.phone ? [0, -1] : [0, 1], L.phone ? [1, 0] : [-1, 0], 4.2, 'ATLANTA', 'rgba(255,255,255,.92)', fnt(800, 100, FDISP, true));
+  const disc = []; for (let a = 0; a < PI * 2; a += PI / 24) disc.push([60 + Math.cos(a) * 4.2, 26.65 + Math.sin(a) * 4.2]);
+  poly(ctx, cam, disc, 'rgba(167,25,48,.14)');
+  worldText(ctx, cam, [60, 26.65], [1, 0], [0, 1], 2.4, 'ATL', 'rgba(255,255,255,.22)', fnt(800, 100, FDISP, true));
+  // line of scrimmage + line to gain (broadcast style, laid in the turf)
+  quad(ctx, cam, o.los - 0.17, 0.2, o.los + 0.17, 53.1, 'rgba(54,124,255,.92)');
+  const fdGlow = o.fdGlow || 0;
+  if (fdGlow > 0) { ctx.globalAlpha = fdGlow * 0.5; quad(ctx, cam, o.fd - 0.6, 0.2, o.fd + 0.6, 53.1, '#FFE24A'); ctx.globalAlpha = 1; }
+  quad(ctx, cam, o.fd - 0.17, 0.2, o.fd + 0.17, 53.1, o.fdColor || 'rgba(255,214,10,.95)');
+  if (o.carpet > 0) { ctx.globalAlpha = o.carpet; quad(ctx, cam, SPOT - 0.14, 0.2, SPOT + 0.14, 53.1, '#FFFFFF'); ctx.globalAlpha = 1; }
+}
+
+// ───────────────────────── live (top-down) ─────────────────────────
+function chipColors(pl) {
+  return pl.side === 'O'
+    ? { fill: COL.white, rim: COL.orange, rim2: COL.brown, num: COL.orange, wedge: COL.orange, trail: '255,140,90' }
+    : { fill: COL.red, rim: '#0A0A0A', rim2: '#0A0A0A', num: '#FFFFFF', wedge: '#0A0A0A', trail: '255,120,140' };
+}
+function drawChip(ctx, L, cam, pl, p, sx, sy, opt) {
+  const c = chipColors(pl), r = L.chipR * (opt.scale || 1), down = isDown(pl, p);
+  ctx.save();
+  ctx.globalAlpha = down ? 0.82 : 1;
+  // soft drop shadow
+  ctx.fillStyle = 'rgba(0,0,0,.38)'; ctx.beginPath(); ctx.ellipse(sx + 1.4, sy + 2.4, r * 1.06, r * 0.98, 0, 0, PI * 2); ctx.fill();
+  if (opt.glow) {
+    const g = ctx.createRadialGradient(sx, sy, r * 0.6, sx, sy, r * 2.6);
+    g.addColorStop(0, `rgba(243,181,63,${0.55 * opt.glow})`); g.addColorStop(1, 'rgba(243,181,63,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sx, sy, r * 2.6, 0, PI * 2); ctx.fill();
+  }
+  // facing wedge
+  if (!down) {
+    const a = cam.ang(facing(pl, p)), tip = r + L.chipR * 0.55, base = r - 1;
+    ctx.fillStyle = c.wedge; ctx.beginPath();
+    ctx.moveTo(sx + Math.cos(a) * tip, sy + Math.sin(a) * tip);
+    ctx.lineTo(sx + Math.cos(a + 0.62) * base, sy + Math.sin(a + 0.62) * base);
+    ctx.lineTo(sx + Math.cos(a - 0.62) * base, sy + Math.sin(a - 0.62) * base);
+    ctx.closePath(); ctx.fill();
+  }
+  // body: offense = circle, defense = rounded square
+  if (pl.side === 'O') {
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, PI * 2); ctx.fillStyle = c.rim2; ctx.fill();
+    ctx.beginPath(); ctx.arc(sx, sy, r - 1.2, 0, PI * 2); ctx.fillStyle = c.rim; ctx.fill();
+    ctx.beginPath(); ctx.arc(sx, sy, r - 1.2 - L.chipR * 0.2, 0, PI * 2); ctx.fillStyle = c.fill; ctx.fill();
+  } else {
+    const s = r * 0.93;
+    rr(ctx, sx - s, sy - s, s * 2, s * 2, r * 0.42); ctx.fillStyle = c.rim; ctx.fill();
+    rr(ctx, sx - s + 1.6, sy - s + 1.6, s * 2 - 3.2, s * 2 - 3.2, r * 0.32); ctx.fillStyle = c.fill; ctx.fill();
+    const g = ctx.createLinearGradient(sx, sy - s, sx, sy + s); g.addColorStop(0, 'rgba(255,255,255,.18)'); g.addColorStop(.5, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fill();
+  }
+  if (down) { ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(sx, sy, r + 1, 0, PI * 2); ctx.stroke(); }
+  if (opt.ring) {
+    ctx.strokeStyle = opt.ring; ctx.lineWidth = L.phone ? 2 : 2.5; ctx.beginPath(); ctx.arc(sx, sy, r + 4 + (opt.ringPulse || 0) * 3, 0, PI * 2); ctx.stroke();
+  }
+  const ns = String(pl.n);
+  txt(ctx, ns, sx - 0.3, sy + 0.6, fnt(800, Math.round(r * (ns.length > 1 ? 1.15 : 1.3)), FDISP, true), c.num, 'center', 'middle');
+  ctx.restore();
+}
+function trail(ctx, L, cam, pl, p, strong) {
+  if (p < 0.6) return;
+  const c = chipColors(pl), pts = [];
+  const span = strong ? 0.75 : 0.55;
+  for (let t = Math.max(0.5, p - span); t <= p + 1e-6; t += 0.04) { const w = pl.at(t); pts.push(cam.proj(cam.view(w[0], w[1], 0))); }
+  if (pts.length < 3) return;
+  ctx.lineCap = 'round';
+  for (let i = 1; i < pts.length; i++) {
+    const u = i / (pts.length - 1);
+    ctx.strokeStyle = strong ? `rgba(255,236,200,${0.75 * u})` : `rgba(${c.trail},${0.45 * u})`;
+    ctx.lineWidth = (strong ? 4.2 : 2.6) * (L.phone ? 0.75 : 1) * (0.35 + 0.65 * u);
+    ctx.beginPath(); ctx.moveTo(pts[i - 1][0], pts[i - 1][1]); ctx.lineTo(pts[i][0], pts[i][1]); ctx.stroke();
+  }
+}
+function starburst(ctx, x, y, r1, r2, spikes, fill, stroke, rot = 0) {
+  ctx.beginPath();
+  for (let i = 0; i < spikes * 2; i++) {
+    const a = rot + i * PI / spikes, r = i % 2 ? r2 : r1;
+    i ? ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r) : ctx.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+  }
+  ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+}
+function tag(ctx, L, s, x, y, bg, fg, al = 'center', stripe) {
+  const f = fnt(700, L.phone ? 11 : 12, FCOND), w = tw(ctx, s, f, '0.9px') + 16, h = L.phone ? 18 : 20;
+  const x0 = al === 'center' ? x - w / 2 : al === 'right' ? x - w : x;
+  slab(ctx, x0, y - h / 2, w, h, bg, 0.3);
+  if (stripe) slab(ctx, x0, y - h / 2, 5 + h * 0.3, h, stripe, 0.3);
+  txt(ctx, s, x0 + w / 2 + (stripe ? 2 : 0), y + 0.5, f, fg, 'center', 'middle', '0.9px');
+  return w;
+}
+
+function drawLive(ctx, L, p, st) {
+  const cam = topCam(L, p);
+  const W = L.W, H = L.H;
+  ctx.fillStyle = SURROUND; ctx.fillRect(0, 0, W, H);
+  const carpet = st.carpet ?? (p > DOWNT ? eOut((p - DOWNT) / 0.4) : 0);
+  drawField(ctx, cam, L, { los: st.los ?? LOS, fd: st.fd ?? FD, carpet, fdGlow: p > CATCHT - 0.05 && p < CATCHT + 0.7 ? 1 - (p - CATCHT) / 0.7 : 0 });
+  // turf grain
+  ctx.save(); ctx.globalAlpha = 0.09; ctx.fillStyle = ctx.createPattern(grassTex, 'repeat'); ctx.fillRect(0, 0, W, H); ctx.restore();
+
+  const S = id => { const w = P[id].at(p); return cam.proj(cam.view(w[0], w[1], 0)); };
+  const R = L.chipR;
+
+  // landing ring at the catch spot while the ball is in the air
+  if (p > THROW && p < CATCHT + 0.15) {
+    const u = c01((p - THROW) / (CATCHT - THROW)), s = cam.proj(cam.view(CATCH[0], CATCH[1], 0));
+    ctx.save(); ctx.globalAlpha = p > CATCHT ? 1 - (p - CATCHT) / 0.15 : 0.9;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(s[0], s[1], lerp(R * 3.2, R * 1.4, u), 0, PI * 2); ctx.stroke();
+    ctx.setLineDash([]); ctx.strokeStyle = COL.orange; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(s[0], s[1], R * 0.9, 0, PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+  // separation line at the break
+  if (p > 2.3 && p < 3.3) {
+    const a = S('wr1'), b = S('cb24'); ctx.save(); ctx.globalAlpha = Math.min(c01((p - 2.3) / 0.15), c01((3.3 - p) / 0.2));
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1.6; ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.restore();
+  }
+  // trails
+  for (const id of ORDER) if (TRAIL.has(id)) trail(ctx, L, cam, P[id], p, id === 'wr1');
+  // engagement links
+  for (const [a, b, t0, t1, kind] of LINKS) {
+    if (p < t0 || p > t1) continue;
+    const A = S(a), B = S(b), dx = B[0] - A[0], dy = B[1] - A[1], d = Math.hypot(dx, dy) || 1;
+    const ux = dx / d, uy = dy / d, inset = Math.min(R * 0.55, d * 0.3);
+    const fade = Math.min(c01((p - t0) / 0.12), c01((t1 - p) / 0.15));
+    ctx.save(); ctx.globalAlpha = fade; ctx.lineCap = 'round';
+    const col = kind === 'dbl' ? COL.gold : kind === 'chip' ? COL.orangeHi : kind === 'tkl' ? '#FF3B4E' : kind === 'miss' ? '#FFFFFF' : 'rgba(255,255,255,.75)';
+    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = (L.phone ? 4.5 : 6.5);
+    ctx.beginPath(); ctx.moveTo(A[0] + ux * inset, A[1] + uy * inset); ctx.lineTo(B[0] - ux * inset, B[1] - uy * inset); ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = (L.phone ? 2.6 : 3.6) * (kind === 'dbl' ? 1.15 : 1);
+    if (kind === 'miss') ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(A[0] + ux * inset, A[1] + uy * inset); ctx.lineTo(B[0] - ux * inset, B[1] - uy * inset); ctx.stroke();
+    ctx.restore();
+  }
+  // double-team ring under the chips
+  if (p > 1.0 && p < 3.4) {
+    const s = S('de97'), al = Math.min(c01((p - 1.0) / 0.2), c01((3.4 - p) / 0.3));
+    ctx.save(); ctx.globalAlpha = al; ctx.strokeStyle = COL.gold; ctx.lineWidth = L.phone ? 1.8 : 2.4;
+    ctx.setLineDash([6, 5]); ctx.lineDashOffset = -p * 30;
+    ctx.beginPath(); ctx.arc(s[0], s[1], R * 2.75, 0, PI * 2); ctx.stroke(); ctx.restore();
+  }
+
+  // chips (carrier and matchup pair last)
+  const hold = holderAt(p);
+  const callout = p > 1.95 && p < 3.7;
+  const late = ['cb24', 'wr1'];
+  const ids = ORDER.filter(id => !late.includes(id)).concat(late);
+  for (const id of ids) {
+    const pl = P[id], s = S(id);
+    const opt = {};
+    if (id === hold && id === 'wr1') { opt.glow = 1; opt.ring = COL.gold; opt.scale = 1.12; }
+    else if (callout && id === 'wr1') { opt.ring = COL.orangeHi; opt.ringPulse = 0.5 + 0.5 * Math.sin(p * 9); }
+    if (callout && id === 'cb24') { opt.ring = COL.redHi; }
+    if (id === 'qb' && hold === 'qb') { opt.ring = 'rgba(243,181,63,.85)'; }
+    drawChip(ctx, L, cam, pl, p, s[0], s[1], opt);
+  }
+
+  // ball with shadow and lift
+  const b = ballAt(p), g = cam.proj(cam.view(b.x, b.y, 0));
+  const lift = b.z * cam.s * 0.55;
+  const air = p > THROW && p < CATCHT;
+  if (air) {
+    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.beginPath();
+    for (let t = Math.max(THROW, p - 0.3), i = 0; t <= p; t += 0.02, i++) {
+      const q = ballAt(t), s = cam.proj(cam.view(q.x, q.y, 0)), y = s[1] - q.z * cam.s * 0.55;
+      i ? ctx.lineTo(s[0], y) : ctx.moveTo(s[0], y);
+    }
+    ctx.stroke(); ctx.restore();
+  }
+  if (air || hold == null || p < 0.64) {
+    const sh = 1 / (1 + b.z * 0.25);
+    ctx.fillStyle = `rgba(0,0,0,${0.35 * sh})`; ctx.beginPath(); ctx.ellipse(g[0] + b.z * 1.5, g[1] + 1, 5 * sh * (L.phone ? .8 : 1), 3 * sh, 0, 0, PI * 2); ctx.fill();
+  }
+  {
+    const hf = hold ? cam.ang(facing(P[hold], p)) : 0;
+    const bx = g[0] + (!air && hold ? Math.cos(hf) * R * 0.55 : 0), by = g[1] - (air ? lift : 0) + (!air && hold ? Math.sin(hf) * R * 0.55 : 0);
+    let ang;
+    if (air) { const a = ballAt(p - 0.02), c = ballAt(p + 0.02), sa = cam.proj(cam.view(a.x, a.y, 0)), sc = cam.proj(cam.view(c.x, c.y, 0)); ang = Math.atan2(sc[1] - sa[1], sc[0] - sa[0]); }
+    else ang = hold ? cam.ang(facing(P[hold], p)) : cam.ang(0);
+    const sz = (L.phone ? 4.6 : 6) * (1 + (air ? b.z * 0.07 : 0));
+    ctx.save(); ctx.translate(bx, by); ctx.rotate(ang);
+    ctx.fillStyle = '#7A3E17'; ctx.strokeStyle = '#2B1405'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.ellipse(0, 0, sz, sz * 0.62, 0, 0, PI * 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-sz * 0.35, 0); ctx.lineTo(sz * 0.35, 0); ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── on-field cues ──
+  // play action
+  if (p > 0.62 && p < 1.45) {
+    const s = S('qb'), al = Math.min(c01((p - 0.62) / 0.12), c01((1.45 - p) / 0.2));
+    ctx.save(); ctx.globalAlpha = al;
+    tag(ctx, L, 'PLAY ACTION', s[0] + (L.phone ? 0 : -6), s[1] + (L.phone ? R * 2.8 : -R * 2.6), COL.orange, '#fff');
+    ctx.restore();
+  }
+  // double-team tag
+  if (p > 1.1 && p < 3.4) {
+    const s = S('de97'), al = Math.min(c01((p - 1.1) / 0.2), c01((3.4 - p) / 0.3));
+    ctx.save(); ctx.globalAlpha = al;
+    const ty = L.phone ? s[1] - R * 4.6 : s[1] - R * 4.0, tx = L.phone ? s[0] - 22 : s[0] - R * 1.4;
+    tag(ctx, L, 'DOUBLE TEAM · 77 + 64', tx, ty, 'rgba(9,13,20,.92)', COL.gold, 'center', COL.gold);
+    ctx.restore();
+  }
+  // chip spark
+  if (p > 1.6 && p < 2.0) {
+    const a = S('rb'), d = S('de96'), u = (p - 1.6) / 0.4;
+    ctx.save(); ctx.globalAlpha = 1 - u;
+    starburst(ctx, (a[0] + d[0]) / 2, (a[1] + d[1]) / 2, R * (0.9 + u * 0.8), R * 0.4, 6, COL.orangeHi, null, p * 3);
+    ctx.restore();
+    if (p < 1.95) { ctx.save(); ctx.globalAlpha = 1 - u; tag(ctx, L, 'CHIP', a[0] + (L.phone ? R * 3 : 0), a[1] + (L.phone ? 0 : R * 2.6), 'rgba(9,13,20,.9)', COL.orangeHi); ctx.restore(); }
+  }
+  // catch pop
+  if (p > CATCHT && p < CATCHT + 0.45) {
+    const s = S('wr1'), u = (p - CATCHT) / 0.45;
+    ctx.save(); ctx.globalAlpha = 1 - u; ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 * (1 - u) + 1;
+    ctx.beginPath(); ctx.arc(s[0], s[1], R * (1.3 + u * 2.4), 0, PI * 2); ctx.stroke(); ctx.restore();
+  }
+  // broken tackle burst
+  if (p > 4.12 && p < 4.9) {
+    const a = S('wr1'), c = S('cb24'), u = (p - 4.12) / 0.78, pop = eBack(c01(u / 0.3));
+    const x = (a[0] * 0.6 + c[0] * 0.4), y = (a[1] * 0.6 + c[1] * 0.4);
+    ctx.save(); ctx.globalAlpha = 1 - c01((u - 0.6) / 0.4);
+    starburst(ctx, x, y, R * 1.6 * pop, R * 0.8 * pop, 9, 'rgba(255,224,74,.92)', 'rgba(60,30,0,.6)', 0.3);
+    txt(ctx, 'BROKEN', x, y - 1, fnt(800, L.phone ? 9 : 11, FDISP, true), '#2B1405', 'center', 'middle');
+    ctx.restore();
+  }
+  // gang tackle tag
+  if (p > 5.05 && p < 6.4) {
+    const s = S('wr1'), al = c01((p - 5.05) / 0.15) * (st.cardHide ? 0 : 1);
+    ctx.save(); ctx.globalAlpha = al;
+    tag(ctx, L, 'GANG TACKLE · #32 + #54', s[0] + (L.phone ? 0 : R * 1), s[1] + (L.phone ? R * 3.4 : R * 3.4), 'rgba(9,13,20,.92)', '#FF6B7A', 'center', '#FF3B4E');
+    ctx.restore();
+  }
+  // gain marker at the spot
+  if (carpet > 0.02 && !st.noGainTag) {
+    const s = cam.proj(cam.view(L.phone ? SPOT + 4 : SPOT, L.phone ? 26.65 : 20.5, 0));
+    ctx.save(); ctx.globalAlpha = carpet;
+    const lab = '+17 · 1ST DOWN', f = fnt(800, L.phone ? 16 : 22, FDISP, true), w = tw(ctx, lab, f) + 22, h = L.phone ? 24 : 30;
+    const x0 = L.phone ? s[0] - w / 2 : s[0] + 8;
+    slab(ctx, x0, s[1] - h / 2, w, h, COL.orange, 0.22);
+    txt(ctx, lab, x0 + w / 2, s[1] + 1, f, '#fff', 'center', 'middle');
+    ctx.restore();
+  }
+
+  drawCallout(ctx, L, cam, p);
+
+  // broadcast vignette
+  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.42)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+}
+
+// Key-matchup callout pinned to the pair at the break.
+function drawCallout(ctx, L, cam, p) {
+  const t0 = 1.95, t1 = 3.7;
+  if (p < t0 || p > t1) return;
+  const a = P.wr1.at(p), b = P.cb24.at(p);
+  const sa = cam.proj(cam.view(a[0], a[1], 0)), sb = cam.proj(cam.view(b[0], b[1], 0));
+  const ax = (sa[0] + sb[0]) / 2, ay = (sa[1] + sb[1]) / 2;
+  const pop = eBack((p - t0) / 0.28), al = c01((t1 - p) / 0.25);
+  const sc = L.phone ? 0.72 : 1, w = 360, h = 66;
+  let cx = L.phone ? ax + 135 : ax + 190, cy = L.phone ? ay - 88 : ay + 44;
+  cx = clamp(cx, w * sc / 2 + 10, L.W - w * sc / 2 - 10);
+  cy = clamp(cy, h * sc / 2 + (L.phone ? 100 : 70), L.H - h * sc / 2 - 40);
+  ctx.save(); ctx.globalAlpha = al;
+  // leader line
+  ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(lerp(ax, cx, pop), lerp(ay, cy, pop)); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ax, ay, 3, 0, PI * 2); ctx.fill();
+  ctx.translate(cx, cy); ctx.scale(sc * pop, sc * pop);
+  // win badge (slides out under the pill after the break)
+  const won = c01((p - 2.4) / 0.25);
+  if (won > 0) {
+    const bw = 236, by = h / 2 - 6 + eOut(won) * 24;
+    slab(ctx, -bw / 2, by - 12, bw, 24, COL.win, 0.25);
+    txt(ctx, 'WON AT THE BREAK · 2.4 YD', 0, by + 0.5, fnt(800, 15, FDISP, true), '#06240F', 'center', 'middle', '0.4px');
+  }
+  rr(ctx, -w / 2, -h / 2, w, h, 6); ctx.fillStyle = 'rgba(9,13,20,.94)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 1; ctx.stroke();
+  txt(ctx, 'KEY MATCHUP', -w / 2 + 12, -h / 2 + 12, fnt(700, 11, FCOND), COL.orangeHi, 'left', 'middle', '1.2px');
+  txt(ctx, 'ROUTE RUNNING vs MAN COVERAGE', w / 2 - 12, -h / 2 + 12, fnt(600, 11, FCOND), COL.muted, 'right', 'middle', '0.6px');
+  const y = 11;
+  // left: #1
+  slab(ctx, -w / 2 + 8, y - 15, 58, 30, COL.orange, 0.2); slab(ctx, -w / 2 + 13, y - 15, 53, 30, COL.brown, 0.2);
+  txt(ctx, '#1', -w / 2 + 41, y + 1, fnt(800, 22, FDISP, true), '#fff', 'center', 'middle');
+  txt(ctx, 'WR', -w / 2 + 74, y - 8, fnt(600, 11, FCOND), COL.muted, 'left', 'middle', '0.6px');
+  txt(ctx, '94', -w / 2 + 73, y + 7, fnt(800, 26, FDISP, true), COL.gold, 'left', 'middle');
+  ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fillRect(-w / 2 + 104, y + 4, 30, 4);
+  ctx.fillStyle = COL.gold; ctx.fillRect(-w / 2 + 104, y + 4, 30 * 0.94, 4);
+  txt(ctx, 'ELITE', -w / 2 + 104, y - 5, fnt(700, 11, FCOND), COL.gold, 'left', 'middle', '0.6px');
+  txt(ctx, 'VS', 0, y + 1, fnt(700, 16, FDISP, true), COL.muted, 'center', 'middle');
+  // right: #24
+  slab(ctx, w / 2 - 66, y - 15, 58, 30, '#000', 0.2); slab(ctx, w / 2 - 66, y - 15, 53, 30, COL.red, 0.2);
+  txt(ctx, '#24', w / 2 - 40, y + 1, fnt(800, 22, FDISP, true), '#fff', 'center', 'middle');
+  txt(ctx, 'CB', w / 2 - 74, y - 8, fnt(600, 11, FCOND), COL.muted, 'right', 'middle', '0.6px');
+  txt(ctx, '78', w / 2 - 73, y + 7, fnt(800, 26, FDISP, true), COL.blue, 'right', 'middle');
+  ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fillRect(w / 2 - 134, y + 4, 30, 4);
+  ctx.fillStyle = COL.blue; ctx.fillRect(w / 2 - 134, y + 4, 30 * 0.78, 4);
+  txt(ctx, 'STARTER', w / 2 - 104, y - 5, fnt(700, 11, FCOND), COL.blue, 'right', 'middle', '0.6px');
+  ctx.restore();
+}
+
+// ───────────────────────── replay (2.5D) ─────────────────────────
+// Segments: [duration, p0, p1, label]
+const RSEG = [
+  [0.9, 0.4, 1.3, ''],
+  [1.5, 1.3, 1.3, 'TELESTRATOR'],
+  [2.1, 1.3, 3.9, ''],
+  [2.0, 3.9, 4.6, 'SLO-MO 0.35×'],
+  [1.2, 4.6, 5.8, ''],
+];
+const RD = RSEG.reduce((s, g) => s + g[0], 0);
+function replayP(r) {
+  let acc = 0;
+  for (let i = 0; i < RSEG.length; i++) {
+    const g = RSEG[i];
+    if (r < acc + g[0] || i === RSEG.length - 1) return { p: lerp(g[1], g[2], c01((r - acc) / g[0])), seg: i, label: g[3] };
+    acc += g[0];
+  }
+}
+const RTGT = track([[0.4,70.5,22.5],[1.3,71.5,21.0],[2.4,76,18.5],[3.2,80,19],[3.9,84.5,21.5],[4.6,86.8,23.5],[5.8,88.2,25.5]], 2);
+const RZOOM = track([[0,1],[0.9,1],[1.5,1.06],[2.4,1.06],[3.4,1],[4.5,1.12],[6.4,1.2],[RD,1.15]], 1);
+function replayCam(L, p, r) {
+  const t = RTGT(p), z = RZOOM(r)[0];
+  if (L.phone) {
+    const eye = [t[0] - 22, t[1] + 2.5, 14];
+    return perspCam(L, eye, [t[0] + 2, t[1] - 1, 0], 470 * z, L.W / 2, L.H * 0.5);
+  }
+  const eye = [t[0] - 15, t[1] + 32, 21];
+  return perspCam(L, eye, [t[0], t[1], 0], 880 * z, L.W / 2, L.H * 0.5);
+}
+const KIT = {
+  O: { jersey: '#F4F1EC', trim: COL.orange, num: COL.orange, pants: '#ECE6DC', helmet: COL.orange, stripe: COL.brown, sock: COL.brown },
+  D: { jersey: COL.red, trim: '#111', num: '#FFFFFF', pants: '#1A1C21', helmet: '#121316', stripe: COL.red, sock: '#0d0d0d' },
+};
+function drawFigure(ctx, cam, pl, p, sx, sy, k, ring) {
+  const kit = KIT[pl.side];
+  const a = pl.at(p - 0.05), b = pl.at(p + 0.05), spd = Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.1;
+  const sa = scr(cam, a[0], a[1]), sbb = scr(cam, b[0], b[1]);
+  const vx = sa && sbb ? sbb[0] - sa[0] : 0;
+  const run = Math.min(spd / 7, 1);
+  const pos = pl.at(p), phase = (pos[0] * 1.25 + pos[1] * 1.05) * 2.4;
+  const dir = vx >= 0 ? 1 : -1;
+  const fall = pl.down != null ? eInOut((p - pl.down) / 0.32) : 0;
+  ctx.save(); ctx.translate(sx, sy);
+  ctx.fillStyle = 'rgba(0,0,0,.34)'; ctx.beginPath(); ctx.ellipse(fall * dir * k * 0.8, 0, k * (0.62 + fall * 0.6), k * 0.2, 0, 0, PI * 2); ctx.fill();
+  if (ring) { ctx.strokeStyle = ring; ctx.lineWidth = Math.max(1.5, k * 0.09); ctx.beginPath(); ctx.ellipse(0, 0, k * 0.95, k * 0.34, 0, 0, PI * 2); ctx.stroke(); }
+  ctx.rotate(dir * (run * 0.16 + fall * 1.42));
+  const hipY = -0.98 * k, shY = -1.62 * k, sw = 0.28 * k * run * Math.sin(phase) * (1 - fall);
+  ctx.lineCap = 'round';
+  // legs
+  ctx.strokeStyle = kit.pants; ctx.lineWidth = 0.24 * k;
+  ctx.beginPath(); ctx.moveTo(-0.11 * k, hipY); ctx.lineTo(-0.11 * k + sw, -0.36 * k); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0.11 * k, hipY); ctx.lineTo(0.11 * k - sw, -0.36 * k); ctx.stroke();
+  ctx.strokeStyle = kit.sock; ctx.lineWidth = 0.2 * k;
+  ctx.beginPath(); ctx.moveTo(-0.11 * k + sw, -0.36 * k); ctx.lineTo(-0.11 * k + sw * 1.15, -0.05 * k); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0.11 * k - sw, -0.36 * k); ctx.lineTo(0.11 * k - sw * 1.15, -0.05 * k); ctx.stroke();
+  // arms
+  ctx.strokeStyle = kit.jersey; ctx.lineWidth = 0.17 * k;
+  ctx.beginPath(); ctx.moveTo(-0.38 * k, shY + 0.1 * k); ctx.lineTo(-0.45 * k - sw * 0.6, hipY + 0.05 * k); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0.38 * k, shY + 0.1 * k); ctx.lineTo(0.45 * k + sw * 0.6, hipY + 0.05 * k); ctx.stroke();
+  // torso with shoulder pads
+  ctx.beginPath(); ctx.moveTo(-0.46 * k, shY); ctx.quadraticCurveTo(0, shY - 0.14 * k, 0.46 * k, shY);
+  ctx.lineTo(0.27 * k, hipY); ctx.lineTo(-0.27 * k, hipY); ctx.closePath();
+  ctx.fillStyle = kit.jersey; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = Math.max(0.8, k * 0.04); ctx.stroke();
+  ctx.fillStyle = kit.trim; ctx.fillRect(-0.27 * k, hipY - 0.07 * k, 0.54 * k, 0.07 * k);
+  if (k > 7) txt(ctx, String(pl.n), 0, (shY + hipY) / 2 + 0.03 * k, fnt(800, Math.round(0.44 * k), FDISP, true), kit.num, 'center', 'middle');
+  // helmet
+  ctx.fillStyle = kit.helmet; ctx.beginPath(); ctx.arc(0, -1.86 * k, 0.21 * k, 0, PI * 2); ctx.fill();
+  ctx.strokeStyle = kit.stripe; ctx.lineWidth = Math.max(1, 0.05 * k); ctx.beginPath(); ctx.moveTo(0, -2.06 * k); ctx.lineTo(0, -1.66 * k); ctx.stroke();
+  const fa = cam.persp ? Math.cos(facing(pl, p)) : 0;
+  ctx.strokeStyle = '#B9BEC6'; ctx.lineWidth = Math.max(1, 0.05 * k);
+  ctx.beginPath(); ctx.moveTo(0.12 * k * dir + fa * 0.02 * k, -1.88 * k); ctx.lineTo(0.24 * k * dir, -1.78 * k); ctx.stroke();
+  ctx.restore();
+}
+function wob(pts, seed, amp) { return pts.map((q, i) => [q[0] + amp * Math.sin(i * 1.7 + seed), q[1] + amp * Math.cos(i * 2.3 + seed * 1.3)]); }
+function strokeProgressive(ctx, sp, frac) {
+  if (sp.length < 2 || frac <= 0) return;
+  let total = 0; const seglen = [];
+  for (let i = 1; i < sp.length; i++) { const d = Math.hypot(sp[i][0] - sp[i - 1][0], sp[i][1] - sp[i - 1][1]); seglen.push(d); total += d; }
+  let rem = total * c01(frac);
+  ctx.beginPath(); ctx.moveTo(sp[0][0], sp[0][1]);
+  let end = sp[0];
+  for (let i = 1; i < sp.length && rem > 0; i++) {
+    const d = seglen[i - 1];
+    if (rem >= d) { ctx.lineTo(sp[i][0], sp[i][1]); end = sp[i]; rem -= d; }
+    else { const u = rem / d; end = [lerp(sp[i - 1][0], sp[i][0], u), lerp(sp[i - 1][1], sp[i][1], u)]; ctx.lineTo(end[0], end[1]); rem = 0; }
+  }
+  return end;
+}
+function teleStroke(ctx, sp, frac, width, dash) {
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (dash) ctx.setLineDash(dash);
+  ctx.strokeStyle = 'rgba(30,20,0,.45)'; ctx.lineWidth = width + 4; strokeProgressive(ctx, sp, frac); ctx.stroke();
+  ctx.shadowColor = 'rgba(255,224,74,.8)'; ctx.shadowBlur = 8;
+  ctx.strokeStyle = COL.tele; ctx.lineWidth = width; const end = strokeProgressive(ctx, sp, frac); ctx.stroke();
+  ctx.restore();
+  return end;
+}
+function arrowHead(ctx, a, b, size) {
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+  ctx.save(); ctx.fillStyle = COL.tele; ctx.strokeStyle = 'rgba(30,20,0,.5)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(b[0] + Math.cos(ang) * size, b[1] + Math.sin(ang) * size);
+  ctx.lineTo(b[0] + Math.cos(ang + 2.5) * size, b[1] + Math.sin(ang + 2.5) * size);
+  ctx.lineTo(b[0] + Math.cos(ang - 2.5) * size, b[1] + Math.sin(ang - 2.5) * size);
+  ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.restore();
+}
+function teleLabel(ctx, L, s, x, y, al = 'left', size) {
+  const f = fnt(800, size || (L.phone ? 17 : 24), FDISP, true);
+  ctx.save(); ctx.font = f; ctx.textAlign = al; ctx.textBaseline = 'middle'; if (HAS_LS) ctx.letterSpacing = '0.5px';
+  ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(20,14,0,.75)'; ctx.lineWidth = 5; ctx.strokeText(s, x, y);
+  ctx.fillStyle = COL.tele; ctx.fillText(s, x, y); ctx.restore();
+}
+const groundPts = (cam, pts, z = 0) => pts.map(q => scr(cam, q[0], q[1], z)).filter(Boolean);
+const sampleTrack = (pl, t0, t1, dt = 0.05) => { const o = []; for (let t = t0; t <= t1 + 1e-6; t += dt) o.push(pl.at(t)); return o; };
+const ROUTE = sampleTrack(P.wr1, 0.5, 3.9), YAC = sampleTrack(P.wr1, 3.9, 5.45);
+
+function drawReplay(ctx, L, r) {
+  const W = L.W, H = L.H, { p, label } = replayP(r), cam = replayCam(L, p, r);
+  // stadium backdrop
+  const bg = ctx.createLinearGradient(0, 0, 0, H * 0.6);
+  bg.addColorStop(0, '#05070C'); bg.addColorStop(1, '#141B26');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = ctx.createPattern(crowdTex, 'repeat'); ctx.fillRect(0, 0, W, H * 0.7); ctx.restore();
+  drawField(ctx, cam, L, { los: LOS, fd: FD, carpet: p > DOWNT ? eOut((p - DOWNT) / 0.4) * 0.8 : 0 });
+  // walls with LED ribbon, far ones first
+  const walls = [
+    { c: [60, -6], pts: [[-30, -6], [150, -6]], ex: [1, 0, 0] },
+    { c: [126, 26], pts: [[126, -6], [126, 59.3]], ex: [0, 1, 0] },
+    { c: [60, 59.3], pts: [[150, 59.3], [-30, 59.3]], ex: [-1, 0, 0] },
+  ].map(wl => ({ ...wl, d: cam.view(wl.c[0], wl.c[1], 0)[2] })).sort((a, b) => b.d - a.d);
+  for (const wl of walls) {
+    const [A, B] = wl.pts;
+    poly(ctx, cam, [[A[0], A[1], 0], [B[0], B[1], 0], [B[0], B[1], 3.6], [A[0], A[1], 3.6]], '#0B111B');
+    poly(ctx, cam, [[A[0], A[1], 0.9], [B[0], B[1], 0.9], [B[0], B[1], 2.2], [A[0], A[1], 2.2]], COL.brown);
+    poly(ctx, cam, [[A[0], A[1], 0.9], [B[0], B[1], 0.9], [B[0], B[1], 1.02], [A[0], A[1], 1.02]], COL.orange);
+    const len = Math.hypot(B[0] - A[0], B[1] - A[1]);
+    for (let s = 10; s < len; s += 26) {
+      const u = s / len, o = [lerp(A[0], B[0], u) + wl.ex[0] * 0, lerp(A[1], B[1], u), 1.55];
+      const dx = (B[0] - A[0]) / len, dy = (B[1] - A[1]) / len;
+      worldText(ctx, cam, o, [dx, dy, 0], [0, 0, -1], 0.75, 'GRIDIRON DYNASTY', 'rgba(255,116,72,.95)', fnt(800, 100, FDISP, true));
+    }
+  }
+  ctx.save(); ctx.globalAlpha = 0.07; ctx.fillStyle = ctx.createPattern(grassTex, 'repeat'); ctx.fillRect(0, 0, W, H); ctx.restore();
+
+  const lw = L.phone ? 3.2 : 4.5;
+  // ── telestrator: ground layer ──
+  // #1 route: drawn during the freeze, then traced solid as he runs it
+  if (r > 1.25) {
+    const sp = groundPts(cam, wob(ROUTE, 1, 0.08), 0.02);
+    const draw = eInOut((r - 1.25) / 0.75);
+    const al = 1 - c01((r - 6.3) / 0.4);
+    ctx.save(); ctx.globalAlpha = al;
+    const end = teleStroke(ctx, sp, draw, lw * 0.75, [lw * 2.2, lw * 1.6]);
+    if (draw >= 1 && sp.length > 2) arrowHead(ctx, sp[sp.length - 3], sp[sp.length - 1], lw * 3.2);
+    else if (end && sp.length > 1) { ctx.fillStyle = COL.tele; ctx.beginPath(); ctx.arc(end[0], end[1], lw, 0, PI * 2); ctx.fill(); }
+    // solid trace behind him
+    if (p > 0.5) { const run = c01((Math.min(p, 3.9) - 0.5) / 3.4); teleStroke(ctx, sp, run, lw, null); }
+    ctx.restore();
+  }
+  // YAC arrow
+  if (p > 4.62) {
+    const sp = groundPts(cam, wob(YAC, 4, 0.06), 0.02), fr = eOut((p - 4.62) / 0.7);
+    teleStroke(ctx, sp, fr, lw, null);
+    if (fr > 0.98 && sp.length > 2) arrowHead(ctx, sp[sp.length - 3], sp[sp.length - 1], lw * 3.2);
+  }
+
+  // ── figures, ball, sorted far → near ──
+  const items = [];
+  const hold = holderAt(p);
+  for (const id of ORDER) {
+    const pl = P[id], w = pl.at(p), v = cam.view(w[0], w[1], 0);
+    if (v[2] < cam.near + 1) continue;
+    items.push({ d: v[2], fn: () => {
+      const s = cam.proj(v), k = cam.focal / v[2];
+      let ring = null;
+      if (id === 'wr1' && p > 1.0) ring = hold === 'wr1' ? COL.gold : COL.orangeHi;
+      else if (id === 'cb24' && p > 1.0 && p < 4.4) ring = COL.redHi;
+      else if (id === 'de97' && r > 0.95 && r < 4.3) ring = COL.gold;
+      drawFigure(ctx, cam, pl, p, s[0], s[1], k, ring);
+    } });
+  }
+  const b = ballAt(p), bv = cam.view(b.x, b.y, b.z);
+  if (bv[2] > cam.near + 1) items.push({ d: cam.view(b.x, b.y, 0)[2] - 0.6, fn: () => {
+    const g = scr(cam, b.x, b.y, 0), s = cam.proj(bv), k = cam.focal / bv[2];
+    if (p > THROW && p < CATCHT) {
+      // shadow + tracer
+      if (g) { ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(g[0], g[1], k * 0.25, k * 0.09, 0, 0, PI * 2); ctx.fill(); }
+      ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = Math.max(1.5, k * 0.06); ctx.lineCap = 'round'; ctx.beginPath();
+      let first = true;
+      for (let t = THROW; t <= p; t += 0.02) { const q = ballAt(t), ss = scr(cam, q.x, q.y, q.z); if (!ss) continue; first ? ctx.moveTo(ss[0], ss[1]) : ctx.lineTo(ss[0], ss[1]); first = false; }
+      ctx.lineTo(s[0], s[1]); ctx.stroke(); ctx.restore();
+    }
+    const sz = Math.max(3, k * 0.2);
+    ctx.save(); ctx.translate(s[0], s[1]); ctx.rotate(-0.4);
+    ctx.fillStyle = '#7A3E17'; ctx.strokeStyle = '#2B1405'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.ellipse(0, 0, sz, sz * 0.6, 0, 0, PI * 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(-sz * 0.3, 0); ctx.lineTo(sz * 0.3, 0); ctx.stroke(); ctx.restore();
+  } });
+  items.sort((a, c) => c.d - a.d).forEach(it => it.fn());
+
+  // ── telestrator: overlay layer ──
+  // double-team circle
+  if (r > 0.95 && r < 4.6) {
+    const c = P.de97.at(1.3), pts = [];
+    for (let a = -2.2; a <= -2.2 + PI * 2.12; a += 0.12) pts.push([c[0] - 0.8 + Math.cos(a) * 2.1, c[1] + Math.sin(a) * 1.9]);
+    const sp = groundPts(cam, wob(pts, 3, 0.07), 1.0);
+    ctx.save(); ctx.globalAlpha = 1 - c01((r - 4.2) / 0.4);
+    teleStroke(ctx, sp, eInOut((r - 0.95) / 0.45), lw, null);
+    if (r > 1.35) {
+      const top = scr(cam, c[0] - 1, c[1] - 2.6, 2.4);
+      if (top) teleLabel(ctx, L, 'DOUBLE TEAM', top[0] + (L.phone ? -6 : -10), top[1] - (L.phone ? 8 : 12), L.phone ? 'right' : 'center');
+    }
+    ctx.restore();
+  }
+  // break point
+  if (r > 1.9 && r < 6.3) {
+    const bp = P.wr1.at(2.05), s = scr(cam, bp[0], bp[1], 0.05);
+    if (s) {
+      const u = eOut((r - 1.9) / 0.3), sz = (L.phone ? 7 : 10) * u;
+      ctx.save(); ctx.globalAlpha = 1 - c01((r - 5.9) / 0.4); ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(30,20,0,.5)'; ctx.lineWidth = lw + 3;
+      ctx.beginPath(); ctx.moveTo(s[0] - sz, s[1] - sz * 0.6); ctx.lineTo(s[0] + sz, s[1] + sz * 0.6); ctx.moveTo(s[0] + sz, s[1] - sz * 0.6); ctx.lineTo(s[0] - sz, s[1] + sz * 0.6); ctx.stroke();
+      ctx.strokeStyle = COL.tele; ctx.lineWidth = lw; ctx.stroke();
+      teleLabel(ctx, L, 'BREAK', s[0] + (L.phone ? -10 : 0), s[1] - (L.phone ? 18 : 26), L.phone ? 'right' : 'center');
+      ctx.restore();
+    }
+  }
+  // separation bracket
+  if (p > 2.42 && r < 5.0) {
+    const w = P.wr1.at(2.45), c = P.cb24.at(2.45), A = scr(cam, w[0], w[1], 1.2), B = scr(cam, c[0], c[1], 1.2);
+    if (A && B) {
+      ctx.save(); ctx.globalAlpha = Math.min(c01((p - 2.42) / 0.2), 1 - c01((r - 4.6) / 0.4));
+      teleStroke(ctx, [A, B], 1, lw * 0.8, null);
+      arrowHead(ctx, B, A, lw * 2.4); arrowHead(ctx, A, B, lw * 2.4);
+      teleLabel(ctx, L, '2.4 YD', (A[0] + B[0]) / 2 + (L.phone ? 8 : 14), (A[1] + B[1]) / 2 - (L.phone ? 14 : 18), 'left');
+      ctx.restore();
+    }
+  }
+  // catch spot
+  if (p >= CATCHT && r < 7.2) {
+    const s = scr(cam, CATCH[0], CATCH[1], 0.05);
+    if (s) {
+      const k = cam.kAt(CATCH[0], CATCH[1]), u = eOut((p - CATCHT) / 0.25);
+      ctx.save(); ctx.globalAlpha = 1 - c01((r - 6.8) / 0.4);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(s[0], s[1], k * 1.2 * u, k * 0.45 * u, 0, 0, PI * 2); ctx.stroke();
+      teleLabel(ctx, L, 'CATCH +14', s[0] - k * 1.4, s[1] + (L.phone ? 16 : 22), 'right', L.phone ? 15 : 20);
+      ctx.restore();
+    }
+  }
+  // broken-tackle starburst
+  if (p >= 4.12) {
+    const w = P.wr1.at(4.2), s = scr(cam, w[0], w[1], 1.1);
+    if (s) {
+      const k = cam.kAt(w[0], w[1]), pop = eBack((p - 4.12) / 0.14);
+      ctx.save(); ctx.globalAlpha = 0.95 * (1 - c01((r - 7.0) / 0.4));
+      starburst(ctx, s[0], s[1], k * 1.25 * pop, k * 0.62 * pop, 11, 'rgba(255,224,74,.28)', COL.tele, 0.2);
+      teleLabel(ctx, L, 'BROKEN TACKLE', s[0] + (L.phone ? -k * 0.4 : -k * 1.3), s[1] - k * 1.6 * pop, L.phone ? 'right' : 'right');
+      ctx.restore();
+    }
+  }
+  // gang tackle
+  if (p > 5.0) {
+    const w = P.wr1.at(5.2), s = scr(cam, w[0] + 0.3, w[1] + 0.2, 0.05);
+    if (s) {
+      const k = cam.kAt(w[0], w[1]), u = eInOut((p - 5.0) / 0.4);
+      const pts = []; for (let a = 0; a <= PI * 2.1 * u; a += 0.15) pts.push([s[0] + Math.cos(a - 1) * k * 2.0, s[1] + Math.sin(a - 1) * k * 0.8]);
+      teleStroke(ctx, pts, 1, lw, null);
+      if (u > 0.6) teleLabel(ctx, L, 'GANG TACKLE · ATL 21', s[0] + k * 2.2, s[1] - k * 0.9, 'left', L.phone ? 15 : 22);
+    }
+  }
+
+  // cinematic chrome: letterbox, vignette, REPLAY bug
+  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.72);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.5)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  if (!L.phone) { ctx.fillStyle = 'rgba(0,0,0,.82)'; ctx.fillRect(0, 0, W, 34); ctx.fillRect(0, H - 34, W, 34); }
+  drawReplayBug(ctx, L, r, label);
+}
+function drawReplayBug(ctx, L, r, label) {
+  const ph = L.phone, h = ph ? 30 : 40, w = ph ? 112 : 150;
+  const x = ph ? L.W - 12 - w : L.W - 20 - w, y = ph ? 100 : 18;
+  slab(ctx, x, y, w, h, COL.orange); slab(ctx, x + 6, y, w - 6, h, COL.brown);
+  const blink = (Math.sin(r * 6) + 1) / 2;
+  ctx.fillStyle = `rgba(255,60,0,${0.5 + 0.5 * blink})`; ctx.beginPath(); ctx.arc(x + (ph ? 22 : 28), y + h / 2, ph ? 4 : 5, 0, PI * 2); ctx.fill();
+  txt(ctx, 'REPLAY', x + (ph ? 32 : 40), y + h / 2 + 1, fnt(800, ph ? 19 : 24, FDISP, true), '#fff', 'left', 'middle', '0.5px');
+  if (label) {
+    const f = fnt(700, ph ? 11 : 12, FCOND), lw2 = tw(ctx, label, f, '1px') + 20;
+    slab(ctx, x + w - lw2, y + h + 4, lw2, ph ? 18 : 22, 'rgba(9,13,20,.9)', 0.3);
+    txt(ctx, label, x + w - lw2 / 2, y + h + 4 + (ph ? 9 : 11), f, COL.tele, 'center', 'middle', '1px');
+  }
+}
+
+// ───────────────────────── broadcast HUD ─────────────────────────
+function drawScorebug(ctx, L, dd, spot) {
+  const ph = L.phone, h = ph ? 34 : 40, y = ph ? 58 : 18;
+  let x = ph ? 12 : 20;
+  const tW = ph ? 74 : 104;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4;
+  slab(ctx, x, y, tW, h, COL.orange); ctx.shadowColor = 'transparent';
+  slab(ctx, x + 6, y, tW - 6, h, COL.brown);
+  txt(ctx, 'CLE', x + (ph ? 15 : 18), y + h / 2 + 1, fnt(800, ph ? 19 : 23, FDISP, true), '#fff', 'left', 'middle', '0.5px');
+  // possession football
+  ctx.fillStyle = COL.orangeHi; ctx.beginPath(); ctx.ellipse(x + (ph ? 48 : 60), y + h / 2, ph ? 3.5 : 4.5, ph ? 2.3 : 2.8, -0.5, 0, PI * 2); ctx.fill();
+  txt(ctx, '7', x + tW - (ph ? 12 : 16), y + h / 2 + 1, fnt(800, ph ? 24 : 30, FDISP, true), '#fff', 'right', 'middle');
+  x += tW + 2;
+  slab(ctx, x, y, tW, h, '#000'); slab(ctx, x + 6, y, tW - 6, h, COL.red);
+  txt(ctx, 'ATL', x + (ph ? 15 : 18), y + h / 2 + 1, fnt(800, ph ? 19 : 23, FDISP, true), '#fff', 'left', 'middle', '0.5px');
+  txt(ctx, '10', x + tW - (ph ? 12 : 16), y + h / 2 + 1, fnt(800, ph ? 24 : 30, FDISP, true), '#fff', 'right', 'middle');
+  x += tW + 2;
+  const iw = ph ? L.W - 12 - x : 246;
+  slab(ctx, x, y, iw, h, 'rgba(11,16,26,.94)');
+  const q = 'Q2 7:42', fq = fnt(700, ph ? 17 : 21, FDISP, true);
+  txt(ctx, q, x + (ph ? 12 : 16), y + h / 2 + 1, fq, '#fff', 'left', 'middle', '0.4px');
+  let cx = x + (ph ? 12 : 16) + tw(ctx, q, fq, '0.4px') + (ph ? 8 : 12);
+  const fd = fnt(800, ph ? 15 : 18, FDISP, true), dw = tw(ctx, dd, fd) + (ph ? 12 : 16), dh = h - (ph ? 12 : 14);
+  slab(ctx, cx, y + (h - dh) / 2, dw, dh, dd.startsWith('1ST') ? COL.win : COL.gold, 0.25);
+  txt(ctx, dd, cx + dw / 2, y + h / 2 + 1, fd, '#0B1220', 'center', 'middle');
+  cx += dw + (ph ? 6 : 10);
+  txt(ctx, spot, cx, y + h / 2 + 1, fnt(700, ph ? 14 : 17, FDISP, true), COL.ink2, 'left', 'middle', '0.4px');
+  ctx.restore();
+}
+function drawDefRead(ctx, L, p) {
+  if (p > 1.4) return;
+  const al = Math.min(c01(p / 0.15), c01((1.4 - p) / 0.25));
+  ctx.save(); ctx.globalAlpha = al;
+  const ph = L.phone, h = ph ? 26 : 40, s1 = 'NICKEL · COVER 1 MAN', s2 = 'S #32 DEEP';
+  const f1 = fnt(800, ph ? 15 : 20, FDISP, true), f2 = fnt(700, ph ? 11 : 12, FCOND);
+  const w = tw(ctx, s1, f1) + tw(ctx, s2, f2, '1px') + (ph ? 36 : 48);
+  const x = ph ? L.W - 12 - w : L.W - 20 - w, y = ph ? 100 : 18;
+  slab(ctx, x, y, w, h, 'rgba(11,16,26,.94)'); slab(ctx, x, y, 8 + h * 0.18, h, COL.red);
+  txt(ctx, s1, x + (ph ? 16 : 22), y + h / 2 + 1, f1, '#fff', 'left', 'middle');
+  txt(ctx, s2, x + w - (ph ? 12 : 16), y + h / 2 + 1, f2, COL.muted, 'right', 'middle', '1px');
+  ctx.restore();
+}
+function drawCompact(ctx, L, ct) {
+  if (ct < 0 || ct > 1.1) return;
+  const ph = L.phone, u = eWipe(ct / 0.35), al = 1 - c01((ct - 0.85) / 0.25);
+  const h = ph ? 34 : 46, s1 = 'COMPLETE', s2 = '+17 · FIRST DOWN';
+  const f1 = fnt(800, ph ? 20 : 26, FDISP, true), f2 = fnt(800, ph ? 20 : 26, FDISP, true);
+  const w1 = tw(ctx, s1, f1) + (ph ? 26 : 34), w2 = tw(ctx, s2, f2) + (ph ? 26 : 34), w = w1 + w2;
+  const x = (L.W - w) / 2, y = ph ? L.H - 120 : L.H - 92;
+  ctx.save(); ctx.globalAlpha = al; ctx.beginPath(); ctx.rect(x - 20, y - 10, (w + 40) * u, h + 20); ctx.clip();
+  slab(ctx, x, y, w1 + 10, h, COL.orange); slab(ctx, x + w1, y, w2, h, 'rgba(11,16,26,.95)');
+  txt(ctx, s1, x + w1 / 2 + 2, y + h / 2 + 1, f1, '#fff', 'center', 'middle', '0.5px');
+  txt(ctx, s2, x + w1 + w2 / 2, y + h / 2 + 1, f2, '#fff', 'center', 'middle', '0.5px');
+  ctx.restore();
+}
+const STATS = [['QB #5', '1/1 · 17 YDS'], ['WR #1', '1 REC · 17 YDS'], ['YAC', '3'], ['BROKEN TKL', '1']];
+function drawCard(ctx, L, ct) {
+  if (ct < 0) return;
+  const ph = L.phone, u = eWipe(ct / 0.5), u2 = eOut((ct - 0.25) / 0.4), wpU = eInOut((ct - 0.55) / 0.9);
+  const wp = Math.round(lerp(41, 47, wpU));
+  ctx.save();
+  if (!ph) {
+    const x = 24, h1 = 60, h2 = 50, y = L.H - 24 - h1 - h2, w = 664;
+    ctx.beginPath(); ctx.rect(0, y - 20, x + (w + 300) * u, h1 + h2 + 40); ctx.clip();
+    ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 8;
+    ctx.fillStyle = COL.surface; ctx.fillRect(x, y, w, h1); ctx.shadowColor = 'transparent';
+    slab(ctx, x, y, 132, h1, COL.orange, 0.18); slab(ctx, x + 8, y, 124, h1, COL.brown, 0.18);
+    txt(ctx, 'CLE', x + 30, y + h1 / 2 + 1, fnt(800, 34, FDISP, true), '#fff', 'left', 'middle', '0.5px');
+    txt(ctx, 'COMPLETE TO #1', x + 150, y + 24, fnt(800, 30, FDISP, true), '#fff', 'left', 'middle', '0.3px');
+    txt(ctx, 'DEEP CROSS · BEAT MAN COVERAGE · FIRST DOWN', x + 151, y + 46, fnt(700, 12, FCOND), COL.orangeHi, 'left', 'middle', '1px');
+    slab(ctx, x + w - 128, y, 128, h1, COL.orange, 0.18);
+    txt(ctx, '+17', x + w - 62, y + h1 / 2 + 2, fnt(800, 44, FDISP, true), '#fff', 'center', 'middle');
+    // stats row
+    ctx.globalAlpha = u2;
+    ctx.fillStyle = COL.surface2; ctx.fillRect(x, y + h1, w, h2);
+    ctx.fillStyle = COL.orange; ctx.fillRect(x, y + h1, w * u2, 2);
+    let sx = x + 20;
+    STATS.forEach(([lab, val], i) => {
+      if (i) { ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fillRect(sx - 14, y + h1 + 12, 1, h2 - 24); }
+      txt(ctx, lab, sx, y + h1 + 16, fnt(600, 12, FCOND), COL.muted, 'left', 'middle', '1px');
+      txt(ctx, val, sx, y + h1 + 34, fnt(800, 20, FDISP, true), '#fff', 'left', 'middle', '0.3px');
+      sx += Math.max(tw(ctx, val, fnt(800, 20, FDISP, true), '0.3px'), tw(ctx, lab, fnt(600, 12, FCOND), '1px')) + 30;
+    });
+    // win-probability panel
+    const px = x + w + 12, pw = 268, phh = h1 + h2;
+    ctx.globalAlpha = eOut((ct - 0.35) / 0.4);
+    ctx.fillStyle = COL.surface; ctx.fillRect(px, y, pw, phh);
+    ctx.fillStyle = COL.orange; ctx.fillRect(px, y, 4, phh);
+    txt(ctx, 'CLE WIN PROBABILITY', px + 18, y + 18, fnt(700, 12, FCOND), COL.muted, 'left', 'middle', '1px');
+    txt(ctx, wp + '%', px + 18, y + 52, fnt(800, 46, FDISP, true), '#fff', 'left', 'middle');
+    const dlt = '▲ ' + (wp - 41);
+    if (wp > 41) { slab(ctx, px + 108, y + 40, 62, 26, COL.win, 0.25); txt(ctx, dlt, px + 139, y + 54, fnt(800, 18, FDISP, true), '#06240F', 'center', 'middle'); }
+    txt(ctx, 'WAS 41%', px + pw - 18, y + 53, fnt(600, 12, FCOND), COL.muted, 'right', 'middle', '1px');
+    const bx = px + 18, bw = pw - 36, by = y + 86;
+    ctx.fillStyle = COL.red; ctx.fillRect(bx, by, bw, 8);
+    ctx.fillStyle = COL.orange; ctx.fillRect(bx, by, bw * wp / 100, 8);
+    ctx.fillStyle = '#fff'; ctx.fillRect(bx + bw * 0.41 - 1, by - 3, 2, 14);
+    txt(ctx, 'CLE', bx, by + 18, fnt(700, 11, FCOND), COL.orangeHi, 'left', 'middle', '1px');
+    txt(ctx, 'ATL', bx + bw, by + 18, fnt(700, 11, FCOND), '#FF6B7A', 'right', 'middle', '1px');
+  } else {
+    const x = 12, w = L.W - 24, h1 = 52, h2 = 62, h3 = 50, y = L.H - 34 - h1 - h2 - h3;
+    ctx.beginPath(); ctx.rect(0, y - 20, (L.W + 40) * u, h1 + h2 + h3 + 40); ctx.clip();
+    ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+    ctx.fillStyle = COL.surface; ctx.fillRect(x, y, w, h1); ctx.shadowColor = 'transparent';
+    slab(ctx, x, y, 70, h1, COL.orange, 0.18); slab(ctx, x + 6, y, 64, h1, COL.brown, 0.18);
+    txt(ctx, 'CLE', x + 18, y + h1 / 2 + 1, fnt(800, 24, FDISP, true), '#fff', 'left', 'middle');
+    txt(ctx, 'COMPLETE TO #1', x + 82, y + 20, fnt(800, 22, FDISP, true), '#fff', 'left', 'middle');
+    txt(ctx, 'DEEP CROSS · FIRST DOWN', x + 83, y + 39, fnt(700, 11, FCOND), COL.orangeHi, 'left', 'middle', '0.8px');
+    slab(ctx, x + w - 76, y, 76, h1, COL.orange, 0.18);
+    txt(ctx, '+17', x + w - 37, y + h1 / 2 + 2, fnt(800, 32, FDISP, true), '#fff', 'center', 'middle');
+    ctx.globalAlpha = u2;
+    ctx.fillStyle = COL.surface2; ctx.fillRect(x, y + h1, w, h2);
+    ctx.fillStyle = COL.orange; ctx.fillRect(x, y + h1, w * u2, 2);
+    STATS.forEach(([lab, val], i) => {
+      const cx = x + 14 + (i % 2) * (w / 2), cy = y + h1 + 8 + Math.floor(i / 2) * 27;
+      txt(ctx, lab, cx, cy + 6, fnt(600, 11, FCOND), COL.muted, 'left', 'middle', '0.8px');
+      txt(ctx, val, cx + tw(ctx, lab, fnt(600, 11, FCOND), '0.8px') + 8, cy + 7, fnt(800, 17, FDISP, true), '#fff', 'left', 'middle');
+    });
+    ctx.globalAlpha = eOut((ct - 0.35) / 0.4);
+    const y3 = y + h1 + h2;
+    ctx.fillStyle = COL.surface; ctx.fillRect(x, y3, w, h3);
+    ctx.fillStyle = COL.orange; ctx.fillRect(x, y3, 3, h3);
+    txt(ctx, 'CLE WIN PROB', x + 14, y3 + 15, fnt(700, 11, FCOND), COL.muted, 'left', 'middle', '0.8px');
+    txt(ctx, wp + '%', x + 14, y3 + 35, fnt(800, 26, FDISP, true), '#fff', 'left', 'middle');
+    if (wp > 41) { slab(ctx, x + 66, y3 + 24, 44, 21, COL.win, 0.25); txt(ctx, '▲ ' + (wp - 41), x + 88, y3 + 35, fnt(800, 15, FDISP, true), '#06240F', 'center', 'middle'); }
+    const bx = x + 124, bw = w - 138, by = y3 + 22;
+    ctx.fillStyle = COL.red; ctx.fillRect(bx, by, bw, 7);
+    ctx.fillStyle = COL.orange; ctx.fillRect(bx, by, bw * wp / 100, 7);
+    ctx.fillStyle = '#fff'; ctx.fillRect(bx + bw * 0.41 - 1, by - 3, 2, 13);
+    txt(ctx, 'WAS 41%', bx + bw, by + 18, fnt(600, 11, FCOND), COL.muted, 'right', 'middle', '0.8px');
+  }
+  ctx.restore();
+}
+function drawWipe(ctx, L, u) {
+  if (u <= 0 || u >= 1) return;
+  const W = L.W, H = L.H, sk = H * 0.35;
+  const cols = [COL.orange, COL.brown, '#0A0F18'];
+  cols.forEach((c, i) => {
+    const lu = eInOut(c01((u - (2 - i) * 0.05) / 0.86));
+    const left = lerp(-1.75 * W, 1.15 * W, lu);
+    ctx.beginPath(); ctx.moveTo(left + sk, 0); ctx.lineTo(left + 1.6 * W + sk, 0); ctx.lineTo(left + 1.6 * W, H); ctx.lineTo(left, H); ctx.closePath();
+    ctx.fillStyle = c; ctx.fill();
+  });
+  const tu = c01(1 - Math.abs(u - 0.5) / 0.16);
+  if (tu > 0) {
+    ctx.save(); ctx.globalAlpha = tu;
+    const ph = L.phone;
+    txt(ctx, 'GRIDIRON DYNASTY', W / 2, H / 2 - (ph ? 30 : 40), fnt(700, ph ? 12 : 14, FCOND), COL.orangeHi, 'center', 'middle', '3px');
+    txt(ctx, 'INSTANT REPLAY', W / 2, H / 2 + 4, fnt(800, ph ? 44 : 84, FDISP, true), '#fff', 'center', 'middle', '1px');
+    ctx.fillStyle = COL.orange; ctx.fillRect(W / 2 - (ph ? 50 : 90), H / 2 + (ph ? 32 : 52), (ph ? 100 : 180) * tu, 4);
+    ctx.restore();
+  }
+}
+function drawPhoneStatus(ctx, L) {
+  const g = ctx.createLinearGradient(0, 0, 0, 120); g.addColorStop(0, 'rgba(0,0,0,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, L.W, 120);
+  txt(ctx, '9:41', 34, 30, fnt(600, 16, FSANS), '#fff', 'left', 'middle');
+  ctx.fillStyle = '#fff'; rr(ctx, L.W - 58, 24, 24, 12, 3.5); ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 1; ctx.stroke();
+  rr(ctx, L.W - 56, 26, 18, 8, 2); ctx.fill();
+  for (let i = 0; i < 4; i++) ctx.fillRect(L.W - 92 + i * 5, 34 - (i + 1) * 2.6, 3, (i + 1) * 2.6);
+  ctx.fillStyle = 'rgba(255,255,255,.85)'; rr(ctx, L.W / 2 - 67, L.H - 12, 134, 5, 3); ctx.fill();
+}
+
+// ───────────────────────── master timeline ─────────────────────────
+const LIVE_END = 6.2, WIPE = 0.7, R0 = LIVE_END + WIPE, R1 = R0 + RD, CARD_HOLD = 4.0;
+const opts = { skip: false };
+function total() { return opts.skip ? 5.6 + CARD_HOLD : R1 + WIPE / 2 + CARD_HOLD; }
+function frameState(T) {
+  const s = { view: 'live', p: Math.min(T, LIVE_END), r: 0, wipe: -1, card: -1, compact: -1, phase: 'LIVE' };
+  if (opts.skip) {
+    s.card = T - 5.6;
+    if (T >= 5.6) s.phase = 'RESULT';
+  } else if (T < LIVE_END) {
+    s.compact = T - 5.55;
+  } else if (T < R0) {
+    s.wipe = (T - LIVE_END) / WIPE; s.compact = T - 5.55;
+    if (s.wipe >= 0.5) { s.view = 'replay'; s.r = 0; }
+    s.phase = 'REPLAY';
+  } else if (T < R1) {
+    s.view = 'replay'; s.r = T - R0; s.phase = 'REPLAY';
+  } else {
+    s.wipe = (T - R1) / WIPE;
+    if (s.wipe < 0.5) { s.view = 'replay'; s.r = RD; } else { s.view = 'live'; s.p = LIVE_END; s.card = T - (R1 + WIPE / 2); }
+    s.phase = 'RESULT';
+  }
+  // chains move during the card hold
+  const cm = s.card - 1.7;
+  s.chains = cm > 0 ? eInOut(cm / 0.7) : 0;
+  return s;
+}
+function renderFrame(ctx, L, T) {
+  const s = frameState(T);
+  ctx.setTransform(L.dpr, 0, 0, L.dpr, 0, 0);
+  ctx.clearRect(0, 0, L.W, L.H);
+  if (s.view === 'live') {
+    const ch = s.chains;
+    drawLive(ctx, L, s.p, {
+      los: lerp(LOS, SPOT, ch), fd: lerp(FD, SPOT + 10, ch),
+      carpet: s.p > DOWNT ? eOut((s.p - DOWNT) / 0.4) * (1 - ch) : 0,
+      noGainTag: ch > 0.05, cardHide: s.card > 0,
+    });
+  } else drawReplay(ctx, L, s.r);
+  const dd = s.chains > 0.6 ? '1ST & 10' : '3RD & 6', spot = s.chains > 0.6 ? 'ATL 21' : 'ATL 38';
+  drawScorebug(ctx, L, dd, spot);
+  if (s.view === 'live') { drawDefRead(ctx, L, s.p); drawCompact(ctx, L, s.compact); drawCard(ctx, L, s.card); }
+  drawWipe(ctx, L, s.wipe);
+  if (L.phone) drawPhoneStatus(ctx, L);
+  const tt = total(), fadeIn = c01(1 - T / 0.3), fadeOut = c01((T - (tt - 0.3)) / 0.3), f = Math.max(fadeIn, fadeOut);
+  if (f > 0) { ctx.fillStyle = `rgba(5,7,12,${f})`; ctx.fillRect(0, 0, L.W, L.H); }
+  return s;
+}
+
+// ───────────────────────── boot ─────────────────────────
+const views = [
+  { el: document.getElementById('wide'), L: { W: 1280, H: 720, phone: false, s: 16, chipR: 11.5 } },
+  { el: document.getElementById('phone'), L: { W: 390, H: 844, phone: true, s: 8.7, chipR: 7.4 } },
+];
+function sizeCanvases() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  for (const v of views) { v.L.dpr = dpr; v.el.width = v.L.W * dpr; v.el.height = v.L.H * dpr; v.ctx = v.el.getContext('2d'); }
+}
+grassTex = makeNoise(256, 5000, ['#0d2a12', '#4f8a4a', '#1b4320', '#6aa860'], 0.9);
+crowdTex = makeNoise(220, 2600, ['#2b3445', '#3d4a5f', '#5a6578', '#FF3C00', '#A71930', '#C5CEDC', '#1a2030'], 0.7);
+sizeCanvases();
+window.addEventListener('resize', () => { const d = Math.min(2, window.devicePixelRatio || 1); if (d !== views[0].L.dpr) sizeCanvases(); });
+
+let T = 0, playing = true, speed = 1, last = performance.now();
+const $ = id => document.getElementById(id);
+const playBtn = $('play'), scrub = $('scrub'), nowEl = $('now'), phasesEl = $('phases');
+function buildPhases() {
+  const tt = total(), seg = opts.skip ? [['LIVE', 0], ['RESULT', 5.6]] : [['LIVE', 0], ['REPLAY', LIVE_END], ['RESULT', R1]];
+  phasesEl.innerHTML = seg.map(([n, t]) => `<span style="left:${(t / tt * 100).toFixed(2)}%">${n}</span>`).join('');
+}
+buildPhases();
+playBtn.addEventListener('click', () => { playing = !playing; playBtn.textContent = playing ? '❚❚ Pause' : '▶ Play'; playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play'); });
+document.querySelectorAll('[data-speed]').forEach(b => b.addEventListener('click', () => {
+  speed = +b.dataset.speed; document.querySelectorAll('[data-speed]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+}));
+$('skip').addEventListener('change', e => { opts.skip = e.target.checked; T = 0; buildPhases(); });
+$('restart').addEventListener('click', () => { T = 0; });
+scrub.addEventListener('input', () => { T = scrub.value / 1000 * total(); });
+window.addEventListener('keydown', e => { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); playBtn.click(); } });
+
+function tick(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (playing) { T += dt * speed; if (T >= total()) T = 0; }
+  let s;
+  for (const v of views) s = renderFrame(v.ctx, v.L, T);
+  scrub.value = String(Math.round(T / total() * 1000));
+  nowEl.textContent = s.phase + ' · ' + T.toFixed(1) + 's';
+  requestAnimationFrame(tick);
+}
+const start = () => requestAnimationFrame(t => { last = t; tick(t); });
+if (document.fonts && document.fonts.load) {
+  Promise.all([document.fonts.load(fnt(800, 20, FDISP, true)), document.fonts.load(fnt(700, 20, FDISP)), document.fonts.load(fnt(700, 12, FCOND)), document.fonts.load('600 16px Inter')])
+    .catch(() => {}).finally(start);
+} else start();
+})();
+</script>
+</body>
+</html>
