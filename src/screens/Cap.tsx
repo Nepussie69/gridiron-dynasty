@@ -12,18 +12,20 @@ import { monthKeyOf } from '../game/engine/gmDesk'
 import { capSummary } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import type { Player } from '../game/types'
-import { Badge, Button, Card, PageHeader, RatingBar, Stat } from '../ui/kit'
+import { Badge, Button, Card, OvrBadge, PageHeader, RatingBar, Stat } from '../ui/kit'
 import { ExtensionTalks } from '../components/ExtensionTalks'
 import { ContractExplainer } from '../components/ContractExplainer'
 import { GmRestructureRequest } from '../components/GmRestructureRequest'
 import { CapPlanner } from '../components/CapPlanner'
 import { ContractLifeCard } from '../components/ContractLifeCard'
 
-type LedgerKey = 'name' | 'pos' | 'age' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'pct'
+type LedgerKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | 'capHit' | 'annual' | 'guaranteed' | 'years' | 'dead' | 'pct'
 const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
   name: (p) => p.name,
   pos: (p) => p.pos,
   age: (p) => p.age,
+  ovr: (p) => p.ovr,
+  pot: (p) => p.pot,
   capHit: (p) => p.contract.capHit,
   annual: (p) => p.contract.annual,
   guaranteed: (p) => p.contract.guaranteed,
@@ -32,7 +34,7 @@ const LEDGER_SORT: Record<LedgerKey, (p: Player) => number | string> = {
   pct: (p) => p.contract.capHit,
 }
 const LEDGER_COLS: [string, LedgerKey | null][] = [
-  ['Player', 'name'], ['Pos', 'pos'], ['Age', 'age'], ['Cap Hit', 'capHit'], ['AAV', 'annual'],
+  ['Player', 'name'], ['Pos', 'pos'], ['Age', 'age'], ['OVR', 'ovr'], ['POT', 'pot'], ['Cap Hit', 'capHit'], ['AAV', 'annual'],
   ['Guaranteed', 'guaranteed'], ['Yrs', 'years'], ['Dead $', 'dead'], ['% Cap', 'pct'], ['', null],
 ]
 import type { Position } from '../game/types'
@@ -222,6 +224,8 @@ export function Cap() {
                     <td className="px-3 py-1.5 font-600 text-ink">{p.name}</td>
                     <td className="px-3 py-1.5 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</td>
                     <td className="px-3 py-1.5 text-ink-2">{p.age}</td>
+                    <td className="px-3 py-1.5"><OvrBadge value={p.ovr} size={22} /></td>
+                    <td className="px-3 py-1.5"><OvrBadge value={p.pot} size={22} /></td>
                     <td className="px-3 py-1.5 font-cond font-700 text-ink">{money(p.contract.capHit)}</td>
                     <td className="px-3 py-1.5 text-ink-2">{money(p.contract.annual)}</td>
                     <td className="px-3 py-1.5 text-muted">{money(p.contract.guaranteed)}</td>
