@@ -82,6 +82,6 @@ FA1 can start now in parallel with any job that does not touch those three files
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| FA1 engine | 🔨 DeepSeek (wt/fafrenzy1) |
+| FA1 engine | ✅ 2026-10-11 merged (probe: AAV/market 1.06, money wins 72.5%, contenders 314 vs rebuilders 9 stars, 0 double signings/cap violations; calibration identical) |
 | FA2 store + probe | ⏳ |
 | FA3 UI (redesign) | ⏳ |
