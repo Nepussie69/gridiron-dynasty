@@ -70,6 +70,8 @@ import {
   freeAgentContract,
   refreshProspectClass,
   runAIFreeAgency,
+  marketPrice,
+  ROSTER_FLOOR,
   runAIResign,
   runAITrades,
   enforceCapCompliance,
@@ -150,6 +152,24 @@ import {
 import { evaluateTrade, executeTrade, findDeals, findPackagesFor, isTradeablePick, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
 import { DEADLINE_WEEK, buildDeadlineOffers, deadlineNewsItem, runDeadlineAI } from '../game/engine/deadline'
+import {
+  advanceFrenzyDay as advanceFrenzyDayEngine,
+  buildFrenzyContext,
+  frenzyNewsItem,
+  openFrenzy,
+  placeFrenzyOffer as placeFrenzyOfferEngine,
+  resolveFrenzy,
+  scoreOffer,
+  TRUST_PENALTY_POINTS,
+  withdrawFrenzyOffer as withdrawFrenzyOfferEngine,
+  FRENZY_DAYS,
+  type FrenzyDealOffer,
+  type FrenzyDayResult,
+  type FrenzyEvent,
+  type FrenzyOfferCheck,
+  type FrenzyState,
+} from '../game/engine/faFrenzy'
+import { projectCap } from '../game/engine/capPlan'
 import { buildDraftTradeDownOffers, buildDraftTradeUpTargets, nextUserPickSlot } from '../game/engine/draftTrades'
 import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
@@ -205,7 +225,7 @@ import {
   tagSalary,
   tagUsed,
 } from '../game/engine/contractLife'
-import { cultureDiscountFor } from '../game/engine/culture'
+import { cultureDiscountFor, cultureQualifiedClubs, discountFromClub } from '../game/engine/culture'
 import { canAskGm, gmAskCovers, gmExtendDecision, gmOffer, type GmAskResult } from '../game/engine/gmAsk'
 import {
   gmDeskView,
@@ -243,6 +263,7 @@ import {
 } from '../game/engine/weekly'
 import {
   capForSeason,
+  CAP_FLOOR_PCT,
   capSavings,
   capScale,
   deadMoney,
@@ -657,6 +678,12 @@ interface GameStore {
   finishDraft: () => void
 
   signFreeAgent: (id: string) => void
+  /** FUTURES #11: advance the March bidding window one day (seven days total). */
+  advanceFrenzyDay: () => FrenzyDayResult | null
+  /** FUTURES #11: submit a binding offer on a live frenzy lot (raise-only). */
+  placeFrenzyOffer: (lotId: string, offer: FrenzyDealOffer) => FrenzyOfferCheck
+  /** FUTURES #11: pull your offer — that player docks your club trust. */
+  withdrawFrenzyOffer: (lotId: string) => FrenzyOfferCheck
   releasePlayer: (id: string) => void
   /** L11 W4: file / withdraw a waiver claim (resolves on Tuesday, at most 3 open). */
   claimWaiver: (playerId: string) => void
@@ -1767,14 +1794,18 @@ export const useGame = create<GameStore>((set, get) => ({
     const done = (world.offseasonDone ??= {})
     if (stage === 'resign') {
       world.offseasonStage = 'freeAgency'
+      // FUTURES #11: the top of the market goes to a seven-day bidding window.
+      if (!world.faFrenzy) world.faFrenzy = openFrenzy(world, career.teamId, statDb)
       pushCareerNews(world, career, {
         category: 'Roster',
         headline: 'March: free agency opens',
         body: 'The market is open. Expiring contracts and released veterans are up for bid — go get your guys.',
       })
     } else if (stage === 'freeAgency') {
-      // Leaving March: the AI clubs have their first crack at what is left.
+      // Leaving March: close the bidding window, then the AI clubs have their
+      // first crack at what is left.
       if (!done.fa) {
+        resolveFrenzyWindow(world, career)
         runAIFreeAgency(world, career.teamId, statDb)
         done.fa = true
       }
@@ -2578,6 +2609,11 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('You do not have roster control yet — keep climbing.')
       return
     }
+    // FUTURES #11: a player on the March board is not an instant signing.
+    if (world.faFrenzy?.lots.some((l) => l.playerId === id && l.status === 'open')) {
+      get().showToast("He's taking bids — make an offer on the board.")
+      return
+    }
     const idx = world.freeAgents.findIndex((p) => p.id === id)
     if (idx < 0) return
     const p = world.freeAgents[idx]
@@ -2601,6 +2637,50 @@ export const useGame = create<GameStore>((set, get) => ({
     bump(set, get)
     get().showToast(`${p.name} signed with the ${world.byId[career.teamId].name}.`)
     get().save()
+  },
+
+  // FUTURES #11: the March frenzy board. One day of AI bidding and decisions;
+  // the returned events carry the signings, expiries and raisings the UI toasts.
+  advanceFrenzyDay: () => {
+    const state = world.faFrenzy
+    if (!state) return null
+    const result = advanceFrenzyDayEngine(world, state, statDb, get().career?.teamId)
+    bump(set, get)
+    get().save()
+    return result
+  },
+
+  placeFrenzyOffer: (lotId, offer) => {
+    const career = get().career
+    if (!career) return { ok: false, message: 'No career in progress.' }
+    // The same gate as an instant signing: no authority, no binding bid. A head
+    // coach without the pen pushes his GM instead (`requestGmSignFreeAgent`).
+    if (!canSignFreeAgents(career)) {
+      get().showToast('You do not have the authority to bid — ask your GM.')
+      return { ok: false, message: 'No free-agency authority.' }
+    }
+    const state = world.faFrenzy
+    if (!state) return { ok: false, message: 'The bidding window is closed.' }
+    const res = placeFrenzyOfferEngine(world, state, statDb, lotId, offer, career.teamId)
+    if (res.ok) {
+      bump(set, get)
+      get().save()
+    }
+    get().showToast(res.message)
+    return res
+  },
+
+  withdrawFrenzyOffer: (lotId) => {
+    const career = get().career
+    const state = world.faFrenzy
+    if (!career || !state) return { ok: false, message: 'The bidding window is closed.' }
+    const res = withdrawFrenzyOfferEngine(world, state, lotId, career.teamId)
+    if (res.ok) {
+      bump(set, get)
+      get().save()
+    }
+    get().showToast(res.message)
+    return res
   },
 
   releasePlayer: (id) => {
@@ -4185,6 +4265,16 @@ export function migrateWorld(w: World): World {
   if (w.phase === 'offseason' && !w.offseasonStage) {
     w.offseasonStage = w.draftState?.complete ? 'camp' : 'draft'
   }
+  // FUTURES #11: an old save has no March bidding board, and a board belongs to
+  // the free-agency stage of its own season. Anything else is stale, so drop it:
+  // a legacy save plays March exactly as it did before (instant signings, then
+  // `runAIFreeAgency` when the month closes).
+  if (
+    w.faFrenzy &&
+    (w.phase !== 'offseason' || w.offseasonStage !== 'freeAgency' || w.faFrenzy.season !== w.season)
+  ) {
+    w.faFrenzy = undefined
+  }
   w.era ??= { id: 'modern', label: 'Modern Spread Era', positionBias: {}, capSpike: 1 }
   // L10 G8: a tendency book from a past season is stale — drop it.
   if (w.userBook && w.userBook.season !== w.season) w.userBook = undefined
@@ -4428,6 +4518,22 @@ function finalizeFifthYearOptions(world: World, career: CareerState | null): num
 }
 
 /**
+ * FUTURES #11: close the March bidding window and hand whatever is left to the
+ * AI market. Runs on the calendar path and the fast path. A world with no board
+ * (an old save, or a season that skipped March) is untouched, so March plays
+ * exactly as it did before. Idempotent: the board is cleared once resolved, so a
+ * second call is a no-op.
+ */
+function resolveFrenzyWindow(world: World, career: CareerState | null) {
+  const state = world.faFrenzy
+  if (!state) return
+  resolveFrenzy(world, state, statDb, career?.teamId)
+  if (career) pushCareerNews(world, career, frenzyNewsItem(world, state))
+  // Risk: keep the save small — the board is finished once April opens.
+  world.faFrenzy = undefined
+}
+
+/**
  * L12.6 C1: run every offseason stage that hasn't happened yet, in calendar
  * order and exactly once. `startNextSeason` calls this so a fast path from any
  * stage (probe, import, stall) still produces a legal new season.
@@ -4435,6 +4541,7 @@ function finalizeFifthYearOptions(world: World, career: CareerState | null): num
 function completeOffseasonStages(world: World, career: CareerState | null) {
   const done = (world.offseasonDone ??= {})
   if (!done.fa) {
+    resolveFrenzyWindow(world, career)
     runAIFreeAgency(world, career?.teamId, statDb)
     done.fa = true
   }
@@ -5860,6 +5967,534 @@ export function faFlowProbe() {
     })
   }
   return { userTeam: userTeamId, aiTeam: aiTeamId, ai: describe(aiRel), user: describe(userRel), weeks }
+}
+
+/**
+ * FUTURES #11 dev probe: the March free-agency frenzy, driven end-to-end through
+ * the real store actions (`advanceStage` opens and closes March, `advanceFrenzyDay`
+ * runs a day, `placeFrenzyOffer` / `withdrawFrenzyOffer` are the user's side) over
+ * 10 seeds x 3 offseasons, user passive and user bidding. It also proves the old-save
+ * default (no board -> March plays as before), the fast path (`completeOffseasonStages`)
+ * and the access gate. Boot it from node with ~/gridiron-work/logs/fa2-probe.mjs.
+ */
+export interface FaFrenzyProbeReport {
+  deterministic: boolean
+  detChecks: number
+  boardDeterministic: boolean
+  noDoubleRoster: boolean
+  doubleRoster: number
+  doubleFree: number
+  wrongTeam: number
+  noNewCapViolation: boolean
+  newOver: number
+  newPlanOver: number
+  overBefore: number
+  overAfter: number
+  planOverBefore: number
+  planOverAfter: number
+  noNewFloorFail: boolean
+  newFloorFail: number
+  newPayrollFail: number
+  floorFailBefore: number
+  floorFailAfter: number
+  payrollFailBefore: number
+  payrollFailAfter: number
+  ratioMeanOk: boolean
+  ratioMean: number
+  ratioMin: number
+  ratioMax: number
+  ratioEveryOk: boolean
+  topMoneyPct: number
+  topMoneyOk: boolean
+  multiOfferPct: number
+  multiOffer: number
+  contendersBeatRebuilders: boolean
+  starContender: number
+  starRebuilder: number
+  starK2: number
+  starNonK2: number
+  k2NotDoubleCounted: boolean
+  k2Mean: number
+  nonK2Mean: number
+  k2Deals: number
+  nonK2Deals: number
+  expiriesPerRun: boolean
+  earlyPerRun: boolean
+  expiries: number
+  early: number
+  runs: number
+  structuralOk: boolean
+  structuralFail: string[]
+  withdrawOk: boolean
+  raiseOnlyOk: boolean
+  withdrawChecks: number
+  userSignings: number
+  userCapViolations: number
+  noFrenzyUnaffected: boolean
+  noFrenzy: { unset: boolean; identical: boolean }
+  oldSaveOk: boolean
+  fastPathOk: boolean
+  accessGateOk: boolean
+  seasons: number
+  lots: number
+  signed: number
+  passed: number
+  lotCounts: string
+}
+
+export async function faFrenzyProbe(
+  opts: { seeds?: number[]; seasons?: number; modes?: ('passive' | 'bidding')[] } = {},
+): Promise<FaFrenzyProbeReport> {
+  const get = () => useGame.getState()
+  const SEEDS = opts.seeds ?? [31337, 2222, 5150, 4242, 991, 1234, 777, 8080, 20250, 4141]
+  const SEASONS = opts.seasons ?? 3
+  const MODES = opts.modes ?? ['passive', 'bidding']
+
+  const fail = (msg: string) => {
+    agg.structuralOk = false
+    if (agg.structuralFail.length < 12) agg.structuralFail.push(msg)
+  }
+
+  const nflOf = (w: World) => w.teams.filter((t) => t.tier === 'NFL')
+  const findP = (w: World, id: string) => w.players.find((p) => p.id === id)
+  const mkt = (w: World, p: Player) => marketPrice(p, w.season, w.era?.positionBias?.[p.pos] ?? 1)
+  const rosterSig = (w: World) =>
+    nflOf(w)
+      .map((t) => `${t.id}:${(w.roster[t.id] ?? []).map((p) => p.id).sort().join(',')}`)
+      .sort()
+      .join('|')
+  const boardSig = (s: FrenzyState) =>
+    s.lots
+      .map((l) => `${l.playerId}:${l.decisionDay}:${Object.values(l.priorities).map((v) => v.toFixed(4)).join('/')}`)
+      .join(',')
+  const signedSig = (s: FrenzyState) =>
+    s.lots
+      .filter((l) => l.status === 'signed')
+      .map((l) => {
+        const o = l.offers.find((x) => x.teamId === l.signedWith)
+        return `${l.playerId}:${l.signedWith}:${o?.aav ?? 0}:${o?.years ?? 0}`
+      })
+      .join(',')
+
+  const capStats = (w: World) => {
+    const over = new Set<string>()
+    const planOver = new Set<string>()
+    const floorFail = new Set<string>()
+    const payrollFail = new Set<string>()
+    const cap = capForSeason(w.season)
+    for (const t of nflOf(w)) {
+      const roster = w.roster[t.id] ?? []
+      const used = roster.reduce((s, q) => s + q.contract.capHit, 0) + (w.deadMoney[t.id] ?? 0)
+      if (used > cap) over.add(t.id)
+      if (used < cap * CAP_FLOOR_PCT) payrollFail.add(t.id)
+      const plan = projectCap(roster, w.deadMoney[t.id] ?? 0, w.season, 2)
+      if (plan.years[1]?.overTheCap) planOver.add(t.id)
+      const counts: Record<string, number> = {}
+      for (const q of roster) counts[q.pos] = (counts[q.pos] ?? 0) + 1
+      for (const [pos, n] of Object.entries(ROSTER_FLOOR)) if ((counts[pos] ?? 0) < n) floorFail.add(t.id)
+    }
+    return { over, planOver, floorFail, payrollFail }
+  }
+  const newIn = (after: Set<string>, before: Set<string>) => [...after].filter((id) => !before.has(id)).length
+
+  /** Drive the regular season to its end exactly as the calendar does. */
+  const driveSeason = async (): Promise<boolean> => {
+    let weeks = 0
+    while (world.phase === 'regular' && weeks < 30) {
+      weeks++
+      await get().advanceWeek()
+      if (get().modal !== 'none') get().dismissModal()
+    }
+    return world.phase === 'offseason'
+  }
+
+  const agg = {
+    seasons: 0,
+    lots: 0,
+    signed: 0,
+    early: 0,
+    passed: 0,
+    expiries: 0,
+    ratios: [] as number[],
+    topMoneyWins: 0,
+    topMoneyDecided: 0,
+    multiOffer: 0,
+    multiMoneyWins: 0,
+    k2Ratios: [] as number[],
+    nonK2Ratios: [] as number[],
+    starContender: 0,
+    starRebuilder: 0,
+    starK2: 0,
+    starNonK2: 0,
+    overBefore: 0,
+    overAfter: 0,
+    planOverBefore: 0,
+    planOverAfter: 0,
+    floorFailBefore: 0,
+    floorFailAfter: 0,
+    payrollFailBefore: 0,
+    payrollFailAfter: 0,
+    newOver: 0,
+    newPlanOver: 0,
+    newFloorFail: 0,
+    newPayrollFail: 0,
+    doubleRoster: 0,
+    doubleFree: 0,
+    wrongTeam: 0,
+    structuralOk: true,
+    structuralFail: [] as string[],
+    withdrawOk: true,
+    withdrawChecks: 0,
+    raiseOnlyOk: true,
+    userSignings: 0,
+    userCapViolations: 0,
+    runs: 0,
+    runsWithExpiry: 0,
+    runsWithEarly: 0,
+    lotCounts: [] as number[],
+  }
+  const noFrenzy = { unset: false, identical: false }
+  let recordedBoardSig: string | null = null
+  let recordedSignSig: string | null = null
+
+  // ── main runs: 10 seeds x 2 modes x 3 offseasons through the store ──────────
+  for (const seed of SEEDS) {
+    for (const mode of MODES) {
+      get().startCareer({ name: 'FA2', path: 'personnel', archetype: 'scout', teamId: 'CLE', seed, startLevel: 8 })
+      const userTeamId = get().career?.teamId ?? 'BUF'
+      if (seed === SEEDS[0] && mode === MODES[0]) noFrenzy.unset = world.faFrenzy === undefined
+      let runExpiry = 0
+      let runEarly = 0
+      let withdrawTested = false
+      for (let s = 0; s < SEASONS; s++) {
+        if (!(await driveSeason())) {
+          fail(`seed ${seed} ${mode}: season ${s} never ended`)
+          break
+        }
+        get().advanceStage() // resign -> freeAgency: the store opens the board
+        const state = world.faFrenzy
+        if (!state) {
+          fail(`seed ${seed} ${mode} s${s}: no frenzy board opened`)
+          break
+        }
+        if (seed === SEEDS[0] && mode === MODES[0] && s === 0) recordedBoardSig = boardSig(state)
+
+        if (seed === SEEDS[0] && mode === MODES[0] && s === 0) {
+          // criterion: a world without the field, and one with it, run the AI
+          // market identically — no culture or cap leak from the frenzy.
+          const a = structuredClone(world) as World
+          delete a.faFrenzy
+          const b = structuredClone(world) as World
+          b.faFrenzy = { season: world.season, day: 0, lots: [], log: [] }
+          runAIFreeAgency(a, userTeamId, statDb)
+          runAIFreeAgency(b, userTeamId, statDb)
+          noFrenzy.identical = rosterSig(a) === rosterSig(b) && a.freeAgents.length === b.freeAgents.length
+        }
+
+        const before = capStats(world)
+
+        // The user's side, through the store actions.
+        if (mode === 'bidding') {
+          for (const lot of state.lots.slice(0, 3)) {
+            const p = findP(world, lot.playerId)
+            if (!p) continue
+            get().placeFrenzyOffer(lot.playerId, {
+              years: p.age <= 27 ? 4 : 2,
+              aav: Math.round((mkt(world, p) * 1.08) / 1e5) * 1e5,
+              guarantee: 'high',
+            })
+          }
+          if (!withdrawTested && state.lots.length >= 4) {
+            withdrawTested = true
+            const lotId = state.lots[3].playerId
+            const p = findP(world, lotId)
+            if (p) {
+              const aav = Math.round((mkt(world, p) * 1.05) / 1e5) * 1e5
+              const placed = get().placeFrenzyOffer(lotId, { years: 3, aav, guarantee: 'mid' })
+              if (placed.ok) {
+                agg.withdrawChecks++
+                const myOffer = () =>
+                  world.faFrenzy?.lots.find((l) => l.playerId === lotId)?.offers.find((o) => o.teamId === userTeamId)
+                const myLot = () => world.faFrenzy?.lots.find((l) => l.playerId === lotId)
+                const o1 = myOffer()
+                const l1 = myLot()
+                const s1 = o1 && l1 ? scoreOffer(world, statDb, l1, o1).total : 0
+                const lower = get().placeFrenzyOffer(lotId, {
+                  years: 3,
+                  aav: Math.max(500000, aav - 2_000_000),
+                  guarantee: 'mid',
+                })
+                if (lower.ok) {
+                  agg.raiseOnlyOk = false
+                  fail('raise-only: a lower offer was accepted')
+                }
+                get().withdrawFrenzyOffer(lotId)
+                if ((myLot()?.trust?.[userTeamId] ?? 0) !== TRUST_PENALTY_POINTS) {
+                  agg.withdrawOk = false
+                  fail('withdraw: trust penalty not applied')
+                }
+                get().placeFrenzyOffer(lotId, { years: 3, aav, guarantee: 'mid' })
+                const o2 = myOffer()
+                const l2 = myLot()
+                const s2 = o2 && l2 ? scoreOffer(world, statDb, l2, o2).total : 0
+                if (Math.abs(s1 - s2 - TRUST_PENALTY_POINTS / 100) > 1e-6) {
+                  agg.withdrawOk = false
+                  fail(`withdraw: score delta ${(s1 - s2).toFixed(4)}`)
+                }
+              }
+            }
+          }
+        }
+
+        // Run the window out through the store day action, keeping the events.
+        const events: FrenzyEvent[] = []
+        for (let d = 0; d < FRENZY_DAYS; d++) {
+          const r = get().advanceFrenzyDay()
+          if (r) events.push(...r.events)
+        }
+        runExpiry += events.filter((e) => e.kind === 'expire').length
+        runEarly += events.filter((e) => e.kind === 'early').length
+
+        // Measure the resolved board while it is still live (cleared when we leave).
+        const ctx = buildFrenzyContext(world, statDb)
+        const k2clubs = cultureQualifiedClubs(world, statDb)
+        const ovrs = state.lots.map((l) => findP(world, l.playerId)?.ovr ?? 0).sort((a, b) => b - a)
+        const starCut = ovrs.length ? ovrs[Math.max(0, Math.floor(ovrs.length * 0.25) - 1)] : 999
+        let seasonSigned = 0
+        let seasonPassed = 0
+        for (const lot of state.lots) {
+          if (lot.status === 'open') seasonPassed++
+          if (lot.status !== 'signed') continue
+          seasonSigned++
+          const p = findP(world, lot.playerId)
+          const o = lot.offers.find((x) => x.teamId === lot.signedWith)
+          if (!p || !o || !lot.signedWith) {
+            fail(`signed lot ${lot.playerId} missing player/offer`)
+            continue
+          }
+          const r = o.aav / mkt(world, p)
+          agg.ratios.push(r)
+          const live = lot.offers.filter((x) => x.user || x.expiresDay >= (lot.signedDay ?? state.day))
+          const maxAav = Math.max(...live.map((x) => x.aav))
+          const topMoney = o.aav >= maxAav
+          agg.topMoneyDecided++
+          if (topMoney) agg.topMoneyWins++
+          if (live.length >= 2) {
+            agg.multiOffer++
+            if (topMoney) agg.multiMoneyWins++
+          }
+          const isK2 = k2clubs.has(lot.signedWith)
+          const culture = ctx.clubs[lot.signedWith]?.culture
+          const disc = isK2 && culture ? discountFromClub(culture, p) : { pct: 0 }
+          if (isK2) agg.k2Ratios.push(r)
+          else agg.nonK2Ratios.push(r)
+          const sc = scoreOffer(world, statDb, lot, o, ctx)
+          const expectPct =
+            (o.aav / mkt(world, p)) * 100 +
+            (o.guarantee === 'low' ? 0 : o.guarantee === 'mid' ? 4 : 8) -
+            (p.age >= 29 && o.years >= 4 ? 3 : 0)
+          if (Math.abs(sc.effectivePct - expectPct) > 1e-6) fail(`effectivePct ${sc.effectivePct} != ${expectPct}`)
+          if ((sc.terms.culture > 0) !== (disc.pct > 0)) fail(`culture term ${sc.terms.culture} vs pct ${disc.pct}`)
+          if (isK2 && Math.abs(sc.terms.culture - disc.pct / 6) > 1e-9) fail('culture term != pct/6')
+          if (p.teamId !== lot.signedWith) {
+            agg.wrongTeam++
+            fail(`signed player teamId ${p.teamId} != ${lot.signedWith}`)
+          }
+          if (world.freeAgents.some((x) => x.id === p.id)) agg.doubleFree++
+          if (lot.signedWith === userTeamId) agg.userSignings++
+          if (p.ovr >= starCut) {
+            const info = ctx.clubs[lot.signedWith]
+            if (info && info.rank <= 10) agg.starContender++
+            if (info && info.rank >= 23) agg.starRebuilder++
+            if (isK2) agg.starK2++
+            else agg.starNonK2++
+          }
+        }
+        if (seed === SEEDS[0] && mode === MODES[0] && s === 0) recordedSignSig = signedSig(state)
+
+        agg.seasons++
+        agg.lots += state.lots.length
+        agg.lotCounts.push(state.lots.length)
+        agg.signed += seasonSigned
+        agg.passed += seasonPassed
+        agg.early += state.lots.filter((l) => l.early).length
+
+        // Measure the window's own effect before the AI market runs: `runAIFreeAgency`
+        // is unchanged baseline behaviour and may itself exceed the cap on main, so
+        // the new-violation gate isolates what the frenzy signed (exactly as FA1 did).
+        const after = capStats(world)
+        if (mode === 'bidding') {
+          const used =
+            (world.roster[userTeamId] ?? []).reduce((sum, q) => sum + q.contract.capHit, 0) +
+            (world.deadMoney[userTeamId] ?? 0)
+          if (used > capForSeason(world.season)) agg.userCapViolations++
+        }
+
+        // No player on two rosters / on a roster and still in the pool.
+        const seen = new Set<string>()
+        for (const t of nflOf(world))
+          for (const p of world.roster[t.id] ?? []) {
+            if (seen.has(p.id)) agg.doubleRoster++
+            else seen.add(p.id)
+          }
+        for (const p of world.freeAgents) if (seen.has(p.id)) agg.doubleRoster++
+
+        agg.overBefore += before.over.size
+        agg.overAfter += after.over.size
+        agg.planOverBefore += before.planOver.size
+        agg.planOverAfter += after.planOver.size
+        agg.floorFailBefore += before.floorFail.size
+        agg.floorFailAfter += after.floorFail.size
+        agg.payrollFailBefore += before.payrollFail.size
+        agg.payrollFailAfter += after.payrollFail.size
+        agg.newOver += newIn(after.over, before.over)
+        agg.newPlanOver += newIn(after.planOver, before.planOver)
+        agg.newFloorFail += newIn(after.floorFail, before.floorFail)
+        agg.newPayrollFail += newIn(after.payrollFail, before.payrollFail)
+
+        // Leave March: the store resolves the window, then runs the AI market.
+        get().advanceStage() // freeAgency -> draft
+        get().advanceStage() // draft -> camp
+        get().advanceStage() // camp -> next season
+      }
+      agg.runs++
+      agg.expiries += runExpiry
+      if (runExpiry > 0) agg.runsWithExpiry++
+      if (runEarly > 0) agg.runsWithEarly++
+    }
+  }
+
+  // ── determinism: a second career, same seed, must build the same board and sign the same players ──
+  let deterministic = false
+  let detChecks = 0
+  let boardDeterministic = false
+  if (recordedBoardSig && recordedSignSig) {
+    get().startCareer({ name: 'FA2det', path: 'personnel', archetype: 'scout', teamId: 'CLE', seed: SEEDS[0], startLevel: 8 })
+    if (await driveSeason()) {
+      get().advanceStage()
+      const state = world.faFrenzy
+      if (state) {
+        detChecks++
+        boardDeterministic = boardSig(state) === recordedBoardSig
+        for (let d = 0; d < FRENZY_DAYS; d++) get().advanceFrenzyDay()
+        deterministic = signedSig(state) === recordedSignSig
+        detChecks++
+      }
+    }
+  }
+
+  // ── old save (no board) + migrateWorld default + the fast path ──────────────
+  let oldSaveOk = false
+  let fastPathOk = false
+  get().startCareer({ name: 'FA2old', path: 'personnel', archetype: 'scout', teamId: 'CLE', seed: SEEDS[0], startLevel: 8 })
+  const uidOld = get().career?.teamId ?? 'BUF'
+  if (await driveSeason()) {
+    get().advanceStage() // opens the board
+    const boardOpened = !!world.faFrenzy
+    // migrateWorld: a save with no board stays without one; a stale board is dropped.
+    const noBoard = structuredClone(world) as World
+    delete noBoard.faFrenzy
+    const migrateNoBoard = migrateWorld(noBoard).faFrenzy === undefined
+    const staleBoard = structuredClone(world) as World
+    staleBoard.faFrenzy = { season: world.season - 5, day: 0, lots: [], log: [] }
+    const migrateStale = migrateWorld(staleBoard).faFrenzy === undefined
+    // An old save loaded mid-March: no board, so leaving March is exactly runAIFreeAgency.
+    delete world.faFrenzy
+    const control = structuredClone(world) as World
+    get().advanceStage() // freeAgency -> draft with no board
+    runAIFreeAgency(control, uidOld, statDb)
+    oldSaveOk =
+      boardOpened &&
+      migrateNoBoard &&
+      migrateStale &&
+      world.faFrenzy === undefined &&
+      rosterSig(world) === rosterSig(control) &&
+      world.freeAgents.length === control.freeAgents.length
+    // The fast path: completeOffseasonStages must run the board out too.
+    world.offseasonStage = 'freeAgency'
+    world.offseasonDone = {}
+    world.faFrenzy = openFrenzy(world, uidOld, statDb)
+    const boardBeforeFast = !!world.faFrenzy
+    await get().advanceWeek() // offseason -> startNextSeason -> completeOffseasonStages
+    if (get().modal !== 'none') get().dismissModal()
+    fastPathOk = boardBeforeFast && world.faFrenzy === undefined && world.phase === 'regular'
+  }
+
+  // ── access gate: a coach without the pen cannot make a binding bid ──────────
+  get().startCareer({ name: 'FA2gate', path: 'coach', archetype: 'off', teamId: 'CLE', seed: SEEDS[0], startLevel: 7 })
+  const gate = get().placeFrenzyOffer('nobody', { years: 1, aav: 1_000_000, guarantee: 'low' })
+  const accessGateOk = gate.ok === false && /authority/i.test(gate.message)
+
+  const ratios = agg.ratios
+  const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0)
+  const k2Mean = mean(agg.k2Ratios)
+  const nk2Mean = mean(agg.nonK2Ratios)
+  const allMean = mean(ratios)
+  const topMoneyPct = agg.topMoneyWins / (agg.topMoneyDecided || 1)
+  return {
+    deterministic: deterministic && boardDeterministic,
+    detChecks,
+    boardDeterministic,
+    noDoubleRoster: agg.doubleRoster === 0 && agg.doubleFree === 0 && agg.wrongTeam === 0,
+    doubleRoster: agg.doubleRoster,
+    doubleFree: agg.doubleFree,
+    wrongTeam: agg.wrongTeam,
+    noNewCapViolation: agg.newOver === 0 && agg.newPlanOver === 0,
+    newOver: agg.newOver,
+    newPlanOver: agg.newPlanOver,
+    overBefore: agg.overBefore,
+    overAfter: agg.overAfter,
+    planOverBefore: agg.planOverBefore,
+    planOverAfter: agg.planOverAfter,
+    noNewFloorFail: agg.newFloorFail === 0 && agg.newPayrollFail === 0,
+    newFloorFail: agg.newFloorFail,
+    newPayrollFail: agg.newPayrollFail,
+    floorFailBefore: agg.floorFailBefore,
+    floorFailAfter: agg.floorFailAfter,
+    payrollFailBefore: agg.payrollFailBefore,
+    payrollFailAfter: agg.payrollFailAfter,
+    ratioMeanOk: allMean >= 0.98 && allMean <= 1.12,
+    ratioMean: +allMean.toFixed(4),
+    ratioMin: ratios.length ? +Math.min(...ratios).toFixed(4) : 0,
+    ratioMax: ratios.length ? +Math.max(...ratios).toFixed(4) : 0,
+    ratioEveryOk: ratios.length > 0 && Math.min(...ratios) >= 0.85 && Math.max(...ratios) <= 1.35,
+    topMoneyPct: +topMoneyPct.toFixed(4),
+    topMoneyOk: topMoneyPct >= 0.55 && topMoneyPct <= 0.75,
+    multiOfferPct: +(agg.multiMoneyWins / (agg.multiOffer || 1)).toFixed(4),
+    multiOffer: agg.multiOffer,
+    contendersBeatRebuilders: agg.starContender > agg.starRebuilder,
+    starContender: agg.starContender,
+    starRebuilder: agg.starRebuilder,
+    starK2: agg.starK2,
+    starNonK2: agg.starNonK2,
+    k2NotDoubleCounted: Math.abs(k2Mean - nk2Mean) < 0.06 || agg.k2Ratios.length === 0,
+    k2Mean: +k2Mean.toFixed(4),
+    nonK2Mean: +nk2Mean.toFixed(4),
+    k2Deals: agg.k2Ratios.length,
+    nonK2Deals: agg.nonK2Ratios.length,
+    expiriesPerRun: agg.runs > 0 && agg.runsWithExpiry === agg.runs,
+    earlyPerRun: agg.runs > 0 && agg.runsWithEarly === agg.runs,
+    expiries: agg.expiries,
+    early: agg.early,
+    runs: agg.runs,
+    structuralOk: agg.structuralOk,
+    structuralFail: agg.structuralFail,
+    withdrawOk: agg.withdrawOk,
+    raiseOnlyOk: agg.raiseOnlyOk,
+    withdrawChecks: agg.withdrawChecks,
+    userSignings: agg.userSignings,
+    userCapViolations: agg.userCapViolations,
+    noFrenzyUnaffected: noFrenzy.unset && noFrenzy.identical,
+    noFrenzy,
+    oldSaveOk,
+    fastPathOk,
+    accessGateOk,
+    seasons: agg.seasons,
+    lots: agg.lots,
+    signed: agg.signed,
+    passed: agg.passed,
+    lotCounts: agg.lotCounts.join(','),
+  }
 }
 
 /** Dev-only probe: weekly rhythm state (hours, actions, set piece, stretch). */
