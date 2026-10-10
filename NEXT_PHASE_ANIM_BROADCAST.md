@@ -45,4 +45,6 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 | Phase | Status |
 |---|---|
 | Spec | ✅ 2026-10-10 |
-| B1–B8 | ⏳ waiting for D5 + animcontact4 |
+| B2 | ✅ merged into ui-redesign (Claude) |
+| B1 | ⏳ prompts b1a/b1b ready; after animfix (playAnim) |
+| B3–B8 | ⏳ prompts b4, b5a/b5b, b7 ready; B3, B6, B8 Claude |
