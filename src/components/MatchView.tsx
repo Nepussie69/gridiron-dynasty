@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { coachLabels, penaltyTotals, PENALTY_INFO, type GameState, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
+import { coachLabels, penaltyTotals, PENALTY_INFO, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
@@ -12,6 +12,7 @@ import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from './PlanEditor'
 import { KeysCard } from './KeysCard'
+import { momentFieldPos } from './fieldPos'
 import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
 import { buildPlayAnim, holderAt, liftAt, posAt, snapYard, targetKey, actorWhy } from './playAnim'
@@ -794,7 +795,7 @@ export function MatchView() {
             <div className="sticky bottom-0 z-30 shrink-0 border-t border-white/10 bg-[#0d1a2b]/95 px-3 py-2 backdrop-blur-md">
               {showMoment && moment ? (
                 <div className="gd-slide-up">
-                  <MomentCard moment={moment} fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)} onAnswer={answer} />
+                  <MomentCard moment={moment} fieldPos={momentFieldPos(world, gameDay.state, moment)} onAnswer={answer} />
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -1514,11 +1515,3 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
   )
 }
 
-/** L11.5 Q1: where the ball is, tagged with the possessing club ("BUF 32", "NE 45"). */
-function gameDayFieldPos(world: World, state: GameState, yard: number): string {
-  const defId = state.offId === state.homeId ? state.awayId : state.homeId
-  const offAbbr = world.byId[state.offId]?.abbr ?? ''
-  const defAbbr = world.byId[defId]?.abbr ?? ''
-  if (yard === 50) return '50'
-  return yard < 50 ? `${offAbbr} ${yard}` : `${defAbbr} ${100 - yard}`
-}

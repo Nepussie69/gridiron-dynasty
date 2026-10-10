@@ -2352,7 +2352,9 @@ function resolveStKick(
     kickCall: surprise ? 'surprise' : 'onside',
     stAttempt: { club: kicking, kind: surprise ? 'surprise' : 'onside' },
     result: recovered ? `${label} recovered by ${kAbbr}!` : `${label}, recovered by ${rAbbr}`,
-    startYard: s.yard, endYard: s.yard, down: 1, distance: 10, timeUsed: 5,
+    // FUTURES #4: a kickoff play logs no down & distance (the game state keeps
+    // s.down/s.distance at 1 & 10), exactly like the squib and normal kickoffs.
+    startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 5,
     returnKind: 'return', turnover: !recovered,
   })
   return { scored: false }
@@ -2432,7 +2434,8 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
       type: 'kickoff', concept: 'Onside kick', yards: 0,
       kickCall: 'onside', stAttempt: { club: kicking, kind: 'onside' },
       result: recovered ? `Onside kick recovered by ${kAbbr}!` : `Onside kick, recovered by ${rAbbr}`,
-      startYard: s.yard, endYard: s.yard, down: 1, distance: 10, timeUsed: 5,
+      // FUTURES #4: log the AI onside like every other kickoff (no down & distance).
+      startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 5,
       returnKind: 'return', turnover: !recovered,
     })
     return { scored: false }
