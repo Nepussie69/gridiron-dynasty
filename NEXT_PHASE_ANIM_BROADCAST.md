@@ -53,5 +53,5 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 | B4 | ✅ on main (ball arc + effects from real events) |
 | B7 | ✅ on main (live 2.5D in Game Day, phone top-down default, quality modes, settings) |
 | B6a graphics | ✅ on main (B8 note: renderer vignette off; FG kicker mapping verified OK on real plays) |
-| B6b telestrator replay | 🔨 Claude building |
+| B6b telestrator replay | ✅ on main (replays not yet wired into Game Day — B8) |
 | B8 | ⏳ Claude, after B4–B7 |
