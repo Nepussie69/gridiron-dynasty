@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sunday Broadcast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,600;1,700;1,800&family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* =====================================================================
+   SUNDAY BROADCAST: design tokens
+   In the app: these live in src/index.css @theme (light) and the single
+   dark block. Team vars are written on documentElement by AppShell.
+   ===================================================================== */
+:root{
+  --font-display:'Barlow Condensed',system-ui,sans-serif;   /* hero / numbers / names, italic 700-800 */
+  --font-cond:'Barlow Semi Condensed',system-ui,sans-serif; /* labels, chips, buttons */
+  --font-sans:'Inter',system-ui,sans-serif;                 /* body, explanations */
+
+  /* type scale (px) */
+  --fs-hero:40px;  --lh-hero:40px;   /* page title, display 800 italic, uppercase */
+  --fs-h1:28px;    --lh-h1:30px;     /* KPI values, HC name */
+  --fs-h2:22px;    --lh-h2:24px;     /* card names, unit titles */
+  --fs-h3:17px;    --lh-h3:20px;     /* row names */
+  --fs-body:14px;  --lh-body:20px;
+  --fs-sm:13px;    --lh-sm:18px;
+  --fs-label:12px; --lh-label:16px;  /* cond 600 uppercase +0.06em; smallest text in UI */
+  --fs-micro:11px;                   /* ONLY units inside a rating tile / axis ticks */
+
+  /* space (4pt) */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px; --s6:24px; --s8:32px;
+  /* radius: broadcast graphics are sharp */
+  --r-xs:2px; --r-sm:4px; --r-md:6px; --r-lg:10px; --r-pill:999px;
+  --skew:-10deg;  /* only team slabs, role tags, CTA */
+  /* motion */
+  --ease-wipe:cubic-bezier(.2,.8,.2,1);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --d1:120ms; --d2:220ms; --d3:420ms;
+  /* z */
+  --z-bar:30; --z-nav:40; --z-pop:60; --z-sheet:70; --z-toast:80;
+}
+
+.theme-dark{
+  color-scheme:dark;
+  --canvas:#090D14; --surface:#111723; --surface-2:#171F2E; --surface-3:#202A3B;
+  --line:#263146; --line-strong:#4B5A74;          /* line-strong >=3:1 on surface: controls */
+  --ink:#F3F6FB; --ink-2:#C5CEDC; --muted:#97A3B6; --faint:#7A879D;
+  --brand:#5B96FA; --brand-soft:#16294B;
+  --win:#3CCB82;  --win-soft:#10301F;
+  --loss:#F2646F; --loss-soft:#3B1A21;
+  --warn:#EDA73C; --warn-soft:#382912;
+  --gold:#F3B53F; --gold-soft:#3A2D10;
+  --slab:#F3F6FB; --on-slab:#0B1220;               /* inverse CTA slab */
+  --shadow-1:0 1px 0 rgba(255,255,255,.03) inset, 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2:0 18px 40px -12px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.06);
+  --focus:0 0 0 2px var(--canvas), 0 0 0 4px #7FB0FF;
+
+  /* rating tiers (dark) */
+  --t-elite:#F3B53F; --t-pro:#3CCB82; --t-starter:#5B96FA; --t-rotation:#9AA9C0;
+  --t-depth:#5E6C84; --t-weak:#EDA73C; --t-liab:#F2646F; --t-on:#0B1220;
+
+  /* team (CLE: primary #311D00, secondary #FF3C00) computed by teamTokens() */
+  --team-fill:#311D00;  --team-fill-2:#FF3C00; --team-on:#FFFFFF;
+  --team-accent:#FF4A12;       /* marks, active bars: >=3:1 on surface (4.9:1) */
+  --team-accent-text:#FF7448;  /* text: >=4.5:1 on surface (6.6:1) */
+  --team-tint:color-mix(in srgb, var(--team-accent) 12%, var(--surface));
+}
+.theme-light{
+  color-scheme:light;
+  --canvas:#ECEFF4; --surface:#FFFFFF; --surface-2:#F5F7FA; --surface-3:#E7EBF1;
+  --line:#D6DCE5; --line-strong:#8792A4;
+  --ink:#0B1220; --ink-2:#2B374B; --muted:#556175; --faint:#687489;
+  --brand:#1F62D6; --brand-soft:#E5EEFD;
+  --win:#0D7F48;  --win-soft:#E2F5EA;
+  --loss:#C42734; --loss-soft:#FCE7E9;
+  --warn:#9A5800; --warn-soft:#FDF0DA;
+  --gold:#8A6100; --gold-soft:#FCF1D6;
+  --slab:#0B1220; --on-slab:#FFFFFF;
+  --shadow-1:0 1px 2px rgba(16,24,40,.06), 0 0 0 1px rgba(16,24,40,.02);
+  --shadow-2:0 18px 40px -12px rgba(16,24,40,.28), 0 0 0 1px rgba(16,24,40,.06);
+  --focus:0 0 0 2px var(--canvas), 0 0 0 4px #1F62D6;
+
+  --t-elite:#EBA923; --t-pro:#2DB86F; --t-starter:#4C86EE; --t-rotation:#B3BFD0;
+  --t-depth:#8792A4; --t-weak:#B76A00; --t-liab:#C42734; --t-on:#0B1220;
+
+  --team-fill:#311D00; --team-fill-2:#FF3C00; --team-on:#FFFFFF;
+  --team-accent:#E63A00;      /* 3.9:1 on white */
+  --team-accent-text:#C23000; /* 5.6:1 on white */
+  --team-tint:color-mix(in srgb, var(--team-accent) 8%, var(--surface));
+}
+
+/* ===================================================================== */
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:#05070B}
+body{font-family:var(--font-sans);background:#05070B;color:#E8EDF5;-webkit-font-smoothing:antialiased;min-width:1960px}
+.tnum{font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+svg{display:block}
+
+/* presentation board (not part of the product) */
+.board{padding:40px 48px 64px}
+.board-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:28px}
+.board-head h1{font:italic 800 56px/1 var(--font-display);text-transform:uppercase;letter-spacing:.01em;color:#fff}
+.board-head h1 span{color:#FF4A12}
+.board-head p{font:500 15px/22px var(--font-sans);color:#9AA6B8;max-width:720px;margin-top:10px}
+.board-meta{font:600 12px/16px var(--font-cond);letter-spacing:.08em;text-transform:uppercase;color:#7A879D;text-align:right}
+.cap{font:600 12px/16px var(--font-cond);letter-spacing:.1em;text-transform:uppercase;color:#7A879D;margin:0 0 10px 2px;display:flex;gap:10px;align-items:center}
+.cap b{color:#E8EDF5;font-weight:700}
+.row{display:flex;gap:48px;align-items:flex-start}
+
+/* ===================== APP FRAME ===================== */
+.app{background:var(--canvas);color:var(--ink);font-size:var(--fs-body);line-height:var(--lh-body);border-radius:12px;overflow:hidden;box-shadow:0 30px 80px -20px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.06)}
+.desktop{width:1440px}
+.label{font:600 var(--fs-label)/var(--lh-label) var(--font-cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+
+/* ---- top bar: three zones, one CTA ---- */
+.topbar{height:64px;display:flex;align-items:stretch;background:var(--surface);border-bottom:1px solid var(--line);position:relative}
+.topbar::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:3px;background:linear-gradient(90deg,var(--team-fill) 0 232px,var(--team-fill-2) 232px 248px,transparent 248px)}
+.tb-brand{width:232px;flex:none;display:flex;align-items:center;gap:10px;padding:0 18px;background:var(--team-fill);color:var(--team-on);position:relative;overflow:hidden}
+.tb-brand::after{content:"";position:absolute;right:-22px;top:0;bottom:0;width:44px;background:var(--team-fill-2);transform:skewX(var(--skew))}
+.crest{display:grid;place-items:center;font:italic 800 15px/1 var(--font-display);letter-spacing:.02em;border-radius:var(--r-sm);flex:none}
+.crest.cle{background:#FF3C00;color:#1A0F00;width:38px;height:38px}
+.crest.atl{background:#A71930;color:#fff;width:26px;height:26px;font-size:12px}
+.tb-club{line-height:1}
+.tb-club b{display:block;font:italic 800 21px/1 var(--font-display);text-transform:uppercase;letter-spacing:.01em}
+.tb-club span{display:block;margin-top:4px;font:600 12px/1 var(--font-cond);letter-spacing:.07em;text-transform:uppercase;opacity:.82}
+.tb-zone{display:flex;align-items:center;padding:0 20px;gap:14px;border-right:1px solid var(--line)}
+.tb-zone:first-of-type{padding-left:40px}
+.rec b{font:italic 800 26px/1 var(--font-display)}
+.rec span{display:block}
+.next{display:flex;align-items:center;gap:12px}
+.wk{display:flex;flex-direction:column;gap:5px}
+.wk b{font:italic 700 18px/1 var(--font-display);text-transform:uppercase}
+.wk b em{font-style:italic;color:var(--muted);font-weight:600}
+.prog{width:96px;height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden}
+.prog i{display:block;height:100%;width:50%;background:var(--team-accent)}
+.vs{display:flex;align-items:center;gap:8px;font:italic 800 20px/1 var(--font-display);text-transform:uppercase}
+.vs small{font:600 13px/1 var(--font-cond);color:var(--muted);font-style:normal}
+.kpis{display:flex;gap:22px;flex:1;justify-content:flex-end;border-right:0}
+.kpi{display:flex;flex-direction:column;gap:3px;min-width:0}
+.kpi .v{font:italic 700 22px/1 var(--font-display);display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+.kpi .v small{font:600 12px/1 var(--font-cond);letter-spacing:.05em;text-transform:uppercase;font-style:normal}
+.tone-warn{color:var(--warn)} .tone-loss{color:var(--loss)} .tone-win{color:var(--win)}
+.meter{width:84px;height:4px;border-radius:2px;background:var(--surface-3);position:relative}
+.meter i{position:absolute;left:0;top:0;bottom:0;border-radius:2px}
+.meter b{position:absolute;top:-3px;width:2px;height:10px;background:var(--ink-2)}
+.tb-actions{display:flex;align-items:center;gap:10px;padding:0 16px 0 8px}
+.iconbtn{width:40px;height:40px;display:grid;place-items:center;border-radius:var(--r-md);border:1px solid var(--line);color:var(--ink-2);position:relative}
+.iconbtn .dot{position:absolute;top:8px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 2px var(--surface)}
+.kbd{font:600 11px/1 var(--font-cond);color:var(--faint);border:1px solid var(--line);border-radius:3px;padding:2px 4px}
+.cta{display:flex;align-items:stretch;height:42px;transform:skewX(var(--skew));border-radius:3px;overflow:hidden;background:var(--slab);color:var(--on-slab);box-shadow:0 6px 18px -8px rgba(0,0,0,.6)}
+.cta > *{transform:skewX(calc(var(--skew) * -1))}
+.cta .go{display:flex;align-items:center;gap:8px;padding:0 18px 0 20px;font:italic 800 17px/1 var(--font-display);text-transform:uppercase;letter-spacing:.02em}
+.cta .go .kbd{border-color:currentColor;color:inherit;opacity:.55;font-style:normal}
+.cta .more{width:38px;display:grid;place-items:center;border-left:1px solid rgba(127,127,127,.35)}
+.cta-wrap{display:flex;align-items:center;gap:0;padding-left:4px}
+
+/* ---- sidebar ---- */
+.shell{display:flex;min-height:1440px}
+.side{width:232px;flex:none;background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column}
+.word{padding:18px 18px 14px;font:italic 800 20px/1 var(--font-display);text-transform:uppercase;letter-spacing:.03em;color:var(--ink)}
+.word span{color:var(--team-accent-text)}
+.word small{display:block;margin-top:6px;font:600 12px/1 var(--font-cond);font-style:normal;letter-spacing:.07em;color:var(--muted)}
+.nav{padding:4px 10px 10px;flex:1}
+.ngrp{margin-top:14px}
+.ngrp .label{padding:0 10px 6px;display:block;color:var(--faint)}
+.ni{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:var(--r-md);font:600 15px/1 var(--font-cond);letter-spacing:.02em;color:var(--ink-2);position:relative}
+.ni svg{color:var(--muted);flex:none}
+.ni.on{background:var(--team-tint);color:var(--ink)}
+.ni.on::before{content:"";position:absolute;left:-10px;top:6px;bottom:6px;width:4px;border-radius:0 3px 3px 0;background:var(--team-accent)}
+.ni.on svg{color:var(--team-accent-text)}
+.ni .cnt{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--brand);color:#06101F;font:700 12px/20px var(--font-cond);text-align:center}
+.ni.lock{color:var(--faint)}
+.side-foot{border-top:1px solid var(--line);padding:12px 14px;display:flex;align-items:center;gap:10px}
+.avatar{width:34px;height:34px;border-radius:var(--r-md);background:var(--surface-3);border:1px solid var(--line-strong);display:grid;place-items:center;font:italic 800 14px/1 var(--font-display);color:var(--ink);flex:none}
+.side-foot .who b{display:block;font:700 14px/1.2 var(--font-cond);color:var(--ink)}
+.side-foot .who span{font:500 12px/1.2 var(--font-sans);color:var(--muted)}
+.side-foot .iconbtn{margin-left:auto;width:34px;height:34px}
+
+/* ---- main ---- */
+main{flex:1;min-width:0;padding:28px 32px 48px}
+.ph{display:flex;align-items:flex-end;justify-content:space-between;gap:24px}
+.eyebrow{font:600 12px/1 var(--font-cond);letter-spacing:.12em;text-transform:uppercase;color:var(--team-accent-text);display:flex;align-items:center;gap:8px}
+.eyebrow::before{content:"";width:18px;height:3px;background:var(--team-accent);transform:skewX(var(--skew))}
+.ph h1{font:italic 800 var(--fs-hero)/var(--lh-hero) var(--font-display);text-transform:uppercase;letter-spacing:.005em;margin-top:8px}
+.ph p{color:var(--muted);margin-top:6px;max-width:620px}
+
+.tabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin-top:22px}
+.tab{height:42px;display:flex;align-items:center;gap:8px;font:700 15px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);position:relative}
+.tab.on{color:var(--ink)}
+.tab.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:3px;background:var(--team-accent)}
+.tab .pill{font:600 12px/1 var(--font-cond);padding:3px 7px;border-radius:var(--r-pill);background:var(--surface-3);color:var(--ink-2);letter-spacing:.03em}
+.seg{display:inline-flex;padding:3px;border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--line)}
+.seg button{height:30px;padding:0 12px;border-radius:4px;font:700 13px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px}
+.seg button.on{background:var(--surface-3);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-strong)}
+
+/* access lower-third */
+.access{margin-top:18px;display:flex;align-items:stretch;border-radius:var(--r-sm);overflow:hidden;background:var(--surface);border:1px solid var(--line)}
+.access .tag{background:var(--slab);color:var(--on-slab);font:italic 800 15px/1 var(--font-display);text-transform:uppercase;letter-spacing:.04em;padding:0 16px 0 14px;display:flex;align-items:center;gap:8px;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);padding-right:24px}
+.access .txt{padding:10px 16px;color:var(--ink-2);font-size:var(--fs-sm)}
+.access .txt b{color:var(--ink);font-weight:600}
+.access .lnk{margin-left:auto;padding:0 16px;display:flex;align-items:center;font:700 13px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--brand)}
+
+/* ---- KPI lower-third strip ---- */
+.strip{margin-top:16px;display:grid;grid-template-columns:1fr 1.25fr 1.45fr 1.35fr 1.1fr;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-1)}
+.k{padding:16px 18px 16px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:6px;min-width:0}
+.k:last-child{border-right:0}
+.k .top{display:flex;justify-content:space-between;align-items:center}
+.k .val{display:flex;align-items:baseline;gap:8px;font:italic 800 34px/1 var(--font-display)}
+.k .val small{font:600 13px/1 var(--font-cond);letter-spacing:.04em;text-transform:uppercase;font-style:normal;color:var(--muted)}
+.k .why{font-size:var(--fs-sm);line-height:18px;color:var(--ink-2)}
+.k .why b{color:var(--ink);font-weight:600}
+.k .why .mut{color:var(--muted)}
+.chipgrade{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:var(--r-xs);font:700 12px/1 var(--font-cond);letter-spacing:.07em;text-transform:uppercase}
+.cg-loss{background:var(--loss-soft);color:var(--loss)} .cg-warn{background:var(--warn-soft);color:var(--warn)} .cg-neutral{background:var(--surface-3);color:var(--ink-2)} .cg-win{background:var(--win-soft);color:var(--win)} .cg-brand{background:var(--brand-soft);color:var(--brand)}
+.scale{position:relative;height:18px;margin-top:2px}
+.scale .tr{position:absolute;left:0;right:0;top:7px;height:4px;border-radius:2px;background:linear-gradient(90deg,var(--t-liab) 0 17%,var(--t-weak) 17% 30.5%,var(--t-depth) 30.5% 44%,var(--t-rotation) 44% 57.6%,var(--t-starter) 57.6% 71.2%,var(--t-pro) 71.2% 83%,var(--t-elite) 83% 100%);opacity:.9}
+.scale .mk{position:absolute;top:1px;width:4px;height:16px;border-radius:2px;background:var(--ink);box-shadow:0 0 0 2px var(--surface)}
+.scale .avg{position:absolute;top:-1px;width:2px;height:20px;background:var(--ink-2);opacity:.6}
+.scale .avgl{position:absolute;top:-1px;font:600 11px/1 var(--font-cond);color:var(--muted);letter-spacing:.04em;transform:translate(6px,0)}
+.split{display:flex;gap:6px;margin-top:2px}
+.split div{flex:1;background:var(--surface-2);border-radius:var(--r-sm);padding:6px 8px}
+.split b{display:block;font:italic 700 18px/1 var(--font-display)}
+.split span{font:600 11px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.floorbar{height:6px;border-radius:3px;background:var(--surface-3);position:relative;margin-top:4px;overflow:hidden}
+.floorbar i{position:absolute;top:0;bottom:0;right:50%;background:var(--loss);border-radius:3px 0 0 3px}
+.floorbar b{position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--ink-2)}
+.info{width:28px;height:28px;margin:-6px -6px 0 0;border-radius:var(--r-md);display:grid;place-items:center;color:var(--muted)}
+
+/* ---- system check (scheme clash) ---- */
+.syscheck{margin-top:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;display:grid;grid-template-columns:260px 1fr 1fr}
+.sc-head{padding:16px 18px;background:var(--surface-2);border-right:1px solid var(--line)}
+.sc-head h3{font:italic 800 22px/1 var(--font-display);text-transform:uppercase;margin:6px 0 8px}
+.sc-head p{font-size:var(--fs-sm);line-height:18px;color:var(--ink-2)}
+.sc-side{padding:14px 18px;border-right:1px solid var(--line)}
+.sc-side:last-child{border-right:0}
+.sc-run{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.sc-run .lbl{font:600 12px/1 var(--font-cond);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.scheme{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:var(--r-xs);font:700 13px/1 var(--font-cond);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.scheme.live{background:var(--slab);color:var(--on-slab)}
+.scheme.live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--win);box-shadow:0 0 0 2px color-mix(in srgb,var(--win) 30%,transparent)}
+.scheme.match{background:var(--surface-3);color:var(--ink-2)}
+.scheme.off{background:transparent;color:var(--warn);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--warn) 60%,transparent)}
+.scheme.na{background:transparent;color:var(--muted);box-shadow:inset 0 0 0 1px var(--line)}
+.sc-list{display:flex;flex-direction:column;gap:6px}
+.sc-item{display:flex;align-items:center;gap:10px;font-size:var(--fs-sm);color:var(--ink-2)}
+.sc-item .who{width:150px;font:600 14px/1 var(--font-cond);color:var(--ink);letter-spacing:.02em}
+.sc-item .who span{color:var(--muted);font-weight:500}
+.sc-ok{color:var(--win);font:700 12px/1 var(--font-cond);letter-spacing:.07em;text-transform:uppercase}
+
+/* ---- section headers ---- */
+.sec{display:flex;align-items:center;justify-content:space-between;margin:26px 0 12px}
+.sec h2{font:italic 800 24px/1 var(--font-display);text-transform:uppercase;display:flex;align-items:center;gap:12px}
+.sec h2 .bar{width:6px;height:22px;background:var(--team-accent);transform:skewX(var(--skew))}
+.legend{display:flex;gap:12px;align-items:center}
+.lg{display:flex;align-items:center;gap:6px;font:600 12px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+
+/* ---- rating tile ---- */
+.rt{width:46px;height:46px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:var(--r-sm);font:italic 800 24px/1 var(--font-display);color:var(--t-on);position:relative}
+.rt small{font:700 9px/1 var(--font-cond);font-style:normal;letter-spacing:.08em;text-transform:uppercase;margin-top:2px;opacity:.85}
+.rt.sm{width:38px;height:38px;font-size:20px}
+.rt.sm small{display:none}
+.rt.elite{background:var(--t-elite)} .rt.pro{background:var(--t-pro)} .rt.starter{background:var(--t-starter)} .rt.rotation{background:var(--t-rotation)}
+.rt.depth{background:transparent;color:var(--ink-2);box-shadow:inset 0 0 0 2px var(--t-depth)}
+.rt.weak{background:color-mix(in srgb,var(--t-weak) 12%,transparent);color:var(--t-weak);box-shadow:inset 0 0 0 2px var(--t-weak)}
+.rt.liab{background:color-mix(in srgb,var(--t-liab) 10%,transparent);color:var(--t-liab);box-shadow:inset 0 0 0 2px var(--t-liab)}
+.lg .rt{width:22px;height:18px;font-size:12px;border-radius:2px}
+.lg .rt small{display:none}
+
+.delta{font:600 12px/1 var(--font-cond);letter-spacing:.04em;color:var(--muted);white-space:nowrap;text-align:center}
+.delta b{color:var(--ink-2);font-weight:700}
+
+/* ---- HC banner ---- */
+.hc{display:grid;grid-template-columns:auto 1fr auto auto auto;align-items:center;gap:22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-1);padding-right:16px}
+.hc .blk{align-self:stretch;width:112px;background:var(--team-fill);position:relative;display:grid;place-items:center;overflow:hidden}
+.hc .blk::after{content:"";position:absolute;right:-18px;top:0;bottom:0;width:30px;background:var(--team-fill-2);transform:skewX(var(--skew))}
+.hc .blk span{font:italic 800 34px/1 var(--font-display);color:var(--team-on);letter-spacing:.02em;margin-right:12px}
+.hc .main{padding:16px 0}
+.hc .role{font:700 12px/1 var(--font-cond);letter-spacing:.1em;text-transform:uppercase;color:var(--team-accent-text)}
+.hc .nm{font:italic 800 30px/1 var(--font-display);text-transform:uppercase;margin:6px 0 9px;letter-spacing:.01em}
+.metaline{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-size:var(--fs-sm);color:var(--ink-2)}
+.eff{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.eff .ar{font-size:10px}
+.eff.neg .ar{color:var(--loss)} .eff.pos .ar{color:var(--win)}
+.eff b{font-weight:600;color:var(--ink)}
+.eff .flag{font:700 11px/1 var(--font-cond);letter-spacing:.07em;text-transform:uppercase;padding:3px 5px;border-radius:2px;background:var(--loss-soft);color:var(--loss)}
+.contract{font:500 13px/1.3 var(--font-sans);color:var(--muted);text-align:right;white-space:nowrap}
+.contract b{display:block;font:italic 700 19px/1 var(--font-display);color:var(--ink);margin-bottom:3px}
+.morebtn{width:36px;height:36px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--ink-2);border:1px solid var(--line)}
+.morebtn.open{background:var(--surface-3);border-color:var(--line-strong);color:var(--ink)}
+.ratewrap{display:flex;flex-direction:column;align-items:center;gap:5px}
+
+/* ---- unit columns ---- */
+.units{display:grid;grid-template-columns:1fr 1fr 0.86fr;gap:16px;margin-top:16px;align-items:start}
+.unit{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow-1);overflow:visible}
+.uh{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 12px 0;border-bottom:1px solid var(--line)}
+.uh h3{display:flex;align-items:center;font:italic 800 20px/1 var(--font-display);text-transform:uppercase;letter-spacing:.02em}
+.uh h3 .tg{background:var(--slab);color:var(--on-slab);padding:7px 18px 6px 14px;margin-right:10px;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);border-top-left-radius:var(--r-lg)}
+.uh .label{font-size:12px}
+.coord{padding:14px;display:grid;grid-template-columns:1fr auto;gap:10px 12px;position:relative}
+.rtag{display:inline-block;font:italic 800 13px/1 var(--font-display);letter-spacing:.06em;padding:4px 8px 3px;background:var(--team-fill);color:var(--team-on);transform:skewX(var(--skew));border-radius:2px;box-shadow:inset -3px 0 0 var(--team-fill-2)}
+.rtag span{display:inline-block;transform:skewX(calc(var(--skew) * -1))}
+.coord .nm{font:italic 800 22px/1 var(--font-display);text-transform:uppercase;margin:8px 0 4px}
+.coord .rl{font:500 13px/1 var(--font-sans);color:var(--muted)}
+.coord .metaline{grid-column:1 / -1}
+.coord .foot{grid-column:1 / -1;display:flex;align-items:center;justify-content:space-between;border-top:1px dashed var(--line);padding-top:10px;margin-top:2px}
+.coord .foot .contract{text-align:left;font-size:13px}
+.coord .foot .contract b{display:inline;font:italic 700 16px/1 var(--font-display);margin-right:6px}
+.pc{display:grid;grid-template-columns:auto 1fr auto auto;gap:12px;align-items:center;padding:12px 14px;border-top:1px solid var(--line)}
+.pc .ab{font:italic 800 13px/1 var(--font-display);letter-spacing:.06em;color:var(--muted);width:30px}
+.pc .nm{font:700 16px/1.1 var(--font-cond);letter-spacing:.02em;text-transform:uppercase;color:var(--ink)}
+.pc .sub{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin-top:6px;font-size:13px;color:var(--ink-2)}
+.pc .sub .ct{color:var(--muted)}
+.pc .morebtn{width:32px;height:32px;border-color:transparent}
+.pc-head{padding:8px 14px;background:var(--surface-2);border-top:1px solid var(--line);display:flex;justify-content:space-between}
+
+.fo{margin-top:16px;display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:14px 16px}
+.fo h3{font:italic 800 20px/1 var(--font-display);text-transform:uppercase}
+.vacant{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-radius:var(--r-sm);border:1px dashed var(--line-strong);color:var(--ink-2);font:700 13px/1 var(--font-cond);letter-spacing:.05em;text-transform:uppercase}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 14px;border-radius:var(--r-md);font:700 14px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line-strong);color:var(--ink)}
+.btn.primary{background:var(--slab);color:var(--on-slab);border-color:transparent}
+.btn.quiet{border-color:transparent;color:var(--brand)}
+.btn.sm{height:32px;padding:0 10px;font-size:13px}
+
+/* overflow menu (popover) */
+.pop{position:absolute;right:12px;top:calc(100% - 44px);width:272px;background:var(--surface-2);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow-2);z-index:5;padding:6px;animation:wipe var(--d2) var(--ease-wipe) both}
+.pop .mi{display:flex;align-items:flex-start;gap:10px;padding:9px 10px;border-radius:var(--r-md);font-size:14px;color:var(--ink)}
+.pop .mi svg{color:var(--muted);margin-top:2px}
+.pop .mi span{display:block;font-size:12px;line-height:16px;color:var(--muted);margin-top:2px}
+.pop .mi.hl{background:var(--surface-3)}
+.pop hr{border:0;border-top:1px solid var(--line);margin:4px 6px}
+.pop .mi.danger{color:var(--loss)}
+.pop .mi.danger svg{color:var(--loss)}
+@keyframes wipe{from{clip-path:inset(0 0 100% 0);opacity:.4}to{clip-path:inset(0 0 0 0);opacity:1}}
+.annot{position:absolute;font:600 12px/16px var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:#05070B;background:#FFD54A;padding:3px 7px;border-radius:3px;white-space:nowrap;z-index:6}
+
+/* ===================== PHONE ===================== */
+.phone{width:390px;height:844px;border-radius:52px;padding:12px;background:#1B1F27;box-shadow:0 0 0 2px #2E343F,0 30px 80px -20px rgba(0,0,0,.85);flex:none}
+.screen{width:366px;height:820px;border-radius:42px;overflow:hidden;position:relative;background:var(--canvas);color:var(--ink);font-size:14px;line-height:20px;display:flex;flex-direction:column}
+.status{height:46px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 28px 6px;font:600 15px/1 var(--font-sans);background:var(--team-fill);color:#fff}
+.island{position:absolute;left:50%;top:10px;width:110px;height:32px;border-radius:20px;background:#000;transform:translateX(-50%)}
+.pbar{flex:none;display:flex;align-items:center;gap:10px;height:56px;padding:0 12px 0 0;background:var(--surface);border-bottom:1px solid var(--line);position:relative}
+.pbar .tm{align-self:stretch;display:flex;align-items:center;gap:8px;padding:0 18px 0 12px;background:var(--team-fill);color:#fff;clip-path:polygon(0 0,100% 0,calc(100% - 12px) 100%,0 100%);box-shadow:inset -14px 0 0 -6px var(--team-fill-2)}
+.pbar .tm b{font:italic 800 18px/1 var(--font-display)}
+.pbar .tm .crest{width:30px;height:30px;font-size:12px}
+.pbar .nx{line-height:1.05}
+.pbar .nx b{display:block;font:italic 800 16px/1 var(--font-display);text-transform:uppercase}
+.pbar .nx span{font:600 12px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.pbar .pcta{margin-left:auto;height:36px;padding:0 12px;display:flex;align-items:center;gap:4px;background:var(--slab);color:var(--on-slab);font:italic 800 15px/1 var(--font-display);text-transform:uppercase;transform:skewX(var(--skew));border-radius:3px}
+.pbar .pcta span{transform:skewX(calc(var(--skew)*-1));display:flex;align-items:center;gap:4px}
+.ticker{flex:none;display:flex;gap:0;height:40px;background:var(--surface-2);border-bottom:1px solid var(--line);overflow:hidden}
+.ticker div{display:flex;align-items:center;gap:6px;padding:0 12px;border-right:1px solid var(--line);white-space:nowrap;font:600 12px/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.ticker div b{font:italic 700 17px/1 var(--font-display);letter-spacing:0;color:var(--ink)}
+.pscroll{flex:1;overflow:hidden;padding:16px 16px 0;position:relative}
+.pscroll h1{font:italic 800 32px/1 var(--font-display);text-transform:uppercase;margin-top:6px}
+.ptabs{display:flex;margin-top:14px;border-bottom:1px solid var(--line)}
+.ptabs .tab{flex:1;justify-content:center;height:44px;font-size:14px}
+.prow{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+.pk{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.pk .k{border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);padding:12px;gap:4px}
+.pk .k .val{font-size:28px}
+.pk .k .why{font-size:12px;line-height:16px}
+.pacc{margin-top:12px;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--r-md);background:var(--surface);border:1px solid var(--line);font-size:13px;line-height:17px;color:var(--ink-2)}
+.pacc b{color:var(--ink)}
+.pacc .tagm{font:italic 800 13px/1 var(--font-display);text-transform:uppercase;background:var(--slab);color:var(--on-slab);padding:5px 8px;border-radius:2px;flex:none}
+.psys{margin-top:12px;border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line));border-radius:var(--r-md);background:var(--surface);padding:12px}
+.psys .t{display:flex;justify-content:space-between;align-items:center}
+.psys h4{font:italic 800 18px/1 var(--font-display);text-transform:uppercase}
+.psys p{font-size:13px;line-height:18px;color:var(--ink-2);margin-top:6px}
+.plist{margin-top:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
+.plist .uh{padding:10px 12px 10px 0}
+.plist .uh h3{font-size:17px}
+.plist .uh h3 .tg{padding:6px 14px 5px 12px;border-radius:0}
+.prw{display:grid;grid-template-columns:1fr auto 28px;gap:10px;align-items:center;padding:12px;border-top:1px solid var(--line)}
+.prw:first-of-type{border-top:0}
+.prw .nm{font:700 16px/1.1 var(--font-cond);text-transform:uppercase;letter-spacing:.02em}
+.prw .s{font-size:12px;line-height:16px;color:var(--muted);margin-top:3px}
+.prw .s2{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center;font-size:12px;color:var(--ink-2)}
+.prw .scheme{height:20px;font-size:12px;padding:0 6px}
+.prw .rt{width:40px;height:40px;font-size:21px}
+.prw .rt small{display:none}
+.prw .morebtn{width:28px;height:40px;border:0}
+.bnav{flex:none;height:84px;padding-bottom:24px;display:grid;grid-template-columns:repeat(5,1fr);background:var(--surface);border-top:1px solid var(--line)}
+.bnav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:600 12px/1 var(--font-cond);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);position:relative}
+.bnav a.on{color:var(--ink)}
+.bnav a.on::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;background:var(--team-accent)}
+.bnav a.on svg{color:var(--team-accent-text)}
+.bnav a .d{position:absolute;top:10px;left:58%;width:8px;height:8px;border-radius:50%;background:var(--brand)}
+.homebar{position:absolute;bottom:8px;left:50%;width:134px;height:5px;border-radius:3px;background:var(--ink);opacity:.8;transform:translateX(-50%)}
+
+/* sheet */
+.scrim{position:absolute;inset:0;background:rgba(3,6,12,.62);z-index:8}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:9;background:var(--surface);border-radius:20px 20px 0 0;border-top:1px solid var(--line-strong);padding:10px 16px 34px;animation:up var(--d3) var(--ease-out) both}
+@keyframes up{from{transform:translateY(40%);opacity:.3}to{transform:none;opacity:1}}
+.grab{width:40px;height:5px;border-radius:3px;background:var(--line-strong);margin:0 auto 14px}
+.sheet h3{font:italic 800 24px/1 var(--font-display);text-transform:uppercase;margin:8px 0 4px}
+.sheet .sb{font-size:13px;color:var(--muted)}
+.cons{margin-top:14px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
+.cons div{display:flex;justify-content:space-between;gap:12px;padding:11px 12px;border-top:1px solid var(--line);font-size:13px;line-height:18px;color:var(--ink-2)}
+.cons div:first-child{border-top:0}
+.cons div b{color:var(--ink);font-weight:600;text-align:right;white-space:nowrap}
+.sheet .acts{display:grid;gap:8px;margin-top:14px}
+.sheet .acts .btn{height:48px;font-size:15px}
+.btn.destructive{background:var(--loss);color:#fff;border-color:transparent}
+.sheet .note{font-size:12px;line-height:16px;color:var(--muted);margin-top:10px;text-align:center}
+
+/* ===================== LIGHT + SPEC ===================== */
+.lightcard{width:900px;padding:24px;border-radius:12px}
+.lightcard .strip{grid-template-columns:1fr 1.25fr 1.45fr 1.35fr 1.1fr}
+.spec{flex:1;background:#0E131C;border:1px solid #1E2635;border-radius:12px;padding:24px;color:#C5CEDC}
+.spec h4{font:italic 800 20px/1 var(--font-display);text-transform:uppercase;color:#fff;margin-bottom:12px}
+.spec .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+.tier{border-radius:6px;background:#111723;border:1px solid #263146;padding:10px;display:flex;flex-direction:column;gap:8px}
+.tier .rt{width:100%;height:40px;font-size:22px}
+.tier .rt small{display:none}
+.tier b{font:700 14px/1 var(--font-cond);text-transform:uppercase;letter-spacing:.04em;color:#F3F6FB}
+.tier span{font:500 12px/16px var(--font-sans);color:#97A3B6}
+.typespec{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px}
+.ts div{display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px solid #1E2635;padding:8px 0;color:#F3F6FB}
+.ts div em{font:500 12px/1 var(--font-cond);font-style:normal;letter-spacing:.06em;color:#7A879D;text-transform:uppercase}
+.sw{display:flex;gap:6px;flex-wrap:wrap}
+.sw i{width:56px;height:44px;border-radius:5px;display:flex;align-items:flex-end;padding:4px;font:600 10px/1 var(--font-cond);font-style:normal;letter-spacing:.04em;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<!-- SVG icon sprite (stroke icons, 18px) -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 19V5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-binoc" viewBox="0 0 24 24"><circle cx="6.5" cy="15.5" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="15.5" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 12 8 5h3v10M17.5 12 16 5h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2.5 20c1-3.5 3.5-5 6.5-5s5.5 1.5 6.5 5M16 4.5a3.5 3.5 0 0 1 0 7M18 15c2 .6 3.2 2.3 3.6 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M5 19 19 5M5 5l4 4M15 15l4 4M14 5h5v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 10h18M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-draft" viewBox="0 0 24 24"><path d="M8 4h8M6 8h12M4 12h16v8H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h14l-3-3M20 16H6l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-whistle" viewBox="0 0 24 24"><circle cx="9" cy="14" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 9.5 21 5v5h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13h5l1.5 3h5L16 13h5M5 5h14l2 8v6H3v-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 10h18M3 15h18M9 5v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H4a3 3 0 0 0 4 4M16 6h4a3 3 0 0 1-4 4M12 13v4M8 20h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-stand" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-3-7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11 12 4l9 7v9h-6v-6H9v6H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-league" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-building" viewBox="0 0 24 24"><path d="M4 21V5l8-2v18M12 8h8v13M8 8h.01M8 12h.01M8 16h.01M16 12h.01M16 16h.01M2 21h20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<div class="board">
+  <div class="board-head">
+    <div>
+      <h1>Sunday <span>Broadcast</span></h1>
+      <p>Gridiron Dynasty redesign, direction A. The game-day TV package becomes the whole product: team-colour slabs, condensed italic type and lower-third data bars. Colour is spent on identity and on meaning, never both on the same element.</p>
+    </div>
+    <div class="board-meta">Staff &amp; Hiring · Cleveland Browns<br>Dark (primary) · Light · Phone 390</div>
+  </div>
+
+  <div class="row">
+  <!-- ======================= DESKTOP 1440 ======================= -->
+  <div>
+    <div class="cap"><b>Desktop · 1440</b> · dark · Staff &amp; Hiring, Chart view · OC overflow menu open</div>
+    <div class="app desktop theme-dark">
+      <header class="topbar">
+        <div class="tb-brand">
+          <div class="crest cle">CLE</div>
+          <div class="tb-club"><b>Browns</b><span>AFC North</span></div>
+        </div>
+        <div class="tb-zone rec">
+          <div><span class="label">Record</span><b class="tnum">5–2</b></div>
+        </div>
+        <div class="tb-zone next">
+          <div class="wk"><span class="label">Next game</span><b class="tnum">Week 9 <em>of 18</em></b><div class="prog"><i></i></div></div>
+          <div class="vs"><small>@</small><div class="crest atl">ATL</div>Falcons</div>
+        </div>
+        <div class="tb-zone kpis">
+          <div class="kpi">
+            <span class="label">Job security</span>
+            <div class="v tnum tone-warn">39% <small>Hot seat</small></div>
+            <div class="meter"><i style="width:39%;background:var(--warn)"></i></div>
+          </div>
+          <div class="kpi">
+            <span class="label">Cap space</span>
+            <div class="v tnum tone-warn">$885K <small>Tight</small></div>
+            <div class="meter"><i style="width:6%;background:var(--warn)"></i></div>
+          </div>
+          <div class="kpi">
+            <span class="label">Team OVR</span>
+            <div class="v tnum">80 <small class="tone-win" style="color:var(--t-pro)">Pro Bowl tier</small></div>
+            <div class="meter"><i style="width:80%;background:var(--t-pro)"></i></div>
+          </div>
+        </div>
+        <div class="tb-actions">
+          <button class="iconbtn" aria-label="Search, Command K"><svg width="18" height="18"><use href="#i-search"/></svg></button>
+          <div class="cta-wrap">
+            <div class="cta">
+              <button class="go">Coach the game <svg width="16" height="16"><use href="#i-right"/></svg></button>
+              <button class="more" aria-label="More week actions: Sim week, sim mode"><svg width="16" height="16"><use href="#i-chev"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="shell">
+        <aside class="side">
+          <div class="word">Gridiron <span>Dynasty</span><small>Season 2026 · Week 9</small></div>
+          <nav class="nav">
+            <a class="ni"><svg width="18" height="18"><use href="#i-inbox"/></svg>Inbox<span class="cnt" style="width:8px;min-width:8px;height:8px;padding:0"></span></a>
+            <div class="ngrp"><span class="label">Career</span>
+              <a class="ni"><svg width="18" height="18"><use href="#i-user"/></svg>My Career</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-grid"/></svg>Dashboard</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-book"/></svg>The Ledger</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-binoc"/></svg>Scouting</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-clock"/></svg>History</a>
+            </div>
+            <div class="ngrp"><span class="label">Team</span>
+              <a class="ni"><svg width="18" height="18"><use href="#i-users"/></svg>Roster</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-list"/></svg>Depth Chart</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-trend"/></svg>Development</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-play"/></svg>Game Plan</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-cal"/></svg>Schedule</a>
+            </div>
+            <div class="ngrp"><span class="label">Personnel</span>
+              <a class="ni"><svg width="18" height="18"><use href="#i-draft"/></svg>Draft Board</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-pen"/></svg>Free Agency</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-swap"/></svg>Trade Center</a>
+            </div>
+            <div class="ngrp"><span class="label">Club</span>
+              <a class="ni"><svg width="18" height="18"><use href="#i-dollar"/></svg>Salary Cap</a>
+              <a class="ni on"><svg width="18" height="18"><use href="#i-whistle"/></svg>Staff &amp; Hiring</a>
+            </div>
+            <div class="ngrp"><span class="label">League</span>
+              <a class="ni"><svg width="18" height="18"><use href="#i-search"/></svg>Find a Player</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-stand"/></svg>Standings</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-table"/></svg>Stats Hub</a>
+              <a class="ni"><svg width="18" height="18"><use href="#i-trophy"/></svg>Awards &amp; HOF</a>
+            </div>
+          </nav>
+          <div class="side-foot">
+            <div class="avatar">YOU</div>
+            <div class="who"><b>NFL Head Coach</b><span>Coaching · Season 2026</span></div>
+            <button class="iconbtn" aria-label="Settings: theme, density, save, new career"><svg width="17" height="17"><use href="#i-gear"/></svg></button>
+          </div>
+        </aside>
+
+        <main>
+          <div class="ph">
+            <div>
+              <div class="eyebrow">Club</div>
+              <h1>Staff &amp; Hiring</h1>
+              <p>Your coaching tree and front office, what each seat does to the sim, and who is available to replace them.</p>
+            </div>
+            <div class="seg" role="tablist" aria-label="View">
+              <button class="on" role="tab" aria-selected="true"><svg width="15" height="15"><use href="#i-grid"/></svg>Chart</button>
+              <button role="tab" aria-selected="false"><svg width="15" height="15"><use href="#i-list"/></svg>Table</button>
+            </div>
+          </div>
+
+          <div class="tabs" role="tablist">
+            <button class="tab on" role="tab" aria-selected="true">My Staff <span class="pill tnum">10 / 11</span></button>
+            <button class="tab" role="tab" aria-selected="false">Hiring Market</button>
+          </div>
+
+          <div class="access">
+            <div class="tag">Advisor</div>
+            <div class="txt"><b>At your rung the GM makes staff moves.</b> Actions on this screen send him a recommendation; nothing is hired or let go until he signs off.</div>
+            <a class="lnk">What you control</a>
+          </div>
+
+          <!-- KPI lower-third -->
+          <section class="strip" aria-label="Staff summary">
+            <div class="k">
+              <div class="top"><span class="label">Staff</span></div>
+              <div class="val tnum">10 <small>of 11 seats</small></div>
+              <div class="why"><b>0 elite</b> (rated 90+)<br><span class="mut">1 vacant: Analytics</span></div>
+            </div>
+            <div class="k">
+              <div class="top"><span class="label">Staff rating</span><span class="chipgrade cg-loss">Poor staff</span></div>
+              <div class="val tnum">49 <small>avg of 10</small></div>
+              <div class="scale" aria-label="49 on a 40 to 99 scale, league average 74">
+                <div class="tr"></div>
+                <div class="avg" style="left:57.6%"></div><div class="avgl" style="left:57.6%">LG AVG 74</div>
+                <div class="mk" style="left:15%"></div>
+              </div>
+              <div class="why"><span class="mut">25 below the league average</span></div>
+            </div>
+            <div class="k">
+              <div class="top"><span class="label">On-field impact</span><span class="chipgrade cg-loss">At the floor</span></div>
+              <div class="val tnum" style="color:var(--loss)">−9.0 <small>pts / snap edge</small></div>
+              <div class="split tnum">
+                <div><b>−4.5</b><span>Offense · OC</span></div>
+                <div><b>−4.5</b><span>Defense · DC</span></div>
+              </div>
+              <div class="why"><span class="mut">Each side bottoms out at −4.5. A coordinator rated 52+ is the first hire that moves it.</span></div>
+            </div>
+            <div class="k">
+              <div class="top"><span class="label">Player development</span><span class="chipgrade cg-warn">16% slower</span></div>
+              <div class="val tnum">×0.84 <small>growth rate</small></div>
+              <div class="why">Average of your 4 position coaches, applied to <b>every</b> player. ×1.00 is normal; the floor is ×0.80.</div>
+            </div>
+            <div class="k">
+              <div class="top"><span class="label">Staff payroll</span></div>
+              <div class="val tnum">$20.3M</div>
+              <div class="why"><b class="tnum">$15.1M</b> headroom in the staff budget<br><span class="mut">Separate from the player cap</span></div>
+            </div>
+          </section>
+
+          <!-- System check -->
+          <section class="syscheck" aria-label="Scheme alignment">
+            <div class="sc-head">
+              <div class="eyebrow">System check</div>
+              <h3>5 coaches off-system</h3>
+              <p>The sim runs your <b>coordinators'</b> schemes. Everyone else is teaching something different.</p>
+            </div>
+            <div class="sc-side">
+              <div class="sc-run"><span class="lbl">Offense runs</span><span class="scheme live">West Coast</span><span class="lbl">· OC Dawson</span></div>
+              <div class="sc-list">
+                <div class="sc-item"><div class="who">HC <span>Nakamura</span></div><span class="scheme off">RPO Heavy</span></div>
+                <div class="sc-item"><div class="who">QB <span>Reyes</span></div><span class="scheme off">Spread</span></div>
+                <div class="sc-item"><div class="who">OL <span>Marsh</span></div><span class="scheme off">Pro Style</span></div>
+              </div>
+            </div>
+            <div class="sc-side">
+              <div class="sc-run"><span class="lbl">Defense runs</span><span class="scheme live">4-3 Base</span><span class="lbl">· DC Barnett</span></div>
+              <div class="sc-list">
+                <div class="sc-item"><div class="who">DL <span>Vaughn</span></div><span class="scheme off">4-2-5 Nickel</span></div>
+                <div class="sc-item"><div class="who">Secondary <span>Bowers</span></div><span class="scheme off">3-4 Base</span><span style="font-size:13px;color:var(--muted)">opposite front</span></div>
+                <div class="sc-item"><div class="who">ST <span>M. Dawson</span></div><span class="scheme na">West Coast · no effect</span></div>
+              </div>
+            </div>
+          </section>
+
+          <div class="sec">
+            <h2><span class="bar"></span>Coaching tree</h2>
+            <div class="legend" aria-label="Rating tiers">
+              <span class="lg"><span class="rt elite">9</span>Elite 90+</span>
+              <span class="lg"><span class="rt pro">8</span>Pro Bowl 82</span>
+              <span class="lg"><span class="rt starter">7</span>Starter 74</span>
+              <span class="lg"><span class="rt rotation">6</span>Rotation 66</span>
+              <span class="lg"><span class="rt depth">5</span>Depth 58</span>
+              <span class="lg"><span class="rt weak">5</span>Weak 50</span>
+              <span class="lg"><span class="rt liab">4</span>Liability &lt;50</span>
+            </div>
+          </div>
+
+          <!-- Head coach -->
+          <article class="hc">
+            <div class="blk"><span>HC</span></div>
+            <div class="main">
+              <div class="role">Head Coach · leads every unit</div>
+              <div class="nm">Miles Nakamura</div>
+              <div class="metaline">
+                <span class="scheme off">RPO Heavy</span>
+                <span class="eff neg"><span class="ar">▼</span><b class="tnum">−2.0</b> situational (late-game &amp; 4th-down calls)</span>
+              </div>
+            </div>
+            <div class="ratewrap"><div class="rt weak tnum">57<small>Weak</small></div><div class="delta tnum"><b>−17</b> vs avg</div></div>
+            <div class="contract tnum"><b>$8.0M/yr</b>4 yr left</div>
+            <button class="morebtn" aria-label="Actions for Miles Nakamura"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+          </article>
+
+          <div class="units">
+            <!-- OFFENSE -->
+            <section class="unit">
+              <div class="uh"><h3><span class="tg">OFF</span>Offense</h3><span class="scheme live">West Coast</span></div>
+              <div class="coord">
+                <div>
+                  <span class="rtag"><span>OC</span></span>
+                  <div class="nm">Tyrese Dawson</div>
+                  <div class="rl">Offensive Coordinator · calls your offense</div>
+                </div>
+                <div class="ratewrap"><div class="rt liab tnum">48<small>Liab.</small></div><div class="delta tnum"><b>−26</b> vs avg</div></div>
+                <div class="metaline">
+                  <span class="eff neg"><span class="ar">▼</span><b class="tnum">−4.5</b> offense edge / snap <span class="flag">Floor</span></span>
+                </div>
+                <div class="foot"><div class="contract tnum"><b>$2.2M/yr</b>3 yr left</div>
+                  <button class="morebtn open" aria-expanded="true" aria-label="Actions for Tyrese Dawson"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+                </div>
+                <div class="pop" role="menu" style="top:calc(100% - 6px)">
+                  <div class="mi"><svg width="16" height="16"><use href="#i-user"/></svg><div>View full readout<span>Effects, tenure, history</span></div></div>
+                  <div class="mi hl"><svg width="16" height="16"><use href="#i-search"/></svg><div>Find a better OC<span>Market filtered to OCs rated 52+, West Coast first</span></div></div>
+                  <hr>
+                  <div class="mi danger"><svg width="16" height="16"><use href="#i-send"/></svg><div>Recommend letting go…<span>Opens a review of what it costs</span></div></div>
+                </div>
+              </div>
+              <div class="pc-head"><span class="label">Position coaches</span><span class="label">Dev share</span></div>
+              <div class="pc">
+                <span class="ab">QB</span>
+                <div><div class="nm">Roman Reyes</div>
+                  <div class="sub"><span class="scheme off">Spread</span><span class="eff neg"><span class="ar">▼</span><b class="tnum">×0.83</b> dev</span><span class="ct tnum">$920K/yr · 4 yr</span></div></div>
+                <div class="ratewrap"><div class="rt sm liab tnum">46</div></div>
+                <button class="morebtn" aria-label="Actions for Roman Reyes"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+              </div>
+              <div class="pc">
+                <span class="ab">OL</span>
+                <div><div class="nm">Colton Marsh</div>
+                  <div class="sub"><span class="scheme off">Pro Style</span><span class="eff neg"><span class="ar">▼</span><b class="tnum">×0.84</b> dev</span></div></div>
+                <div class="ratewrap"><div class="rt sm liab tnum">47</div></div>
+                <button class="morebtn" aria-label="Actions for Colton Marsh"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+              </div>
+            </section>
+
+            <!-- DEFENSE -->
+            <section class="unit">
+              <div class="uh"><h3><span class="tg">DEF</span>Defense</h3><span class="scheme live">4-3 Base</span></div>
+              <div class="coord">
+                <div>
+                  <span class="rtag"><span>DC</span></span>
+                  <div class="nm">Darius Barnett</div>
+                  <div class="rl">Defensive Coordinator · calls your defense</div>
+                </div>
+                <div class="ratewrap"><div class="rt liab tnum">46<small>Liab.</small></div><div class="delta tnum"><b>−28</b> vs avg</div></div>
+                <div class="metaline">
+                  <span class="eff neg"><span class="ar">▼</span><b class="tnum">−4.5</b> defense edge / snap <span class="flag">Floor</span></span>
+                </div>
+                <div class="foot"><div class="contract tnum"><b>$2.1M/yr</b>4 yr left</div>
+                  <button class="morebtn" aria-label="Actions for Darius Barnett"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+                </div>
+              </div>
+              <div class="pc-head"><span class="label">Position coaches</span><span class="label">Dev share</span></div>
+              <div class="pc">
+                <span class="ab">DL</span>
+                <div><div class="nm">Bryce Vaughn</div>
+                  <div class="sub"><span class="scheme off">4-2-5 Nickel</span><span class="eff neg"><span class="ar">▼</span><b class="tnum">×0.87</b> dev</span><span class="ct tnum">$1.1M/yr · 2 yr</span></div></div>
+                <div class="ratewrap"><div class="rt sm weak tnum">53</div></div>
+                <button class="morebtn" aria-label="Actions for Bryce Vaughn"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+              </div>
+              <div class="pc">
+                <span class="ab">DB</span>
+                <div><div class="nm">Trey Bowers</div>
+                  <div class="sub"><span class="scheme off">3-4 Base</span><span class="eff neg"><span class="ar">▼</span><b class="tnum">×0.83</b> dev</span></div></div>
+                <div class="ratewrap"><div class="rt sm liab tnum">45</div></div>
+                <button class="morebtn" aria-label="Actions for Trey Bowers"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+              </div>
+            </section>
+
+            <!-- SPECIAL TEAMS -->
+            <section class="unit">
+              <div class="uh"><h3><span class="tg">ST</span>Special Teams</h3><span class="label">No scheme in sim</span></div>
+              <div class="coord">
+                <div>
+                  <span class="rtag"><span>STC</span></span>
+                  <div class="nm">Miles Dawson</div>
+                  <div class="rl">Special Teams Coordinator</div>
+                </div>
+                <div class="ratewrap"><div class="rt liab tnum">48<small>Liab.</small></div><div class="delta tnum"><b>−26</b> vs avg</div></div>
+                <div class="metaline">
+                  <span class="scheme na">West Coast</span>
+                  <span class="eff neg"><span class="ar">▼</span><b class="tnum">−1.0</b> situational</span>
+                </div>
+                <div class="foot"><div class="contract tnum"><b>$2.2M/yr</b>3 yr left</div>
+                  <button class="morebtn" aria-label="Actions for Miles Dawson"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+                </div>
+              </div>
+              <div style="padding:12px 14px;border-top:1px solid var(--line);font-size:13px;line-height:18px;color:var(--muted)">
+                Dev share is one program-wide number: the 4 position coaches average to <b style="color:var(--ink-2)" class="tnum">×0.84</b> for every player, not per unit.
+              </div>
+            </section>
+          </div>
+
+          <div class="fo">
+            <h3>Front office &amp; scouting</h3>
+            <span class="label">2 filled</span>
+            <span class="vacant">+ Analytics · vacant</span>
+            <span style="margin-left:auto"></span>
+            <button class="btn quiet">Show 3 seats <svg width="16" height="16"><use href="#i-chev"/></svg></button>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= PHONES ======================= -->
+  <div style="display:flex;flex-direction:column;gap:40px">
+    <div>
+      <div class="cap"><b>Phone · 390</b> · top of Staff</div>
+      <div class="phone"><div class="screen theme-dark">
+        <div class="status"><span class="tnum">1:04</span><span style="font-size:13px">●●● 5G ▮</span></div>
+        <div class="island"></div>
+        <div class="pbar">
+          <div class="tm"><div class="crest cle">CLE</div><b class="tnum">5–2</b></div>
+          <div class="nx"><span class="tnum">Wk 9 / 18</span><b>@ ATL</b></div>
+          <div class="pcta"><span>Coach <svg width="14" height="14"><use href="#i-right"/></svg></span></div>
+        </div>
+        <div class="ticker tnum">
+          <div>Job <b style="color:var(--warn)">39%</b></div>
+          <div>Cap <b style="color:var(--warn)">$885K</b></div>
+          <div>OVR <b>80</b></div>
+          <div>Sim <b style="font-size:14px">Fast</b></div>
+        </div>
+        <div class="pscroll">
+          <div class="eyebrow">Club</div>
+          <h1>Staff &amp; Hiring</h1>
+          <div class="ptabs"><button class="tab on">My Staff</button><button class="tab">Hiring Market</button></div>
+          <div class="pacc"><span class="tagm">Advisor</span><span><b>GM decides.</b> Your actions send recommendations.</span></div>
+          <div class="pk">
+            <div class="k"><span class="label">Staff rating</span><div class="val tnum">49</div><span class="chipgrade cg-loss" style="align-self:flex-start">Poor staff</span><div class="why tnum">Lg avg 74</div></div>
+            <div class="k"><span class="label">On-field</span><div class="val tnum" style="color:var(--loss)">−9.0</div><span class="chipgrade cg-loss" style="align-self:flex-start">At floor</span><div class="why tnum">OFF −4.5 · DEF −4.5</div></div>
+            <div class="k"><span class="label">Development</span><div class="val tnum">×0.84</div><span class="chipgrade cg-warn" style="align-self:flex-start">16% slower</span></div>
+            <div class="k"><span class="label">Payroll</span><div class="val tnum">$20.3M</div><div class="why tnum">$15.1M headroom<br>10 staff · 0 elite</div></div>
+          </div>
+          <div class="psys">
+            <div class="t"><h4>System check</h4><span class="chipgrade cg-warn">5 off-system</span></div>
+            <p>Sim runs <span class="scheme live" style="height:20px;font-size:12px">West Coast</span> and <span class="scheme live" style="height:20px;font-size:12px">4-3 Base</span>. HC, QB, OL, DL and Secondary coaches teach other schemes.</p>
+          </div>
+          <div class="plist">
+            <div class="uh"><h3><span class="tg">HC</span>Head Coach</h3></div>
+            <div class="prw">
+              <div><div class="nm">Miles Nakamura</div><div class="s2"><span class="scheme off">RPO Heavy</span><span class="tnum">▼ −2.0 situational</span></div><div class="s tnum">$8.0M/yr · 4 yr</div></div>
+              <div class="rt weak tnum">57</div>
+              <button class="morebtn" aria-label="Actions"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <nav class="bnav">
+          <a><svg width="22" height="22"><use href="#i-home"/></svg>Career<span class="d"></span></a>
+          <a><svg width="22" height="22"><use href="#i-users"/></svg>Team</a>
+          <a><svg width="22" height="22"><use href="#i-swap"/></svg>Personnel</a>
+          <a class="on"><svg width="22" height="22"><use href="#i-building"/></svg>Club</a>
+          <a><svg width="22" height="22"><use href="#i-league"/></svg>League</a>
+        </nav>
+        <div class="homebar"></div>
+      </div></div>
+    </div>
+
+    <div>
+      <div class="cap"><b>Phone · 390</b> · scrolled to Offense · “Recommend letting go” review sheet</div>
+      <div class="phone"><div class="screen theme-dark">
+        <div class="status"><span class="tnum">1:05</span><span style="font-size:13px">●●● 5G ▮</span></div>
+        <div class="island"></div>
+        <div class="pbar">
+          <div class="tm"><div class="crest cle">CLE</div><b class="tnum">5–2</b></div>
+          <div class="nx"><span class="tnum">Wk 9 / 18</span><b>@ ATL</b></div>
+          <div class="pcta"><span>Coach <svg width="14" height="14"><use href="#i-right"/></svg></span></div>
+        </div>
+        <div class="pscroll" style="padding-top:12px">
+          <div class="plist" style="margin-top:0">
+            <div class="uh"><h3><span class="tg">OFF</span>Offense</h3><span class="scheme live" style="height:20px;font-size:12px;margin-right:0">West Coast</span></div>
+            <div class="prw">
+              <div><div class="nm">Tyrese Dawson</div><div class="s">Off. Coordinator · $2.2M/yr · 3 yr</div><div class="s2 tnum">▼ −4.5 edge/snap <span class="eff"><span class="flag">Floor</span></span></div></div>
+              <div class="rt liab tnum">48</div>
+              <button class="morebtn" aria-label="Actions"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+            </div>
+            <div class="prw">
+              <div><div class="nm">Roman Reyes</div><div class="s">QB Coach · $920K/yr · 4 yr</div><div class="s2"><span class="scheme off">Spread</span><span class="tnum">▼ ×0.83 dev</span></div></div>
+              <div class="rt liab tnum">46</div>
+              <button class="morebtn" aria-label="Actions"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+            </div>
+            <div class="prw">
+              <div><div class="nm">Colton Marsh</div><div class="s">OL Coach</div><div class="s2"><span class="scheme off">Pro Style</span><span class="tnum">▼ ×0.84 dev</span></div></div>
+              <div class="rt liab tnum">47</div>
+              <button class="morebtn" aria-label="Actions"><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet" role="dialog" aria-label="Recommend letting go of Tyrese Dawson">
+          <div class="grab"></div>
+          <span class="label">Recommendation to GM</span>
+          <h3>Let go of Tyrese Dawson?</h3>
+          <div class="sb">Offensive Coordinator · rated 48 · West Coast</div>
+          <div class="cons tnum">
+            <div>Remaining contract<b>$2.2M/yr · 3 yr</b></div>
+            <div>OC seat<b>Vacant until a hire</b></div>
+            <div>Offense edge<b>Stays −4.5 unless replaced by 52+</b></div>
+            <div>Who decides<b>GM (you advise)</b></div>
+          </div>
+          <div class="acts">
+            <button class="btn destructive">Send recommendation</button>
+            <button class="btn">Find a replacement first</button>
+          </div>
+          <div class="note">Nothing changes until the GM acts. You can withdraw it from the Inbox.</div>
+        </div>
+        <div class="homebar" style="z-index:10"></div>
+      </div></div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ======================= LIGHT + SPEC ======================= -->
+  <div class="row" style="margin-top:48px">
+    <div>
+      <div class="cap"><b>Light mode</b> · same tokens, light values</div>
+      <div class="app lightcard theme-light">
+        <section class="strip" style="margin-top:0" aria-label="Staff summary, light">
+          <div class="k"><div class="top"><span class="label">Staff</span></div><div class="val tnum">10 <small>of 11 seats</small></div><div class="why"><b>0 elite</b><br><span class="mut">1 vacant: Analytics</span></div></div>
+          <div class="k"><div class="top"><span class="label">Staff rating</span><span class="chipgrade cg-loss">Poor staff</span></div><div class="val tnum">49 <small>avg</small></div>
+            <div class="scale"><div class="tr"></div><div class="avg" style="left:57.6%"></div><div class="avgl" style="left:57.6%">LG AVG 74</div><div class="mk" style="left:15%"></div></div></div>
+          <div class="k"><div class="top"><span class="label">On-field impact</span><span class="chipgrade cg-loss">At the floor</span></div><div class="val tnum" style="color:var(--loss)">−9.0 <small>edge / snap</small></div>
+            <div class="split tnum"><div><b>−4.5</b><span>Offense</span></div><div><b>−4.5</b><span>Defense</span></div></div></div>
+          <div class="k"><div class="top"><span class="label">Development</span><span class="chipgrade cg-warn">16% slower</span></div><div class="val tnum">×0.84</div><div class="why">4 position coaches, all players</div></div>
+          <div class="k"><div class="top"><span class="label">Payroll</span></div><div class="val tnum">$20.3M</div><div class="why"><b class="tnum">$15.1M</b> headroom</div></div>
+        </section>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+          <section class="unit">
+            <div class="uh"><h3><span class="tg">DEF</span>Defense</h3><span class="scheme live">4-3 Base</span></div>
+            <div class="coord">
+              <div><span class="rtag"><span>DC</span></span><div class="nm">Darius Barnett</div><div class="rl">Defensive Coordinator</div></div>
+              <div class="ratewrap"><div class="rt liab tnum">46<small>Liab.</small></div><div class="delta tnum"><b>−28</b> vs avg</div></div>
+              <div class="metaline"><span class="eff neg"><span class="ar">▼</span><b class="tnum">−4.5</b> defense edge / snap <span class="flag">Floor</span></span></div>
+              <div class="foot"><div class="contract tnum"><b>$2.1M/yr</b>4 yr left</div><button class="morebtn" aria-label="Actions"><svg width="18" height="18"><use href="#i-dots"/></svg></button></div>
+            </div>
+            <div class="pc"><span class="ab">DL</span><div><div class="nm">Bryce Vaughn</div><div class="sub"><span class="scheme off">4-2-5 Nickel</span><span class="eff neg"><span class="ar">▼</span><b class="tnum">×0.87</b> dev</span><span class="ct tnum">$1.1M/yr · 2 yr</span></div></div><div class="rt sm weak tnum">53</div><button class="morebtn" aria-label="Actions"><svg width="18" height="18"><use href="#i-dots"/></svg></button></div>
+          </section>
+          <div>
+            <article class="hc" style="grid-template-columns:auto 1fr auto;gap:16px">
+              <div class="blk" style="width:72px"><span style="font-size:24px">HC</span></div>
+              <div class="main"><div class="role">Head Coach</div><div class="nm" style="font-size:24px">Miles Nakamura</div><div class="metaline"><span class="scheme off">RPO Heavy</span><span class="eff neg tnum"><span class="ar">▼</span><b>−2.0</b> situational</span></div></div>
+              <div class="ratewrap"><div class="rt weak tnum">57<small>Weak</small></div><div class="delta tnum"><b>−17</b> vs avg</div></div>
+            </article>
+            <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+              <span class="lg"><span class="rt elite" style="width:30px;height:24px;font-size:14px">92</span></span>
+              <span class="lg"><span class="rt pro" style="width:30px;height:24px;font-size:14px">85</span></span>
+              <span class="lg"><span class="rt starter" style="width:30px;height:24px;font-size:14px">77</span></span>
+              <span class="lg"><span class="rt rotation" style="width:30px;height:24px;font-size:14px">69</span></span>
+              <span class="lg"><span class="rt depth" style="width:30px;height:24px;font-size:14px">61</span></span>
+              <span class="lg"><span class="rt weak" style="width:30px;height:24px;font-size:14px">53</span></span>
+              <span class="lg"><span class="rt liab" style="width:30px;height:24px;font-size:14px">45</span></span>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+              <div class="cta" style="height:38px"><button class="go" style="font-size:15px">Coach the game</button><button class="more"><svg width="14" height="14"><use href="#i-chev"/></svg></button></div>
+              <button class="btn">Secondary</button>
+              <button class="btn quiet">Quiet</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <h4>Rating tiers · one scale for players, staff, prospects</h4>
+      <div class="grid">
+        <div class="tier theme-dark"><div class="rt elite tnum">90+</div><b>Elite</b><span>Gold fill, dark ink</span></div>
+        <div class="tier theme-dark"><div class="rt pro tnum">82–89</div><b>Pro Bowl</b><span>Green fill</span></div>
+        <div class="tier theme-dark"><div class="rt starter tnum">74–81</div><b>Starter</b><span>Blue fill · league avg 74</span></div>
+        <div class="tier theme-dark"><div class="rt rotation tnum">66–73</div><b>Rotation</b><span>Slate fill</span></div>
+        <div class="tier theme-dark"><div class="rt depth tnum">58–65</div><b>Depth</b><span>Grey outline</span></div>
+        <div class="tier theme-dark"><div class="rt weak tnum">50–57</div><b>Weak</b><span>Amber outline</span></div>
+        <div class="tier theme-dark"><div class="rt liab tnum">&lt;50</div><b>Liability</b><span>Red outline</span></div>
+      </div>
+      <div class="typespec">
+        <div class="ts">
+          <div><span style="font:italic 800 40px/1 var(--font-display);text-transform:uppercase">Hero 40</span><em>Barlow Cond 800 italic</em></div>
+          <div><span style="font:italic 800 28px/1 var(--font-display);text-transform:uppercase">H1 · KPI 28–34</span><em>800 italic, tnum</em></div>
+          <div><span style="font:italic 800 22px/1 var(--font-display);text-transform:uppercase">H2 Name 22</span><em>800 italic</em></div>
+          <div><span style="font:700 17px/1 var(--font-cond);text-transform:uppercase">H3 Row name 17</span><em>Semi Cond 700</em></div>
+          <div><span style="font:400 14px/20px var(--font-sans)">Body 14 / 20 Inter</span><em>Inter 400–600</em></div>
+          <div><span style="font:600 12px/1 var(--font-cond);letter-spacing:.07em;text-transform:uppercase;color:#97A3B6">Label 12 · floor</span><em>Nothing smaller</em></div>
+        </div>
+        <div>
+          <div class="sw" style="margin-bottom:10px">
+            <i style="background:#090D14;color:#97A3B6">canvas</i><i style="background:#111723;color:#97A3B6">surface</i><i style="background:#171F2E;color:#97A3B6">surf-2</i><i style="background:#202A3B;color:#97A3B6">surf-3</i><i style="background:#4B5A74;color:#F3F6FB">line-str</i><i style="background:#F3F6FB;color:#0B1220">ink</i><i style="background:#97A3B6;color:#0B1220">muted</i>
+          </div>
+          <div class="sw" style="margin-bottom:10px">
+            <i style="background:#5B96FA;color:#0B1220">brand</i><i style="background:#3CCB82;color:#0B1220">win</i><i style="background:#F2646F;color:#0B1220">loss</i><i style="background:#EDA73C;color:#0B1220">warn</i><i style="background:#F3B53F;color:#0B1220">gold</i>
+          </div>
+          <div class="sw">
+            <i style="background:#311D00;color:#fff">team-fill</i><i style="background:#FF3C00;color:#1A0F00">fill-2</i><i style="background:#FF4A12;color:#0B1220">accent dk</i><i style="background:#E63A00;color:#fff">accent lt</i><i style="background:#0B1220;color:#F3F6FB;box-shadow:inset 0 0 0 1px #4B5A74">slab lt</i>
+          </div>
+          <p style="font-size:13px;line-height:19px;color:#97A3B6;margin-top:14px">Team colour has two jobs: <b style="color:#F3F6FB">fill</b> (raw primary + secondary stripe, big slabs, white or dark ink chosen by WCAG) and <b style="color:#F3F6FB">accent</b> (computed per theme to clear 3:1, used for active bars and eyebrows). Ratings, status and team never share a colour slot.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
