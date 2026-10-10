@@ -9,7 +9,7 @@ const DOT: Record<Voice['tone'], string> = {
   loss: 'bg-loss',
   warn: 'bg-warn',
   info: 'bg-brand',
-  gold: 'bg-[#c9a227]',
+  gold: 'bg-gold',
 }
 
 /**
@@ -35,13 +35,13 @@ export function VoicesCard({ className }: { className?: string }) {
       <div className="space-y-3">
         {voices.map((v) => (
           <div key={v.id} className="flex gap-2.5">
-            <span className={cn('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', DOT[v.tone])} />
+            <span className={cn('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', DOT[v.tone])} aria-hidden />
             <div className="min-w-0">
               <div className="flex flex-wrap items-baseline gap-x-1.5">
-                <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-faint">{v.role}</span>
-                <span className="text-[11px] font-600 text-ink-2">{v.name}</span>
+                <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-faint">{v.role}</span>
+                <span className="text-label font-600 text-ink-2">{v.name}</span>
               </div>
-              <p className="text-xs italic leading-snug text-muted">&ldquo;{v.quote}&rdquo;</p>
+              <p className="text-small leading-snug text-muted">&ldquo;{v.quote}&rdquo;</p>
             </div>
           </div>
         ))}

@@ -35,7 +35,8 @@ export function GmAskButton({
   return (
     <Button
       size="sm"
-      variant="ghost"
+      variant="secondary"
+      rowSafe
       disabled={asked}
       title={title ?? 'Send a request to the front office'}
       onClick={() => (kind === 'trade' ? requestGmTrade(player.id) : requestGmSignFreeAgent(player.id))}

@@ -3,7 +3,7 @@ import { currentSetPiece } from '../game/engine/weekly'
 import { PracticeCard } from './PracticeCard'
 import { ByeWeekCard } from './ByeWeekCard'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card } from '../ui/kit'
+import { Badge, Button, Card, OptionCard, OptionGroup } from '../ui/kit'
 
 /**
  * The weekly rhythm (#6, #8): the annual set piece and any stretch assignment on
@@ -23,51 +23,44 @@ export function CareerRhythm() {
   return (
     <div className="space-y-4">
       {piece && (
-        <Card className="border-[var(--team)]">
+        <Card tier="call" callLabel="Set piece">
           <div className="mb-2 flex items-center gap-2">
-            <Flag size={16} style={{ color: 'var(--team)' }} />
-            <h3 className="font-display text-lg font-700 uppercase tracking-wide">{piece.title}</h3>
-            <Badge tone="team" className="ml-auto">Set piece · Week {world.week}</Badge>
+            <Flag size={16} className="text-[var(--team-accent)]" aria-hidden />
+            <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">{piece.title}</h3>
+            <Badge tone="neutral" className="ml-auto">Week {world.week}</Badge>
           </div>
-          <p className="mb-3 text-sm text-muted">{piece.blurb}</p>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <p className="mb-3 text-body text-muted">{piece.blurb}</p>
+          <OptionGroup label={piece.title} className="sm:grid-cols-2">
             {piece.options.map((o) => (
-              <button
-                key={o.id}
-                onClick={() => resolveSetPiece(o.id)}
-                className="rounded-lg border border-line p-3 text-left transition hover:border-line-strong hover:bg-surface-2"
-              >
-                <div className="font-cond text-sm font-700 uppercase text-ink">{o.label}</div>
-                <div className="mt-0.5 text-xs text-muted">{o.blurb}</div>
-              </button>
+              <OptionCard key={o.id} selected={false} title={o.label} description={o.blurb} onSelect={() => resolveSetPiece(o.id)} />
             ))}
-          </div>
+          </OptionGroup>
         </Card>
       )}
 
       {stretch && !stretch.accepted && (
-        <Card className="border-warn/30 bg-warn-soft">
+        <Card tier="call" callLabel="Stretch assignment">
           <div className="mb-1 flex items-center gap-2">
-            <Handshake size={16} className="text-warn" />
-            <h3 className="font-display text-lg font-700 uppercase tracking-wide text-ink">
+            <Handshake size={16} className="text-warn" aria-hidden />
+            <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
               {stretch.kind === 'interim' ? 'Interim assignment' : 'Stretch assignment'}
             </h3>
           </div>
-          <div className="font-cond text-sm font-700 uppercase text-ink">{stretch.label}</div>
-          <p className="mt-1 text-xs text-ink-2">{stretch.blurb}</p>
+          <div className="font-cond text-body font-700 uppercase tracking-[0.02em] text-ink">{stretch.label}</div>
+          <p className="mt-1 text-small text-ink-2">{stretch.blurb}</p>
           <div className="mt-3 flex gap-2">
-            <Button size="sm" variant="team" className="flex-1" onClick={acceptStretch}>Accept</Button>
-            <Button size="sm" variant="ghost" onClick={declineStretch}><X size={13} /> Pass</Button>
+            <Button size="sm" variant="primary" className="flex-1" onClick={acceptStretch}>Accept</Button>
+            <Button size="sm" variant="secondary" onClick={declineStretch} icon={<X size={13} aria-hidden />}>Pass</Button>
           </div>
         </Card>
       )}
 
       {stretch && stretch.accepted && (
         <Card className="bg-surface-2">
-          <div className="flex items-center gap-2 text-sm">
-            <Handshake size={15} className="text-win" />
+          <div className="flex items-center gap-2 text-body">
+            <Handshake size={15} className="text-win" aria-hidden />
             <span className="font-600 text-ink">On assignment: {stretch.label}</span>
-            <Badge tone="info" className="ml-auto">resolved at season's end</Badge>
+            <Badge tone="neutral" className="ml-auto">resolved at season&rsquo;s end</Badge>
           </div>
         </Card>
       )}

@@ -38,8 +38,8 @@ export function GmRequestsDesk({ className }: { className?: string }) {
   return (
     <Card className={className}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
-          <Handshake size={16} className="text-[var(--team)]" /> GM Requests
+        <h3 className="flex items-center gap-1.5 font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
+          <Handshake size={16} className="text-[var(--team-accent)]" aria-hidden /> GM Requests
         </h3>
         <div className="flex items-center gap-1.5">
           <Badge tone={view.contenders.contending ? 'win' : 'neutral'}>
@@ -50,7 +50,7 @@ export function GmRequestsDesk({ className }: { className?: string }) {
         </div>
       </div>
 
-      <p className="mb-3 text-xs leading-relaxed text-muted">
+      <p className="mb-3 text-small leading-relaxed text-muted">
         You shape the roster; the GM holds the pen. He answers the same week — leaning yes when your standing and the
         record are strong, no when the mandate is a rebuild or the cap says wait. Each request is answered immediately
         and counts against a limit of three per month (one per player per month).
@@ -68,10 +68,10 @@ export function GmRequestsDesk({ className }: { className?: string }) {
                 type="button"
                 onClick={() => toggleGmUntouchable(p.id)}
                 title="Remove protection"
-                className="flex items-center gap-1 rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink-2 transition hover:border-loss/60 hover:text-loss"
+                className="motion pointer-coarse:min-h-11 flex items-center gap-1 rounded-[var(--r-md)] border border-line bg-surface-2 px-2 py-1 text-small text-ink-2 hover:border-loss/60 hover:text-loss"
               >
                 {p.name}
-                <Trash2 size={11} />
+                <Trash2 size={11} aria-hidden />
               </button>
             ))}
           </div>
@@ -81,28 +81,28 @@ export function GmRequestsDesk({ className }: { className?: string }) {
       <div className="mt-4 border-t border-line pt-3">
         <div className="label mb-2">Recent answers</div>
         {requests.length === 0 ? (
-          <p className="text-xs text-muted">
+          <p className="text-small text-muted">
             No requests yet. Ask from a player profile, the Trade Center, Free Agency or the Cap screen.
           </p>
         ) : (
           <div className="space-y-1.5">
             {requests.slice(0, 8).map((r, i) => (
-              <div key={`${r.season}-${r.week}-${i}`} className="flex items-start gap-2 rounded-lg border border-line px-2.5 py-1.5">
+              <div key={`${r.season}-${r.week}-${i}`} className="flex items-start gap-2 rounded-[var(--r-md)] border border-line px-2.5 py-1.5">
                 <Badge tone={OUTCOME_TONE[r.outcome] ?? 'neutral'}>{OUTCOME_LABEL[r.outcome] ?? r.outcome}</Badge>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-cond text-[11px] font-700 uppercase text-muted">{GM_REQUEST_LABEL[r.kind]}</span>
+                    <span className="font-cond text-label font-700 uppercase tracking-[0.07em] text-muted">{GM_REQUEST_LABEL[r.kind]}</span>
                     <button
                       type="button"
                       onClick={() => r.playerId && selectPlayer(r.playerId)}
-                      className={cn('truncate text-sm font-600 text-ink', r.playerId && 'hover:underline')}
+                      className={cn('truncate text-body font-600 text-ink', r.playerId && 'hover:underline')}
                     >
                       {r.name}
                     </button>
                   </div>
-                  <p className="text-[11px] leading-snug text-muted">{r.message}</p>
+                  <p className="text-label leading-snug text-muted">{r.message}</p>
                 </div>
-                <span className="shrink-0 font-cond text-[10px] font-700 uppercase text-faint">
+                <span className="shrink-0 font-cond text-label font-700 uppercase tracking-[0.07em] text-faint tnum">
                   S{r.season} W{r.week}
                 </span>
               </div>
@@ -112,12 +112,12 @@ export function GmRequestsDesk({ className }: { className?: string }) {
       </div>
 
       {career.gmRestructureSeason === league.season && (
-        <p className="mt-3 rounded-lg bg-surface-2 p-2.5 text-[11px] text-muted">
+        <p className="mt-3 rounded-[var(--r-md)] bg-surface-2 p-2.5 text-label text-muted">
           Restructure green-lit this season: a free-agent bid that doesn&apos;t fit will now trigger one automatically.
         </p>
       )}
       {typeof view.contenders.rank === 'number' && view.contenders.contending && (
-        <p className="mt-1 text-[10px] text-faint">
+        <p className="mt-1 text-label text-faint">
           Cap moves are for a push — the GM only restructures while the club reads as a contender.
         </p>
       )}

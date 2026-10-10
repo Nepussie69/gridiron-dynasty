@@ -1,7 +1,10 @@
 import type { ReactNode } from 'react'
 import { cn } from '../lib/cn'
-import { gradeColor, inkOn, money } from '../lib/format'
+import { money, tierStroke } from '../lib/format'
+import { bestInk, parseHex } from '../lib/teamColor'
 import type { Player, Team } from '../game/types'
+import { DevBadge, OvrBadge, PotBubble } from '../ui/kit'
+import { InjuryChip } from './PlayerTable'
 
 /**
  * U4 — a faceless player silhouette for the card views. No portrait art, just a
@@ -37,7 +40,7 @@ export function RatingRing({
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const pct = Math.max(0, Math.min(100, value))
-  const ring = color ?? gradeColor(value)
+  const ring = color ?? tierStroke(value)
   return (
     <span className={cn('relative grid shrink-0 place-items-center', className)} style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
@@ -55,7 +58,7 @@ export function RatingRing({
       </svg>
       <span
         className="absolute font-display font-700 tnum leading-none"
-        style={{ fontSize: size * 0.34, color: 'var(--color-ink)' }}
+        style={{ fontSize: Math.max(12, Math.round(size * 0.34)), color: 'var(--color-ink)' }}
       >
         {value}
       </span>
@@ -65,9 +68,9 @@ export function RatingRing({
 
 /**
  * U4 — the shared roster / find-a-player card. Silhouette on a club-coloured
- * tile, name and bio, an OVR ring, and a footer strip with the ceiling, tier and
- * (optionally) cap hit or a club tag. Purely presentational; the caller decides
- * what clicking does.
+ * tile, name and bio, a rated OVR tile with the ceiling bubble, and a footer
+ * strip with the ceiling and (optionally) cap hit or a club tag. Purely
+ * presentational; the caller decides what clicking does.
  */
 export function PlayerCard({
   player,
@@ -86,8 +89,6 @@ export function PlayerCard({
   tag?: string | null
   className?: string
 }) {
-  const ovrColor = gradeColor(player.ovr)
-  const potColor = gradeColor(player.pot)
   const bg = team ? `linear-gradient(150deg, ${team.primary}, ${team.secondary})` : 'var(--color-surface-3)'
   return (
     <div
@@ -105,62 +106,58 @@ export function PlayerCard({
           : undefined
       }
       className={cn(
-        'motion card-shadow group relative overflow-hidden rounded-2xl border border-line bg-surface text-left',
+        'motion card-shadow group relative overflow-hidden rounded-[var(--r-lg)] border border-line bg-surface text-left',
         onClick && 'cursor-pointer hover:-translate-y-0.5 hover:border-line-strong',
         className,
       )}
     >
       {tag && (
-        <span className="absolute right-2 top-2 z-10 rounded bg-ink/85 px-1.5 py-0.5 font-cond text-[9px] font-700 uppercase tracking-wide text-canvas">
+        <span className="absolute right-2 top-2 z-10 rounded-[var(--r-xs)] bg-slab/90 px-1.5 py-0.5 font-cond text-label font-700 uppercase tracking-wide text-on-slab">
           {tag}
         </span>
       )}
 
       <div className="flex items-center gap-3 p-3">
         <span
-          className="relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl"
+          className="relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-[var(--r-md)]"
           style={{ background: bg, boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.18)' }}
         >
-          <PlayerSilhouette className="h-12 w-12" fill={team ? inkOn(team.primary) : 'var(--color-faint)'} />
-          <span className="absolute bottom-0 left-0 right-0 bg-black/30 py-0.5 text-center font-cond text-[9px] font-700 uppercase tracking-widest text-white">
+          <PlayerSilhouette className="h-12 w-12" fill={team && parseHex(team.primary) ? bestInk(team.primary) : 'var(--color-faint)'} />
+          <span className="absolute inset-x-0 bottom-0 bg-slab/85 py-0.5 text-center font-cond text-label font-700 uppercase tracking-widest text-on-slab">
             {player.pos}
           </span>
         </span>
 
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-display text-lg font-700 uppercase leading-tight text-ink">
+          <span className="block truncate font-display text-[20px] font-800 italic uppercase leading-none text-ink">
             {player.name}
           </span>
-          <span className="mt-0.5 block truncate font-cond text-xs text-muted">
-            {player.injured ? `OUT ${player.injured.games}W` : `${player.college || '—'} · age ${player.age}`}
+          <span className="mt-1 block truncate text-small text-muted">
+            {player.college || '—'} · age {player.age}
           </span>
-          <span className="mt-1 flex items-center gap-1.5">
-            <span className="rounded bg-surface-3 px-1.5 py-0.5 font-cond text-[9px] font-700 uppercase tracking-wide text-ink-2">
-              {player.dev}
-            </span>
+          <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <DevBadge dev={player.dev} />
+            <InjuryChip player={player} />
             {team && (
-              <span className="truncate font-cond text-[10px] font-700 uppercase tracking-wide text-muted">
+              <span className="truncate font-cond text-label font-700 uppercase tracking-wide text-muted">
                 {team.abbr || team.name}
               </span>
             )}
           </span>
         </span>
 
-        <RatingRing value={player.ovr} color={ovrColor} className="mr-0.5" />
+        <span className="mr-0.5 shrink-0 self-start">
+          <OvrBadge value={player.ovr} pot={player.pot} size={42} />
+        </span>
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-line bg-surface-2/60 px-3 py-1.5">
         <span className="flex items-center gap-1.5">
-          <span className="label !mb-0 !text-[9px]">Ceiling</span>
-          <span
-            className="rounded px-1.5 py-0.5 font-display text-xs font-700 tnum leading-none"
-            style={{ background: potColor, color: inkOn(potColor) }}
-          >
-            {player.pot}
-          </span>
+          <span className="label">Ceiling</span>
+          <PotBubble value={player.pot} size={24} />
         </span>
         {footer ?? (
-          <span className="font-cond text-[10px] tnum text-muted">
+          <span className="font-cond text-label tnum text-muted">
             {money(player.contract.capHit)} · {player.contract.years} yr{player.contract.years === 1 ? '' : 's'}
           </span>
         )}

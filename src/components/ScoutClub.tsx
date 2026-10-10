@@ -1,4 +1,4 @@
-import { Eye, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { coordinatorAdvice } from '../game/engine/advice'
 import {
   coachTendency,
@@ -12,7 +12,7 @@ import {
 import { aiTendency } from '../game/engine/playsim'
 import { seasonLine } from '../game/engine/stats'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card } from '../ui/kit'
+import { Badge, Button, Card, SectionTitle } from '../ui/kit'
 import { PlayerHoverCard } from './PlayerHoverCard'
 import type { CareerState, Player, SeasonStats, StatLevel } from '../game/types'
 
@@ -30,12 +30,12 @@ export function ScoutButton({ teamId, className }: { teamId: string; className?:
   return (
     <Button
       size="sm"
-      variant={done ? 'ghost' : 'team'}
+      variant={done ? 'ghost' : 'primary'}
       disabled={done}
       onClick={() => scoutClub(teamId)}
       className={className}
     >
-      <Search size={13} /> {done ? 'Scouted' : `Scout ${league.byId[teamId]?.abbr ?? 'club'}`}
+      <Search size={13} aria-hidden /> {done ? 'Scouted' : `Scout ${league.byId[teamId]?.abbr ?? 'club'}`}
     </Button>
   )
 }
@@ -88,21 +88,19 @@ export function ScoutClubCard({ teamId, className }: { teamId: string; className
 
   return (
     <Card className={className}>
-      <div className="mb-3 flex items-center gap-2">
-        <Eye size={16} className="text-muted" />
-        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Scout the {team?.name}</h3>
-        <Badge tone={done ? 'win' : 'neutral'} className="ml-auto">
-          {done ? 'Scouted this week' : 'Once per week'}
-        </Badge>
-      </div>
+      <SectionTitle
+        right={<Badge tone={done ? 'win' : 'neutral'}>{done ? 'Scouted this week' : 'Once per week'}</Badge>}
+      >
+        Scout the {team?.name}
+      </SectionTitle>
 
       {!done ? (
-        <p className="mb-3 text-sm text-muted">
+        <p className="mb-3 text-small text-muted">
           Send your staff to break down the {team?.name}: this season&rsquo;s tendencies, their two
           most-targeted receivers and top pass rusher, and how to attack them.
         </p>
       ) : (
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3 text-small">
           <div className="rounded-lg bg-surface-2 p-3">
             <div className="label mb-1.5">Tendencies this season</div>
             <div className="text-ink-2">
@@ -143,8 +141,8 @@ export function ScoutClubCard({ teamId, className }: { teamId: string; className
               <div className="space-y-1">
                 {receivers.map(({ p, s }) => (
                   <div key={p.id} className="flex items-center gap-2">
-                    <PlayerHoverCard player={p} className="min-w-0 text-sm font-600 text-ink" />
-                    <span className="font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
+                    <PlayerHoverCard player={p} className="min-w-0 text-small font-600 text-ink" />
+                    <span className="font-cond text-micro font-700 uppercase text-muted">{p.pos}</span>
                     <span className="ml-auto font-cond text-xs tnum text-muted">
                       {s.targets} tgt · {s.rec} rec · {s.recYds} yds
                     </span>
@@ -160,8 +158,8 @@ export function ScoutClubCard({ teamId, className }: { teamId: string; className
             <div className="label mb-1.5">Top pass rusher</div>
             {rusher ? (
               <div className="flex items-center gap-2">
-                <PlayerHoverCard player={rusher.p} className="min-w-0 text-sm font-600 text-ink" />
-                <span className="font-cond text-[10px] font-700 uppercase text-muted">{rusher.p.pos}</span>
+                <PlayerHoverCard player={rusher.p} className="min-w-0 text-small font-600 text-ink" />
+                <span className="font-cond text-micro font-700 uppercase text-muted">{rusher.p.pos}</span>
                 <span className="ml-auto font-cond text-xs tnum text-muted">
                   {rusher.s.defSacks} sck · {rusher.s.tackles} tkl
                 </span>

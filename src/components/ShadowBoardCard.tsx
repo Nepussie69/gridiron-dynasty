@@ -2,7 +2,7 @@ import { Star, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { canShadow, findShadowPlayer, isOnShadowBoard, MAX_SHADOW } from '../game/engine/shadow'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card, OvrBadge } from '../ui/kit'
+import { Badge, Card, Delta, IconButton, OvrBadge } from '../ui/kit'
 
 /**
  * G1: the Shadow Board.
@@ -22,10 +22,10 @@ export function ShadowBoardCard({ className }: { className?: string }) {
   return (
     <Card className={className}>
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="flex items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
-          <Star size={15} className="text-[var(--team)]" /> Shadow Board
+        <h3 className="flex items-center gap-1.5 font-display text-[20px] font-800 italic uppercase leading-none text-ink">
+          <Star size={15} className="text-[var(--team-accent)]" /> Shadow Board
         </h3>
-        <Badge tone="team">
+        <Badge tone="neutral">
           {board.length}/{MAX_SHADOW}
         </Badge>
       </div>
@@ -35,35 +35,37 @@ export function ShadowBoardCard({ className }: { className?: string }) {
           {board.map((e) => {
             const p = findShadowPlayer(league, e.playerId)
             const team = p?.teamId ? league.byId[p.teamId] : undefined
+            const now = p?.ovr ?? e.ovrAtAdd
+            const drift = now - e.ovrAtAdd
             return (
-              <div
-                key={e.playerId}
-                className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5"
-              >
-                <OvrBadge value={p?.ovr ?? e.ovrAtAdd} pot={p?.pot} size={30} />
+              <div key={e.playerId} className="flex items-center gap-2 rounded-[var(--r-md)] border border-line px-2.5 py-1.5">
+                <OvrBadge value={now} pot={p?.pot} size={30} />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-600 text-ink">
-                    {e.name}{' '}
-                    <span className="font-cond text-[11px] font-700 uppercase text-muted">{e.pos}</span>
+                  <div className="truncate text-small font-600 text-ink">
+                    {e.name} <span className="font-cond text-label font-700 uppercase text-muted">{e.pos}</span>
                   </div>
-                  <div className="truncate text-[11px] text-muted">
-                    {team ? team.abbr : 'FA'} · {e.ovrAtAdd} → {p?.ovr ?? e.ovrAtAdd} OVR · age {p?.age ?? '—'}
+                  <div className="truncate text-label text-muted">
+                    {team ? team.abbr : 'FA'} · age {p?.age ?? '—'} · added at {e.ovrAtAdd}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  title="Remove from shadow board"
-                  onClick={() => toggleShadowBoard(e.playerId)}
-                  className="shrink-0 text-faint transition hover:text-loss"
+                <span
+                  className={cn(
+                    'shrink-0 rounded-[var(--r-xs)] px-1.5 py-0.5 font-cond text-label font-700 uppercase tracking-wide',
+                    drift > 0 ? 'bg-win-soft text-win' : drift < 0 ? 'bg-loss-soft text-loss' : 'bg-surface-3 text-ink-2',
+                  )}
+                  title={`Overall since he was added (${e.ovrAtAdd} → ${now})`}
                 >
-                  <X size={13} />
-                </button>
+                  <Delta value={drift} />
+                </span>
+                <IconButton label={`Remove ${e.name} from the shadow board`} size="lg" variant="ghost" onClick={() => toggleShadowBoard(e.playerId)}>
+                  <X size={16} />
+                </IconButton>
               </div>
             )
           })}
         </div>
       ) : (
-        <p className="text-sm leading-snug text-muted">
+        <p className="text-small leading-snug text-muted">
           Track up to {MAX_SHADOW} players on other clubs or in free agency. At season end, the risers pay
           you back.
         </p>
@@ -75,6 +77,9 @@ export function ShadowBoardCard({ className }: { className?: string }) {
 /**
  * The ☆ toggle shown on any non-own player row. Filled when the player is on
  * the board. stopPropagation keeps it from also selecting the row.
+ * V1: the visible box stays 28px on a phone-width screen, inside a 44px hit
+ * box with −8px margins (row layout unchanged); a coarse pointer keeps the
+ * full 44px box as before.
  */
 export function ShadowStar({ playerId, className }: { playerId: string; className?: string }) {
   const career = useGame((s) => s.career)
@@ -87,17 +92,27 @@ export function ShadowStar({ playerId, className }: { playerId: string; classNam
     <button
       type="button"
       title={on ? 'Remove from shadow board' : 'Add to shadow board'}
+      aria-label={on ? 'Remove from shadow board' : 'Add to shadow board'}
+      aria-pressed={on}
       onClick={(e) => {
         e.stopPropagation()
         toggleShadowBoard(playerId)
       }}
       className={cn(
-        'grid h-6 w-6 shrink-0 place-items-center rounded-md border border-line transition',
-        on ? 'border-transparent text-[var(--team)]' : 'text-faint hover:border-[var(--team)] hover:text-ink',
+        'group/star grid h-7 w-7 shrink-0 place-items-center rounded-[var(--r-md)]',
+        'max-sm:pointer-fine:-m-2 max-sm:pointer-fine:h-11 max-sm:pointer-fine:w-11 pointer-coarse:h-11 pointer-coarse:w-11',
         className,
       )}
     >
-      <Star size={13} fill={on ? 'currentColor' : 'none'} />
+      <span
+        aria-hidden
+        className={cn(
+          'grid h-7 w-7 place-items-center rounded-[var(--r-md)] border border-line transition pointer-coarse:h-11 pointer-coarse:w-11',
+          on ? 'border-transparent text-[var(--team-accent)]' : 'text-faint group-hover/star:border-[var(--team-accent)] group-hover/star:text-ink',
+        )}
+      >
+        <Star size={14} fill={on ? 'currentColor' : 'none'} />
+      </span>
     </button>
   )
 }

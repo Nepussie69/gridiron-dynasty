@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, PanelBottom, Play, Shield, SkipForward, Target, Timer, Wind, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, penaltyTotals, PENALTY_INFO, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
@@ -23,7 +23,8 @@ import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { TeamHoverCard } from './TeamHoverCard'
-import { Badge, Button, TeamCrest } from '../ui/kit'
+import { Badge, BroadcastScope, Button, ConfirmSheet, OverflowMenu, ScoreBlock, TeamCrest, type MenuItem } from '../ui/kit'
+import { usePhone } from '../ui/hooks'
 
 const CENTER_Y = 26.65
 const W = 120
@@ -47,7 +48,14 @@ function luminance(hex: string): number {
   })
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
-const FIELD_GREEN = '#1f7a3f'
+// ── Field art (the broadcast field itself) ───────────────────────────────────
+// Turf and the football leather are the only hard-coded colours left in this
+// file; scripts/check-hex.sh allowlists them by the marker. Everything else
+// uses the broadcast tokens, which the .broadcast scope resolves to dark.
+const MOW_A = '#1d7a3d' // check-hex-allow: field art — turf stripe
+const MOW_B = '#238a48' // check-hex-allow: field art — turf stripe
+const FIELD_GREEN = '#1f7a3f' // check-hex-allow: field art — turf reference
+const BALL_BROWN = '#8a4b1f' // check-hex-allow: field art — football leather
 /** A club color that reads on the green field: primary unless it's too dark or too close to the grass. */
 function fieldColor(team: import('../game/types').Team): string {
   const ok = (c: string) => luminance(c) > 0.045 && colorGap(c, FIELD_GREEN) > 90
@@ -61,14 +69,12 @@ function jerseyColors(home: import('../game/types').Team, away: import('../game/
   let awayC = fieldColor(away)
   if (colorGap(homeC, awayC) < 90) {
     const alt = awayC === away.primary ? away.secondary : away.primary
-    awayC = colorGap(homeC, alt) > colorGap(homeC, awayC) ? alt : '#ffffff'
+    awayC = colorGap(homeC, alt) > colorGap(homeC, awayC) ? alt : 'var(--color-ink)'
   }
   return { home: homeC, away: awayC }
 }
 
 // ── U1: TV broadcast field helpers (visual only; never touch the sim) ─────────
-const MOW_A = '#1d7a3d'
-const MOW_B = '#238a48'
 /** NFL hash marks sit 70'9" in from each sideline. */
 const HASH_A = 23.58
 const HASH_B = H - HASH_A
@@ -112,10 +118,10 @@ const CONFETTI = Array.from({ length: 16 }, (_, i) => ({
 
 type ToastTone = 'gold' | 'good' | 'bad' | 'plain'
 const TOAST_TONE: Record<ToastTone, string> = {
-  gold: 'border-[#ffd34d]/70 bg-[#ffd34d]/20 text-[#ffe9a3]',
-  good: 'border-[#8ef0b5]/50 bg-[#0d3b26]/70 text-[#8ef0b5]',
-  bad: 'border-[#ffb3ba]/50 bg-[#3b0d13]/70 text-[#ffb3ba]',
-  plain: 'border-white/20 bg-black/55 text-white/85',
+  gold: 'border-gold/70 bg-gold-soft text-gold',
+  good: 'border-win/50 bg-win-soft text-win',
+  bad: 'border-loss/50 bg-loss-soft text-loss',
+  plain: 'border-line-strong bg-canvas/70 text-ink-2',
 }
 
 /** The TV play-result toast, built only from the recorded PlayEvent fields. */
@@ -170,6 +176,11 @@ export function MatchView() {
   const timer = useRef<number | null>(null)
   const [tab, setTab] = useState<'plays' | 'box' | 'plan' | 'keys' | 'film'>('plays')
   const [boxTeam, setBoxTeam] = useState<string | null>(null)
+  // Phone: the side panel collapses to a bottom sheet so the field keeps the
+  // height during a decision; the ⋯ menu opens the abandon review.
+  const phone = usePhone()
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [abandoning, setAbandoning] = useState(false)
 
   // U1: follow camera + full-field toggle + reduced-motion pref.
   const [fullField, setFullField] = useState(() => {
@@ -411,15 +422,26 @@ export function MatchView() {
   // R14: the club's penalties by type, for the box score (follows the replay).
   const pen = penaltyTotals(shownPlays, boxTeamId)
 
-  const onClose = () => {
-    if (gameDay) {
-      if (window.confirm('Abandon this game? Nothing will be recorded and the week is unchanged.')) {
-        abandonGameDay()
-      }
-      return
-    }
-    closeMatch()
-  }
+  // ⋯ in the scorebug: abandoning a live game is destructive, so it sits in the
+  // menu and goes through the review sheet; a replay just closes.
+  const gameMenu: MenuItem[] = gameDay
+    ? [
+        {
+          id: 'abandon',
+          label: 'Abandon game…',
+          description: 'Nothing is recorded and the week is unchanged',
+          danger: true,
+          onSelect: () => setAbandoning(true),
+        },
+      ]
+    : [
+        {
+          id: 'close',
+          label: 'Close replay',
+          description: 'Back to the schedule',
+          onSelect: () => closeMatch(),
+        },
+      ]
 
   const answer = (choiceId: string) => {
     setFrozen(false)
@@ -492,48 +514,53 @@ export function MatchView() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex h-screen w-screen flex-col overflow-hidden bg-[#0a1626] text-white">
+    <BroadcastScope>
+    <div className="broadcast fixed inset-0 z-50 flex h-screen w-screen flex-col overflow-hidden bg-canvas text-ink">
       {/* ── U2: broadcast scorebug (replaces the header row) ───────────────── */}
-      <header className="flex shrink-0 items-center gap-1.5 border-b border-white/10 bg-black/45 px-2 py-1.5 sm:gap-2 sm:px-3">
-        <ScoreBlock team={away} score={shownScore.away} hasBall={play.offId === away.id} timeouts={gameDay?.state.timeouts?.[away.id]} align="left" />
+      <header className="flex shrink-0 items-center gap-1.5 border-b border-line bg-canvas/60 px-2 py-1.5 sm:gap-2 sm:px-3">
+        <TeamHoverCard team={away} className="min-w-0">
+          <ScoreBlock team={away} score={shownScore.away} hasBall={play.offId === away.id} timeouts={gameDay?.state.timeouts?.[away.id]} align="left" />
+        </TeamHoverCard>
         <div className="mx-auto flex min-w-0 flex-col items-center justify-center leading-tight">
           <div className="flex items-center gap-1.5">
-            <span className="whitespace-nowrap rounded bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum sm:text-sm">Q{play.qtr} · {play.clock}</span>
+            <span className="whitespace-nowrap rounded bg-surface-2 px-2 py-0.5 font-cond text-label font-700 tnum">Q{play.qtr} · {play.clock}</span>
             {play.down ? (
-              <span className="whitespace-nowrap font-cond text-xs font-700 uppercase sm:text-sm">
-                {downText(play)} <span className="hidden text-white/60 sm:inline">at {gameDayFieldPosForPlay(world, play)}</span>
+              <span className="whitespace-nowrap font-cond text-label font-700 uppercase sm:text-small">
+                {downText(play)} <span className="hidden text-muted sm:inline">at {gameDayFieldPosForPlay(world, play)}</span>
               </span>
             ) : (
-              <span className="font-cond text-sm font-600 uppercase text-white/70">{play.concept}</span>
+              <span className="font-cond text-small font-600 uppercase text-ink-2">{play.concept}</span>
             )}
           </div>
-          <span className="mt-0.5 hidden max-w-[42vw] truncate text-[10px] text-white/45 md:block">
+          {/* One score order everywhere: away is the left block, home the right. */}
+          <span className="mt-0.5 font-cond text-label uppercase tracking-[0.14em] text-faint">away · home</span>
+          <span className="mt-0.5 hidden max-w-[42vw] truncate text-label text-muted md:block">
             {[away, home].map((t) => {
               const c = coachLabels(world, t.id)
               return `${t.abbr}: ${c.ocScheme} / ${c.dcScheme}`
             }).join('   ·   ')}
           </span>
           {career && canPractice(career) && (
-            <span className="mt-0.5 font-cond text-[10px] font-700 uppercase tracking-wide text-[#ffd34d]/85">
+            <span className="mt-0.5 font-cond text-label font-700 uppercase tracking-wide text-gold/85">
               Practice: {practicePlan(career, world)}
             </span>
           )}
         </div>
-        <ScoreBlock team={home} score={shownScore.home} hasBall={play.offId === home.id} timeouts={gameDay?.state.timeouts?.[home.id]} align="right" />
-        <button onClick={onClose} title={gameDay ? 'Abandon game' : 'Close'} className="ml-0.5 grid h-8 w-8 shrink-0 place-items-center self-center rounded-lg bg-white/10 hover:bg-white/20">
-          <X size={16} />
-        </button>
+        <TeamHoverCard team={home} className="min-w-0">
+          <ScoreBlock team={home} score={shownScore.home} hasBall={play.offId === home.id} timeouts={gameDay?.state.timeouts?.[home.id]} align="right" />
+        </TeamHoverCard>
+        <OverflowMenu items={gameMenu} label="Game options" size="sm" className="ml-0.5 shrink-0 self-center" />
       </header>
 
       {/* ── Body: field + decisions (left), side panel (right) ─────────────── */}
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,42vh)] lg:grid-cols-[minmax(0,1fr)_400px] lg:grid-rows-1">
-        <div className="flex min-h-0 flex-col overflow-y-auto lg:overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col lg:grid lg:min-w-0 lg:grid-cols-[minmax(0,1fr)_400px] lg:grid-rows-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
           {/* Field */}
           <div ref={fieldRef} className="relative min-h-[140px] flex-1 p-3 pb-0">
             <svg viewBox={vb} preserveAspectRatio="xMidYMid meet" className="h-full w-full">
               <defs>
                 <filter id="gd-dot-shadow" x="-60%" y="-60%" width="220%" height="220%">
-                  <feDropShadow dx="0" dy="0.26" stdDeviation="0.3" floodColor="#04140b" floodOpacity="0.55" />
+                  <feDropShadow dx="0" dy="0.26" stdDeviation="0.3" floodColor="var(--color-canvas)" floodOpacity="0.55" />
                 </filter>
                 <linearGradient id="gd-ez-home" gradientUnits="userSpaceOnUse" x1={0} y1={0} x2={10} y2={H}>
                   <stop offset="0" stopColor={home.primary} />
@@ -552,10 +579,10 @@ export function MatchView() {
               {/* end zones: club-colour gradients + TV end-zone lettering */}
               <rect x={0} y={0} width={10} height={H} fill="url(#gd-ez-home)" />
               <rect x={110} y={0} width={10} height={H} fill="url(#gd-ez-away)" />
-              <text transform={`translate(5 ${CENTER_Y}) rotate(-90)`} textAnchor="middle" dominantBaseline="middle" fill="#ffffff" fillOpacity={0.92} fontSize={4.7} textLength={46} lengthAdjust="spacingAndGlyphs" className="font-display" style={{ fontStyle: 'italic', fontWeight: 800 }}>
+              <text transform={`translate(5 ${CENTER_Y}) rotate(-90)`} textAnchor="middle" dominantBaseline="middle" fill="var(--color-ink)" fillOpacity={0.92} fontSize={4.7} textLength={46} lengthAdjust="spacingAndGlyphs" className="font-display" style={{ fontStyle: 'italic', fontWeight: 800 }}>
                 {home.name.toUpperCase()}
               </text>
-              <text transform={`translate(115 ${CENTER_Y}) rotate(90)`} textAnchor="middle" dominantBaseline="middle" fill="#ffffff" fillOpacity={0.92} fontSize={4.7} textLength={46} lengthAdjust="spacingAndGlyphs" className="font-display" style={{ fontStyle: 'italic', fontWeight: 800 }}>
+              <text transform={`translate(115 ${CENTER_Y}) rotate(90)`} textAnchor="middle" dominantBaseline="middle" fill="var(--color-ink)" fillOpacity={0.92} fontSize={4.7} textLength={46} lengthAdjust="spacingAndGlyphs" className="font-display" style={{ fontStyle: 'italic', fontWeight: 800 }}>
                 {away.name.toUpperCase()}
               </text>
 
@@ -566,33 +593,33 @@ export function MatchView() {
               ))}
 
               {/* red-zone tint inside the 20 the offence is attacking */}
-              {inRedZone && <rect x={rzX} y={0} width={rzW} height={H} fill="#e0344a" opacity={0.1} />}
+              {inRedZone && <rect x={rzX} y={0} width={rzW} height={H} fill="var(--color-loss)" opacity={0.1} />}
 
               {/* midfield club-crest watermark */}
               <g opacity={0.09} pointerEvents="none">
                 <path d={`M54 ${CENTER_Y - 8} L66 ${CENTER_Y - 8} L66 ${CENTER_Y + 1} Q66 ${CENTER_Y + 8} 60 ${CENTER_Y + 9} Q54 ${CENTER_Y + 8} 54 ${CENTER_Y + 1} Z`} fill="url(#gd-wm)" />
-                <ellipse cx={60} cy={CENTER_Y} rx={3.4} ry={2.1} fill="#ffffff" opacity={0.55} />
-                <line x1={60} y1={CENTER_Y - 1} x2={60} y2={CENTER_Y + 1} stroke="#0a1626" strokeWidth={0.22} />
-                <line x1={59.3} y1={CENTER_Y - 0.6} x2={60.7} y2={CENTER_Y - 0.6} stroke="#0a1626" strokeWidth={0.16} />
-                <line x1={59.3} y1={CENTER_Y} x2={60.7} y2={CENTER_Y} stroke="#0a1626" strokeWidth={0.16} />
-                <line x1={59.3} y1={CENTER_Y + 0.6} x2={60.7} y2={CENTER_Y + 0.6} stroke="#0a1626" strokeWidth={0.16} />
+                <ellipse cx={60} cy={CENTER_Y} rx={3.4} ry={2.1} fill="var(--color-ink)" opacity={0.55} />
+                <line x1={60} y1={CENTER_Y - 1} x2={60} y2={CENTER_Y + 1} stroke="var(--color-canvas)" strokeWidth={0.22} />
+                <line x1={59.3} y1={CENTER_Y - 0.6} x2={60.7} y2={CENTER_Y - 0.6} stroke="var(--color-canvas)" strokeWidth={0.16} />
+                <line x1={59.3} y1={CENTER_Y} x2={60.7} y2={CENTER_Y} stroke="var(--color-canvas)" strokeWidth={0.16} />
+                <line x1={59.3} y1={CENTER_Y + 0.6} x2={60.7} y2={CENTER_Y + 0.6} stroke="var(--color-canvas)" strokeWidth={0.16} />
               </g>
 
               {/* yard lines, hashes every yard, and the white border */}
-              <path d={YARD_LINE_5} stroke="#ffffff" strokeOpacity={0.16} strokeWidth={0.1} />
-              <path d={YARD_LINE_10} stroke="#ffffff" strokeOpacity={0.34} strokeWidth={0.16} />
-              <path d={HASH_SHORT} stroke="#ffffff" strokeOpacity={0.34} strokeWidth={0.1} />
-              <path d={HASH_LONG} stroke="#ffffff" strokeOpacity={0.5} strokeWidth={0.14} />
-              <rect x={0.15} y={0.15} width={W - 0.3} height={H - 0.3} fill="none" stroke="#ffffff" strokeOpacity={0.75} strokeWidth={0.34} />
-              <line x1={10} y1={0} x2={10} y2={H} stroke="#ffffff" strokeOpacity={0.85} strokeWidth={0.38} />
-              <line x1={110} y1={0} x2={110} y2={H} stroke="#ffffff" strokeOpacity={0.85} strokeWidth={0.38} />
+              <path d={YARD_LINE_5} stroke="var(--color-ink)" strokeOpacity={0.16} strokeWidth={0.1} />
+              <path d={YARD_LINE_10} stroke="var(--color-ink)" strokeOpacity={0.34} strokeWidth={0.16} />
+              <path d={HASH_SHORT} stroke="var(--color-ink)" strokeOpacity={0.34} strokeWidth={0.1} />
+              <path d={HASH_LONG} stroke="var(--color-ink)" strokeOpacity={0.5} strokeWidth={0.14} />
+              <rect x={0.15} y={0.15} width={W - 0.3} height={H - 0.3} fill="none" stroke="var(--color-ink)" strokeOpacity={0.75} strokeWidth={0.34} />
+              <line x1={10} y1={0} x2={10} y2={H} stroke="var(--color-ink)" strokeOpacity={0.85} strokeWidth={0.38} />
+              <line x1={110} y1={0} x2={110} y2={H} stroke="var(--color-ink)" strokeOpacity={0.85} strokeWidth={0.38} />
 
               {/* yard numbers every 10 near both sidelines, arrows to the nearer goal */}
               {YARD_NUMBERS.map((x) => {
                 const n = Math.min(x - 10, 110 - x)
                 const left = x < 60
                 return (
-                  <g key={`yn${x}`} className="font-display" fill="#ffffff" fillOpacity={0.6} style={{ fontWeight: 800, fontStyle: 'italic' }}>
+                  <g key={`yn${x}`} className="font-display" fill="var(--color-ink)" fillOpacity={0.6} style={{ fontWeight: 800, fontStyle: 'italic' }}>
                     <text x={x} y={7.4} fontSize={5} textAnchor="middle">{n}</text>
                     <text x={x} y={48.6} fontSize={5} textAnchor="middle">{n}</text>
                     {x !== 60 && (
@@ -606,12 +633,12 @@ export function MatchView() {
               })}
 
               {/* line of scrimmage (blue) + first-down line (yellow, if any) */}
-              <line x1={los} y1={0} x2={los} y2={H} stroke="#2f7dff" strokeWidth={0.34} opacity={0.95} />
-              {fdX != null && <line x1={fdX} y1={0} x2={fdX} y2={H} stroke="#ffd400" strokeWidth={0.3} opacity={0.95} />}
+              <line x1={los} y1={0} x2={los} y2={H} stroke="var(--color-brand)" strokeWidth={0.34} opacity={0.95} />
+              {fdX != null && <line x1={fdX} y1={0} x2={fdX} y2={H} stroke="var(--color-warn)" strokeWidth={0.3} opacity={0.95} />}
 
               {/* goal posts at both end lines (bolder on a kick) */}
               {[{ back: 0.8, x: 2.1, dir: 1 }, { back: 119.2, x: 117.9, dir: -1 }].map((gp) => (
-                <g key={`gp${gp.x}`} stroke="#ffd34d" strokeOpacity={0.92} strokeWidth={anim?.posts ? 0.42 : 0.32}>
+                <g key={`gp${gp.x}`} stroke="var(--color-gold)" strokeOpacity={0.92} strokeWidth={anim?.posts ? 0.42 : 0.32}>
                   <line x1={gp.back} y1={CENTER_Y} x2={gp.x} y2={CENTER_Y} />
                   <line x1={gp.x} y1={CENTER_Y - 3.1} x2={gp.x} y2={CENTER_Y + 3.1} />
                   <line x1={gp.x} y1={CENTER_Y - 3.1} x2={gp.x + gp.dir * 0.9} y2={CENTER_Y - 3.1} />
@@ -629,7 +656,7 @@ export function MatchView() {
                       const tt = t - s * 0.035
                       if (tt <= 0) return null
                       const p = posAt(act.path, tt)
-                      return <circle key={s} cx={mx(p.x)} cy={p.y} r={1.4 - s * 0.12} fill={k === holder ? '#ffd34d' : offColor} opacity={0.28 - s * 0.04} />
+                      return <circle key={s} cx={mx(p.x)} cy={p.y} r={1.4 - s * 0.12} fill={k === holder ? 'var(--color-gold)' : offColor} opacity={0.28 - s * 0.04} />
                     })}
                   </g>
                 )
@@ -650,14 +677,14 @@ export function MatchView() {
                       </title>
                     )}
                     {carrying && !frozen && !reduced && (
-                      <circle r={2} fill="none" stroke="#ffd34d" strokeWidth={0.26} opacity={0.7}>
+                      <circle r={2} fill="none" stroke="var(--color-gold)" strokeWidth={0.26} opacity={0.7}>
                         <animate attributeName="r" values="2;3.6" dur="0.9s" repeatCount="indefinite" />
                         <animate attributeName="opacity" values="0.7;0" dur="0.9s" repeatCount="indefinite" />
                       </circle>
                     )}
-                    <circle r={1.75} fill={a.side === 'off' ? offColor : defColor} stroke={carrying ? '#ffd34d' : a.side === 'off' ? '#ffffff' : '#0a1626'} strokeWidth={carrying ? 0.42 : 0.3} filter="url(#gd-dot-shadow)" />
+                    <circle r={1.75} fill={a.side === 'off' ? offColor : defColor} stroke={carrying ? 'var(--color-gold)' : a.side === 'off' ? 'var(--color-ink)' : 'var(--color-canvas)'} strokeWidth={carrying ? 0.42 : 0.3} filter="url(#gd-dot-shadow)" />
                     {num !== undefined && (
-                      <text y={0.62} fontSize={1.9} textAnchor="middle" fill="#fff" stroke="#000" strokeOpacity={0.6} strokeWidth={0.16} paintOrder="stroke" className="font-cond" style={{ fontWeight: 700, pointerEvents: 'none' }}>
+                      <text y={0.62} fontSize={1.9} textAnchor="middle" fill="var(--color-ink)" stroke="var(--color-canvas)" strokeOpacity={0.6} strokeWidth={0.16} paintOrder="stroke" className="font-cond" style={{ fontWeight: 700, pointerEvents: 'none' }}>
                         {num}
                       </text>
                     )}
@@ -680,11 +707,11 @@ export function MatchView() {
                         const p = posAt(anim.ball, tt)
                         pts.push(`${mx(p.x)} ${p.y - liftAt(anim, tt) * 3.2}`)
                       }
-                      return <polyline points={pts.join(' ')} fill="none" stroke="#ffd34d" strokeWidth={0.16} strokeDasharray="0.8 0.7" opacity={0.85} />
+                      return <polyline points={pts.join(' ')} fill="none" stroke="var(--color-gold)" strokeWidth={0.16} strokeDasharray="0.8 0.7" opacity={0.85} />
                     })()}
-                    {lift > 0.02 && <ellipse cx={bx} cy={b.y} rx={0.6} ry={0.3} fill="#000" opacity={0.3} />}
-                    <ellipse cx={bx} cy={b.y - lift * 3.2} rx={0.82 * (1 + lift * 0.45)} ry={0.53 * (1 + lift * 0.45)} fill="#8a4b1f" stroke="#fff" strokeWidth={0.14} />
-                    <line x1={bx - 0.26} y1={b.y - lift * 3.2} x2={bx + 0.26} y2={b.y - lift * 3.2} stroke="#fff" strokeWidth={0.08} />
+                    {lift > 0.02 && <ellipse cx={bx} cy={b.y} rx={0.6} ry={0.3} fill="var(--color-canvas)" opacity={0.3} />}
+                    <ellipse cx={bx} cy={b.y - lift * 3.2} rx={0.82 * (1 + lift * 0.45)} ry={0.53 * (1 + lift * 0.45)} fill={BALL_BROWN} stroke="var(--color-ink)" strokeWidth={0.14} />
+                    <line x1={bx - 0.26} y1={b.y - lift * 3.2} x2={bx + 0.26} y2={b.y - lift * 3.2} stroke="var(--color-ink)" strokeWidth={0.08} />
                     {!frozen && !reduced && t > 0.9 && (() => {
                       const e = posAt(anim.ball, 1)
                       const ex = mx(e.x)
@@ -719,17 +746,17 @@ export function MatchView() {
 
               {/* penalty flag */}
               {anim?.flag && t >= anim.flag.t && (
-                <rect x={mx(anim.flag.x) - 0.5} y={anim.flag.y - 0.5} width={1} height={1} fill="#ffd400" stroke="#000" strokeWidth={0.08} />
+                <rect x={mx(anim.flag.x) - 0.5} y={anim.flag.y - 0.5} width={1} height={1} fill="var(--color-warn)" stroke="var(--color-canvas)" strokeWidth={0.08} />
               )}
             </svg>
 
             {/* glass down & distance chip (top-left) */}
             <div className="pointer-events-none absolute left-4 top-3 z-10 flex flex-wrap items-center gap-2">
-              <span className="rounded-md border border-white/15 bg-black/45 px-2.5 py-1 font-cond text-xs font-700 uppercase tracking-wide text-white/90 shadow-lg backdrop-blur-sm">
+              <span className="rounded-md border border-line-strong bg-canvas/60 px-2.5 py-1 font-cond text-label font-700 uppercase tracking-wide text-ink shadow-lg backdrop-blur-sm">
                 {play.down ? (
                   <>
-                    <span className="text-[#ffd34d]">{downText(play)}</span>
-                    <span className="mx-1 text-white/40">·</span>
+                    <span className="text-gold">{downText(play)}</span>
+                    <span className="mx-1 text-faint">·</span>
                     {gameDayFieldPosForPlay(world, play)}
                   </>
                 ) : (
@@ -742,7 +769,7 @@ export function MatchView() {
             <button
               type="button"
               onClick={toggleFullField}
-              className="absolute right-4 top-3 z-10 rounded-md border border-white/15 bg-black/45 px-2.5 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-white/80 shadow-lg backdrop-blur-sm hover:bg-black/65 hover:text-white"
+              className="absolute right-4 top-3 z-10 min-h-11 rounded-md lg:min-h-0 border border-line-strong bg-canvas/60 px-2.5 py-1 font-cond text-label font-700 uppercase tracking-wide text-ink-2 shadow-lg backdrop-blur-sm hover:bg-canvas/80 hover:text-ink"
             >
               {fullField ? 'Follow' : 'Full field'}
             </button>
@@ -758,24 +785,34 @@ export function MatchView() {
 
             {/* U2: floating replay pill (glass, bottom-centre over the field) */}
             <div className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
-              <div className="flex items-center gap-0.5 rounded-full border border-white/15 bg-black/45 px-1 py-0.5 shadow-[0_8px_24px_-10px_rgba(0,0,0,0.8)] backdrop-blur-md sm:gap-1 sm:px-1.5 sm:py-1">
+              <div className="flex items-center gap-0.5 rounded-full border border-line-strong bg-canvas/60 px-1 py-0.5 shadow-[0_8px_24px_-10px_rgba(0,0,0,0.8)] backdrop-blur-md sm:gap-1 sm:px-1.5 sm:py-1">
                 <IconBtn title="Previous play" onClick={() => jump(Math.max(0, idx - 1))}><ChevronLeft size={15} /></IconBtn>
                 <IconBtn playToggle title={showPause ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{showPause ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
                 <IconBtn title="Next play" onClick={() => jump(Math.min(match.plays.length - 1, idx + 1))}><ChevronRight size={15} /></IconBtn>
                 <IconBtn title="Jump to the latest play" onClick={() => jump(match.plays.length - 1)}><SkipForward size={15} /></IconBtn>
-                <span className="mx-0.5 h-4 w-px bg-white/15 sm:mx-1" />
-                {[0.5, 1, 2, 4].map((sp) => (
+                <span className="mx-0.5 h-4 w-px bg-surface-3 sm:mx-1" />
+                {phone ? (
+                  <button
+                    type="button"
+                    title="Playback speed"
+                    aria-label={`Playback speed ${speed}×, tap to change`}
+                    onClick={() => setSpeed(speed === 0.5 ? 1 : speed === 1 ? 2 : speed === 2 ? 4 : 0.5)}
+                    className="h-11 min-w-11 rounded-full px-2 font-cond text-label font-700 text-ink"
+                  >
+                    {speed}×
+                  </button>
+                ) : [0.5, 1, 2, 4].map((sp) => (
                   <button
                     key={sp}
                     onClick={() => setSpeed(sp)}
-                    className={cn('rounded-full px-1.5 py-0.5 font-cond text-[11px] font-700', speed === sp ? 'bg-white text-ink' : 'text-white/60 hover:bg-white/10')}
+                    className={cn('rounded-full px-1.5 py-0.5 font-cond text-label font-700', speed === sp ? 'bg-slab text-on-slab' : 'text-muted hover:bg-surface-2')}
                   >
                     {sp}×
                   </button>
                 ))}
-                <span className="ml-1 font-cond text-[11px] tnum text-white/50">{idx + 1}/{match.plays.length}</span>
-                <span className="ml-1 hidden items-center gap-1 font-cond text-[10px] uppercase text-white/35 md:flex">
-                  <kbd className="rounded border border-white/20 px-1 py-px leading-none">Space</kbd>
+                <span className="ml-1 font-cond text-label tnum text-muted">{idx + 1}/{match.plays.length}</span>
+                <span className="ml-1 hidden items-center gap-1 font-cond text-label uppercase text-faint md:flex">
+                  <kbd className="rounded border border-line-strong px-1 py-px leading-none">Space</kbd>
                 </span>
               </div>
             </div>
@@ -784,19 +821,28 @@ export function MatchView() {
           {/* What just happened */}
           <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5">
             <div className="flex min-w-0 items-baseline gap-2">
-              <span className="font-display text-lg font-700 uppercase" style={{ color: play.bigPlay ? '#ffd34d' : '#fff' }}>{play.concept}</span>
-              <span className="truncate font-cond text-base font-600 text-white/85">{play.result}</span>
+              <span className={cn('font-display text-lg font-700 uppercase', play.bigPlay ? 'text-gold' : 'text-ink')}>{play.concept}</span>
+              <span className="truncate font-cond text-base font-600 text-ink-2">{play.result}</span>
               {play.yards !== 0 && (
-                <span className={cn('font-cond text-base font-700 tnum', play.yards > 0 ? 'text-[#8ef0b5]' : 'text-[#ffb3ba]')}>
+                <span className={cn('font-cond text-base font-700 tnum', play.yards > 0 ? 'text-win' : 'text-loss')}>
                   {play.yards > 0 ? '+' : ''}{play.yards} yd
                 </span>
               )}
             </div>
+            {phone && (
+              <button
+                type="button"
+                onClick={() => setPanelOpen(true)}
+                className="ml-auto inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2.5 font-cond text-label font-700 uppercase tracking-wide text-ink-2"
+              >
+                <PanelBottom size={14} /> Panel
+              </button>
+            )}
           </div>
 
           {/* U2: game-day dock — sticky to the bottom of the game column */}
           {gameDay && (
-            <div className="sticky bottom-0 z-30 shrink-0 border-t border-white/10 bg-[#0d1a2b]/95 px-3 py-2 backdrop-blur-md">
+            <div className="sticky bottom-0 z-30 shrink-0 border-t border-line bg-surface-2/95 px-3 py-2 backdrop-blur-md">
               {showMoment && moment ? (
                 <div className="gd-slide-up">
                   <MomentCard
@@ -811,7 +857,7 @@ export function MatchView() {
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                   <span className="hidden font-display text-sm font-700 uppercase tracking-wide sm:inline">Game day</span>
                   {career && <CallModePicker scope={gameDay.state.ctx?.scope} mode={career.callMode} keepPlays={idx + 1} onFallback={() => jump(match.plays.length - 1)} />}
-                  <span className="hidden text-[11px] text-white/55 md:inline">
+                  <span className="hidden text-label text-muted md:inline">
                     {moment ? 'Your call is coming up — the replay is catching up.' : 'Paused. Change the plan in the side panel, or move the game on.'}
                   </span>
                   <div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -833,7 +879,7 @@ export function MatchView() {
               )}
               {showMoment && (
                 <div className="mt-2 flex items-center justify-end">
-                  <Button size="sm" variant="ghost" className="!text-white/60 hover:!bg-white/10" onClick={simToEnd}>
+                  <Button size="sm" variant="ghost" onClick={simToEnd}>
                     <SkipForward size={14} /> Sim to end (standing orders)
                   </Button>
                 </div>
@@ -842,34 +888,53 @@ export function MatchView() {
           )}
         </div>
 
-        {/* ── Side panel ───────────────────────────────────────────────────── */}
-        <aside className="flex min-h-0 flex-col border-t border-white/10 bg-[#0c1828] lg:border-l lg:border-t-0">
-          <div className="flex shrink-0 gap-1 border-b border-white/10 p-1.5">
-            {sideTabs.map((t) => (
+        {/* ── Side panel: a right column at lg, a collapsible bottom sheet on phone ── */}
+        {(!phone || (panelOpen && !showMoment)) && (
+          <aside
+            className={cn(
+              'flex min-h-0 min-w-0 flex-col border-line bg-surface-2',
+              phone
+                ? 'kit-sheet fixed inset-x-0 bottom-0 z-40 max-h-[55dvh] rounded-t-[20px] border-t shadow-[var(--shadow-2)]'
+                : 'border-t lg:border-l lg:border-t-0',
+            )}
+            aria-label="Game panel"
+          >
+            {phone && (
               <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={cn(
-                  'flex-1 rounded-md px-2 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  activeTab === t.id ? 'bg-white text-ink' : 'text-white/65 hover:bg-white/10 hover:text-white',
-                )}
+                type="button"
+                onClick={() => setPanelOpen(false)}
+                aria-label="Collapse panel"
+                className="mx-auto mb-1 mt-2 flex h-6 w-16 shrink-0 items-center justify-center rounded-full bg-surface-3 text-muted"
               >
-                {t.label}
+                <ChevronDown size={16} />
               </button>
-            ))}
-          </div>
+            )}
+            <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-line p-1.5">
+              {sideTabs.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className={cn(
+                    'flex-1 whitespace-nowrap rounded-md px-2 py-1.5 font-cond text-label font-700 uppercase tracking-wide transition',
+                    activeTab === t.id ? 'bg-slab text-on-slab' : 'text-muted hover:bg-surface-3 hover:text-ink',
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {activeTab === 'plays' && (
               <PlayLog plays={shownPlays} idx={idx} world={world} onJump={jump} downText={downText} />
             )}
             {activeTab === 'box' && (
               <div className="p-2">
-                <div className="mb-2 inline-flex w-full rounded-lg bg-white/10 p-0.5">
+                <div className="mb-2 inline-flex w-full rounded-lg bg-surface-2 p-0.5">
                   {[away, home].map((t) => (
                     <button
                       key={t.id}
                       onClick={() => setBoxTeam(t.id)}
-                      className={cn('flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 font-cond text-xs font-700 uppercase', boxTeamId === t.id ? 'bg-white text-ink' : 'text-white/70')}
+                      className={cn('flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 font-cond text-xs font-700 uppercase', boxTeamId === t.id ? 'bg-slab text-on-slab' : 'text-ink-2')}
                     >
                       <TeamCrest team={t} size={16} /> {t.name}
                     </button>
@@ -912,27 +977,27 @@ export function MatchView() {
                   <>
                     <div className="flex items-baseline gap-2">
                       <span className="font-display text-3xl font-700">{match.film.letter}</span>
-                      <span className="font-cond text-xs text-white/50">{match.film.grade}/100 film grade</span>
+                      <span className="font-cond text-xs text-muted">{match.film.grade}/100 film grade</span>
                     </div>
                     {match.film.lines.length > 0 && (
                       <ul className="mt-2 space-y-1">
-                        {match.film.lines.map((l, i) => <li key={i} className="text-xs leading-snug text-white/70">• {l}</li>)}
+                        {match.film.lines.map((l, i) => <li key={i} className="text-xs leading-snug text-ink-2">• {l}</li>)}
                       </ul>
                     )}
                   </>
                 )}
                 {/* L12 W2: the keys you promised, graded against the box score. */}
                 {match.keys && match.keys.length > 0 && (
-                  <div className="mt-3 border-t border-white/10 pt-3">
-                    <div className="label mb-1.5 !text-white/45">Keys to the game</div>
+                  <div className="mt-3 border-t border-line pt-3">
+                    <div className="label mb-1.5">Keys to the game</div>
                     <ul className="space-y-1">
                       {match.keys.map((k) => (
                         <li key={k.id} className="flex items-start gap-2 text-xs leading-snug">
-                          <span className={cn('font-700', k.hit ? 'text-[#8ef0b5]' : 'text-[#ffb3ba]')}>
+                          <span className={cn('font-700', k.hit ? 'text-win' : 'text-loss')}>
                             {k.hit ? '✅' : '❌'}
                           </span>
-                          <span className="text-white/80">
-                            <strong className="text-white">{k.label}</strong> — {k.detail}
+                          <span className="text-ink-2">
+                            <strong className="text-ink">{k.label}</strong> — {k.detail}
                           </span>
                         </li>
                       ))}
@@ -941,68 +1006,42 @@ export function MatchView() {
                 )}
                 {match.planChanges && match.planChanges.length > 0 && (
                   <ul className="mt-2 space-y-1">
-                    {match.planChanges.map((c, i) => <li key={i} className="text-xs text-white/60">• Switched to {c.preset} at Q{c.qtr} {c.clock}</li>)}
+                    {match.planChanges.map((c, i) => <li key={i} className="text-xs text-muted">• Switched to {c.preset} at Q{c.qtr} {c.clock}</li>)}
                   </ul>
                 )}
               </div>
             )}
           </div>
-        </aside>
+          </aside>
+        )}
       </div>
+
+      {/* Abandon a live game — the only path to abandonGameDay, behind a review. */}
+      <ConfirmSheet
+        open={abandoning}
+        onClose={() => setAbandoning(false)}
+        eyebrow="Game day"
+        title="Abandon this game?"
+        subtitle={`Q${play.qtr} ${play.clock} · ${away.abbr} ${shownScore.away}–${shownScore.home} ${home.abbr}`}
+        consequences={[
+          { label: 'This week', value: 'Unchanged — the game is not recorded' },
+          { label: 'Your record', value: 'No result is added' },
+          { label: 'Game state', value: 'Discarded, back to the schedule', tone: 'warn' },
+        ]}
+        confirmLabel="Abandon game"
+        ledgerNote={null}
+        onConfirm={() => {
+          setAbandoning(false)
+          abandonGameDay()
+        }}
+      />
     </div>
+    </BroadcastScope>
   )
 }
 
-/** U2: a club-colour scorebug block — abbr, big score, possession ball, timeout pips. */
-function ScoreBlock({ team, score, hasBall, timeouts, align }: {
-  team: import('../game/types').Team; score: number; hasBall: boolean; timeouts?: number; align: 'left' | 'right'
-}) {
-  const ink = luminance(team.primary) > 0.5 ? '#0a1626' : '#ffffff'
-  return (
-    <TeamHoverCard team={team} className="min-w-0">
-      <div
-        className="flex min-w-0 items-center rounded-lg px-2 py-1 sm:px-2.5"
-        style={{ background: team.primary, color: ink, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)' }}
-      >
-        <div className={cn('flex flex-col leading-none', align === 'right' && 'items-end')}>
-          <span className="flex items-center gap-1 font-cond text-[11px] font-700 uppercase tracking-wide">
-            {align === 'left' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
-            {team.abbr}
-            {align === 'right' && <PossessionBall on={hasBall} ink={ink} bg={team.primary} />}
-          </span>
-          <span className="font-display text-2xl font-700 tnum leading-none sm:text-3xl">{score}</span>
-          {timeouts != null && <TimeoutPips n={timeouts} ink={ink} />}
-        </div>
-      </div>
-    </TeamHoverCard>
-  )
-}
-
-/** A small football marking the club with the ball (hidden, not removed, when it isn't theirs). */
-function PossessionBall({ on, ink, bg }: { on: boolean; ink: string; bg: string }) {
-  return (
-    <svg width={11} height={11} viewBox="0 0 24 24" aria-hidden className={cn('shrink-0', on ? 'opacity-100' : 'opacity-0')}>
-      <ellipse cx="12" cy="12" rx="9.5" ry="6.2" fill={ink} />
-      <path d="M7 12h10" stroke={bg} strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M10 10.6v2.8M12 10.4v3.2M14 10.6v2.8" stroke={bg} strokeWidth="1.1" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-/** U2: three timeout pips per side, filled in club-block ink. */
-function TimeoutPips({ n, ink }: { n: number; ink: string }) {
-  return (
-    <span className="mt-1 flex gap-0.5" title={`${n} timeout${n === 1 ? '' : 's'} left`}>
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-2.5 rounded-full"
-          style={{ background: i < n ? ink : 'transparent', border: `1px solid ${ink}`, opacity: i < n ? 0.9 : 0.4 }}
-        />
-      ))}
-    </span>
-  )
-}
+/** Kit ScoreBlock was promoted from MatchView (F2); the game-day scorebug now
+ *  uses it directly, so the local copy and its helpers are gone. */
 
 /** U2: a dock button — icon always, label from 400px up. */
 function DockButton({ icon, label, onClick, disabled, title }: {
@@ -1015,7 +1054,7 @@ function DockButton({ icon, label, onClick, disabled, title }: {
       disabled={disabled}
       title={title ?? label}
       aria-label={label}
-      className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 font-cond text-xs font-700 uppercase tracking-wide text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+      className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-surface-2 px-2.5 py-1.5 font-cond text-xs lg:min-h-0 font-700 uppercase tracking-wide text-ink transition hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-40"
     >
       {icon}
       <span className="hidden min-[400px]:inline">{label}</span>
@@ -1025,7 +1064,7 @@ function DockButton({ icon, label, onClick, disabled, title }: {
 
 function IconBtn({ title, onClick, children, playToggle }: { title: string; onClick: () => void; children: React.ReactNode; playToggle?: boolean }) {
   return (
-    <button title={title} aria-label={title} onClick={onClick} data-play-toggle={playToggle || undefined} className="grid h-7 w-7 place-items-center rounded text-white/80 hover:bg-white/15 hover:text-white">
+    <button title={title} aria-label={title} onClick={onClick} data-play-toggle={playToggle || undefined} className="grid h-11 w-10 place-items-center rounded text-ink-2 hover:bg-surface-3 hover:text-ink lg:h-7 lg:w-7">
       {children}
     </button>
   )
@@ -1072,17 +1111,17 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
         const scored = ptsBefore ? (last.homeScore + last.awayScore) - (ptsBefore.homeScore + ptsBefore.awayScore) : last.homeScore + last.awayScore
         return (
           <div key={`${d.start}`}>
-            <div className="sticky top-0 z-10 flex items-center gap-2 border-y border-white/10 bg-[#13233a] px-3 py-1.5">
+            <div className="sticky top-0 z-10 flex items-center gap-2 border-y border-line bg-surface-3 px-3 py-1.5">
               {team && <TeamCrest team={team} size={16} />}
-              <span className="font-cond text-[11px] font-700 uppercase tracking-wide">{team?.abbr} ball</span>
-              <span className="font-cond text-[11px] text-white/50">
+              <span className="font-cond text-label font-700 uppercase tracking-wide">{team?.abbr} ball</span>
+              <span className="font-cond text-label text-muted">
                 Q{first.qtr} {first.clock}
                 {scrimmage.length > 0 && ` · ${scrimmage.length} plays, ${yards} yds`}
               </span>
-              {scored > 0 && <span className="ml-auto rounded bg-[#ffd34d] px-1.5 py-px font-cond text-[10px] font-700 uppercase text-ink">+{scored}</span>}
-              {scored <= 0 && last.type === 'punt' && <span className="ml-auto rounded bg-white/15 px-1.5 py-px font-cond text-[10px] font-700 uppercase text-white/80">Punt</span>}
-              {scored <= 0 && last.turnover && (last.type === 'run' || last.type === 'pass') && <span className="ml-auto rounded bg-[#dc2937] px-1.5 py-px font-cond text-[10px] font-700 uppercase">Turnover</span>}
-              {scored <= 0 && last.type === 'fg' && <span className="ml-auto rounded bg-white/15 px-1.5 py-px font-cond text-[10px] font-700 uppercase text-white/80">Missed FG</span>}
+              {scored > 0 && <span className="ml-auto rounded bg-gold px-1.5 py-px font-cond text-label font-700 uppercase text-on-slab">+{scored}</span>}
+              {scored <= 0 && last.type === 'punt' && <span className="ml-auto rounded bg-surface-3 px-1.5 py-px font-cond text-label font-700 uppercase text-ink-2">Punt</span>}
+              {scored <= 0 && last.turnover && (last.type === 'run' || last.type === 'pass') && <span className="ml-auto rounded border border-loss/30 bg-loss-soft px-1.5 py-px font-cond text-label font-700 uppercase text-loss">Turnover</span>}
+              {scored <= 0 && last.type === 'fg' && <span className="ml-auto rounded bg-surface-3 px-1.5 py-px font-cond text-label font-700 uppercase text-ink-2">Missed FG</span>}
             </div>
             {snaps.map((p, k) => {
               const i = d.start + k
@@ -1094,25 +1133,25 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
                   onClick={() => onJump(i)}
                   className={cn(
                     'flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs',
-                    isActive ? 'bg-white/15' : 'hover:bg-white/5',
+                    isActive ? 'bg-surface-3' : 'hover:bg-surface-2',
                   )}
                 >
-                  <span className="w-14 shrink-0 pt-px font-cond text-[11px] tnum text-white/45">{downText(p) || p.type.toUpperCase()}</span>
-                  <span className="min-w-0 flex-1 leading-snug text-white/85">
-                    <span className="font-600 text-white">{p.concept}</span> — {p.result}
+                  <span className="w-14 shrink-0 pt-px font-cond text-label tnum text-muted">{downText(p) || p.type.toUpperCase()}</span>
+                  <span className="min-w-0 flex-1 leading-snug text-ink-2">
+                    <span className="font-600 text-ink">{p.concept}</span> — {p.result}
                     {p.missedTackleIds?.length ? (
-                      <span className="text-white/55"> — broke a tackle by {p.missedTackleIds.map((id) => `#${jersey(p.defId, id) ?? '?'}`).join(', ')}</span>
+                      <span className="text-muted"> — broke a tackle by {p.missedTackleIds.map((id) => `#${jersey(p.defId, id) ?? '?'}`).join(', ')}</span>
                     ) : null}
                     {p.dropId ? (
-                      <span className="text-white/55"> — dropped by #{jersey(p.offId, p.dropId) ?? '?'}</span>
+                      <span className="text-muted"> — dropped by #{jersey(p.offId, p.dropId) ?? '?'}</span>
                     ) : null}
                   </span>
                   {(p.type === 'run' || p.type === 'pass') && (
-                    <span className={cn('w-10 shrink-0 text-right font-cond tnum', p.yards > 0 ? 'text-[#8ef0b5]' : p.yards < 0 ? 'text-[#ffb3ba]' : 'text-white/45')}>
+                    <span className={cn('w-10 shrink-0 text-right font-cond tnum', p.yards > 0 ? 'text-win' : p.yards < 0 ? 'text-loss' : 'text-muted')}>
                       {p.yards > 0 ? '+' : ''}{p.yards}
                     </span>
                   )}
-                  <span className="w-11 shrink-0 text-right font-cond tnum text-white/45">
+                  <span className="w-11 shrink-0 text-right font-cond tnum text-muted">
                     {p.awayScore}-{p.homeScore}
                   </span>
                 </button>
@@ -1150,13 +1189,13 @@ function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' 
   const activeIdx = Math.max(0, all.findIndex((o) => o.id === active))
   return (
     <div
-      className="relative grid w-full max-w-xs shrink-0 rounded-full bg-white/10 p-0.5"
+      className="relative grid w-full max-w-xs shrink-0 rounded-full bg-surface-2 p-0.5"
       style={{ gridTemplateColumns: `repeat(${all.length}, minmax(0, 1fr))` }}
       title="How often the game stops for your call (from the next snap)"
     >
       <span
         aria-hidden
-        className="gd-pill-slide pointer-events-none absolute bottom-0.5 left-0.5 top-0.5 rounded-full bg-white shadow"
+        className="gd-pill-slide pointer-events-none absolute bottom-0.5 left-0.5 top-0.5 rounded-full bg-slab shadow"
         style={{ width: `calc((100% - 0.25rem) / ${all.length})`, transform: `translateX(${activeIdx * 100}%)` }}
       />
       {all.map((o) => (
@@ -1171,7 +1210,7 @@ function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' 
             else if (o.id !== 'key') void gameDayAdvance('moment')
             showToast(o.id === 'key' ? 'Key moments only — from the next snap.' : `${o.label}: you call it from the next snap.`)
           }}
-          className={cn('relative z-10 whitespace-nowrap rounded-full px-2 py-1 font-cond text-[10px] font-700 uppercase transition sm:px-2.5 sm:text-[11px]', active === o.id ? 'text-ink' : 'text-white/65 hover:text-white')}
+          className={cn('relative z-10 min-h-11 whitespace-nowrap rounded-full px-2 py-1 font-cond lg:min-h-0 text-label font-700 uppercase transition sm:px-2.5', active === o.id ? 'text-on-slab' : 'text-muted hover:text-ink')}
         >
           {o.label}
         </button>
@@ -1198,17 +1237,17 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
   const advice = coordinatorAdvice(world, career, oppId).filter((a) => a.side === active)
   return (
     <div className="p-3">
-      <p className="mb-2 text-[11px] text-white/55">Change how you play — it applies from the next snap.</p>
+      <p className="mb-2 text-label text-muted">Change how you play — it applies from the next snap.</p>
       <div>
           {hasOff && hasDef && (
-            <div className="mb-3 inline-flex rounded-lg bg-white/10 p-0.5">
+            <div className="mb-3 inline-flex rounded-lg bg-surface-2 p-0.5">
               {(['off', 'def'] as const).map((s) => (
                 <button
                   key={s}
                   onClick={() => setSide(s)}
                   className={cn(
                     'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                    active === s ? 'bg-white text-ink' : 'text-white/70 hover:text-white',
+                    active === s ? 'bg-slab text-on-slab' : 'text-ink-2 hover:text-ink',
                   )}
                 >
                   {s === 'off' ? 'Offense' : 'Defense'}
@@ -1220,15 +1259,15 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
             const preset = PLAN_PRESETS.find((p) => p.id === a.presetId && p.side === a.side)
             if (!preset) return null
             return (
-              <div key={a.side} className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-[11px] text-white/70">
+              <div key={a.side} className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-label text-ink-2">
                 <span>
-                  <strong className="font-700 text-white">{a.coach}</strong> recommends{' '}
-                  <strong className="font-700 text-white">{preset.label}</strong> — {a.reason}
+                  <strong className="font-700 text-ink">{a.coach}</strong> recommends{' '}
+                  <strong className="font-700 text-ink">{preset.label}</strong> — {a.reason}
                 </span>
                 <Button
                   size="sm"
                   variant="primary"
-                  className="ml-auto !bg-white !text-ink"
+                  className="ml-auto"
                   onClick={() => setGameDayPlan(active, { ...preset.plan })}
                 >
                   Apply
@@ -1236,7 +1275,7 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
               </div>
             )
           })}
-          <div className="rounded-lg bg-white p-3">
+          <div className="rounded-lg border border-line p-3">
             <PlanEditor plan={gameDay.plan[active]} onChange={(p) => setGameDayPlan(active, p)} side={active} />
             <div className="mt-3 border-t border-line pt-3">
               <PersonnelCard
@@ -1253,7 +1292,7 @@ function GameDayPlanPanel({ gameDay }: { gameDay: GameDay }) {
           {gameDay.changes.length > 0 && (
             <ul className="mt-2 space-y-0.5">
               {gameDay.changes.map((c, i) => (
-                <li key={i} className="text-[11px] text-white/50">
+                <li key={i} className="text-label text-muted">
                   Switched to {c.preset} at Q{c.qtr} {c.clock}
                 </li>
               ))}
@@ -1286,30 +1325,30 @@ function clockSeconds(clock: string): number {
 
 function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void; quick?: (lean: 'run' | 'pass') => string | null; fourthNote?: string | null }) {
   return (
-    <div className="rounded-2xl border border-[#c99a2e]/70 bg-black/40 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]">
+    <div className="rounded-2xl border border-gold/70 bg-canvas/60 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Badge tone="gold">Your call</Badge>
-        <span className="font-display text-base font-700 uppercase text-white">{moment.title}</span>
+        <span className="font-display text-base font-700 uppercase text-ink">{moment.title}</span>
         <div className="ml-auto flex items-center gap-1.5">
-          <span className="rounded-full bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum text-white/80">
+          <span className="rounded-full bg-surface-2 px-2 py-0.5 font-cond text-xs font-700 tnum text-ink-2">
             Q{moment.qtr} {moment.clock}
           </span>
-          <span className="rounded-full bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum text-white/80">
+          <span className="rounded-full bg-surface-2 px-2 py-0.5 font-cond text-xs font-700 tnum text-ink-2">
             {moment.us}-{moment.them}
           </span>
-          <span className="rounded-full bg-white/10 px-2 py-0.5 font-cond text-xs font-700 tnum text-white/80">
+          <span className="rounded-full bg-surface-2 px-2 py-0.5 font-cond text-xs font-700 tnum text-ink-2">
             {fieldPos}
           </span>
         </div>
       </div>
       {moment.staffRead && (
-        <div className="mb-2 flex items-center gap-1.5 text-[11px] text-white/60">
+        <div className="mb-2 flex items-center gap-1.5 text-label text-muted">
           <Eye size={12} className="shrink-0" />
           <span>{moment.staffRead}</span>
         </div>
       )}
       {fourthNote && (
-        <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-[#ffd34d]/10 px-2 py-1 text-[11px] text-[#ffe9a3]">
+        <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-gold-soft px-2 py-1 text-label text-gold">
           <BarChart3 size={12} className="shrink-0" />
           <span>{fourthNote}</span>
         </div>
@@ -1326,26 +1365,26 @@ function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote }: { moment:
               <button
                 key={o.id}
                 onClick={() => onAnswer(o.id)}
-                className="flex items-start gap-2.5 rounded-xl border border-white/15 bg-white/[0.07] p-2.5 text-left transition hover:border-white/30 hover:bg-white/15"
+                className="flex items-start gap-2.5 rounded-xl border border-line-strong bg-surface-2 p-2.5 text-left transition hover:border-line-strong hover:bg-surface-3"
               >
-                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/10 text-[#ffd34d]">
+                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-gold">
                   <Icon size={17} />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex w-full items-center gap-1.5">
-                    <span className="font-cond text-sm font-700 uppercase text-white">{o.label}</span>
+                    <span className="font-cond text-sm font-700 uppercase text-ink">{o.label}</span>
                     {ev != null && (
-                      <span className="ml-auto rounded bg-[#ffd34d]/20 px-1.5 py-px font-cond text-[10px] font-700 tnum uppercase text-[#ffe9a3]">
+                      <span className="ml-auto rounded bg-gold-soft px-1.5 py-px font-cond text-label font-700 tnum uppercase text-gold">
                         EV {ev >= 0 ? '+' : ''}{ev.toFixed(1)}
                       </span>
                     )}
                     {o.id === moment.defaultId && (
-                      <span className={cn('rounded bg-white/20 px-1.5 py-px font-cond text-[9px] font-700 uppercase text-white/80', ev == null && 'ml-auto')}>
+                      <span className={cn('rounded bg-surface-3 px-1.5 py-px font-cond text-label font-700 uppercase text-ink-2', ev == null && 'ml-auto')}>
                         Standing order
                       </span>
                     )}
                   </span>
-                  {o.hint && <span className="mt-0.5 block text-[11px] leading-snug text-white/60">{o.hint}</span>}
+                  {o.hint && <span className="mt-0.5 block text-label leading-snug text-muted">{o.hint}</span>}
                 </span>
               </button>
             )
@@ -1397,10 +1436,10 @@ function QuickCallBar({ quick, onAnswer }: { quick: (lean: 'run' | 'pass') => st
             disabled={!id}
             onClick={() => id && onAnswer(id)}
             title={id ? `Staff call: ${id}` : 'No play of this type in the book'}
-            className="flex items-center justify-between gap-2 rounded-xl border border-[#ffd34d]/50 bg-[#ffd34d]/10 px-3 py-2 text-left transition hover:bg-[#ffd34d]/20 disabled:opacity-40"
+            className="flex items-center justify-between gap-2 rounded-xl border border-gold/50 bg-gold-soft px-3 py-2 text-left transition hover:bg-gold/20 disabled:opacity-40"
           >
-            <span className="font-display text-lg font-700 uppercase text-white">{lean === 'run' ? 'Run' : 'Pass'}</span>
-            <span className="truncate font-cond text-[11px] font-600 uppercase tracking-wide text-white/60">{id ?? '—'}</span>
+            <span className="font-display text-lg font-700 uppercase text-ink">{lean === 'run' ? 'Run' : 'Pass'}</span>
+            <span className="truncate font-cond text-label font-600 uppercase tracking-wide text-muted">{id ?? '—'}</span>
           </button>
         )
       })}
@@ -1433,13 +1472,13 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide text-white/80 transition hover:bg-white/20 hover:text-white"
+          className="inline-flex shrink-0 items-center gap-1 rounded-md bg-surface-2 px-2 py-1 font-cond text-label font-700 uppercase tracking-wide text-ink-2 transition hover:bg-surface-3 hover:text-ink"
         >
           <ChevronDown size={12} className={cn('transition-transform', !open && '-rotate-90')} />
           Playbook
-          <span className="text-white/45">{plays.length}</span>
+          <span className="text-muted">{plays.length}</span>
         </button>
-        <span className="truncate text-[11px] text-white/45">
+        <span className="truncate text-label text-muted">
           {open ? 'Tap a play to call it — scroll for more' : `${active} · tap to browse the book`}
         </span>
       </div>
@@ -1451,8 +1490,8 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
                 key={f}
                 onClick={() => setFormation(f)}
                 className={cn(
-                  'shrink-0 rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase tracking-wide',
-                  active === f ? 'bg-white text-ink' : 'bg-white/10 text-white/70 hover:bg-white/20',
+                  'shrink-0 rounded-md px-2 py-1 font-cond text-label font-700 uppercase tracking-wide',
+                  active === f ? 'bg-slab text-on-slab' : 'bg-surface-2 text-ink-2 hover:bg-surface-3',
                 )}
               >
                 {f}
@@ -1469,12 +1508,12 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
                   title={`${o.label} — ${o.hint}`}
                   className={cn(
                     'flex w-[78px] shrink-0 flex-col gap-0.5 rounded-lg border p-1 text-left transition',
-                    o.id === moment.defaultId ? 'border-[#ffd34d]/70 bg-white/15' : 'border-white/20 bg-white/10 hover:bg-white/20',
+                    o.id === moment.defaultId ? 'border-gold/70 bg-surface-3' : 'border-line-strong bg-surface-2 hover:bg-surface-3',
                   )}
                 >
                   <RouteDiagram name={o.id} className="h-8 w-full rounded" />
-                  <span className="truncate font-cond text-[10px] font-700 uppercase leading-tight text-white">{o.label}</span>
-                  <span className="truncate font-cond text-[8px] uppercase leading-none text-white/45">
+                  <span className="truncate font-cond text-label font-700 uppercase leading-tight text-ink">{o.label}</span>
+                  <span className="truncate font-cond text-label uppercase leading-none text-muted">
                     {o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''}
                   </span>
                 </button>
@@ -1501,7 +1540,7 @@ export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClic
   const jerseyNumbers = useMemo(() => teamJerseys(world, teamId), [world, teamId])
   const fp = { gmName, myTeamId, byId, jerseyNumbers }
   return (
-    <div className="rounded-lg bg-black/30 p-2">
+    <div className="rounded-lg bg-surface-2/60 p-2">
       <div className="mb-2">
         <TeamHoverCard team={team}>
           {onTeamClick ? (
@@ -1558,13 +1597,13 @@ export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClic
       ]} />}
       {pen && pen.count > 0 && (
         <div className="mb-1">
-          <div className="label mb-0.5 !text-white/50">Penalties</div>
-          <div className="text-[11px] text-white/85 tnum">{pen.count} accepted for {pen.yards} yds</div>
-          <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-white/60">
+          <div className="label mb-0.5">Penalties</div>
+          <div className="text-label text-ink-2 tnum">{pen.count} accepted for {pen.yards} yds</div>
+          <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-label text-muted">
             {Object.entries(pen.byType)
               .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
               .map(([k, n]) => (
-                <span key={k}>{PENALTY_INFO[k as PenaltyKind]?.label ?? k} <span className="tnum text-white/80">{n}</span></span>
+                <span key={k}>{PENALTY_INFO[k as PenaltyKind]?.label ?? k} <span className="tnum text-ink-2">{n}</span></span>
               ))}
           </div>
         </div>
@@ -1583,14 +1622,14 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
   const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct'
   return (
     <div className="mb-3">
-      <div className="label mb-0.5 !text-white/50">{title}</div>
-      <table className="w-full table-fixed text-[11px] tnum">
+      <div className="label mb-0.5">{title}</div>
+      <table className="w-full table-fixed text-label tnum">
         <colgroup>
           <col />
           {cols.map((c) => <col key={c.k} className={c.w ?? (wide(c.k) ? 'w-11' : 'w-8')} />)}
         </colgroup>
         <thead>
-          <tr className="text-white/40">
+          <tr className="text-faint">
             <th className="text-left font-500">Player</th>
             {cols.map((c) => <th key={c.k} title={c.title} className="whitespace-nowrap text-right font-500">{c.l}</th>)}
           </tr>
@@ -1601,12 +1640,12 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
             const jersey = fp.jerseyNumbers.get(b.playerId)
             const tag = fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null
             return (
-              <tr key={b.playerId} className="text-white/85">
+              <tr key={b.playerId} className="text-ink-2">
                 <td className="truncate pr-1" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
-                  {jersey != null && <span className="mr-1 inline-block min-w-6 text-white/50">#{jersey}</span>}
+                  {jersey != null && <span className="mr-1 inline-block min-w-6 text-muted">#{jersey}</span>}
                   {b.name}
                   {tag && (
-                    <span className="ml-1 rounded bg-[var(--team-soft)] px-1 py-px font-cond text-[9px] font-700 uppercase tracking-wide text-[var(--team)]">
+                    <span className="ml-1 rounded bg-[var(--team-soft)] px-1 py-px font-cond text-label font-700 uppercase tracking-wide text-[var(--team)]">
                       {tag}
                     </span>
                   )}

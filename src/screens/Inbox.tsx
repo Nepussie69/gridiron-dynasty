@@ -1,16 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { cn } from '../lib/cn'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card, PageHeader } from '../ui/kit'
+import { usePhone } from '../ui/hooks'
+import { Badge, Button, Card, PageHeader, SegmentedControl, Sheet } from '../ui/kit'
 
-const CAT_TONE: Record<string, 'gold' | 'loss' | 'info' | 'win' | 'neutral' | 'warn'> = {
-  Owner: 'gold',
+type CatTone = 'neutral' | 'loss'
+
+/** Category chips are neutral by design; only an injury is a real problem (red). */
+const CAT_TONE: Record<string, CatTone> = {
   Injury: 'loss',
-  Roster: 'info',
-  Draft: 'info',
-  Trade: 'warn',
-  League: 'neutral',
-  Staff: 'neutral',
+}
+
+type InboxItem = ReturnType<typeof useWorld>['news'][number]
+
+function MessageDetail({ item, season }: { item: InboxItem; season: number }) {
+  return (
+    <>
+      <div className="mb-4 flex items-center gap-3 border-b border-line pb-4">
+        <Badge tone={CAT_TONE[item.category] ?? 'neutral'}>{item.category}</Badge>
+        <span className="text-label text-muted">
+          Week {item.week} · {season} Season
+        </span>
+      </div>
+      <h2 className="font-display text-[26px] font-800 italic uppercase leading-tight tracking-[0.005em] text-ink sm:text-[32px]">
+        {item.headline}
+      </h2>
+      <p className="mt-4 max-w-2xl text-body leading-relaxed text-ink-2">{item.body}</p>
+    </>
+  )
 }
 
 export function Inbox() {
@@ -19,29 +36,41 @@ export function Inbox() {
   const markRead = useGame((s) => s.markRead)
   const markAllNewsRead = useGame((s) => s.markAllNewsRead)
   const career = useGame((s) => s.career)!
-  const [openId, setOpenId] = useState<string | null>(league.news[0]?.id ?? null)
+  const phone = usePhone()
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [filter, setFilter] = useState<'all' | 'unread'>('all')
 
   const items = league.news
-  const open = items.find((i) => i.id === openId) ?? items[0]
+  const shown = filter === 'unread' ? items.filter((i) => !readNews[i.id]) : items
+  // Phone is a master list; the detail opens in a sheet. Desktop keeps a detail pane.
+  const open = items.find((i) => i.id === openId) ?? (phone ? null : items[0])
   const isRead = (id: string) => readNews[id]
-
-  useEffect(() => {
-    if (open) markRead(open.id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open?.id])
-
   const unread = items.filter((i) => !isRead(i.id)).length
+
+  // Reading a message marks it read (never on mount).
+  const openMessage = (id: string) => {
+    setOpenId(id)
+    markRead(id)
+  }
 
   return (
     <div>
       <PageHeader
-        eyebrow="Club"
+        eyebrow="Career"
         title="Inbox"
         subtitle={`${unread} unread. Offers, press, transactions, and notes from ownership.`}
         right={
-          <div className="flex items-center gap-2">
-            <Badge tone={unread ? 'team' : 'neutral'}>{unread} unread</Badge>
-            <Button size="sm" variant="default" disabled={!unread} onClick={markAllNewsRead}>
+          <div className="flex flex-wrap items-center gap-2">
+            <SegmentedControl
+              label="Message filter"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { id: 'all', label: 'All' },
+                { id: 'unread', label: 'Unread' },
+              ]}
+            />
+            <Button size="sm" variant="secondary" disabled={!unread} onClick={markAllNewsRead}>
               Mark all read
             </Button>
           </div>
@@ -50,64 +79,58 @@ export function Inbox() {
 
       <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
         <Card pad={false} className="overflow-hidden">
-          <div className="border-b border-line px-4 py-2.5">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
             <span className="label">All Messages</span>
+            <span className="font-cond text-label font-700 uppercase tracking-[0.07em] text-muted tnum">{shown.length}</span>
           </div>
-          <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
-            {items.map((n) => (
+          <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto max-lg:max-h-none">
+            {shown.length === 0 && <div className="px-4 py-10 text-center text-body text-muted">Nothing unread.</div>}
+            {shown.map((n) => (
               <button
                 key={n.id}
-                onClick={() => setOpenId(n.id)}
+                type="button"
+                onClick={() => openMessage(n.id)}
                 className={cn(
-                  'flex w-full items-start gap-3 px-4 py-3 text-left transition',
-                  openId === n.id ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
+                  'motion flex w-full items-start gap-3 px-4 py-3 text-left',
+                  openId === n.id ? 'bg-[var(--team-tint)] shadow-[inset_3px_0_0_var(--team-accent)]' : 'hover:bg-surface-2',
                 )}
               >
                 <span
-                  className={cn(
-                    'mt-1.5 h-2 w-2 shrink-0 rounded-full',
-                    isRead(n.id) ? 'bg-transparent' : 'bg-[var(--team)]',
-                  )}
+                  aria-hidden
+                  className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', isRead(n.id) ? 'bg-transparent' : 'bg-brand')}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <Badge tone={CAT_TONE[n.category] ?? 'neutral'}>{n.category}</Badge>
-                    <span className="text-[11px] text-faint">Week {n.week}</span>
+                    <span className="text-label text-faint">Week {n.week}</span>
                   </div>
-                  <div className={cn('mt-1 text-sm leading-snug', isRead(n.id) ? 'font-500 text-ink-2' : 'font-700 text-ink')}>
+                  <div className={cn('mt-1 text-body leading-snug', isRead(n.id) ? 'font-500 text-ink-2' : 'font-700 text-ink')}>
                     {n.headline}
                   </div>
-                  <div className="mt-0.5 line-clamp-1 text-xs text-muted">{n.body}</div>
+                  <div className="mt-0.5 line-clamp-1 text-small text-muted">{n.body}</div>
                 </div>
               </button>
             ))}
           </div>
         </Card>
 
-        {open && (
+        {!phone && open && (
           <Card>
-            <div className="mb-4 flex items-center gap-3 border-b border-line pb-4">
-              <Badge tone={CAT_TONE[open.category] ?? 'neutral'}>{open.category}</Badge>
-              <span className="text-xs text-muted">
-                Week {open.week} · {career.season} Season
-              </span>
-            </div>
-            <h2 className="font-display text-3xl font-700 uppercase leading-tight tracking-tight text-ink">
-              {open.headline}
-            </h2>
-            <p className="mt-4 max-w-2xl text-[15px] leading-relaxed text-ink-2">{open.body}</p>
-
-            <div className="mt-6 rounded-xl bg-surface-2 p-4">
-              <div className="label mb-2">Suggested Actions</div>
-              <div className="flex flex-wrap gap-2">
-                <Badge tone="team">Review roster impact</Badge>
-                <Badge tone="info">Consult staff</Badge>
-                <Badge tone="neutral">Update depth chart</Badge>
-              </div>
-            </div>
+            <MessageDetail item={open} season={career.season} />
           </Card>
         )}
       </div>
+
+      {phone && (
+        <Sheet
+          open={!!open}
+          onClose={() => setOpenId(null)}
+          eyebrow={open ? `${open.category} · Week ${open.week}` : undefined}
+          title={open?.headline ?? ''}
+        >
+          {open && <MessageDetail item={open} season={career.season} />}
+        </Sheet>
+      )}
     </div>
   )
 }

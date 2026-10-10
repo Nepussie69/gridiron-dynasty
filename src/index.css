@@ -1,5 +1,34 @@
 @import 'tailwindcss';
 
+/* ═════════════════════════════════════════════════════════════════════════════
+   SUNDAY BROADCAST tokens (UI redesign F1). Reference: NEXT_PHASE_UI_REDESIGN.md
+   §2–§6 and docs/redesign/direction-broadcast.html.
+
+   • @theme holds the LIGHT values (and registers the Tailwind utilities).
+   • The dark values are written ONCE, through the `theme-dark` variant below,
+     which matches `@media (prefers-color-scheme: dark) :root:not([data-theme=light])`,
+     `:root[data-theme=dark]` and the scoped `.broadcast` class (Game Day,
+     BoxScore, the schedule box modal: always dark, whatever the app theme).
+   • Every token NAME that screens already use (bg-surface, text-muted,
+     bg-win-soft, text-gold-ink, var(--team), var(--team-soft) …) still works;
+     legacy names alias the new values.
+   • Team tokens (--team-fill, --team-accent …) are written on <html> by
+     AppShell via src/lib/teamColor.ts; the values below are pre-team defaults.
+   • scripts/check-contrast.ts parses this file: keep hex values 6-digit.
+   ═════════════════════════════════════════════════════════════════════════════ */
+
+@custom-variant theme-dark {
+  @media (prefers-color-scheme: dark) {
+    &:not([data-theme='light']) {
+      @slot;
+    }
+  }
+  &[data-theme='dark'],
+  &.broadcast {
+    @slot;
+  }
+}
+
 @theme {
   --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
   --font-cond: 'Barlow Semi Condensed', 'Arial Narrow', sans-serif;
@@ -12,108 +41,211 @@
   --font-weight-700: 700;
   --font-weight-800: 800;
 
-  /* Broadcast light palette */
-  --color-canvas: #e9edf4;
-  --color-surface: #ffffff;
-  --color-surface-2: #f4f7fb;
-  --color-surface-3: #eaf0f8;
-  --color-line: #d5deea;
-  --color-line-strong: #b9c6d6;
-  --color-ink: #0a1626;
-  --color-ink-2: #26374b;
-  --color-muted: #5c6f86;
-  --color-faint: #8a9bb0;
+  /* Type scale (§5): text-hero / kpi / title / row / body / small / label / micro.
+     12px is the floor (V1): micro is the 12px size with tight (1.0) leading, for
+     units, axis ticks and tags inside tiles; label is 12px on a 16px line. */
+  --text-hero: 2.5rem;
+  --text-hero--line-height: 1;
+  --text-kpi: 1.875rem;
+  --text-kpi--line-height: 1;
+  --text-title: 1.375rem;
+  --text-title--line-height: 1;
+  --text-row: 1rem;
+  --text-row--line-height: 1.15;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.25rem;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.125rem;
+  --text-label: 0.75rem;
+  --text-label--line-height: 1rem;
+  --text-micro: 0.75rem;
+  --text-micro--line-height: 1;
 
-  --color-brand: #0b62ff;
-  --color-win: #05914f;
-  --color-loss: #dc2937;
-  --color-warn: #d98207;
-  --color-gold: #c99a2e;
+  /* ── Neutrals (light) ── */
+  --color-canvas: #ECEFF4;
+  --color-surface: #FFFFFF;
+  --color-surface-2: #F5F7FA;
+  --color-surface-3: #E7EBF1;
+  --color-line: #D6DCE5; /* dividers */
+  --color-line-strong: #8792A4; /* control borders, ≥3:1 on surface */
+  --color-ink: #0B1220;
+  --color-ink-2: #2B374B;
+  --color-muted: #556175;
+  --color-faint: #667287; /* lowest text colour, ≥4.5:1 on surface-2 (spec #687489: 4.40) */
 
-  /* Soft semantic tints (dark-safe variants live in the dark blocks below) */
-  --color-brand-soft: #e7efff;
-  --color-win-soft: #e5f6ec;
-  --color-loss-soft: #fdeaec;
-  --color-warn-soft: #fdf0dc;
-  --color-gold-soft: #fbf3de;
-  --color-gold-ink: #9a7418;
-  /* Text that sits on a saturated accent (win/gold) and must flip with theme. */
-  --color-on-accent: #ffffff;
+  /* ── Tones (light) ── */
+  --color-brand: #1F62D6; /* info / links */
+  --color-win: #0C7844; /* spec #0D7F48: 4.14:1 on win-soft/surface-2 */
+  --color-loss: #C42734;
+  --color-warn: #9A5800;
+  --color-gold: #8A6100; /* honours and Elite only */
+  --color-slab: #0B1220; /* inverse CTA slab */
+  --color-on-slab: #FFFFFF;
+  --color-focus: #2F6FE0;
 
-  /* Fallback team colors (overridden per active team) */
-  --team: #0b62ff;
-  --team-2: #0a1626;
-  --team-ink: #ffffff;
-  --team-soft: #e7efff;
+  /* Soft tints: tone at --soft-pct over transparent (10% light / 14% dark). */
+  --color-brand-soft: color-mix(in srgb, var(--color-brand) var(--soft-pct), transparent);
+  --color-win-soft: color-mix(in srgb, var(--color-win) var(--soft-pct), transparent);
+  --color-loss-soft: color-mix(in srgb, var(--color-loss) var(--soft-pct), transparent);
+  --color-warn-soft: color-mix(in srgb, var(--color-warn) var(--soft-pct), transparent);
+  --color-gold-soft: color-mix(in srgb, var(--color-gold) var(--soft-pct), transparent);
+  /* Legacy: gold text. The new gold is already text-safe in both themes. */
+  --color-gold-ink: var(--color-gold);
+  /* Legacy: text that sits on a saturated win/gold fill. */
+  --color-on-accent: #FFFFFF;
+
+  /* ── Rating tiers (§4, light) ── */
+  --color-tier-elite: #EBA923; /* 90+ gold fill */
+  --color-tier-pro: #2DB86F; /* 82-89 green fill */
+  --color-tier-starter: #4C86EE; /* 74-81 blue fill */
+  --color-tier-rotation: #B3BFD0; /* 66-73 slate fill */
+  --color-tier-depth: #8792A4; /* 58-65 outline only, never text */
+  --color-tier-weak: #9A5800; /* 50-57 outline + number */
+  --color-tier-liab: #C42734; /* <50 outline + number */
+  --color-tier-on: #0B1220; /* ink on every filled tier */
+  --color-tier-weak-wash: color-mix(in srgb, var(--color-tier-weak) var(--tier-weak-wash-pct), transparent);
+  --color-tier-liab-wash: color-mix(in srgb, var(--color-tier-liab) 10%, transparent);
 }
 
-/* ── U3 dark palette ──────────────────────────────────────────────────────────
-   Applied from the OS preference unless the user pinned a theme, or whenever
-   `data-theme="dark"` is set on <html> (inline script in index.html applies it
-   before first paint). Overriding the @theme custom properties here re-themes
-   every token-based utility at once. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
+/* Non-utility tokens: theme switches, team defaults, shape, elevation, motion. */
+:root {
+  color-scheme: light;
+  --soft-pct: 10%;
+  --team-tint-pct: 8%;
+  /* Weak-tier wash: 10% light keeps #9A5800 ≥4.5:1 on surface-2 (12% gives 4.41). */
+  --tier-weak-wash-pct: 10%;
+
+  /* Team defaults until AppShell writes the active club (src/lib/teamColor.ts). */
+  --team-fill: #1F62D6;
+  --team-fill-2: #0B1220;
+  --team-on: #FFFFFF;
+  --team-accent: var(--color-brand);
+  --team-accent-text: var(--color-brand);
+  --team-accent-on: #FFFFFF;
+  --team-slab-ring: none;
+  --team-lift-stripe: 0px;
+  /* Dark-theme copies, used by the always-dark .broadcast scope. */
+  --team-dark-accent: #5B96FA;
+  --team-dark-accent-text: #5B96FA;
+  --team-dark-accent-on: #0B1220;
+
+  /* Radius (§6). Tailwind's rounded-* scale is left untouched. */
+  --r-xs: 2px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-pill: 999px;
+  --skew: -10deg;
+
+  /* z-index */
+  --z-bar: 30;
+  --z-nav: 40;
+  --z-pop: 60;
+  --z-sheet: 70;
+  --z-toast: 80;
+
+  /* Motion */
+  --d1: 120ms;
+  --d2: 220ms;
+  --d3: 420ms;
+  --ease-wipe: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-settle: cubic-bezier(0.16, 1, 0.3, 1); /* not --ease-out: that is a Tailwind theme var */
+
+  /* Elevation (light) */
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 0 0 1px rgba(16, 24, 40, 0.02);
+  --shadow-2: 0 18px 40px -12px rgba(16, 24, 40, 0.28), 0 0 0 1px rgba(16, 24, 40, 0.06);
+  --focus-ring: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-focus);
+  --card-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(10, 22, 38, 0.25);
+  --hatch-ink: rgba(10, 22, 38, 0.035);
+  --scrollbar-thumb: #C3CFDD;
+  --scrollbar-thumb-hover: #A9B8CA;
+}
+
+/* Derived tokens. Custom properties resolve where they are declared, so the
+   .broadcast scope redeclares everything built from other tokens. */
+:root,
+.broadcast {
+  --team-tint: color-mix(in srgb, var(--team-accent) var(--team-tint-pct), var(--color-surface));
+  /* Legacy team names (155 var(--team) / 66 var(--team-soft) uses). */
+  --team: var(--team-accent);
+  --team-2: var(--team-fill-2);
+  --team-ink: var(--team-accent-on);
+  --team-soft: var(--team-tint);
+}
+.broadcast {
+  --color-brand-soft: color-mix(in srgb, var(--color-brand) var(--soft-pct), transparent);
+  --color-win-soft: color-mix(in srgb, var(--color-win) var(--soft-pct), transparent);
+  --color-loss-soft: color-mix(in srgb, var(--color-loss) var(--soft-pct), transparent);
+  --color-warn-soft: color-mix(in srgb, var(--color-warn) var(--soft-pct), transparent);
+  --color-gold-soft: color-mix(in srgb, var(--color-gold) var(--soft-pct), transparent);
+  --color-gold-ink: var(--color-gold);
+  --color-tier-weak-wash: color-mix(in srgb, var(--color-tier-weak) var(--tier-weak-wash-pct), transparent);
+  --color-tier-liab-wash: color-mix(in srgb, var(--color-tier-liab) 10%, transparent);
+  --focus-ring: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-focus);
+  --team-accent: var(--team-dark-accent);
+  --team-accent-text: var(--team-dark-accent-text);
+  --team-accent-on: var(--team-dark-accent-on);
+  color: var(--color-ink);
+}
+
+/* ── The single dark token set ──────────────────────────────────────────────── */
+:root,
+.broadcast {
+  @variant theme-dark {
     color-scheme: dark;
-    --color-canvas: #0b1220;
-    --color-surface: #111a2b;
-    --color-surface-2: #16223a;
-    --color-surface-3: #1b2a45;
-    --color-line: #22324d;
-    --color-line-strong: #2f4466;
-    --color-ink: #e8eef7;
-    --color-ink-2: #c3cfdf;
-    --color-muted: #93a4bd;
-    --color-faint: #6b7d96;
-    --color-brand: #4d94ff;
-    --color-win: #2fce7c;
-    --color-loss: #ff5d6c;
-    --color-warn: #f0a93c;
-    --color-gold: #e2b24a;
-    --color-brand-soft: #16223a;
-    --color-win-soft: #10291e;
-    --color-loss-soft: #2c1620;
-    --color-warn-soft: #2b2210;
-    --color-gold-soft: #2b2410;
-    --color-gold-ink: #e8c874;
-    --color-on-accent: #0a1626;
+    --soft-pct: 14%;
+    --team-tint-pct: 12%;
+    --tier-weak-wash-pct: 12%;
+
+    --color-canvas: #090D14;
+    --color-surface: #111723;
+    --color-surface-2: #171F2E;
+    --color-surface-3: #202A3B;
+    --color-line: #263146;
+    --color-line-strong: #57657D; /* spec #4B5A74 is 2.57:1; lifted to 3:1 */
+    --color-ink: #F3F6FB;
+    --color-ink-2: #C5CEDC;
+    --color-muted: #97A3B6;
+    --color-faint: #7A879D;
+
+    --color-brand: #5B96FA;
+    --color-win: #3CCB82;
+    --color-loss: #F26670; /* spec #F2646F: 4.46:1 on loss-soft/surface-2 */
+    --color-warn: #EDA73C;
+    --color-gold: #F3B53F;
+    --color-slab: #F3F6FB;
+    --color-on-slab: #0B1220;
+    --color-focus: #7FB0FF;
+    --color-on-accent: #0B1220;
+
+    --color-tier-elite: #F3B53F;
+    --color-tier-pro: #3CCB82;
+    --color-tier-starter: #5B96FA;
+    --color-tier-rotation: #9AA9C0;
+    --color-tier-depth: #5E6C84;
+    --color-tier-weak: #EDA73C;
+    --color-tier-liab: #F26670;
+    --color-tier-on: #0B1220;
+
+    --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 18px 40px -12px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --card-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 10px 30px -14px rgba(0, 0, 0, 0.65);
+    --hatch-ink: rgba(255, 255, 255, 0.04);
+    --scrollbar-thumb: #3A4D6B;
+    --scrollbar-thumb-hover: #4B5A74;
   }
 }
-
-:root[data-theme='dark'] {
-  color-scheme: dark;
-  --color-canvas: #0b1220;
-  --color-surface: #111a2b;
-  --color-surface-2: #16223a;
-  --color-surface-3: #1b2a45;
-  --color-line: #22324d;
-  --color-line-strong: #2f4466;
-  --color-ink: #e8eef7;
-  --color-ink-2: #c3cfdf;
-  --color-muted: #93a4bd;
-  --color-faint: #6b7d96;
-  --color-brand: #4d94ff;
-  --color-win: #2fce7c;
-  --color-loss: #ff5d6c;
-  --color-warn: #f0a93c;
-  --color-gold: #e2b24a;
-  --color-brand-soft: #16223a;
-  --color-win-soft: #10291e;
-  --color-loss-soft: #2c1620;
-  --color-warn-soft: #2b2210;
-  --color-gold-soft: #2b2410;
-  --color-gold-ink: #e8c874;
-    --color-on-accent: #0a1626;
-}
-
 :root[data-theme='light'] {
   color-scheme: light;
 }
 
-/* Team-soft is derived from the active club colour so it stays legible in both
-   palettes (a light wash on white, a deep wash on dark). */
-:root {
-  --team-soft: color-mix(in srgb, var(--team) 10%, var(--color-surface));
+/* Global keyboard focus ring (§6). In the base layer so component utilities
+   (focus:ring-*, outline-none + custom rings) can still override it. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
 }
 
 * {
@@ -147,14 +279,20 @@ body {
   font-family: var(--font-cond);
 }
 
-/* Broadcast label: bold condensed uppercase with tracking */
-.label {
-  font-family: var(--font-cond);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.055em;
-  font-size: 0.68rem;
-  color: var(--color-muted);
+/* Broadcast label (§5): 12/16 Semi Condensed 600, uppercase, +0.07em, muted.
+   In the components layer (V1) so a utility on the same element — text-ink-2,
+   font-700, normal-case, leading-none, a team-accent eyebrow colour — wins
+   without an !important override. */
+@layer components {
+  .label {
+    font-family: var(--font-cond);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    color: var(--color-muted);
+  }
 }
 
 /* Slanted broadcast chip */
@@ -169,8 +307,8 @@ body {
 .hatch {
   background-image: repeating-linear-gradient(
     -45deg,
-    rgba(10, 22, 38, 0.035) 0,
-    rgba(10, 22, 38, 0.035) 1px,
+    var(--hatch-ink) 0,
+    var(--hatch-ink) 1px,
     transparent 1px,
     transparent 8px
   );
@@ -188,23 +326,9 @@ body {
   backdrop-filter: blur(12px) saturate(1.4);
 }
 
-/* Layered card shadow: 1px inner highlight + soft drop. Lightened in dark. */
+/* Layered card shadow: 1px inner highlight + soft drop (token switches with theme). */
 .card-shadow {
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 8px 24px -12px rgba(10, 22, 38, 0.25);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .card-shadow {
-    box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.05) inset,
-      0 10px 30px -14px rgba(0, 0, 0, 0.65);
-  }
-}
-:root[data-theme='dark'] .card-shadow {
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.05) inset,
-    0 10px 30px -14px rgba(0, 0, 0, 0.65);
+  box-shadow: var(--card-shadow);
 }
 
 /* ── U3b: table density (comfortable / compact) ─────────────────────────────── */
@@ -238,41 +362,13 @@ table[data-density='compact'] {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #c3cfdd;
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
   border: 2px solid var(--color-canvas);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #a9b8ca;
+  background: var(--scrollbar-thumb-hover);
 }
-:root[data-theme='dark'] ::-webkit-scrollbar-thumb,
-html[data-theme='dark'] ::-webkit-scrollbar-thumb {
-  background: #3a4d6b;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) ::-webkit-scrollbar-thumb {
-    background: #3a4d6b;
-  }
-  :root:not([data-theme='light']) .hatch {
-    background-image: repeating-linear-gradient(
-      -45deg,
-      rgba(255, 255, 255, 0.04) 0,
-      rgba(255, 255, 255, 0.04) 1px,
-      transparent 1px,
-      transparent 8px
-    );
-  }
-}
-:root[data-theme='dark'] .hatch {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    rgba(255, 255, 255, 0.04) 0,
-    rgba(255, 255, 255, 0.04) 1px,
-    transparent 1px,
-    transparent 8px
-  );
-}
-
 
 /* ── U1 game-day field: broadcast motion (SVG + CSS only) ───────────────────── */
 @keyframes gd-toast {
@@ -318,6 +414,45 @@ html[data-theme='dark'] ::-webkit-scrollbar-thumb {
 .gd-slide-up { animation: gd-slide-up 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
 
 .gd-pill-slide { transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1); }
+
+/* ── F2 kit overlays: sheets slide up (d3), dialogs pop, menus wipe in (d2) ── */
+@keyframes kit-sheet-up {
+  from { transform: translateY(40%); opacity: 0.3; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes kit-pop-in {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes kit-wipe-in {
+  from { clip-path: inset(0 0 100% 0); opacity: 0.4; }
+  to { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+@keyframes kit-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@utility kit-sheet {
+  animation: kit-sheet-up var(--d3) var(--ease-settle) both;
+}
+@utility kit-pop {
+  animation: kit-pop-in var(--d2) var(--ease-settle) both;
+}
+@utility kit-wipe {
+  animation: kit-wipe-in var(--d2) var(--ease-wipe) both;
+}
+@utility kit-fade {
+  animation: kit-fade-in var(--d2) ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kit-sheet,
+  .kit-pop,
+  .kit-wipe,
+  .kit-fade,
+  .sm\:kit-pop {
+    animation: none;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .gd-toast,

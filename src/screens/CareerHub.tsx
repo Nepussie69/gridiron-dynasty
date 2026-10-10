@@ -8,7 +8,7 @@ import { SCENARIOS, scenarioById } from '../game/engine/scenarios'
 import { parseSeedCode } from '../game/engine/seed'
 import type { CareerPath, ScenarioId } from '../game/types'
 import { useGame } from '../store/gameStore'
-import { Badge, Button, TeamCrest } from '../ui/kit'
+import { Badge, Button, Card, ConfirmSheet, OptionCard, OptionGroup, SegmentedControl, TeamCrest } from '../ui/kit'
 
 const ARCHETYPES: Record<CareerPath, { id: string; name: string; desc: string }[]> = {
   personnel: [
@@ -129,6 +129,8 @@ export function CareerHub() {
   const [teamId, setTeamId] = useState(pool[0].id)
   const [seedText, setSeedText] = useState('')
   const [scenarioId, setScenarioId] = useState<ScenarioId>('climb')
+  const [openRung, setOpenRung] = useState<number | null>(null)
+  const [freshOpen, setFreshOpen] = useState(false)
 
   const seedValue = parseSeedCode(seedText)
   const seedInvalid = seedText.trim() !== '' && seedValue === null
@@ -158,358 +160,332 @@ export function CareerHub() {
 
   return (
     <div className="min-h-screen bg-canvas">
-      <div className="mx-auto grid max-w-[1240px] gap-8 px-6 py-10 lg:grid-cols-[1.05fr_1fr]">
-        {/* Hero */}
-        <div>
-          <div className="mb-6 flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink text-canvas">
-              <Shield size={24} strokeWidth={2.4} />
+      <div className="mx-auto max-w-[1240px] px-6 py-10">
+        {/* Continue first: on phone the resumable save leads, before the pitch. */}
+        {saveInfo && (
+          <div className="mx-auto mb-8 max-w-[760px] rounded-[var(--r-lg)] border border-line-strong bg-surface p-5 shadow-[var(--shadow-1)]">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="label">Continue Career</div>
+              {saveInfo.usedBackup && <Badge tone="warn">Recovered from backup</Badge>}
             </div>
-            <div>
-              <div className="font-display text-3xl font-700 uppercase leading-none tracking-wide">
-                Gridiron <span className="text-brand">Dynasty</span>
-              </div>
-              <div className="label mt-1">Front Office Football Career</div>
-            </div>
-          </div>
-
-          <h1 className="font-display text-5xl font-700 uppercase leading-[0.95] tracking-tight text-ink">
-            Start in the league.
-            <br />
-            <span className="text-brand">Run an NFL franchise.</span>
-          </h1>
-          <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-muted">
-            Every game is an NFL game. You begin as a{' '}
-            {path === 'coach' ? 'position coach / quality-control assistant' : 'assistant director of college scouting'} making{' '}
-            {path === 'coach' ? '$700k' : '$260k'}. Four reputations and your skills decide how fast you rise:{' '}
-            <strong>Evaluation</strong>, <strong>Roster Building</strong>, <strong>Leadership</strong>,{' '}
-            <strong>Results</strong>, and <strong>Profile</strong>. Excel and you skip rungs — stumble and you can be
-            fired. The endpoint is the same: <strong>General Manager</strong>.
-          </p>
-
-          <div className="mt-6 flex rounded-lg bg-surface-2 p-0.5">
-            {(['personnel', 'coach'] as CareerPath[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => choosePath(p)}
-                className={cn(
-                  'flex-1 rounded-md px-3 py-2 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  path === p ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
+            <div className="flex items-center gap-3">
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[var(--r-md)] bg-surface-3 text-ink-2">
+                <Play size={20} aria-hidden />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-display text-xl font-800 italic uppercase leading-none text-ink">{saveInfo.title}</div>
+                <div className="mt-0.5 font-cond text-small text-muted">
+                  {saveInfo.teamName} · Season {saveInfo.season} · {saveInfo.tier}
+                </div>
+                {saveInfo.savedAt > 0 && (
+                  <div className="mt-0.5 text-label text-faint">Saved {new Date(saveInfo.savedAt).toLocaleString()}</div>
                 )}
-              >
-                {p === 'coach' ? 'Coaching Ladder' : 'Personnel Ladder'}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-4 space-y-2">
-            {ladder.map((r, i) => {
-              const active = r.level === level
-              const d = roleDetail(path, r.level)
-              const unlocks = unlocksFor(path, r.level)
-              return (
-                <div key={r.level} className={cn('overflow-hidden rounded-xl border shadow-[0_1px_2px_rgba(10,22,38,0.05)]', active ? 'border-[var(--team)] ring-1 ring-[var(--team)]' : 'border-line')}>
-                  <button
-                    type="button"
-                    onClick={() => setLevel(active ? -1 : r.level)}
-                    aria-expanded={active}
-                    className={cn(
-                      'flex w-full items-center gap-4 p-3 text-left transition',
-                      active ? 'bg-surface' : 'bg-surface hover:bg-surface-2',
-                    )}
-                  >
-                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-ink font-display text-base font-700 text-canvas">
-                      {i + 1}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-display text-base font-700 uppercase leading-none text-ink">{r.title}</div>
-                      <div className="mt-0.5 font-cond text-xs text-muted">{r.blurb}</div>
-                    </div>
-                    <Badge tone="loss">NFL</Badge>
-                    <ChevronDown size={16} className={cn('shrink-0 text-faint transition-transform', active && 'rotate-180')} />
-                  </button>
-
-                  {active && d.does && (
-                    <div className="space-y-2.5 border-t border-line bg-surface-2 p-3.5">
-                      <RoleLine icon={<Search size={13} />} title="What you do" body={d.does} />
-                      <RoleLine icon={<Shield size={13} />} title="What you control" body={d.controls} />
-                      <RoleLine icon={<TrendingUp size={13} />} title="How you get promoted" body={d.promo} />
-                      {unlocks.length > 0 && (
-                        <div className="flex gap-2.5">
-                          <span className="mt-0.5 shrink-0 text-[var(--team)]">
-                            <Sparkles size={13} />
-                          </span>
-                          <div className="text-xs leading-relaxed text-ink-2">
-                            <strong className="font-600 text-ink">What you unlock:</strong>{' '}
-                            <span className="flex flex-wrap gap-1.5 pt-1.5">
-                              {unlocks.map((u) => (
-                                <span key={u} className="rounded-md bg-[var(--team-soft)] px-1.5 py-0.5 font-cond text-[11px] font-700 uppercase tracking-wide text-[var(--team)]">
-                                  {u}
-                                </span>
-                              ))}
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-
-          <div className="mt-6 flex items-center gap-2 rounded-xl bg-brand-soft p-3.5 text-sm text-brand">
-            <Shield size={18} />
-            <span>
-              <strong className="font-600">One living league:</strong> the prospects you grade today become
-              tomorrow's NFL stars. Reputation is earned, not given.
-            </span>
-          </div>
-        </div>
-
-        {/* Setup card */}
-        <div className="space-y-4">
-          {saveInfo && (
-            <div className="rounded-2xl border border-[var(--team)] bg-surface p-5 shadow-[0_8px_30px_rgba(10,22,38,0.08)]">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="label">Continue Career</div>
-                {saveInfo.usedBackup && <Badge tone="warn">Recovered from backup</Badge>}
               </div>
-              <div className="flex items-center gap-3">
-                <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink text-canvas">
-                  <Play size={20} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-display text-xl font-700 uppercase leading-none text-ink">
-                    {saveInfo.title}
-                  </div>
-                  <div className="mt-0.5 font-cond text-xs text-muted">
-                    {saveInfo.teamName} · Season {saveInfo.season} · {saveInfo.tier}
-                  </div>
-                  {saveInfo.savedAt > 0 && (
-                    <div className="mt-0.5 text-[11px] text-faint">
-                      Saved {new Date(saveInfo.savedAt).toLocaleString()}
-                    </div>
-                  )}
-                </div>
+            </div>
+            <Button variant="primary" size="lg" className="mt-3 w-full" icon={<Play size={16} aria-hidden />} onClick={continueCareer}>
+              Continue
+            </Button>
+            <Button variant="quiet" size="sm" className="mt-2 w-full" onClick={() => setFreshOpen(true)}>
+              Start fresh (erase this save)
+            </Button>
+          </div>
+        )}
+
+        {saveError && !saveInfo && (
+          <div className="mx-auto mb-8 flex max-w-[760px] items-start gap-2 rounded-[var(--r-lg)] border border-warn/30 bg-warn-soft p-3 text-small text-warn">
+            <TriangleAlert size={15} className="mt-0.5 shrink-0" aria-hidden />
+            <span>{saveError}</span>
+          </div>
+        )}
+
+        <div className="grid gap-8 lg:grid-cols-[1.05fr_1fr]">
+          {/* Hero */}
+          <div>
+            <div className="mb-6 flex items-center gap-3">
+              <div className="grid h-12 w-12 place-items-center rounded-[var(--r-md)] bg-slab text-on-slab">
+                <Shield size={24} strokeWidth={2.4} aria-hidden />
               </div>
-              <Button variant="primary" size="lg" className="mt-3 w-full" onClick={continueCareer}>
-                <Play size={16} /> Continue
-              </Button>
-              <button
-                onClick={discardSave}
-                className="mt-2 w-full text-center font-cond text-xs font-600 uppercase tracking-wide text-muted hover:text-loss"
-              >
-                Start fresh (erase this save)
-              </button>
-            </div>
-          )}
-
-          {saveError && !saveInfo && (
-            <div className="flex items-start gap-2 rounded-xl border border-warn/30 bg-warn-soft p-3 text-xs text-warn">
-              <TriangleAlert size={15} className="mt-0.5 shrink-0" />
-              <span>{saveError}</span>
-            </div>
-          )}
-
-          <div className="rounded-2xl border border-line bg-surface p-5 shadow-[0_8px_30px_rgba(10,22,38,0.08)]">
-            <div className="label mb-1">New Career</div>
-            <h2 className="mb-5 font-display text-2xl font-700 uppercase tracking-wide">Build Your Resumé</h2>
-
-            <label className="label mb-1 block">Your Name</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="mb-5 w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-cond text-base font-600 text-ink outline-none focus:border-[var(--team)]"
-            />
-
-            <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="label">Track</span>
-              {scenarioLocked && <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Set by scenario</span>}
-            </div>
-            <div className="mb-5 grid grid-cols-2 gap-2">
-              {(['personnel', 'coach'] as CareerPath[]).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => choosePath(p)}
-                  disabled={scenarioLocked}
-                  className={cn(
-                    'rounded-lg border px-3 py-2.5 text-left transition',
-                    scenarioLocked && 'cursor-not-allowed opacity-60',
-                    path === p ? 'border-transparent bg-ink text-canvas' : 'border-line bg-surface-2 text-ink hover:border-line-strong',
-                  )}
-                >
-                  <div className="font-display text-base font-700 uppercase leading-none">
-                    {p === 'coach' ? 'Coaching' : 'Personnel'}
-                  </div>
-                  <div className={cn('mt-1 text-[11px]', path === p ? 'text-white/70' : 'text-muted')}>
-                    {p === 'coach' ? 'On-field → GM' : 'Scout → GM'}
-                  </div>
-                </button>
-              ))}
+              <div>
+                <div className="font-display text-3xl font-800 italic uppercase leading-none tracking-wide">
+                  Gridiron <span className="text-brand">Dynasty</span>
+                </div>
+                <div className="label mt-1">Front Office Football Career</div>
+              </div>
             </div>
 
-            <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="label">Scenario</span>
-              {scenarioLocked && <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Set by scenario</span>}
-            </div>
-            <div className="mb-1.5 space-y-1.5">
-              {SCENARIOS.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => chooseScenario(s.id)}
-                  className={cn(
-                    'flex w-full items-start gap-3 rounded-lg border p-2.5 text-left transition',
-                    scenarioId === s.id ? 'border-[var(--team)] bg-[var(--team-soft)]' : 'border-line hover:bg-surface-2',
-                  )}
-                >
-                  <div className={cn('mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border', scenarioId === s.id ? 'border-[var(--team)]' : 'border-line-strong')}>
-                    {scenarioId === s.id && <span className="h-2 w-2 rounded-full" style={{ background: 'var(--team)' }} />}
-                  </div>
-                  <div>
-                    <div className="font-cond text-sm font-700 uppercase text-ink">{s.title}</div>
-                    <div className="text-xs text-muted">{s.desc}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <p className="mb-5 text-[11px] leading-relaxed text-muted">
-              Scenarios skip the climb — the Standard Climb is the intended way to play.
+            <h1 className="font-display text-[40px] font-800 italic uppercase leading-[0.95] tracking-tight text-ink">
+              Start in the league.
+              <br />
+              <span className="text-brand">Run an NFL franchise.</span>
+            </h1>
+            <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-muted">
+              Every game is an NFL game. You begin as a{' '}
+              {path === 'coach' ? 'position coach / quality-control assistant' : 'assistant director of college scouting'} making{' '}
+              {path === 'coach' ? '$700k' : '$260k'}. Four reputations and your skills decide how fast you rise:{' '}
+              <strong>Evaluation</strong>, <strong>Roster Building</strong>, <strong>Leadership</strong>,{' '}
+              <strong>Results</strong>, and <strong>Profile</strong>. Excel and you skip rungs — stumble and you can be
+              fired. The endpoint is the same: <strong>General Manager</strong>.
             </p>
 
-            <div className="label mb-1.5">Archetype</div>
-            <div className="mb-5 space-y-1.5">
-              {ARCHETYPES[path].map((a) => (
-                <button
-                  key={a.id}
-                  onClick={() => setArchetype(a.id)}
-                  className={cn(
-                    'flex w-full items-start gap-3 rounded-lg border p-2.5 text-left transition',
-                    archetype === a.id ? 'border-[var(--team)] bg-[var(--team-soft)]' : 'border-line hover:bg-surface-2',
-                  )}
-                >
-                  <div className={cn('mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border', archetype === a.id ? 'border-[var(--team)]' : 'border-line-strong')}>
-                    {archetype === a.id && <span className="h-2 w-2 rounded-full" style={{ background: 'var(--team)' }} />}
-                  </div>
-                  <div>
-                    <div className="font-cond text-sm font-700 uppercase text-ink">{a.name}</div>
-                    <div className="text-xs text-muted">{a.desc}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            {advanced && (
-              <>
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <span className="label">Starting Level (advanced)</span>
-                  {scenarioLocked && <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Set by scenario</span>}
-                </div>
-                <div className="mb-4 flex flex-wrap gap-1.5">
-                  {ladder.map((r) => (
+            <div className="mt-6 space-y-2">
+              {ladder.map((r, i) => {
+                const open = openRung === r.level
+                const isCurrent = r.level === level
+                const d = roleDetail(path, r.level)
+                const unlocks = unlocksFor(path, r.level)
+                return (
+                  <div key={r.level} className={cn('overflow-hidden rounded-[var(--r-lg)] border', isCurrent ? 'border-line-strong' : 'border-line')}>
                     <button
-                      key={r.level}
-                      onClick={() => setLevel(r.level)}
-                      disabled={scenarioLocked}
-                      className={cn(
-                        'rounded-md border px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
-                        scenarioLocked && 'cursor-not-allowed opacity-60',
-                        level === r.level ? 'border-transparent text-[var(--team-ink)]' : 'border-line text-muted hover:bg-surface-2',
-                      )}
-                      style={level === r.level ? { background: 'var(--team)' } : undefined}
+                      type="button"
+                      onClick={() => setOpenRung(open ? null : r.level)}
+                      aria-expanded={open}
+                      className={cn('flex min-h-11 w-full items-center gap-4 p-3 text-left transition', open ? 'bg-surface' : 'bg-surface hover:bg-surface-2')}
                     >
-                      {r.title}
+                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[var(--r-md)] bg-surface-3 font-display text-base font-700 text-ink-2">
+                        {i + 1}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-display text-base font-700 uppercase leading-none text-ink">{r.title}</div>
+                        <div className="mt-0.5 font-cond text-small text-muted">{r.blurb}</div>
+                      </div>
+                      {isCurrent && <Badge tone="neutral">Current level</Badge>}
+                      <Badge tone="neutral">NFL</Badge>
+                      <ChevronDown size={16} className={cn('shrink-0 text-faint transition-transform', open && 'rotate-180')} aria-hidden />
+                    </button>
+
+                    {open && d.does && (
+                      <div className="space-y-2.5 border-t border-line bg-surface-2 p-3.5">
+                        <RoleLine icon={<Search size={13} />} title="What you do" body={d.does} />
+                        <RoleLine icon={<Shield size={13} />} title="What you control" body={d.controls} />
+                        <RoleLine icon={<TrendingUp size={13} />} title="How you get promoted" body={d.promo} />
+                        {unlocks.length > 0 && (
+                          <div className="flex gap-2.5">
+                            <span className="mt-0.5 shrink-0 text-[var(--team-accent)]">
+                              <Sparkles size={13} aria-hidden />
+                            </span>
+                            <div className="text-small leading-relaxed text-ink-2">
+                              <strong className="font-600 text-ink">What you unlock:</strong>{' '}
+                              <span className="flex flex-wrap gap-1.5 pt-1.5">
+                                {unlocks.map((u) => (
+                                  <span key={u} className="rounded-[var(--r-xs)] bg-surface-3 px-1.5 py-0.5 font-cond text-label font-700 uppercase tracking-[0.06em] text-ink-2">
+                                    {u}
+                                  </span>
+                                ))}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <p className="mt-3 text-label leading-relaxed text-muted">
+              The ladder is on the wall for reference — you set your starting level below.
+            </p>
+
+            <div className="mt-6 flex items-center gap-2 rounded-[var(--r-lg)] bg-brand-soft p-3.5 text-small text-brand">
+              <Shield size={18} aria-hidden />
+              <span>
+                <strong className="font-600">One living league:</strong> the prospects you grade today become
+                tomorrow&rsquo;s NFL stars. Reputation is earned, not given.
+              </span>
+            </div>
+          </div>
+
+          {/* Setup card */}
+          <div className="space-y-4">
+            <Card>
+              <div className="label mb-1">New Career</div>
+              <h2 className="mb-5 font-display text-2xl font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
+                Build Your Resumé
+              </h2>
+
+              <label className="label mb-1 block" htmlFor="hub-name">Your Name</label>
+              <input
+                id="hub-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="mb-5 w-full rounded-[var(--r-md)] border border-line-strong bg-surface-2 px-3 py-2 text-[16px] font-600 max-sm:h-11 text-ink outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-focus)]"
+              />
+
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="label">Track</span>
+                {scenarioLocked && <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">Set by scenario</span>}
+              </div>
+              <div className="mb-5">
+                <SegmentedControl
+                  label="Career track"
+                  value={path}
+                  disabled={scenarioLocked}
+                  onChange={(p) => {
+                    if (!scenarioLocked) choosePath(p)
+                  }}
+                  options={[
+                    { id: 'personnel', label: 'Personnel' },
+                    { id: 'coach', label: 'Coaching' },
+                  ]}
+                />
+              </div>
+
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="label">Scenario</span>
+              </div>
+              <OptionGroup label="Scenario" className="mb-2">
+                {SCENARIOS.map((s) => (
+                  <OptionCard
+                    key={s.id}
+                    selected={scenarioId === s.id}
+                    title={s.title}
+                    description={s.desc}
+                    onSelect={() => chooseScenario(s.id)}
+                  />
+                ))}
+              </OptionGroup>
+              <p className="mb-5 text-label leading-relaxed text-muted">
+                Scenarios skip the climb — the Standard Climb is the intended way to play.
+              </p>
+
+              <div className="label mb-1.5">Archetype</div>
+              <OptionGroup label="Archetype" className="mb-5">
+                {ARCHETYPES[path].map((a) => (
+                  <OptionCard key={a.id} selected={archetype === a.id} title={a.name} description={a.desc} onSelect={() => setArchetype(a.id)} />
+                ))}
+              </OptionGroup>
+
+              {advanced && (
+                <>
+                  <div className="mb-1.5 flex items-baseline justify-between">
+                    <span className="label">Starting Level (advanced)</span>
+                    {scenarioLocked && <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">Set by scenario</span>}
+                  </div>
+                  <div className="mb-4 flex flex-wrap gap-1.5">
+                    {ladder.map((r) => (
+                      <button
+                        key={r.level}
+                        type="button"
+                        onClick={() => setLevel(r.level)}
+                        disabled={scenarioLocked}
+                        aria-pressed={level === r.level}
+                        className={cn(
+                          'motion pointer-coarse:min-h-11 rounded-[var(--r-sm)] border px-2 py-1 font-cond text-label font-700 uppercase tracking-[0.06em]',
+                          scenarioLocked && 'cursor-not-allowed opacity-60',
+                          level === r.level ? 'border-line-strong bg-surface-3 text-ink' : 'border-line text-muted hover:bg-surface-2',
+                        )}
+                      >
+                        {r.title}
+                      </button>
+                    ))}
+                  </div>
+
+                  <label className="label mb-1.5 block" htmlFor="hub-seed">World seed</label>
+                  <input
+                    id="hub-seed"
+                    value={seedText}
+                    onChange={(e) => setSeedText(e.target.value)}
+                    placeholder="Blank = random"
+                    className="mb-1 w-full rounded-[var(--r-md)] border border-line-strong bg-surface-2 px-3 py-2 text-[16px] font-600 text-ink outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-focus)]"
+                  />
+                  <p className="text-label leading-relaxed text-muted">Same seed → same league. Leave blank for random.</p>
+                  {seedInvalid && <p className="mt-1 text-label font-600 text-loss">That seed isn&apos;t valid.</p>}
+                </>
+              )}
+
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="label">Choose Your Franchise</span>
+                <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">
+                  {scenario.forceLowestPrestige ? 'Set by scenario' : 'Rebuild jobs · weakest clubs'}
+                </span>
+              </div>
+              <div className="mb-2 max-h-[180px] overflow-y-auto rounded-[var(--r-md)] border border-line bg-surface-2 p-2">
+                <div className="grid grid-cols-2 gap-1">
+                  {pool.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setTeamId(t.id)}
+                      disabled={scenario.forceLowestPrestige}
+                      aria-pressed={teamId === t.id}
+                      className={cn(
+                        'motion flex items-center gap-2 rounded-[var(--r-sm)] px-2 py-1.5 text-left max-sm:min-h-11 pointer-coarse:min-h-11',
+                        scenario.forceLowestPrestige && 'cursor-not-allowed opacity-60',
+                        teamId === t.id ? 'bg-surface-3 ring-1 ring-line-strong' : 'hover:bg-surface-3',
+                      )}
+                    >
+                      <TeamCrest team={t} size={22} />
+                      <span className="truncate font-cond text-small font-600 text-ink">{t.name}</span>
                     </button>
                   ))}
                 </div>
-
-                <div className="label mb-1.5">World seed</div>
-                <input
-                  value={seedText}
-                  onChange={(e) => setSeedText(e.target.value)}
-                  placeholder="Blank = random"
-                  className="mb-1 w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-cond text-sm font-600 text-ink outline-none focus:border-[var(--team)]"
-                />
-                <p className="text-[11px] leading-relaxed text-muted">Same seed → same league. Leave blank for random.</p>
-                {seedInvalid && (
-                  <p className="mt-1 text-[11px] font-600 text-loss">That seed isn&apos;t valid.</p>
-                )}
-              </>
-            )}
-
-            <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="label">Choose Your Franchise</span>
-              <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">
-                {scenario.forceLowestPrestige ? 'Set by scenario' : 'Rebuild jobs · weakest clubs'}
-              </span>
-            </div>
-            <div className="mb-2 max-h-[180px] overflow-y-auto rounded-lg border border-line bg-surface-2 p-2">
-              <div className="grid grid-cols-2 gap-1">
-                {pool.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setTeamId(t.id)}
-                    disabled={scenario.forceLowestPrestige}
-                    className={cn(
-                      'flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition',
-                      scenario.forceLowestPrestige && 'cursor-not-allowed opacity-60',
-                      teamId === t.id ? 'bg-surface shadow-sm ring-1 ring-[var(--team)]' : 'hover:bg-surface-2',
-                    )}
-                  >
-                    <TeamCrest team={t} size={22} />
-                    <span className="truncate font-cond text-xs font-600 text-ink">{t.name}</span>
-                  </button>
-                ))}
               </div>
-            </div>
-            <p className="mb-5 text-[11px] leading-relaxed text-muted">
-              You're unproven, so only the league's worst clubs will take a chance on you. Build your
-              reputation and relationships, and better franchises will come calling for your next job.
-            </p>
+              <p className="mb-5 text-label leading-relaxed text-muted">
+                You&rsquo;re unproven, so only the league&rsquo;s worst clubs will take a chance on you. Build your
+                reputation and relationships, and better franchises will come calling for your next job.
+              </p>
 
-            <div
-              className="mb-4 flex items-center gap-3 rounded-xl p-3"
-              style={{ background: selected ? `linear-gradient(110deg, ${selected.primary}, ${selected.secondary})` : undefined }}
-            >
-              {selected && (
-                <>
-                  <TeamCrest team={selected} size={38} />
-                  <div className="text-white">
-                    <div className="label !text-white/70">First Job</div>
-                    <div className="font-display text-lg font-700 uppercase leading-none">{rung.title}</div>
-                    <div className="font-cond text-xs text-white/80">
-                      {selected.city} {selected.name}
-                    </div>
+              <div
+                className="mb-4 flex items-center gap-3 rounded-[var(--r-lg)] p-3"
+                style={{ background: 'var(--team-fill)', color: 'var(--team-on)', boxShadow: 'var(--team-slab-ring)' }}
+              >
+                <TeamCrest team={selected} size={38} />
+                <div>
+                  <div className="font-cond text-label font-600 uppercase tracking-[0.07em] opacity-80">First Job</div>
+                  <div className="font-display text-lg font-800 italic uppercase leading-none">{rung.title}</div>
+                  <div className="font-cond text-small opacity-90">
+                    {selected.city} {selected.name}
                   </div>
-                  <div className="ml-auto text-right text-white">
-                    <div className="label !text-white/70">First Contract</div>
-                    <div className="font-display text-lg font-700 tnum">${(startSalary / 1000).toFixed(0)}k</div>
-                  </div>
-                </>
-              )}
-            </div>
+                </div>
+                <div className="ml-auto text-right">
+                  <div className="font-cond text-label font-600 uppercase tracking-[0.07em] opacity-80">First Contract</div>
+                  <div className="font-display text-lg font-700 tnum">${(startSalary / 1000).toFixed(0)}k</div>
+                </div>
+              </div>
 
-            <Button
-              variant="primary"
-              size="lg"
-              className="w-full"
-              onClick={() => selected && startCareer({ name, path, archetype, teamId: selected.id, startLevel: level, seed: seedValue ?? undefined, scenarioId })}
-            >
-              <Search size={16} /> Begin: {scenario.title} <ArrowRight size={15} />
-            </Button>
+              <Button
+                variant="primary"
+                size="lg"
+                className="w-full"
+                icon={<Search size={16} aria-hidden />}
+                onClick={() => selected && startCareer({ name, path, archetype, teamId: selected.id, startLevel: level, seed: seedValue ?? undefined, scenarioId })}
+              >
+                Begin: {scenario.title} <ArrowRight size={15} aria-hidden />
+              </Button>
 
-            <button
-              onClick={() => setAdvanced((a) => !a)}
-              className="mt-3 w-full text-center font-cond text-xs font-600 uppercase tracking-wide text-muted hover:text-ink-2"
-            >
-              {advanced ? 'Hide advanced options' : 'Advanced: choose a starting level'}
-            </button>
+              <Button variant="quiet" size="sm" className="mt-3 w-full" onClick={() => setAdvanced((a) => !a)}>
+                {advanced ? 'Hide advanced options' : 'Advanced: choose a starting level'}
+              </Button>
+            </Card>
           </div>
         </div>
       </div>
-      <div className="pb-10 text-center text-xs text-faint">
+      <div className="pb-10 text-center text-label text-faint">
         Real team brands · ratings seeded from Madden NFL 26 · 32-club league sim
       </div>
+
+      {/* Erasing the save is one-way: review it first. */}
+      <ConfirmSheet
+        open={freshOpen}
+        onClose={() => setFreshOpen(false)}
+        eyebrow="Save file"
+        title="Start fresh?"
+        subtitle="This erases the saved career on this device. It can't be undone."
+        consequences={
+          saveInfo
+            ? [
+                { label: 'Saved career', value: `${saveInfo.title} · ${saveInfo.teamName}` },
+                { label: 'Season', value: `Season ${saveInfo.season} · ${saveInfo.tier}` },
+                { label: 'What replaces it', value: 'Nothing — you begin again from the bottom', tone: 'warn' },
+              ]
+            : []
+        }
+        confirmLabel="Erase save"
+        ledgerNote={null}
+        onConfirm={() => {
+          discardSave()
+          setFreshOpen(false)
+        }}
+      />
     </div>
   )
 }
@@ -518,8 +494,8 @@ export function CareerHub() {
 function RoleLine({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return (
     <div className="flex gap-2.5">
-      <span className="mt-0.5 shrink-0 text-[var(--team)]">{icon}</span>
-      <p className="text-xs leading-relaxed text-ink-2">
+      <span className="mt-0.5 shrink-0 text-[var(--team-accent)]">{icon}</span>
+      <p className="text-small leading-relaxed text-ink-2">
         <strong className="font-600 text-ink">{title}:</strong> {body}
       </p>
     </div>

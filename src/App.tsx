@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect, useSyncExternalStore } from 'react'
 import './App.css'
 import { AppShell } from './components/AppShell'
 import { PlayerProfile } from './components/PlayerProfile'
@@ -29,7 +29,16 @@ import { League } from './screens/League'
 import { Inbox } from './screens/Inbox'
 import { TeamView } from './screens/TeamView'
 
+// UI redesign F2: hidden dev showcase of every kit primitive at  #/kit
+const KitShowcase = lazy(() => import('./ui/KitShowcase'))
+function subscribeHash(cb: () => void) {
+  window.addEventListener('hashchange', cb)
+  return () => window.removeEventListener('hashchange', cb)
+}
+const isKitHash = () => /^#\/?kit$/.test(window.location.hash)
+
 export default function App() {
+  const kit = useSyncExternalStore(subscribeHash, isKitHash, () => false)
   const career = useGame((s) => s.career)
   const screen = useGame((s) => s.screen)
   const ready = useGame((s) => s.ready)
@@ -39,9 +48,17 @@ export default function App() {
     void hydrate()
   }, [hydrate])
 
+  if (kit) {
+    return (
+      <Suspense fallback={<div className="label p-8">Loading kit…</div>}>
+        <KitShowcase />
+      </Suspense>
+    )
+  }
+
   if (!ready) {
     return (
-      <div className="grid h-screen w-screen place-items-center bg-canvas">
+      <div className="grid h-dvh w-full place-items-center bg-canvas">
         <div className="text-center">
           <div className="font-display text-4xl font-700 uppercase tracking-wide">
             Gridiron <span className="text-brand">Dynasty</span>

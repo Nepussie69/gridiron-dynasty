@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 're
 import { ArrowLeftRight, Handshake, Plus, Search, Tag, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
-import { playerById, rosterOf } from '../game/selectors'
+import { capSummary, playerById, rosterOf } from '../game/selectors'
 import { picksOwnedBy } from '../game/engine/picks'
 import {
   assetValue,
@@ -29,7 +29,8 @@ import { DeadlinePanel } from '../components/DeadlinePanel'
 import { GmAskButton } from '../components/GmAskButton'
 import { HoverCard } from '../components/HoverCard'
 import { PlayerHoverCard } from '../components/PlayerHoverCard'
-import { Badge, Button, Card, PageHeader, OvrBadge, SectionTitle, TeamCrest } from '../ui/kit'
+import { Badge, Button, Card, ConfirmSheet, FilterChip, IconButton, OvrBadge, PageHeader, SectionTitle, Tabs, TeamCrest } from '../ui/kit'
+import { usePhone } from '../ui/hooks'
 
 interface Asset {
   id: string
@@ -69,7 +70,15 @@ export function Trades() {
   // L12.8 V1: a club page can hand off "trade for this player". Consume it once.
   const request = peekTradeRequest()
 
-  const [tab, setTab] = useState<TabId>('build')
+  // D4: open on the Deadline tab when the league has live offers on the table.
+  const [tab, setTab] = useState<TabId>(() => {
+    const d = career?.deadline
+    const open =
+      d && d.season === league.season && d.week === league.week ? d.offers.filter((o) => !d.resolved.includes(o.id)).length : 0
+    return open > 0 ? 'deadline' : 'build'
+  })
+  const phone = usePhone()
+  const [review, setReview] = useState(false)
   // U4: the middle tray highlights while an asset is dragged over it.
   const [dragOver, setDragOver] = useState(false)
   const [partnerId, setPartnerId] = useState(
@@ -102,6 +111,13 @@ export function Trades() {
 
   const giveVal = give.reduce((s, a) => s + a.value, 0)
   const getVal = get.reduce((s, a) => s + a.value, 0)
+  // D4: the tray carries the cap picture too (this season's incoming hits,
+  // outgoing hits, and the space left after the deal).
+  const capIn = get.reduce((s, a) => s + capOf(league, toRef(a)), 0)
+  const capOut = give.reduce((s, a) => s + capOf(league, toRef(a)), 0)
+  const capNet = capIn - capOut
+  const capSpace = capSummary(league, activeTeamId).space
+  const capAfter = capSpace - capNet
 
   const verdict = useMemo(
     () => evaluateTrade(league, partnerId, activeTeamId, give.map(toRef), get.map(toRef)),
@@ -174,7 +190,7 @@ export function Trades() {
               setPartnerId(e.target.value)
               setGet([])
             }}
-            className="rounded-lg border border-line bg-surface px-3 py-2 font-cond text-sm font-600 outline-none"
+            className="rounded-lg border border-line bg-surface min-h-11 px-3 py-2 font-cond text-base font-600 outline-none lg:min-h-0 lg:text-sm"
           >
             {NFL_TEAMS.filter((t) => t.id !== activeTeamId).map((t) => (
               <option key={t.id} value={t.id}>
@@ -185,22 +201,18 @@ export function Trades() {
         }
       />
 
-      <div className="mb-4 flex flex-wrap rounded-lg bg-surface-2 p-0.5">
-        {TABS.map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={cn(
-              'flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-              tab === id ? 'bg-surface text-ink shadow-sm' : 'text-muted',
-            )}
-          >
-            {label}
-            {id === 'deadline' && deadlineOpen > 0 && <Badge tone="team">{deadlineOpen}</Badge>}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        label="Trade Center sections"
+        value={tab}
+        onChange={setTab}
+        stretch={phone}
+        className="mb-4"
+        tabs={TABS.map(([id, label]) => ({
+          id,
+          label,
+          count: id === 'deadline' && deadlineOpen > 0 ? deadlineOpen : undefined,
+        }))}
+      />
 
       {tab === 'deadline' && <DeadlinePanel className="mb-4" />}
 
@@ -214,14 +226,9 @@ export function Trades() {
             <h3 className="font-display text-lg font-700 uppercase tracking-wide text-ink">
               {deal.mode === 'sell' ? `Deals for ${deal.asset.label}` : `Packages for ${deal.asset.label}`}
             </h3>
-            <button
-              type="button"
-              title="Close"
-              onClick={() => setDeal(null)}
-              className="grid h-7 w-7 place-items-center rounded-md border border-line text-faint transition hover:text-ink"
-            >
-              <X size={15} />
-            </button>
+            <IconButton label="Close deals list" size="sm" onClick={() => setDeal(null)}>
+              <X size={16} />
+            </IconButton>
           </div>
           {deals.length ? (
             <div className="grid gap-2 md:grid-cols-2">
@@ -236,14 +243,14 @@ export function Trades() {
                     <DealHover world={league} offer={o} className="min-w-0 flex-1">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-600 text-ink">{o.summary}</div>
-                        <div className="text-[11px] tnum text-muted">
+                        <div className="text-label tnum text-muted">
                           {deal.mode === 'sell'
-                            ? `Value back ${Math.round(o.userValue).toLocaleString()} · for ${Math.round(deal.asset.value).toLocaleString()}`
-                            : `You give ${Math.round(cost).toLocaleString()} · get ${Math.round(o.userValue).toLocaleString()}`}
+                            ? `Value back ${Math.round(o.userValue).toLocaleString()} pts · for ${Math.round(deal.asset.value).toLocaleString()} pts`
+                            : `You give ${Math.round(cost).toLocaleString()} pts · get ${Math.round(o.userValue).toLocaleString()} pts`}
                         </div>
                       </div>
                     </DealHover>
-                    <Button variant="team" onClick={() => onLoadDeal(o)}>
+                    <Button variant="primary" onClick={() => onLoadDeal(o)}>
                       Load deal
                     </Button>
                   </div>
@@ -289,22 +296,29 @@ export function Trades() {
           <div className="grid h-14 w-14 place-items-center rounded-full bg-ink text-canvas">
             <ArrowLeftRight size={22} />
           </div>
-          <div className="w-full rounded-xl border border-line bg-surface p-4 text-center">
+          <div className="w-full rounded-[var(--r-lg)] border border-line bg-surface p-4 text-center">
             <div className="label mb-2">Trade Value</div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-end justify-between">
               <div>
-                <div className="font-display text-2xl font-700 tnum text-ink">{giveVal.toLocaleString()}</div>
-                <div className="label !text-[9px]">You give</div>
+                <div className="font-display text-[26px] font-800 italic leading-none text-ink tnum">{giveVal.toLocaleString()}</div>
+                <div className="label">You give · pts</div>
               </div>
               <div>
-                <div className="font-display text-2xl font-700 tnum text-ink-2">{getVal.toLocaleString()}</div>
-                <div className="label !text-[9px]">You get</div>
+                <div className="font-display text-[26px] font-800 italic leading-none text-ink-2 tnum">{getVal.toLocaleString()}</div>
+                <div className="label">You get · pts</div>
               </div>
+            </div>
+            <div className="mt-1.5 text-label text-muted tnum">
+              Net value{' '}
+              <b className={cn('font-700', getVal - giveVal >= 0 ? 'text-win' : 'text-loss')}>
+                {getVal - giveVal >= 0 ? '+' : '−'}
+                {Math.abs(getVal - giveVal).toLocaleString()} pts
+              </b>
             </div>
 
             <div
               className={cn(
-                'mt-3 rounded-lg px-3 py-2 font-cond text-sm font-700 uppercase',
+                'mt-3 rounded-[var(--r-sm)] px-3 py-2 font-cond text-small font-700 uppercase',
                 !give.length && !get.length
                   ? 'bg-surface-2 text-muted'
                   : verdict.verdict === 'accept' ? 'bg-win-soft text-win' : verdict.verdict === 'close' ? 'bg-warn-soft text-warn' : 'bg-loss-soft text-loss',
@@ -318,17 +332,44 @@ export function Trades() {
                     ? 'Close — needs more'
                     : 'They decline'}
             </div>
-            {canTrade && <p className="mt-2 text-[11px] leading-snug text-muted">{verdict.reason}</p>}
+            {canTrade && <p className="mt-2 text-label leading-snug text-muted">{verdict.reason}</p>}
 
-            <p className={cn('mt-2 text-[11px]', dragOver ? 'font-600 text-ink' : 'text-faint')}>
+            <dl className="mt-3 space-y-1 rounded-[var(--r-sm)] bg-surface-2 px-3 py-2 text-left text-label tnum">
+              <div className="flex items-center justify-between gap-2">
+                <dt className="text-muted">Cap in (you get)</dt>
+                <dd className="font-600 text-ink">{money(capIn)}</dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <dt className="text-muted">Cap out (you send)</dt>
+                <dd className="font-600 text-ink">{money(capOut)}</dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <dt className="text-muted">Space after</dt>
+                <dd className={cn('font-700', capAfter < 0 ? 'text-loss' : 'text-ink')}>
+                  {money(capAfter)}
+                  <span className="ml-1 font-600 text-muted">
+                    ({capNet >= 0 ? '+' : '−'}
+                    {money(Math.abs(capNet))})
+                  </span>
+                </dd>
+              </div>
+            </dl>
+
+            <p className={cn('mt-2 text-label', dragOver ? 'font-600 text-ink' : 'text-faint')}>
               {dragOver ? 'Drop to add it to the deal' : 'Drag assets here — click still works.'}
             </p>
 
-            <Button variant="team" className="mt-3 w-full" disabled={!canTrade} onClick={onPropose}>
-              <Handshake size={15} /> Propose Trade
-            </Button>
-            {career && career.tier !== 'NFL' && (
-              <p className="mt-2 text-[11px] text-warn">Trades unlock in the NFL.</p>
+            {career && career.tier !== 'NFL' ? (
+              <div className="mt-3">
+                <Button variant="secondary" className="w-full" disabled>
+                  <Handshake size={15} /> Propose Trade
+                </Button>
+                <p className="mt-2 text-label text-warn">Trades unlock in the NFL.</p>
+              </div>
+            ) : (
+              <Button variant="primary" className="mt-3 w-full" disabled={!canTrade} onClick={() => setReview(true)}>
+                <Handshake size={15} /> Review trade
+              </Button>
             )}
           </div>
         </div>
@@ -351,6 +392,43 @@ export function Trades() {
 
       {tab === 'position' && <PositionFinder onLoadDeal={onLoadDeal} />}
       {tab === 'block' && <TradeBlockTab onLoadDeal={onLoadDeal} />}
+
+      <ConfirmSheet
+        open={review}
+        onClose={() => setReview(false)}
+        eyebrow="Trade review"
+        title={`Propose to the ${partner.name}?`}
+        subtitle={`${giveVal.toLocaleString()} pts out · ${getVal.toLocaleString()} pts in · they read it as "${verdict.verdict === 'accept' ? 'accept' : verdict.verdict === 'close' ? 'close' : 'decline'}"`}
+        destructive={false}
+        confirmLabel="Send the offer"
+        ledgerNote={null}
+        consequences={[
+          { label: 'You give', value: give.map((a) => a.label).join(', ') || 'Nothing' },
+          { label: 'You get', value: get.map((a) => a.label).join(', ') || 'Nothing' },
+          {
+            label: 'Value',
+            value: `${giveVal.toLocaleString()} → ${getVal.toLocaleString()} pts (net ${getVal - giveVal >= 0 ? '+' : '−'}${Math.abs(getVal - giveVal).toLocaleString()})`,
+          },
+          { label: 'Cap in / out', value: `${money(capIn)} / ${money(capOut)}` },
+          {
+            label: 'Cap space after',
+            value: money(capAfter),
+            tone: capAfter < 0 ? 'loss' : undefined,
+          },
+          {
+            label: 'Their read',
+            value:
+              verdict.verdict === 'accept' ? 'They accept' : verdict.verdict === 'close' ? 'Close — needs more' : 'They decline',
+            tone: verdict.verdict === 'accept' ? 'win' : verdict.verdict === 'close' ? 'warn' : 'loss',
+          },
+        ]}
+        onConfirm={() => {
+          setReview(false)
+          onPropose()
+        }}
+      >
+        <p className="mt-2 text-small text-muted">{verdict.reason}</p>
+      </ConfirmSheet>
     </div>
   )
 }
@@ -391,18 +469,9 @@ function PositionFinder({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) 
           <div className="label mb-1">Position</div>
           <div className="flex flex-wrap gap-1">
             {POSITIONS.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPos(p)}
-                className={cn(
-                  'rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
-                  pos === p ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-2',
-                )}
-                style={pos === p ? { background: 'var(--team)' } : undefined}
-              >
+              <FilterChip key={p} pressed={pos === p} onChange={() => setPos(p)}>
                 {p}
-              </button>
+              </FilterChip>
             ))}
           </div>
         </div>
@@ -434,7 +503,7 @@ function PositionFinder({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) 
             ))}
           </select>
         </div>
-        <Button variant="team" onClick={search}>
+        <Button variant="primary" onClick={search}>
           <Search size={14} /> Search
         </Button>
       </div>
@@ -447,19 +516,19 @@ function PositionFinder({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <PlayerHoverCard player={r.player} className="min-w-0 text-sm font-600 text-ink" />
-                  <span className="font-cond text-[10px] font-700 uppercase text-muted">{r.player.pos}</span>
+                  <span className="font-cond text-label font-700 uppercase text-muted">{r.player.pos}</span>
                 </div>
-                <div className="text-[11px] tnum text-muted">
+                <div className="text-label tnum text-muted">
                   Age {r.player.age} · {money(r.player.contract.capHit)} · value{' '}
-                  {playerTradeValue(r.player).toLocaleString()}
+                  {playerTradeValue(r.player).toLocaleString()} pts
                 </div>
                 <DealHover world={league} offer={r.offer} className="mt-0.5 min-w-0">
-                  <span className="truncate text-[11px] text-ink-2">{r.offer.summary}</span>
+                  <span className="truncate text-label text-ink-2">{r.offer.summary}</span>
                 </DealHover>
               </div>
               <OvrBadge value={r.player.ovr} pot={r.player.pot} size={30} />
               <GmAskButton player={r.player} kind="trade" />
-              <Button variant="team" onClick={() => onLoadDeal(r.offer)}>
+              <Button variant="primary" onClick={() => onLoadDeal(r.offer)}>
                 Load deal
               </Button>
             </div>
@@ -539,7 +608,7 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
   return (
     <div className="space-y-4">
       <Card>
-        <SectionTitle right={<Badge tone={mine.length ? 'team' : 'neutral'}>{mine.length}/5</Badge>}>
+        <SectionTitle right={<Badge tone={mine.length ? 'info' : 'neutral'}>{mine.length}/5</Badge>}>
           Your block
         </SectionTitle>
         {mine.length ? (
@@ -549,8 +618,8 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
                 <div className="flex items-center gap-2">
                   <OvrBadge value={player.ovr} pot={player.pot} size={28} />
                   <PlayerHoverCard player={player} className="min-w-0 text-sm font-600 text-ink" />
-                  <span className="font-cond text-[10px] font-700 uppercase text-muted">{player.pos}</span>
-                  <span className="ml-auto text-[11px] tnum text-muted">{money(player.contract.capHit)}</span>
+                  <span className="font-cond text-label font-700 uppercase text-muted">{player.pos}</span>
+                  <span className="ml-auto text-label tnum text-muted">{money(player.contract.capHit)}</span>
                 </div>
                 {offers.length ? (
                   <div className="mt-1.5 space-y-1">
@@ -561,19 +630,19 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
                       >
                         <TeamCrest team={league.byId[o.partnerId]} size={20} />
                         <DealHover world={league} offer={o} className="min-w-0 flex-1">
-                          <span className="truncate text-[11px] text-ink-2">{o.summary}</span>
+                          <span className="truncate text-label text-ink-2">{o.summary}</span>
                         </DealHover>
-                        <span className="text-[10px] tnum text-muted">
-                          back {Math.round(o.userValue).toLocaleString()}
+                        <span className="text-label tnum text-muted">
+                          back {Math.round(o.userValue).toLocaleString()} pts
                         </span>
-                        <Button size="sm" variant="team" onClick={() => onLoadDeal(o)}>
+                        <Button size="sm" variant="primary" onClick={() => onLoadDeal(o)}>
                           Load
                         </Button>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="mt-1 text-[11px] text-muted">No club is offering for him right now.</p>
+                  <p className="mt-1 text-label text-muted">No club is offering for him right now.</p>
                 )}
               </div>
             ))}
@@ -590,18 +659,9 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <div className="flex flex-wrap gap-1">
             {POSITION_FILTERS.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPos(p)}
-                className={cn(
-                  'rounded-md px-2 py-1 font-cond text-[11px] font-700 uppercase transition',
-                  pos === p ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-2',
-                )}
-                style={pos === p ? { background: 'var(--team)' } : undefined}
-              >
+              <FilterChip key={p} pressed={pos === p} onChange={() => setPos(p)}>
                 {p}
-              </button>
+              </FilterChip>
             ))}
           </div>
           <div className="flex items-center gap-1">
@@ -641,23 +701,18 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <PlayerHoverCard player={p} className="min-w-0 text-sm font-600 text-ink" />
-                      <span className="font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
+                      <span className="font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
                       <Badge tone={reasonTone(e.reason)}>{e.reason}</Badge>
                     </div>
-                    <div className="text-[11px] tnum text-muted">
-                      Age {p.age} · {money(p.contract.capHit)} · value {playerTradeValue(p).toLocaleString()}
+                    <div className="text-label tnum text-muted">
+                      Age {p.age} · {money(p.contract.capHit)} · value {playerTradeValue(p).toLocaleString()} pts
                     </div>
                   </div>
                   <OvrBadge value={p.ovr} pot={p.pot} size={28} />
                   <GmAskButton player={p} kind="trade" label="Ask GM" />
-                  <button
-                    type="button"
-                    title="Find deals"
-                    onClick={() => onFind(p.id)}
-                    className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
-                  >
-                    <Search size={13} />
-                  </button>
+                  <IconButton label={`Find deals for ${p.name}`} size="sm" onClick={() => onFind(p.id)}>
+                    <Search size={14} />
+                  </IconButton>
                   {canScout && <ShadowStar playerId={p.id} />}
                 </div>
                 {deals?.playerId === p.id && (
@@ -669,18 +724,18 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
                           className="flex items-center gap-2 rounded-md bg-surface px-2 py-1"
                         >
                           <DealHover world={league} offer={o} className="min-w-0 flex-1">
-                            <span className="truncate text-[11px] text-ink-2">{o.summary}</span>
+                            <span className="truncate text-label text-ink-2">{o.summary}</span>
                           </DealHover>
-                          <span className="text-[10px] tnum text-muted">
-                            give {o.give.reduce((s, a) => s + assetValue(league, a), 0).toLocaleString()}
+                          <span className="text-label tnum text-muted">
+                            give {o.give.reduce((s, a) => s + assetValue(league, a), 0).toLocaleString()} pts
                           </span>
-                          <Button size="sm" variant="team" onClick={() => onLoadDeal(o)}>
+                          <Button size="sm" variant="primary" onClick={() => onLoadDeal(o)}>
                             Load
                           </Button>
                         </div>
                       ))
                     ) : (
-                      <p className="text-[11px] text-muted">No package you can offer lands him right now.</p>
+                      <p className="text-label text-muted">No package you can offer lands him right now.</p>
                     )}
                   </div>
                 )}
@@ -730,15 +785,15 @@ function DealDetail({ world, offer }: { world: World; offer: DealOffer }) {
     <div className="space-y-2.5">
       <DealSide title="You give" world={world} refs={offer.give} />
       <DealSide title="You get" world={world} refs={offer.get} />
-      <div className="flex items-center justify-between border-t border-line pt-2 text-[11px] tnum">
+      <div className="flex items-center justify-between border-t border-line pt-2 text-label tnum">
         <span className="text-muted">
-          Value · give {giveVal.toLocaleString()} · get {getVal.toLocaleString()}
+          Value · give {giveVal.toLocaleString()} pts · get {getVal.toLocaleString()} pts
         </span>
-        <span className={cn('font-cond font-700 uppercase', net >= 0 ? 'text-loss' : 'text-win')}>
+        <span className={cn('font-cond font-700 uppercase', net > 0 ? 'text-warn' : net < 0 ? 'text-win' : 'text-ink-2')}>
           Cap {money(net, { sign: true })}
         </span>
       </div>
-      <p className="text-[10px] text-faint">This season's cap change for you (incoming hits minus outgoing).</p>
+      <p className="text-label text-faint">This season&apos;s cap change for you (incoming hits minus outgoing).</p>
     </div>
   )
 }
@@ -769,13 +824,13 @@ function DealAssetRow({ world, asset }: { world: World; asset: TradeAsset }) {
         <OvrBadge value={p.ovr} pot={p.pot} size={26} />
         <div className="min-w-0 flex-1">
           <PlayerHoverCard player={p} className="text-xs font-600 text-ink" />
-          <div className="truncate text-[11px] tnum text-muted">
+          <div className="truncate text-label tnum text-muted">
             {p.pos} · age {p.age} · {money(p.contract.capHit)} · {p.contract.years} yr
             {p.contract.years === 1 ? '' : 's'}
           </div>
         </div>
-        <span className="font-cond text-[11px] font-700 tnum text-muted">
-          {assetValue(world, asset).toLocaleString()}
+        <span className="font-cond text-label font-700 tnum text-muted">
+          {assetValue(world, asset).toLocaleString()} pts
         </span>
       </div>
     )
@@ -785,17 +840,17 @@ function DealAssetRow({ world, asset }: { world: World; asset: TradeAsset }) {
   const via = world.byId[pk.originalTeam]
   return (
     <div className="flex items-center gap-2">
-      <span className="grid h-6 w-6 place-items-center rounded-md bg-ink font-display text-[10px] font-700 text-canvas">
+      <span className="grid h-6 w-6 place-items-center rounded-md bg-ink font-display text-label font-700 text-canvas">
         R{pk.round}
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-600 text-ink">
           {pk.season} Round {pk.round} Pick{pk.comp ? ' (comp)' : ''}
         </div>
-        <div className="truncate text-[11px] text-muted">via {via?.abbr ?? pk.originalTeam}</div>
+        <div className="truncate text-label text-muted">via {via?.abbr ?? pk.originalTeam}</div>
       </div>
-      <span className="font-cond text-[11px] font-700 tnum text-muted">
-        {assetValue(world, asset).toLocaleString()}
+      <span className="font-cond text-label font-700 tnum text-muted">
+        {assetValue(world, asset).toLocaleString()} pts
       </span>
     </div>
   )
@@ -939,7 +994,7 @@ function AssetColumn({
             type="button"
             onClick={onTeamClick}
             title={`View the ${team.name}`}
-            className="flex min-w-0 items-center gap-2 transition hover:opacity-80"
+            className="flex min-h-11 min-w-0 items-center gap-2 transition hover:opacity-80 lg:min-h-0"
           >
             <TeamCrest team={team} size={26} />
             <span className="truncate font-display text-base font-700 uppercase tracking-wide text-ink underline-offset-2 hover:underline">
@@ -961,26 +1016,17 @@ function AssetColumn({
       <div className="space-y-1.5 border-b border-line bg-surface-2 px-3 py-2">
         <div className="flex flex-wrap gap-1">
           {COLUMN_POSITIONS.map((g) => (
-            <button
-              key={g.id}
-              type="button"
-              onClick={() => setPos(g.id)}
-              className={cn(
-                'rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase transition',
-                pos === g.id ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-3',
-              )}
-              style={pos === g.id ? { background: 'var(--team)' } : undefined}
-            >
+            <FilterChip key={g.id} pressed={pos === g.id} onChange={() => setPos(g.id)}>
               {g.id}
-            </button>
+            </FilterChip>
           ))}
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="label !mb-0">Sort</span>
+          <span className="label">Sort</span>
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as AssetSort)}
-            className="rounded-md border border-line bg-surface px-2 py-1 font-cond text-xs font-600 outline-none"
+            className="rounded-md border border-line bg-surface min-h-11 px-2 py-1 font-cond text-base font-600 outline-none lg:min-h-0 lg:text-xs"
           >
             {ASSET_SORTS.map(([id, label]) => (
               <option key={id} value={id}>
@@ -988,16 +1034,15 @@ function AssetColumn({
               </option>
             ))}
           </select>
-          <button
-            type="button"
-            title={dir === 'desc' ? 'Descending — click for ascending' : 'Ascending — click for descending'}
+          <IconButton
+            label={dir === 'desc' ? 'Sorted descending; switch to ascending' : 'Sorted ascending; switch to descending'}
+            size="sm"
             onClick={() => setDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
-            className="grid h-7 w-7 place-items-center rounded-md border border-line bg-surface text-xs text-ink-2 transition hover:bg-surface-2"
           >
             {dir === 'desc' ? '▼' : '▲'}
-          </button>
+          </IconButton>
           {hiddenSelected > 0 && (
-            <span className="ml-auto font-cond text-[10px] font-700 uppercase tracking-wide text-warn">
+            <span className="ml-auto font-cond text-label font-700 uppercase tracking-wide text-warn">
               {hiddenSelected} selected hidden
             </span>
           )}
@@ -1017,7 +1062,7 @@ function AssetColumn({
             return (
               <div key={a.id}>
                 {showYear && (
-                  <div className="bg-surface-2 px-4 py-1 font-cond text-[10px] font-700 uppercase tracking-widest text-muted">
+                  <div className="bg-surface-2 px-4 py-1 font-cond text-label font-700 uppercase tracking-widest text-muted">
                     {a.season} Draft
                   </div>
                 )}
@@ -1050,44 +1095,34 @@ function AssetColumn({
                     )}
                     <span className="block truncate text-xs text-muted">{a.sub}</span>
                   </span>
-                  <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()}</span>
+                  <span className="font-cond text-xs font-700 tnum text-muted">{a.value.toLocaleString()} pts</span>
                   {a.kind === 'player' && showGmAsk && player && <GmAskButton player={player} kind="trade" label="Ask GM" />}
                   {a.kind === 'player' && showShadow && <ShadowStar playerId={a.id} />}
                   {onFindDeals && (
-                    <button
-                      type="button"
-                      title={a.kind === 'pick' ? 'Find deals for this pick' : 'Find deals'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onFindDeals(a)
-                      }}
-                      className="grid h-6 w-6 place-items-center rounded-md border border-line text-faint transition hover:border-[var(--team)] hover:text-ink"
+                    <IconButton
+                      label={a.kind === 'pick' ? 'Find deals for this pick' : `Find deals for ${a.label}`}
+                      size="sm"
+                      rowSafe
+                      onClick={() => onFindDeals(a)}
                     >
-                      <Search size={13} />
-                    </button>
+                      <Search size={14} />
+                    </IconButton>
                   )}
                   {a.kind === 'player' && onToggleBlock && (
-                    <button
-                      type="button"
-                      title={blocked ? 'Remove from your trade block' : 'Add to your trade block'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onToggleBlock(a)
-                      }}
-                      className={cn(
-                        'grid h-6 w-6 place-items-center rounded-md border transition',
-                        blocked
-                          ? 'border-transparent text-[var(--team)]'
-                          : 'border-line text-faint hover:border-[var(--team)] hover:text-ink',
-                      )}
+                    <IconButton
+                      label={blocked ? `Remove ${a.label} from your trade block` : `Add ${a.label} to your trade block`}
+                      size="sm"
+                      rowSafe
+                      pressed={blocked}
+                      onClick={() => onToggleBlock(a)}
                     >
-                      <Tag size={13} fill={blocked ? 'currentColor' : 'none'} />
-                    </button>
+                      <Tag size={14} fill={blocked ? 'currentColor' : 'none'} />
+                    </IconButton>
                   )}
                   <span
                     className={cn(
                       'grid h-6 w-6 place-items-center rounded-md border',
-                      on ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]' : 'border-line text-faint',
+                      on ? 'border-transparent bg-ink text-canvas' : 'border-line text-faint',
                     )}
                   >
                     {on ? <X size={13} /> : <Plus size={13} />}

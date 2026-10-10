@@ -6,24 +6,30 @@ import {
   planEffects,
   type GamePlan,
 } from '../game/engine/gameplan'
-import { Badge, Card, RatingBar } from '../ui/kit'
+import { OptionCard, OptionGroup, RatingBar } from '../ui/kit'
 
 /**
- * The plan editor: preset buttons plus the dials for one side. Shared by the
+ * The plan editor: preset cards plus the dials for one side. Shared by the
  * pre-game "Game Plan" tab and the in-game overlay so the mental model is
  * identical. Offense edits only Run/Pass + Tempo; defense only Pass Rush +
  * Coverage. Hidden dials keep their current values.
+ *
+ * D6: presets are kit OptionCards (radio mark, distinct hover/selected states).
+ * The "What this does" bars are neutral ink — never red for a high value.
  */
 export function PlanEditor({
   plan,
   onChange,
   side,
   compact = false,
+  disabled = false,
 }: {
   plan: GamePlan
   onChange: (p: GamePlan) => void
   side: 'off' | 'def'
   compact?: boolean
+  /** Access 'view' / a locked game: show the plan without letting it be edited. */
+  disabled?: boolean
 }) {
   const eff = planEffects(plan, false)
   const defEff = planEffects(plan, true)
@@ -41,7 +47,7 @@ export function PlanEditor({
     <div>
       <div className="mb-1 flex items-center justify-between">
         <span className="label">{label}</span>
-        <span className="font-cond text-xs font-700 tnum text-ink">{plan[key].toFixed(1)}</span>
+        <span className="font-cond text-small font-700 tnum text-ink">{plan[key].toFixed(1)}</span>
       </div>
       <input
         type="range"
@@ -49,10 +55,11 @@ export function PlanEditor({
         max={max}
         step={step}
         value={plan[key]}
+        disabled={disabled}
         onChange={(e) => onChange({ ...plan, [key]: Number(e.target.value) })}
-        className="w-full accent-[var(--team)]"
+        className="h-9 w-full accent-[var(--team-accent)] max-sm:h-11 disabled:opacity-45"
       />
-      <div className="mt-0.5 flex justify-between text-[10px] text-faint">
+      <div className="mt-0.5 flex justify-between text-micro text-faint">
         <span>{leftLabel}</span>
         <span>{rightLabel}</span>
       </div>
@@ -64,24 +71,24 @@ export function PlanEditor({
       {!compact && (
         <div>
           <div className="label mb-2">Presets</div>
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <OptionGroup
+            label={`${side === 'off' ? 'Offense' : 'Defense'} preset`}
+            className="sm:grid-cols-2 lg:grid-cols-3"
+          >
             {presets.map((p) => {
               const active = JSON.stringify(p.plan) === JSON.stringify(plan)
               return (
-                <button
+                <OptionCard
                   key={p.id}
-                  onClick={() => onChange({ ...p.plan })}
-                  className={cn(
-                    'rounded-lg border p-2.5 text-left transition',
-                    active ? 'border-transparent bg-[var(--team-soft)]' : 'border-line hover:bg-surface-2',
-                  )}
-                >
-                  <div className="font-cond text-xs font-700 uppercase text-ink">{p.label}</div>
-                  <div className="mt-0.5 text-[11px] leading-snug text-muted">{p.blurb}</div>
-                </button>
+                  selected={active}
+                  disabled={disabled}
+                  onSelect={() => onChange({ ...p.plan })}
+                  title={p.label}
+                  description={p.blurb}
+                />
               )
             })}
-          </div>
+          </OptionGroup>
         </div>
       )}
 
@@ -99,9 +106,9 @@ export function PlanEditor({
         )}
       </div>
 
-      <div className="rounded-lg bg-surface-2 p-3">
+      <div className="rounded-[var(--r-md)] bg-surface-2 p-3">
         <div className="label mb-1.5">What this does</div>
-        <div className="grid gap-2 text-xs text-ink-2 sm:grid-cols-2">
+        <div className="grid gap-2 text-small text-ink-2 sm:grid-cols-2">
           {side === 'off' ? (
             <>
               <MiniBar label="Pass tendency" value={50 + eff.passAdj * 400} />
@@ -114,13 +121,15 @@ export function PlanEditor({
             </>
           )}
         </div>
-        <div className="mt-2 text-[11px] text-muted">{describePlan(plan, side)}</div>
+        <div className="mt-2 text-small text-muted">{describePlan(plan, side)}</div>
       </div>
 
       {!compact && (
         <button
+          type="button"
+          disabled={disabled}
           onClick={() => onChange({ ...BALANCED_PLAN })}
-          className="font-cond text-xs font-600 uppercase tracking-wide text-muted hover:text-ink-2"
+          className="inline-flex min-h-11 items-center font-cond text-small font-600 uppercase lg:min-h-0 tracking-wide text-muted hover:text-ink-2 disabled:opacity-45"
         >
           Reset to balanced
         </button>
@@ -129,16 +138,15 @@ export function PlanEditor({
   )
 }
 
+/** A neutral 0–100 read of one plan dial; no status colour, no red for "high". */
 function MiniBar({ label, value }: { label: string; value: number }) {
   const clamped = Math.max(0, Math.min(100, value))
   return (
     <div className="flex items-center gap-2">
-      <span className="w-28 shrink-0 font-cond text-[10px] font-700 uppercase text-muted">{label}</span>
+      <span className="w-28 shrink-0 font-cond text-label font-700 uppercase text-muted">{label}</span>
       <div className="flex-1">
-        <RatingBar value={clamped} height={6} color={clamped > 66 ? '#dc2937' : clamped < 34 ? '#0b62ff' : 'var(--team)'} />
+        <RatingBar value={clamped} height={6} color="var(--color-ink-2)" label={label} />
       </div>
     </div>
   )
 }
-
-export { Badge, Card, PLAN_PRESETS }

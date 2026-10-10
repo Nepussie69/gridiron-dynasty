@@ -1,7 +1,7 @@
 import { CheckCircle2, Circle, Plus, Target, X } from 'lucide-react'
 import { MAX_AMBITIONS, makeAmbitionPool } from '../game/engine/ambitions'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card } from '../ui/kit'
+import { Badge, Card, IconButton, OptionCard, OptionGroup } from '../ui/kit'
 
 /**
  * Personal ambitions (#11).
@@ -25,11 +25,11 @@ export function AmbitionsCard({ className }: { className?: string }) {
 
   return (
     <Card className={className}>
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="flex items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
-          <Target size={15} className="text-[var(--team)]" /> Ambitions
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-1.5 font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
+          <Target size={15} className="text-[var(--team-accent)]" aria-hidden /> Ambitions
         </h3>
-        <Badge tone={graded ? (met === chosen.length ? 'win' : 'neutral') : 'team'}>
+        <Badge tone={graded ? (met === chosen.length ? 'win' : 'neutral') : 'neutral'}>
           {graded ? `${met}/${chosen.length} met` : `${chosen.length}/${MAX_AMBITIONS}`}
         </Badge>
       </div>
@@ -37,32 +37,28 @@ export function AmbitionsCard({ className }: { className?: string }) {
       {chosen.length > 0 ? (
         <div className="space-y-1.5">
           {chosen.map((a) => (
-            <div key={a.id} className="flex items-start gap-2 rounded-lg border border-line px-2.5 py-2">
+            <div key={a.id} className="flex items-start gap-2 rounded-[var(--r-md)] border border-line px-2.5 py-2">
               {a.done === undefined ? (
-                <Circle size={14} className="mt-0.5 shrink-0 text-faint" />
+                <Circle size={14} className="mt-0.5 shrink-0 text-faint" aria-hidden />
               ) : a.done ? (
-                <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-win" />
+                <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-win" aria-hidden />
               ) : (
-                <X size={14} className="mt-0.5 shrink-0 text-loss" />
+                <X size={14} className="mt-0.5 shrink-0 text-loss" aria-hidden />
               )}
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-600 text-ink">{a.label}</div>
-                <div className="text-[11px] leading-snug text-muted">{a.blurb}</div>
+                <div className="text-body font-600 text-ink">{a.label}</div>
+                <div className="text-label leading-snug text-muted">{a.blurb}</div>
               </div>
               {inSeason && a.done === undefined && (
-                <button
-                  onClick={() => dropAmbition(a.id)}
-                  className="mt-0.5 text-faint transition hover:text-loss"
-                  title="Drop this ambition"
-                >
-                  <X size={13} />
-                </button>
+                <IconButton label="Drop this ambition" size="sm" variant="ghost" onClick={() => dropAmbition(a.id)}>
+                  <X size={14} aria-hidden />
+                </IconButton>
               )}
             </div>
           ))}
         </div>
       ) : (
-        <p className="text-sm text-muted">
+        <p className="text-body text-muted">
           {inSeason
             ? 'Pick a goal you actually want. Up to three a season.'
             : 'A fresh slate of ambitions opens next season.'}
@@ -72,21 +68,18 @@ export function AmbitionsCard({ className }: { className?: string }) {
       {inSeason && chosen.length < MAX_AMBITIONS && open.length > 0 && (
         <div className="mt-3">
           <div className="label mb-1.5">Add an ambition</div>
-          <div className="space-y-1">
+          <OptionGroup label="Ambition pool">
             {open.map((a) => (
-              <button
+              <OptionCard
                 key={a.id}
-                onClick={() => pickAmbition(a.id)}
-                className="group flex w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-left transition hover:border-[var(--team)] hover:bg-[var(--team-soft)]"
-              >
-                <Plus size={13} className="shrink-0 text-[var(--team)]" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs font-600 text-ink">{a.label}</span>
-                  <span className="block text-[11px] leading-snug text-muted">{a.blurb}</span>
-                </span>
-              </button>
+                selected={false}
+                title={a.label}
+                description={a.blurb}
+                meta={<Plus size={14} className="text-muted" aria-hidden />}
+                onSelect={() => pickAmbition(a.id)}
+              />
             ))}
-          </div>
+          </OptionGroup>
         </div>
       )}
     </Card>

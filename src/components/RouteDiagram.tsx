@@ -9,6 +9,11 @@ import { ROUTES } from '../game/data/routes'
 import { playbookPlay, treeFor } from '../game/data/playbookData'
 import { MID_Y } from './playAnim'
 
+// Field art only — the one place hard-coded colours are allowed (check-hex-allow).
+const TURF = '#14603a' // check-hex-allow: turf fill
+const LINE = '#ffd34d' // check-hex-allow: line of scrimmage / route ends
+const CHALK = '#fff' // check-hex-allow: route chalk
+
 const H = 30
 const LOS_X = 16
 const Y_SCALE = H / 53.3
@@ -48,19 +53,19 @@ export function RouteDiagram({ name, className }: { name: string; className?: st
   const lines = useMemo(() => pathsFor(name), [name])
   return (
     <svg viewBox="0 0 64 34" className={className} role="img" aria-label={`${name} route diagram`}>
-      <rect x={0} y={0} width={64} height={34} rx={2} fill="#14603a" />
-      <line x1={sx(10)} y1={2} x2={sx(10)} y2={32} stroke="#ffd34d" strokeWidth={0.4} />
+      <rect x={0} y={0} width={64} height={34} rx={2} fill={TURF} />
+      <line x1={sx(10)} y1={2} x2={sx(10)} y2={32} stroke={LINE} strokeWidth={0.4} />
       {lines.map((l) => {
         const d = l.pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ')
-        return <path key={l.key} d={d} fill="none" stroke="#fff" strokeWidth={0.8} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} />
+        return <path key={l.key} d={d} fill="none" stroke={CHALK} strokeWidth={0.8} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} />
       })}
       {lines.map((l) => {
         const a = l.pts[0]
         const b = l.pts[l.pts.length - 1]
         return (
           <g key={`${l.key}-d`}>
-            <circle cx={sx(a.x)} cy={sy(a.y)} r={1.1} fill="#ffd34d" />
-            <circle cx={sx(b.x)} cy={sy(b.y)} r={1.1} fill="#fff" />
+            <circle cx={sx(a.x)} cy={sy(a.y)} r={1.1} fill={LINE} />
+            <circle cx={sx(b.x)} cy={sy(b.y)} r={1.1} fill={CHALK} />
           </g>
         )
       })}

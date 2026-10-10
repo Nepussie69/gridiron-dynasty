@@ -1,3 +1,5 @@
+import { capSpaceTone } from '../game/engine/capMemo'
+
 export function money(n: number, opts: { sign?: boolean } = {}) {
   const sign = opts.sign && n > 0 ? '+' : ''
   const abs = Math.abs(n)
@@ -10,14 +12,80 @@ export function num(n: number) {
   return n.toLocaleString('en-US')
 }
 
-/** Contrast-aware text color for a given hex background. */
-export function inkOn(hex: string) {
-  const c = hex.replace('#', '')
-  const r = parseInt(c.slice(0, 2), 16)
-  const g = parseInt(c.slice(2, 4), 16)
-  const b = parseInt(c.slice(4, 6), 16)
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-  return lum > 0.6 ? '#0a1626' : '#ffffff'
+/** Typographic minus (U+2212). */
+export const MINUS = '−'
+
+/**
+ * Signed number with a real minus sign: signed(-9) → "−9", signed(2.5, 1) → "+2.5".
+ * Zero reads "+0" (or "0" with `zero: 'plain'`).
+ */
+export function signed(n: number, digits = 0, opts: { zero?: 'plus' | 'plain' } = {}) {
+  const abs = Math.abs(n).toFixed(digits)
+  if (Number(abs) === 0) return opts.zero === 'plain' ? abs : `+${abs}`
+  return `${n < 0 ? MINUS : '+'}${abs}`
+}
+
+/** Multiplier: mult(0.84) → "×0.84". */
+export function mult(x: number, digits = 2) {
+  return `×${x.toFixed(digits)}`
+}
+
+/** 1 → "1st", 2 → "2nd", 11 → "11th", 22 → "22nd". */
+export function ordinal(n: number) {
+  const v = Math.abs(Math.trunc(n))
+  const mod100 = v % 100
+  const suffix = mod100 >= 11 && mod100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][v % 10] ?? 'th')
+  return `${n}${suffix}`
+}
+
+// ── Rating tiers (UI redesign §4) ─────────────────────────────────────────────
+/** "Elite" means 90+ everywhere. */
+export const ELITE = 90
+/** League-average staff / starter rating used for "−17 vs avg" deltas. */
+export const STAFF_BASELINE = 74
+
+export type TierKey = 'elite' | 'pro' | 'starter' | 'rotation' | 'depth' | 'weak' | 'liability'
+
+export interface RatingTier {
+  key: TierKey
+  label: string
+  /** Short word for tight tiles (WEAK / LIAB.). */
+  short: string
+  /** Lowest value in the tier. */
+  min: number
+  /** Background: a solid tier colour, a tinted wash, or transparent. */
+  fill: string
+  /** Number colour on that fill. */
+  ink: string
+  /** Border colour for outline tiers; null for filled tiers. */
+  outline: string | null
+  /** Pips 5..1 so the tier never relies on colour alone (Liability shows 0). */
+  pips: number
+}
+
+const TIERS: RatingTier[] = [
+  { key: 'elite', label: 'Elite', short: 'ELITE', min: ELITE, fill: 'var(--color-tier-elite)', ink: 'var(--color-tier-on)', outline: null, pips: 5 },
+  { key: 'pro', label: 'Pro Bowl', short: 'PRO', min: 82, fill: 'var(--color-tier-pro)', ink: 'var(--color-tier-on)', outline: null, pips: 4 },
+  { key: 'starter', label: 'Starter', short: 'START', min: 74, fill: 'var(--color-tier-starter)', ink: 'var(--color-tier-on)', outline: null, pips: 3 },
+  { key: 'rotation', label: 'Rotation', short: 'ROT.', min: 66, fill: 'var(--color-tier-rotation)', ink: 'var(--color-tier-on)', outline: null, pips: 2 },
+  { key: 'depth', label: 'Depth', short: 'DEPTH', min: 58, fill: 'transparent', ink: 'var(--color-ink-2)', outline: 'var(--color-tier-depth)', pips: 1 },
+  { key: 'weak', label: 'Weak', short: 'WEAK', min: 50, fill: 'var(--color-tier-weak-wash)', ink: 'var(--color-tier-weak)', outline: 'var(--color-tier-weak)', pips: 1 },
+  { key: 'liability', label: 'Liability', short: 'LIAB.', min: -Infinity, fill: 'var(--color-tier-liab-wash)', ink: 'var(--color-tier-liab)', outline: 'var(--color-tier-liab)', pips: 0 },
+]
+
+/** The tier for a rating on the NFL scale (players, staff, prospects, college grades). */
+export function ratingTier(v: number): RatingTier {
+  return TIERS.find((t) => v >= t.min) ?? TIERS[TIERS.length - 1]
+}
+
+/**
+ * The tier's colour for a MARK (a meter segment, a ring, a sparkline): the
+ * fill of a filled tier, the outline of an outline tier. Never a background
+ * behind text — tiles use ratingTier().fill / .ink / .outline.
+ */
+export function tierStroke(v: number): string {
+  const t = ratingTier(v)
+  return t.outline ?? t.fill
 }
 
 /** Light tint of a hex color, for soft team backgrounds. */
@@ -30,10 +98,21 @@ export function tint(hex: string, amount = 0.88) {
   return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`
 }
 
-export function gradeColor(v: number) {
-  if (v >= 90) return '#05914f'
-  if (v >= 82) return '#3aa35a'
-  if (v >= 74) return '#0b62ff'
-  if (v >= 66) return '#d98207'
-  return '#dc2937'
+// ── Status tones ──────────────────────────────────────────────────────────────
+export type Tone = 'win' | 'neutral' | 'warn' | 'loss'
+
+/**
+ * Cap space in DOLLARS: over the cap is loss, under $5M warn, comfortable is
+ * neutral, flush is win. Thresholds live in the engine (capMemo.spaceBucket).
+ */
+export function capTone(dollars: number): Tone {
+  return capSpaceTone(dollars) ?? 'neutral'
+}
+
+/** Job security (0-100) against the owner's firing line. */
+export function jobTone(security: number, firingLine: number): Tone {
+  if (security > firingLine + 25) return 'win'
+  if (security > firingLine + 10) return 'neutral'
+  if (security > firingLine) return 'warn'
+  return 'loss'
 }

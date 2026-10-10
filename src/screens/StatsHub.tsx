@@ -49,7 +49,7 @@ import type { CareerDatabase } from '../game/engine/statsDb'
 import type { World } from '../game/engine/generate'
 import { emptySeason, type Player, type Position, type SeasonStats, type StatLevel } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card, PageHeader, TeamCrest } from '../ui/kit'
+import { Badge, Card, DensityToggle, FilterChip, PageHeader, SegmentedControl, TeamCrest, useDensity } from '../ui/kit'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stats Hub — live season leaderboards built from the players themselves.
@@ -348,6 +348,7 @@ export function StatsHub() {
   const [sortKey, setSortKey] = useState('totyds')
   const [dir, setDir] = useState<Dir>('desc')
   const [limit, setLimit] = useState(50)
+  const { density, fontSize, rowPad, headPad } = useDensity()
 
   const seasonsRecorded = [...new Set(db.teams.map((t) => t.season))].sort((a, b) => b - a)
   const pastSeasons = seasonsRecorded.filter((s) => s !== world.season)
@@ -438,127 +439,88 @@ export function StatsHub() {
         title="Stats Hub"
         subtitle={subtitle}
         right={
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-lg bg-surface-2 p-0.5">
-              <button
-                onClick={() => applyScope({ kind: 'live' })}
-                className={cn(
-                  'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-                  scope.kind === 'live' ? 'bg-surface text-ink shadow-sm' : 'text-muted',
-                )}
-              >
-                Season {world.season}
-              </button>
-              <button
-                onClick={() => applyScope({ kind: 'career' })}
-                className={cn(
-                  'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-                  scope.kind === 'career' ? 'bg-surface text-ink shadow-sm' : 'text-muted',
-                )}
-              >
-                Career
-              </button>
-            </div>
+          <label className="flex items-center gap-2">
+            <span className="label">Scope</span>
             <select
-              value={scope.kind === 'season' ? String(scope.season) : ''}
+              value={scope.kind === 'season' ? String(scope.season) : scope.kind === 'career' ? 'career' : 'live'}
               onChange={(e) => {
                 const v = e.target.value
-                applyScope(v ? { kind: 'season', season: Number(v) } : { kind: 'live' })
+                applyScope(v === 'live' ? { kind: 'live' } : v === 'career' ? { kind: 'career' } : { kind: 'season', season: Number(v) })
               }}
-              className="rounded-md border border-line bg-surface-2 px-2 py-1.5 font-cond text-xs font-600 uppercase outline-none"
+              className="h-11 min-w-0 rounded-[var(--r-md)] border border-line-strong bg-surface px-2 text-[16px] text-ink sm:h-9 sm:text-small"
             >
-              <option value="">Past seasons…</option>
+              <option value="live">Season {world.season} · live</option>
+              <option value="career">Career totals</option>
               {pastSeasons.map((s) => (
-                <option key={s} value={s}>
-                  {s}
+                <option key={s} value={String(s)}>
+                  {s} season
                 </option>
               ))}
             </select>
-          </div>
+          </label>
         }
       />
 
       {/* Tabs + filters */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex rounded-lg bg-surface-2 p-0.5">
-          {tabs.map((t) => (
-            <button
-              key={t}
-              onClick={() => applyTab(t)}
-              className={cn(
-                'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase transition',
-                tab === t ? 'text-[var(--team-ink)]' : 'text-muted hover:text-ink-2',
-              )}
-              style={tab === t ? { background: 'var(--team)' } : undefined}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl label="Stat group" value={tab} onChange={applyTab} options={tabs.map((t) => ({ id: t, label: t }))} />
 
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Position filter">
           {posOptions.map((p) => (
-            <button
-              key={p}
-              onClick={() => applyPos(p)}
-              className={cn(
-                'rounded-md px-2.5 py-1 font-cond text-xs font-700 uppercase transition',
-                pos === p ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-2',
-              )}
-              style={pos === p ? { background: 'var(--team)' } : undefined}
-            >
+            <FilterChip key={p} pressed={pos === p} onChange={() => applyPos(p)}>
               {p === 'ALL' ? 'All' : p}
-            </button>
+            </FilterChip>
           ))}
         </div>
 
-        <select
-          value={team}
-          onChange={(e) => {
-            setTeam(e.target.value)
-            setLimit(50)
-          }}
-          className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
-        >
-          <option value="ALL">All teams</option>
-          {teams.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.city} {t.name}
-            </option>
-          ))}
-          <option value="FA">Free agents</option>
-        </select>
+        <label className="flex items-center gap-2">
+          <span className="label">Team</span>
+          <select
+            value={team}
+            onChange={(e) => {
+              setTeam(e.target.value)
+              setLimit(50)
+            }}
+            className="h-11 min-w-0 rounded-[var(--r-md)] border border-line-strong bg-surface px-2 text-[16px] text-ink sm:h-9 sm:text-small"
+          >
+            <option value="ALL">All teams</option>
+            {teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.city} {t.name}
+              </option>
+            ))}
+            <option value="FA">Free agents</option>
+          </select>
+        </label>
 
-        <button
-          onClick={() => {
-            setQualified(!qualified)
+        <FilterChip
+          pressed={qualified}
+          onChange={(v) => {
+            setQualified(v)
             setLimit(50)
           }}
-          className={cn(
-            'rounded-md border px-2.5 py-1 font-cond text-xs font-700 uppercase transition',
-            qualified ? 'border-transparent text-[var(--team-ink)]' : 'border-line bg-surface text-muted hover:bg-surface-2',
-          )}
-          style={qualified ? { background: 'var(--team)' } : undefined}
         >
           Qualified only
-        </button>
+        </FilterChip>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <DensityToggle />
           <Badge tone="neutral">{sorted.length} players</Badge>
         </div>
       </div>
 
       <Card pad={false}>
         {sorted.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-muted">
+          <div className="px-4 py-10 text-center text-body text-muted">
             No stats recorded yet. Play a week to see live production.
           </div>
         ) : (
           <>
             <div className="max-h-[70vh] overflow-auto">
-              <table className="min-w-full border-collapse text-sm tnum">
+              <table data-density={density} className={cn('min-w-full border-collapse tnum', fontSize)}>
                 <thead>
                   <tr className="text-left">
+                    <th className="sticky top-0 z-30 h-6 border-b border-line bg-surface-2 px-2" />
                     <th className="sticky left-0 top-0 z-40 h-6 border-b border-line bg-surface-2 px-2" />
                     <th className="sticky top-0 z-30 h-6 border-b border-line bg-surface-2 px-2" />
                     <th className="sticky top-0 z-30 h-6 border-b border-line bg-surface-2 px-2" />
@@ -574,6 +536,9 @@ export function StatsHub() {
                     ))}
                   </tr>
                   <tr className="text-left">
+                    <th scope="col" className={cn('label sticky top-0 z-30 whitespace-nowrap border-b border-line bg-surface-2 px-2 font-700', headPad)} title="Rank in the current sort">
+                      #
+                    </th>
                     <HdrCell className="sticky left-0 top-6 z-40" active={sortKey === 'name'} dir={dir} onClick={() => toggleSort('name')}>
                       Player
                     </HdrCell>
@@ -601,7 +566,7 @@ export function StatsHub() {
                   </tr>
                 </thead>
                 <tbody>
-                  {shown.map((r) => {
+                  {shown.map((r, idx) => {
                     const club = world.byId[r.teamId ?? '']
                     const mine = r.teamId === activeTeamId
                     const cellBg = mine ? 'bg-[var(--team-soft)]' : 'bg-surface'
@@ -611,24 +576,30 @@ export function StatsHub() {
                         onClick={() => selectPlayer(r.id)}
                         className={cn('cursor-pointer border-b border-line/60 transition hover:bg-[var(--team-soft)]', mine && 'bg-[var(--team-soft)]')}
                       >
-                        <td className={cn('sticky left-0 z-10 whitespace-nowrap px-2 py-1.5', cellBg)}>
-                          <span className="font-600 text-ink">{r.name}</span>
+                        <td className={cn('px-2 font-cond text-label tnum text-muted', rowPad)}>{idx + 1}</td>
+                        <td className={cn('sticky left-0 z-10 whitespace-nowrap px-2', rowPad, cellBg)}>
+                          <span className={cn('text-ink', sortKey === 'name' ? 'font-700' : 'font-600')}>{r.name}</span>
                         </td>
-                        <td className="whitespace-nowrap px-2 py-1.5">
+                        <td className={cn('whitespace-nowrap px-2', rowPad, sortKey === 'team' && 'font-600 text-ink')}>
                           <span className="inline-flex items-center gap-1.5 text-ink-2">
                             {club && <TeamCrest team={club} size={18} />}
                             {teamNameOf(r.teamId, world)}
                           </span>
                         </td>
-                        <td className="whitespace-nowrap px-2 py-1.5">
-                          <span className="font-cond text-[11px] font-700 uppercase text-muted">{r.pos}</span>
+                        <td className={cn('whitespace-nowrap px-2', rowPad, sortKey === 'pos' && 'font-600')}>
+                          <span className={cn('font-cond text-label font-700 uppercase', sortKey === 'pos' ? 'text-ink' : 'text-muted')}>{r.pos}</span>
                         </td>
-                        <td className="whitespace-nowrap px-2 py-1.5 text-center text-ink-2">{COL_GP.fmt(r.line, r.player)}</td>
-                        {columns.map((c) => (
-                          <td key={c.id} className="whitespace-nowrap px-2 py-1.5 text-center text-ink-2">
-                            {c.fmt(r.line, r.player)}
-                          </td>
-                        ))}
+                        <td className={cn('whitespace-nowrap px-2 text-center text-ink-2', rowPad, sortKey === 'gp' && 'bg-surface-2 font-600 text-ink')}>
+                          {COL_GP.fmt(r.line, r.player)}
+                        </td>
+                        {columns.map((c) => {
+                          const on = sortKey === c.id
+                          return (
+                            <td key={c.id} className={cn('whitespace-nowrap px-2 text-center', rowPad, on ? 'bg-surface-2 font-600 text-ink' : 'text-ink-2')}>
+                              {c.fmt(r.line, r.player)}
+                            </td>
+                          )
+                        })}
                       </tr>
                     )
                   })}
@@ -639,7 +610,7 @@ export function StatsHub() {
               <div className="border-t border-line p-3 text-center">
                 <button
                   onClick={() => setLimit(limit + 50)}
-                  className="rounded-md bg-surface-2 px-4 py-1.5 font-cond text-xs font-700 uppercase text-ink-2 hover:bg-surface-3"
+                  className="rounded-[var(--r-md)] bg-surface-2 px-4 py-2 font-cond text-label font-700 uppercase text-ink-2 hover:bg-surface-3 max-sm:min-h-11 pointer-coarse:min-h-11"
                 >
                   Show more ({sorted.length - limit} remaining)
                 </button>
@@ -679,7 +650,7 @@ function HdrCell({
     >
       <span className="inline-flex items-center gap-0.5">
         {children}
-        {active && <span className="text-[9px] leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
+        {active && <span className="text-micro leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
       </span>
     </th>
   )

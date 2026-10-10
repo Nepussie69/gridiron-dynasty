@@ -1,14 +1,12 @@
-import { ArrowRight, ChevronRight, TrendingDown, TrendingUp } from 'lucide-react'
+import { ArrowRight, ChevronRight } from 'lucide-react'
 import { useMemo } from 'react'
-import { gradeColor, inkOn, money } from '../lib/format'
-import { cn } from '../lib/cn'
+import { ordinal, signed } from '../lib/format'
 import { depthGroup } from '../game/engine/depth'
 import { type World } from '../game/engine/generate'
 import { winProjection } from '../game/engine/analytics'
 import type { Position } from '../game/types'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import {
-  capSpace,
   defenseRating,
   offenseRating,
   positionNeeds,
@@ -18,25 +16,41 @@ import {
   scheduleFor,
   teamAvgOvr,
 } from '../game/selectors'
-import { useGame, useWorld, type ScreenId } from '../store/gameStore'
+import { useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { rivalTitle } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerPersonalityLabel, ownerProfile } from '../game/engine/owner'
 import { rivalFor } from '../game/engine/rivalry'
 import { hasRoom } from '../game/engine/room'
-import { capSpaceTone } from '../game/engine/capMemo'
-import { CulturePanel } from '../components/CulturePanel'
-import { KeysCard } from '../components/KeysCard'
+import { advanceLabel, canCoach as canCoachNow, stageOf } from '../ui/nav'
+import {
+  Badge,
+  Button,
+  Card,
+  KpiStrip,
+  KpiTile,
+  OvrBadge,
+  PageHeader,
+  RatingBar,
+  RatingTile,
+  SchemeChip,
+  ScoreBlock,
+  TeamCrest,
+  TierLegend,
+  VerdictChip,
+} from '../ui/kit'
 import { OfficeScene } from '../components/OfficeScene'
+import { KeysCard } from '../components/KeysCard'
 import { PracticeCard } from '../components/PracticeCard'
 import { ByeWeekCard } from '../components/ByeWeekCard'
 import { OwnerMeetingCard } from '../components/OwnerMeetingCard'
 import { RoomCard } from '../components/RoomCard'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
 import { WeeklyDecision } from '../components/WeeklyDecision'
-import { Badge, Button, Card, Donut, MiniBars, OvrBadge, PageHeader, RatingBar, Stat, TeamCrest } from '../ui/kit'
+import { CulturePanel } from '../components/CulturePanel'
 import { TopPlayers } from '../components/TopPlayers'
 import { TeamHoverCard } from '../components/TeamHoverCard'
+import { liveSchemes } from '../components/staffEffects'
 
 export function Dashboard() {
   const league = useWorld()
@@ -45,11 +59,14 @@ export function Dashboard() {
   const setScreen = useGame((s) => s.setScreen)
   const viewTeam = useGame((s) => s.viewTeam)
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const gameDay = useGame((s) => s.gameDay)
+  const advanceWeek = useGame((s) => s.advanceWeek)
+  const advanceStage = useGame((s) => s.advanceStage)
+  const startGameDay = useGame((s) => s.startGameDay)
 
   const team = league.byId[activeTeamId]
   const roster = rosterOf(league, activeTeamId)
   const rec = recordOf(league, activeTeamId)
-  const space = capSpace(league, activeTeamId)
   const isNFL = team.tier === 'NFL'
 
   const off = offenseRating(roster)
@@ -57,6 +74,10 @@ export function Dashboard() {
   const st = roster.filter((p) => p.side === 'ST')
   const stRating = st.length ? st.reduce((s, p) => s + p.ovr, 0) / st.length : 0
   const ovr = teamAvgOvr(roster)
+  const live = liveSchemes(league.staff[activeTeamId] ?? [])
+  const staff = league.staff[activeTeamId] ?? []
+  const hasOC = staff.some((m) => m.role === 'Offensive Coordinator')
+  const hasDC = staff.some((m) => m.role === 'Defensive Coordinator')
 
   const needs = isNFL ? positionNeeds(league, activeTeamId, NFL_TEAMS).slice(0, 6) : []
   const { out: schedule } = scheduleFor(league, activeTeamId)
@@ -86,217 +107,199 @@ export function Dashboard() {
       .sort((a, b) => b.w - a.w || a.l - b.l)
       .findIndex((x) => x.id === activeTeamId) + 1
 
+  const coachable = canCoachNow(league, career, !!gameDay)
+  const advance = () => (stageOf(league) ? advanceStage() : void advanceWeek())
+
+  const rep = overallRep(career.reputation)
+
   return (
     <div>
       <PageHeader
-        eyebrow={`${isNFL ? `${team.conference} ${team.division}` : team.conference} · Season ${career.season}`}
+        eyebrow="Career"
         title="Front Office"
         subtitle={career.ownerExpectation}
         right={
-          <div className="flex gap-2">
-            <Button onClick={() => setScreen('roster')}>Manage Roster</Button>
-            <Button variant="team" onClick={() => setScreen('draft')}>
-              Draft Board <ArrowRight size={15} />
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setScreen('roster')}>
+              Manage Roster
+            </Button>
+            <Button variant="secondary" onClick={() => setScreen('draft')} icon={<ArrowRight size={15} aria-hidden />}>
+              Draft Board
             </Button>
           </div>
         }
       />
 
-      <OfficeScene className="mb-5" />
-      <OwnerMeetingCard compact className="mb-5" />
-      <ByeWeekCard className="mb-5" />
-      <WeeklyDecision className="mb-5" />
-      <WeeklyChecklist className="mb-5" />
+      <OfficeScene className="mb-4" />
 
-      {/* KPI strip */}
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Card className="flex items-center gap-4">
-          <div>
-            <div className="label mb-1">Record</div>
-            <div className="font-display text-3xl font-700 tnum leading-none">
-              {rec.wins}-{rec.losses}
-            </div>
-            <div className="mt-1 flex items-center gap-1 text-xs text-muted">
-              {rank === 1 ? (
-                <><TrendingUp size={13} className="text-win" /> 1st in division</>
-              ) : (
-                <><TrendingDown size={13} className="text-muted" /> {rank}th in division</>
-              )}
-            </div>
-          </div>
-        </Card>
-        <Card className="flex items-center gap-4">
-          <Donut value={career.jobSecurity} color={career.jobSecurity > 60 ? '#05914f' : career.jobSecurity > 35 ? '#d98207' : '#dc2937'} />
-          <Stat label="Job Security" value={`${career.jobSecurity}%`} sub={career.jobSecurity > 60 ? 'Safe' : 'On the hot seat'} />
-        </Card>
-        <Card>
-          <Stat label="Team Overall" value={Math.round(ovr)} sub="Top-22 weighted" />
-          <div className="mt-3">
-            <RatingBar value={ovr} />
-          </div>
-        </Card>
-        {isNFL ? (
-          <Card>
-            <Stat
-              label="Cap Space"
-              value={money(space)}
-              sub={`of $279.2M limit`}
-              tone={capSpaceTone(space)}
-            />
-            <div className="mt-3">
-              {/* Full bar at $30M+ of room; empty when at or over the cap. */}
-              <RatingBar
-                value={Math.max(0, Math.min(100, (space / 30_000_000) * 100))}
-                color={capSpaceTone(space) === 'win' ? 'var(--color-win)' : capSpaceTone(space) === undefined ? 'var(--color-brand)' : capSpaceTone(space) === 'warn' ? 'var(--color-warn)' : 'var(--color-loss)'}
-              />
-            </div>
-          </Card>
-        ) : (
-          <Card>
-            <Stat label="Prestige" value={team.prestige} sub={team.conference} />
-            <div className="mt-3">
-              <RatingBar value={team.prestige} />
-            </div>
-          </Card>
+      <KpiStrip label="Club standing" className="mb-4">
+        <KpiTile
+          label="Reputation"
+          value={rep}
+          unit="/ 100"
+          verdict={{ label: career.path === 'coach' ? 'Coaching track' : 'Personnel track', tone: 'neutral' }}
+          why={<span className="text-muted">Five pillars: evaluation, roster, leadership, results, profile.</span>}
+        />
+        <KpiTile
+          label="Prestige"
+          value={team.prestige}
+          unit="/ 100"
+          why={
+            <span className="text-muted">
+              How the league rates the {team.tier === 'NFL' ? `${team.conference} ${team.division}` : team.conference} club.
+            </span>
+          }
+        />
+        {isNFL && (
+          <KpiTile
+            label="Division"
+            value={ordinal(rank)}
+            unit="in division"
+            why={
+              <span className="text-muted">
+                {team.conference} {team.division} · sorted by wins
+              </span>
+            }
+          />
         )}
-        <Card>
-          <Stat label="Reputation" value={overallRep(career.reputation)} sub={career.path === 'coach' ? 'Coaching track' : 'Personnel track'} />
-          <div className="mt-3">
-            <RatingBar value={overallRep(career.reputation)} color="#c99a2e" />
-          </div>
-        </Card>
-      </div>
+      </KpiStrip>
 
-      <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
-        <div className="space-y-5">
+      <WeeklyDecision className="mb-4" />
+      <ByeWeekCard className="mb-4" />
+      <OwnerMeetingCard compact className="mb-4" />
+
+      {/* Next game — the broadcast matchup hero. */}
+      {next && opp && (
+        <>
           {/* L9 Z5: a rivalry week against a rival's club. */}
-          {rival && opp && (
-            <Card className="border-gold/60 bg-gold/10">
-              <div className="font-cond text-sm font-700 uppercase leading-snug text-ink">
+          {rival && (
+            <Card className="mb-4 border-gold/60 bg-gold/10">
+              <div className="font-cond text-body font-700 uppercase leading-snug text-ink">
                 Rivalry week: {rival.name} ({rivalTitle(rival)}) and the {opp.name}
               </div>
             </Card>
           )}
-          {/* Next game — U4 broadcast hero matchup */}
-          {next && opp && (
-            <>
-              <Card pad={false} className="overflow-hidden">
-                <div className="hatch flex items-center justify-between border-b border-line px-4 py-2">
-                  <div className="label">Up Next · Week {next.week}</div>
-                  <div className="label">
-                    {next.home ? `Home · ${team.stadium}` : `Away · ${opp.stadium}`}
-                  </div>
-                </div>
 
-                <div className="relative grid grid-cols-2">
-                  <TeamHoverCard team={team} className="flex">
-                    <button
-                      type="button"
-                      onClick={() => viewTeam(team.id)}
-                      className="motion relative flex min-h-[148px] flex-col justify-between overflow-hidden p-4 text-left hover:brightness-105 sm:p-5"
-                      style={{ background: `linear-gradient(135deg, ${team.primary}, ${team.secondary})` }}
-                    >
-                      <TeamCrest team={team} size={50} />
-                      <div className="relative text-white">
-                        <div className="label !text-white/70">{team.conference} {team.division ?? ''}</div>
-                        <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">
-                          {isNFL ? team.name : team.name}
-                        </div>
-                        <div className="mt-1 font-cond text-sm font-600 text-white/85">{recordStr(rec)}</div>
-                      </div>
-                    </button>
-                  </TeamHoverCard>
-
-                  <TeamHoverCard team={opp} className="flex">
-                    <button
-                      type="button"
-                      onClick={() => viewTeam(opp.id)}
-                      className="motion relative flex min-h-[148px] flex-col items-end justify-between overflow-hidden p-4 text-right hover:brightness-105 sm:p-5"
-                      style={{ background: `linear-gradient(225deg, ${opp.primary}, ${opp.secondary})` }}
-                    >
-                      <TeamCrest team={opp} size={50} />
-                      <div className="relative text-white">
-                        <div className="label !text-white/70">{opp.conference} {opp.division ?? ''}</div>
-                        <div className="font-display text-2xl font-700 uppercase leading-none sm:text-3xl">{opp.name}</div>
-                        <div className="mt-1 font-cond text-sm font-600 text-white/85">
-                          {recordStr(recordOf(league, opp.id))}
-                        </div>
-                      </div>
-                    </button>
-                  </TeamHoverCard>
-
-                  <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
-                    <span className="grid h-12 w-12 place-items-center rounded-full border-4 border-surface bg-ink font-display text-lg font-700 uppercase text-canvas shadow-lg">
-                      vs
-                    </span>
-                  </div>
-                </div>
-
-                {/* Win probability */}
-                <div className="border-t border-line px-4 py-3">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="label !mb-0 flex items-center gap-1.5">
-                      Win probability
-                      {wp.sharp && <Badge tone="team">Analytics</Badge>}
-                    </span>
-                    <span className="font-cond text-[11px] tnum text-muted">
-                      {team.abbr || team.name} {Math.round(winProb * 100)}%
-                      {wp.sharp && <span className="text-faint"> ±{Math.round(wp.margin * 100)}</span>} ·{' '}
-                      {opp.abbr || opp.name} {Math.round((1 - winProb) * 100)}%
-                    </span>
-                  </div>
-                  <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3">
-                    <span className="transition-[width] duration-500" style={{ width: `${winProb * 100}%`, background: team.primary }} />
-                    <span className="flex-1" style={{ background: opp.primary }} />
-                  </div>
-                  {wp.sharp && wp.factors.length > 0 && (
-                    <div className="mt-1 text-[10px] text-faint">
-                      Model: {wp.factors.join(' · ')} · {wp.confidence} confidence
-                    </div>
-                  )}
-                </div>
-
-                {/* L12.8 V2: the opponent's best three on each side (hover for ratings). */}
-                <div className="space-y-2 border-t border-line px-4 py-3">
-                  <TopPlayers teamId={opp.id} side="off" n={3} label="Their offense" />
-                  <TopPlayers teamId={opp.id} side="def" n={3} label="Their defense" />
-                </div>
-                <div className="flex items-center justify-between border-t border-line bg-surface-2 px-4 py-2.5">
-                  <span className="text-xs text-muted">Vegas line: {team.abbr} -3.5 · O/U 44.5</span>
-                  <Button size="sm" variant="team" onClick={() => setScreen('schedule')}>
-                    Game Plan <ChevronRight size={14} />
-                  </Button>
-                </div>
-              </Card>
-
-              {/* Keys + practice, promoted onto the dashboard for game week. */}
-              <div className="grid gap-5 lg:grid-cols-2">
-                <KeysCard oppId={opp.id} />
-                <PracticeCard />
-              </div>
-            </>
-          )}
-
-          {/* Ratings */}
-          <Card>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-display text-lg font-700 uppercase tracking-wide">Unit Grades</h3>
-              <Badge tone="team">Scheme: {league.staff[activeTeamId]?.[0]?.scheme ?? 'Balanced'}</Badge>
+          <Card pad={false} className="mb-4 overflow-hidden">
+            <div className="hatch flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
+              <div className="label">Up Next · Week {next.week}</div>
+              <div className="label">{next.home ? `Home · ${team.stadium}` : `Away · ${opp.stadium}`}</div>
             </div>
-            <div className="flex items-center gap-4">
-              <div className="shrink-0 text-center" title="Team overall (average of the starters)">
-                <OvrBadge value={Math.round(ovr)} size={52} />
-                <div className="mt-1 font-cond text-[10px] font-700 uppercase tracking-wide text-muted">Overall</div>
+
+            <div className="grid items-center gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+              <TeamHoverCard team={team} info>
+                <button type="button" onClick={() => viewTeam(team.id)} className="block w-full text-left" title={`Open the ${team.name}`}>
+                  <ScoreBlock
+                    team={{ abbr: team.abbr || team.name.slice(0, 3), primary: team.primary, name: team.name, city: team.city }}
+                    sub={recordStr(rec)}
+                    size="lg"
+                    className="w-full"
+                  />
+                </button>
+              </TeamHoverCard>
+
+              <div className="flex flex-col items-center gap-0.5 text-center">
+                <span className="font-cond text-label font-700 uppercase tracking-[0.07em] text-muted">{next.home ? 'vs' : '@'}</span>
+                <span className="whitespace-nowrap font-cond text-small font-700 uppercase tracking-[0.06em] text-ink">WK {next.week}</span>
               </div>
-              <div className="min-w-0 flex-1">
-                <MiniBars
-                  items={[
-                    { label: 'OFF', value: off, color: 'var(--team)' },
-                    { label: 'DEF', value: def, color: '#0b62ff' },
-                    { label: 'ST', value: stRating, color: '#c99a2e' },
-                  ]}
-                />
+
+              <TeamHoverCard team={opp} info>
+                <button type="button" onClick={() => viewTeam(opp.id)} className="block w-full text-right" title={`Open the ${opp.name}`}>
+                  <ScoreBlock
+                    team={{ abbr: opp.abbr || opp.name.slice(0, 3), primary: opp.primary, name: opp.name, city: opp.city }}
+                    sub={recordStr(recordOf(league, opp.id))}
+                    size="lg"
+                    align="right"
+                    className="w-full"
+                  />
+                </button>
+              </TeamHoverCard>
+            </div>
+
+            {/* Win probability */}
+            <div className="border-t border-line px-4 py-3">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="label flex items-center gap-1.5">
+                  Win probability
+                  {wp.sharp && <Badge tone="neutral">Analytics</Badge>}
+                </span>
+                <span className="font-cond text-label tnum text-muted">
+                  {team.abbr || team.name} {Math.round(winProb * 100)}%
+                  {wp.sharp && <span className="text-faint"> ±{Math.round(wp.margin * 100)}</span>} ·{' '}
+                  {opp.abbr || opp.name} {Math.round((1 - winProb) * 100)}%
+                </span>
               </div>
+              <div
+                role="meter"
+                aria-label={`Win probability: ${team.abbr || team.name} ${Math.round(winProb * 100)}%`}
+                aria-valuenow={Math.round(winProb * 100)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="flex h-2.5 overflow-hidden rounded-full bg-surface-3"
+              >
+                <span className="transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${winProb * 100}%`, background: 'var(--team-accent)' }} />
+                <span className="flex-1 bg-line-strong" />
+              </div>
+              {wp.sharp && wp.factors.length > 0 && (
+                <div className="mt-1 text-label text-faint">
+                  Model: {wp.factors.join(' · ')} · {wp.confidence} confidence
+                </div>
+              )}
+            </div>
+
+            {/* L12.8 V2: the opponent's best three on each side (hover for ratings). */}
+            <div className="space-y-2 border-t border-line px-4 py-3">
+              <TopPlayers teamId={opp.id} side="off" n={3} label="Their offense" />
+              <TopPlayers teamId={opp.id} side="def" n={3} label="Their defense" />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-surface-2 px-4 py-2.5">
+              <Button size="sm" variant="quiet" onClick={() => setScreen('gameplan')} icon={<ChevronRight size={14} aria-hidden />}>
+                Game Plan
+              </Button>
+              <Button variant="slab" onClick={() => (coachable ? startGameDay() : advance())}>
+                {coachable ? 'Coach the game' : advanceLabel(league)}
+              </Button>
+            </div>
+          </Card>
+
+          {/* Keys + practice, promoted onto the dashboard for game week. */}
+          <div className="mb-4 grid gap-4 lg:grid-cols-2">
+            <KeysCard oppId={opp.id} />
+            <PracticeCard />
+          </div>
+        </>
+      )}
+
+      <WeeklyChecklist className="mb-5" />
+
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-5">
+          {/* Unit grades — a rating tile per unit with the scheme that drives it. */}
+          <Card>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em]">Unit Grades</h3>
+              <TierLegend />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <UnitTile label="Overall" value={Math.round(ovr)} hint="Top-22 weighted" />
+              <UnitTile
+                label="Offense"
+                value={Math.round(off)}
+                scheme={live.off?.scheme ?? null}
+                schemeState="live"
+                hint={hasOC ? `Called by OC ${live.off?.name?.split(' ').slice(-1)[0] ?? ''}` : 'No offensive coordinator — league-average until hired'}
+                warn={!hasOC}
+              />
+              <UnitTile
+                label="Defense"
+                value={Math.round(def)}
+                scheme={live.def?.scheme ?? null}
+                schemeState="live"
+                hint={hasDC ? `Called by DC ${live.def?.name?.split(' ').slice(-1)[0] ?? ''}` : 'No defensive coordinator — league-average until hired'}
+                warn={!hasDC}
+              />
+              <UnitTile label="Special teams" value={Math.round(stRating)} scheme={null} hint="No scheme in the sim" />
             </div>
             {isNFL && <PositionGrades teamId={activeTeamId} />}
           </Card>
@@ -310,50 +313,46 @@ export function Dashboard() {
           {/* Positional needs (NFL) */}
           {isNFL && (
             <Card>
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-display text-lg font-700 uppercase tracking-wide">Positional Needs</h3>
-                <span className="text-xs text-muted">vs. league average</span>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em]">Positional Needs</h3>
+                <span className="text-label text-muted">Grade vs. league average</span>
               </div>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
-                {needs.map((n) => {
-                  const bad = n.gap < -3
-                  const warn = n.gap >= -3 && n.gap < 0
-                  return (
-                    <div key={n.pos} className="flex items-center gap-2">
-                      <span className="w-8 font-cond text-xs font-700 uppercase text-muted">{n.pos}</span>
-                      <div className="flex-1">
-                        <RatingBar value={Math.round(n.mine)} color={bad ? '#dc2937' : warn ? '#d98207' : '#05914f'} />
-                      </div>
-                      <span className="w-8 text-right font-cond text-xs font-700 tnum text-ink-2">
-                        {Math.round(n.mine)}
-                      </span>
+              <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+                {needs.map((n) => (
+                  <div key={n.pos} className="flex items-center gap-2">
+                    <span className="w-8 font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">{n.pos}</span>
+                    <div className="flex-1">
+                      <RatingBar value={Math.round(n.mine)} tone="tier" />
                     </div>
-                  )
-                })}
+                    <span className="w-8 text-right font-cond text-label font-700 tnum text-ink-2">{Math.round(n.mine)}</span>
+                    <span className="w-14 text-right font-cond text-label tnum text-muted">{signed(n.gap, 1)} vs avg</span>
+                  </div>
+                ))}
               </div>
             </Card>
           )}
 
           {/* Stars */}
           <Card>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-display text-lg font-700 uppercase tracking-wide">Cornerstones</h3>
-              <Button size="sm" variant="ghost" onClick={() => setScreen('roster')}>
-                Full Roster <ChevronRight size={14} />
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em]">Cornerstones</h3>
+              <Button size="sm" variant="quiet" onClick={() => setScreen('roster')} icon={<ChevronRight size={14} aria-hidden />}>
+                Full Roster
               </Button>
             </div>
             <div className="space-y-1">
               {stars.map((p) => (
                 <button
                   key={p.id}
+                  type="button"
                   onClick={() => selectPlayer(p.id)}
-                  className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition hover:bg-surface-2"
+                  className="motion flex min-h-11 w-full items-center gap-3 rounded-[var(--r-md)] px-2 py-1.5 text-left hover:bg-surface-2"
                 >
                   <OvrBadge value={p.ovr} pot={p.pot} size={30} />
-                  <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
+                  <span className="w-8 font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">{p.pos}</span>
                   <span className="flex-1 truncate font-600 text-ink">{p.name}</span>
-                  <span className="font-cond text-xs text-muted">{p.college}</span>
-                  <ChevronRight size={15} className="text-faint" />
+                  <span className="text-label text-muted">{p.college}</span>
+                  <ChevronRight size={15} className="text-faint" aria-hidden />
                 </button>
               ))}
             </div>
@@ -361,11 +360,11 @@ export function Dashboard() {
         </div>
 
         {/* Right column */}
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           <Card>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-display text-lg font-700 uppercase tracking-wide">Inbox</h3>
-              <Button size="sm" variant="ghost" onClick={() => setScreen('inbox')}>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em]">Inbox</h3>
+              <Button size="sm" variant="quiet" onClick={() => setScreen('inbox')}>
                 View All
               </Button>
             </div>
@@ -373,15 +372,14 @@ export function Dashboard() {
               {news.map((n) => (
                 <button
                   key={n.id}
+                  type="button"
                   onClick={() => setScreen('inbox')}
-                  className="flex w-full items-start gap-3 rounded-lg border border-line/70 p-2.5 text-left transition hover:border-line-strong hover:bg-surface-2"
+                  className="motion flex w-full items-start gap-3 rounded-[var(--r-md)] border border-line p-2.5 text-left hover:border-line-strong hover:bg-surface-2"
                 >
-                  <Badge tone={n.category === 'Owner' ? 'gold' : n.category === 'Injury' ? 'loss' : 'info'}>
-                    {n.category}
-                  </Badge>
+                  <Badge tone={n.category === 'Injury' ? 'loss' : 'neutral'}>{n.category}</Badge>
                   <div className="min-w-0">
-                    <div className="text-sm font-600 leading-snug text-ink">{n.headline}</div>
-                    <div className="mt-0.5 line-clamp-2 text-xs text-muted">{n.body}</div>
+                    <div className="text-body font-600 leading-snug text-ink">{n.headline}</div>
+                    <div className="mt-0.5 line-clamp-2 text-small text-muted">{n.body}</div>
                   </div>
                 </button>
               ))}
@@ -390,9 +388,12 @@ export function Dashboard() {
 
           {isNFL && (
             <Card>
-              <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">
-                {team.conference} {team.division}
-              </h3>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em]">
+                  {team.conference} {team.division}
+                </h3>
+                <VerdictChip tone={rank === 1 ? 'win' : 'neutral'}>{ordinal(rank)}</VerdictChip>
+              </div>
               <div className="space-y-1">
                 {divTeams
                   .map((t) => ({ t, r: recordOf(league, t.id) }))
@@ -400,13 +401,16 @@ export function Dashboard() {
                   .map(({ t, r }) => (
                     <div
                       key={t.id}
-                      className="flex items-center gap-3 rounded-lg px-2 py-1.5"
-                      style={t.id === activeTeamId ? { background: 'var(--team-soft)' } : undefined}
+                      className={
+                        t.id === activeTeamId
+                          ? 'flex items-center gap-3 rounded-[var(--r-md)] bg-[var(--team-tint)] px-2 py-1.5 shadow-[inset_3px_0_0_var(--team-accent)]'
+                          : 'flex items-center gap-3 rounded-[var(--r-md)] px-2 py-1.5'
+                      }
                     >
-                      <TeamHoverCard team={t} className="min-w-0 flex-1">
+                      <TeamHoverCard team={t} className="min-w-0 flex-1" info>
                         <span className="flex min-w-0 items-center gap-3">
                           <TeamCrest team={t} size={24} />
-                          <span className="flex-1 truncate font-cond text-sm font-600 text-ink">{t.name}</span>
+                          <span className="flex-1 truncate font-cond text-body font-600 text-ink">{t.name}</span>
                         </span>
                       </TeamHoverCard>
                       <span className="font-display text-base font-700 tnum text-ink-2">
@@ -419,46 +423,62 @@ export function Dashboard() {
           )}
 
           <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Era & Mandate</h3>
-            <div className="mb-2 flex items-center gap-2">
-              <Badge tone="gold">{league.era?.label ?? 'Modern Era'}</Badge>
-              <span className="text-xs text-muted">
+            <h3 className="mb-3 font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em]">Era &amp; Mandate</h3>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Badge tone="neutral">{league.era?.label ?? 'Modern Era'}</Badge>
+              <span className="text-label text-muted">
                 {ownerPersonalityLabel(ownerProfile(career.teamId).personality)} owner
               </span>
             </div>
             <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="truncate font-cond text-sm font-700 uppercase text-ink">{ownerName(career.teamId)}</span>
-              <span className="shrink-0 font-cond text-[10px] uppercase text-faint">
+              <span className="truncate font-cond text-body font-700 uppercase text-ink">{ownerName(career.teamId)}</span>
+              <span className="shrink-0 font-cond text-label uppercase tracking-[0.06em] text-faint">
                 {ownerFiringLine(career.teamId) > 0
                   ? `Fired at ≤ ${ownerFiringLine(career.teamId)}% security`
                   : 'Never fires early'}
               </span>
             </div>
-            <p className="text-xs leading-relaxed text-muted">{career.ownerExpectation}</p>
-            <p className="mt-2 text-[11px] leading-snug text-faint">
+            <p className="text-small leading-relaxed text-muted">{career.ownerExpectation}</p>
+            <p className="mt-2 text-label leading-snug text-faint">
               The league's market drifts by era — positions rise and fall in value. Build into the drift.
             </p>
           </Card>
-
-          <Card>
-            <h3 className="mb-3 font-display text-lg font-700 uppercase tracking-wide">Quick Actions</h3>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  { label: 'Depth Chart', screen: 'depth' },
-                  { label: 'Staff Hiring', screen: 'staff' },
-                  { label: 'Trade Center', screen: 'trades' },
-                  { label: 'Salary Cap', screen: 'cap' },
-                ] as { label: string; screen: ScreenId }[]
-              ).map((a) => (
-                <Button key={a.label} onClick={() => setScreen(a.screen)} className="justify-start">
-                  {a.label}
-                </Button>
-              ))}
-            </div>
-          </Card>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** One unit grade: a rating tile, the scheme that drives it, and its readout. */
+function UnitTile({
+  label,
+  value,
+  scheme = null,
+  schemeState = 'live',
+  hint,
+  warn = false,
+}: {
+  label: string
+  value: number
+  scheme?: string | null
+  schemeState?: 'live' | 'na'
+  hint?: string
+  warn?: boolean
+}) {
+  return (
+    <div className="rounded-[var(--r-md)] border border-line bg-surface-2 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="label">{label}</span>
+        <RatingTile value={value} size="md" label={`${label} grade`} />
+      </div>
+      <div className="mt-2 min-h-[24px]">
+        {scheme ? (
+          <SchemeChip scheme={scheme} state={schemeState} />
+        ) : (
+          <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">No scheme in sim</span>
+        )}
+      </div>
+      {hint && <p className={`mt-1.5 text-label leading-snug ${warn ? 'text-warn' : 'text-muted'}`}>{hint}</p>}
     </div>
   )
 }
@@ -498,17 +518,20 @@ function PositionGrades({ teamId }: { teamId: string }) {
     })
   }, [world, teamId, tick])
   return (
-    <div className="mt-4 grid grid-cols-5 gap-2 border-t border-line pt-3">
-      {rows.map((r) => {
-        const c = gradeColor(r.value)
-        return (
-          <div key={r.label} className="flex flex-col items-center gap-1 rounded-lg bg-surface-2 px-1 py-2" title={`${r.label}: ${r.value} — ranked ${r.rank} of 32`}>
-            <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-muted">{r.label}</span>
-            <span className="grid h-8 w-9 place-items-center rounded-md font-display text-sm font-700 tnum" style={{ background: c, color: inkOn(c) }}>{r.value}</span>
-            <span className={cn('font-cond text-[10px] font-700 tnum', r.rank <= 8 ? 'text-win' : r.rank >= 25 ? 'text-loss' : 'text-muted')}>#{r.rank}</span>
-          </div>
-        )
-      })}
+    <div className="mt-4 grid grid-cols-4 gap-2 border-t border-line pt-3 sm:grid-cols-6 lg:grid-cols-11">
+      {rows.map((r) => (
+        <div
+          key={r.label}
+          className="flex flex-col items-center gap-1 rounded-[var(--r-md)] bg-surface-2 px-1 py-2"
+          title={`${r.label}: ${r.value} — ranked ${r.rank} of 32`}
+        >
+          <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">{r.label}</span>
+          <RatingTile value={r.value} size="sm" label={`${r.label} group grade`} />
+          <span className={`font-cond text-label font-700 tnum ${r.rank <= 8 ? 'text-win' : r.rank >= 25 ? 'text-loss' : 'text-muted'}`}>
+            #{r.rank}
+          </span>
+        </div>
+      ))}
     </div>
   )
 }

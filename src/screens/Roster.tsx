@@ -1,17 +1,37 @@
 import { useMemo, useState } from 'react'
-import { LayoutGrid, List, Search } from 'lucide-react'
-import { cn } from '../lib/cn'
+import { LayoutGrid, List, Search, SlidersHorizontal, UserMinus } from 'lucide-react'
 import { money } from '../lib/format'
-import { capUsed, rosterOf, teamAvgOvr } from '../game/selectors'
+import { deadMoney } from '../game/engine/cap'
+import { masteryProgress } from '../game/engine/playbook'
+import { schemeFit } from '../game/engine/style'
+import { rosterOf } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { PlayerCard } from '../components/PlayerCard'
-import { PlayerTable } from '../components/PlayerTable'
+import { InjuryChip, PlayerTable } from '../components/PlayerTable'
 import { RatingsTable } from '../components/RatingsTable'
 import { StatsTable } from '../components/StatsTable'
 import { mainStatValue, seasonLine } from '../game/engine/stats'
 import { RATING_GROUPS, groupPositions } from '../game/data/ratingInfo'
-import type { Position, StatLevel } from '../game/types'
-import { Badge, Button, Card, OvrBadge, PageHeader, Stat } from '../ui/kit'
+import type { Player, Position, StatLevel } from '../game/types'
+import {
+  AccessBanner,
+  Badge,
+  Button,
+  Card,
+  ConfirmSheet,
+  FilterChip,
+  KpiStrip,
+  KpiTile,
+  OvrBadge,
+  OverflowMenu,
+  PageHeader,
+  SegmentedControl,
+  Sheet,
+  Tabs,
+  type Consequence,
+  type MenuItem,
+} from '../ui/kit'
+import { useAccessLevel, usePhone } from '../ui/hooks'
 
 const SIDES = [
   { id: 'ALL', label: 'All' },
@@ -30,23 +50,53 @@ const TABS = [
 
 const RATING_POSITIONS = ['ALL', ...RATING_GROUPS.map((g) => g.id)]
 
+const SORTS = [
+  { id: 'ovr', label: 'Overall' },
+  { id: 'pot', label: 'Potential' },
+  { id: 'age', label: 'Age' },
+  { id: 'cap', label: 'Cap Hit' },
+  { id: 'name', label: 'Name' },
+  { id: 'dev', label: 'Dev trait' },
+  { id: 'pbk', label: 'Playbook' },
+  { id: 'dead', label: 'Dead money' },
+  { id: 'yrs', label: 'Years left' },
+  { id: 'fit', label: 'Scheme fit' },
+  { id: 'stats', label: 'Stats' },
+] as const
+type RosterSort = (typeof SORTS)[number]['id']
+
+const DEV_RANK: Record<string, number> = {
+  'X-Factor': 6,
+  Superstar: 5,
+  Star: 4,
+  Starter: 3,
+  Depth: 2,
+  Backup: 1,
+}
+
 export function Roster() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const level = useAccessLevel('roster')
+  const phone = usePhone()
   const [tab, setTab] = useState<(typeof TABS)[number]['id']>('overview')
   const [side, setSide] = useState<(typeof SIDES)[number]['id']>('ALL')
   const [pos, setPos] = useState('ALL')
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState<'ovr' | 'pot' | 'age' | 'name' | 'cap' | 'stats'>('ovr')
+  const [sort, setSort] = useState<RosterSort>('ovr')
   const [view, setView] = useState<'table' | 'cards'>('table')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [cutting, setCutting] = useState<Player | null>(null)
 
   const roster = rosterOf(league, activeTeamId)
-  const level: StatLevel = league.byId[activeTeamId].tier === 'NFL' ? 'NFL' : 'CFB'
+  const levelTier: StatLevel = league.byId[activeTeamId].tier === 'NFL' ? 'NFL' : 'CFB'
+  const ocScheme = (league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
+  const dcScheme = (league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme
 
   const filtered = useMemo(() => {
     const groupPos = tab !== 'overview' ? groupPositions(pos) : null
-    let out = roster.filter((p) => {
+    const out = roster.filter((p) => {
       if (side !== 'ALL' && p.side !== side) return false
       if (pos !== 'ALL') {
         if (tab !== 'overview') {
@@ -56,24 +106,110 @@ export function Roster() {
       if (q && !p.name.toLowerCase().includes(q.toLowerCase())) return false
       return true
     })
-    out = [...out].sort((a, b) => {
-      if (sort === 'stats') {
-        const va = mainStatValue(a, seasonLine(a, league.season, level)) ?? -1
-        const vb = mainStatValue(b, seasonLine(b, league.season, level)) ?? -1
-        return vb - va
+    const cmp = (a: Player, b: Player) => {
+      switch (sort) {
+        case 'stats': {
+          const va = mainStatValue(a, seasonLine(a, league.season, levelTier)) ?? -1
+          const vb = mainStatValue(b, seasonLine(b, league.season, levelTier)) ?? -1
+          return vb - va
+        }
+        case 'ovr':
+          return b.ovr - a.ovr
+        case 'pot':
+          return b.pot - a.pot || b.ovr - a.ovr
+        case 'age':
+          return a.age - b.age
+        case 'cap':
+          return b.contract.capHit - a.contract.capHit
+        case 'dev':
+          return (DEV_RANK[b.dev] ?? 0) - (DEV_RANK[a.dev] ?? 0)
+        case 'pbk':
+          return masteryProgress(b) - masteryProgress(a)
+        case 'dead':
+          return deadMoney(b.contract) - deadMoney(a.contract)
+        case 'yrs':
+          return b.contract.years - a.contract.years
+        case 'fit': {
+          const score = (p: Player) => {
+            if (p.side === 'ST') return -1
+            const sc = p.side === 'DEF' ? dcScheme : ocScheme
+            return sc ? schemeFit(p, sc, p.side === 'DEF' ? 'DEF' : 'OFF') : -1
+          }
+          return score(b) - score(a)
+        }
+        default:
+          return a.name.localeCompare(b.name)
       }
-      if (sort === 'ovr') return b.ovr - a.ovr
-      if (sort === 'pot') return b.pot - a.pot || b.ovr - a.ovr
-      if (sort === 'age') return a.age - b.age
-      if (sort === 'cap') return b.contract.capHit - a.contract.capHit
-      return a.name.localeCompare(b.name)
-    })
-    return out
-  }, [roster, side, pos, q, sort, tab, league.season, level])
+    }
+    return [...out].sort(cmp)
+  }, [roster, side, pos, q, sort, tab, league.season, levelTier, ocScheme, dcScheme])
 
   const avgAge = roster.length ? roster.reduce((s, p) => s + p.age, 0) / roster.length : 0
-  const used = capUsed(roster)
-  const isNFL = level === 'NFL'
+  const injured = roster.filter((p) => p.injured).length
+  const isNFL = levelTier === 'NFL'
+  const psCount = (league.practiceSquad?.[activeTeamId] ?? []).length
+  const irCount = (league.ir?.[activeTeamId] ?? []).length
+
+  const activeFilters = (side !== 'ALL' ? 1 : 0) + (pos !== 'ALL' ? 1 : 0) + (q ? 1 : 0)
+  const resetFilters = () => {
+    setSide('ALL')
+    setPos('ALL')
+    setQ('')
+  }
+
+  const positionList = tab === 'overview' ? POSITIONS : RATING_POSITIONS
+
+  const filters = (
+    <div className="space-y-3">
+      <div>
+        <div className="label mb-1.5">Side</div>
+        <SegmentedControl
+          label="Side of the ball"
+          value={side}
+          onChange={setSide}
+          options={SIDES.map((s) => ({ id: s.id, label: s.label }))}
+        />
+      </div>
+      <div>
+        <div className="label mb-1.5">Position</div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Position">
+          {positionList.map((p) => (
+            <FilterChip key={p} pressed={pos === p} onChange={() => setPos(p)}>
+              {p === 'ALL' ? 'All' : p}
+            </FilterChip>
+          ))}
+        </div>
+      </div>
+      {tab === 'overview' && (
+        <label className="flex items-center gap-2">
+          <span className="label shrink-0">Sort</span>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as RosterSort)}
+            className="min-w-0 flex-1 rounded-[var(--r-md)] border border-line-strong bg-surface px-2 py-1.5 text-ink max-sm:h-11 max-sm:text-[16px] sm:text-small"
+          >
+            {SORTS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <label className="block">
+        <span className="label mb-1.5 block">Search</span>
+        <span className="flex items-center gap-2 rounded-[var(--r-md)] border border-line-strong bg-surface px-2 py-1.5">
+          <Search size={16} className="shrink-0 text-faint" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search players…"
+            className="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-faint max-sm:h-11 max-sm:text-[16px] sm:text-small"
+          />
+        </span>
+      </label>
+    </div>
+  )
 
   return (
     <div>
@@ -85,124 +221,111 @@ export function Roster() {
             ? `${filtered.length} shown · click a column header to sort`
             : tab === 'stats'
               ? `${filtered.length} shown · ${league.season} season stats`
-              : `${roster.length} players · sorted by ${sort === 'ovr' ? 'overall' : sort === 'pot' ? 'potential' : sort}`
+              : `${roster.length} players · sorted by ${SORTS.find((s) => s.id === sort)?.label.toLowerCase() ?? 'overall'}`
         }
         right={
-          <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
-            <Search size={16} className="text-faint" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search players…"
-              className="w-44 bg-transparent text-sm outline-none placeholder:text-faint"
+          tab === 'overview' ? (
+            <SegmentedControl
+              label="Roster view"
+              value={view}
+              onChange={setView}
+              options={[
+                { id: 'table', label: 'Table', icon: <List size={14} aria-hidden /> },
+                { id: 'cards', label: 'Cards', icon: <LayoutGrid size={14} aria-hidden /> },
+              ]}
             />
-          </div>
+          ) : undefined
         }
       />
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card>
-          <Stat label="Players" value={roster.length} sub={`${roster.filter((p) => p.injured).length} injured`} />
-        </Card>
-        <Card>
-          <Stat label="Team Overall" value={Math.round(teamAvgOvr(roster))} sub="Top-22 weighted" />
-        </Card>
-        <Card>
-          <Stat label="Average Age" value={avgAge.toFixed(1)} sub="Roster experience" />
-        </Card>
-        <Card>
-          <Stat label={isNFL ? 'Cap Used' : 'Salary Pool'} value={money(used)} sub={isNFL ? 'of $279.2M limit' : 'coaching + scholarships'} />
-        </Card>
-      </div>
+      <Tabs
+        label="Roster sections"
+        value={tab}
+        onChange={(id) => {
+          setTab(id)
+          setPos('ALL')
+        }}
+        stretch={phone}
+        className="mb-4"
+        tabs={[
+          { id: 'overview', label: 'Overview' },
+          { id: 'ratings', label: 'Ratings' },
+          { id: 'stats', label: 'Stats' },
+        ]}
+      />
+
+      <AccessBanner
+        area="roster"
+        className="mb-4"
+        message={
+          level === 'advise' ? (
+            <>
+              <b className="font-600 text-ink">The GM signs off on active-roster moves.</b> Depth, practice squad,
+              injured reserve and development plans are yours to run here.
+            </>
+          ) : undefined
+        }
+      />
+
+      <KpiStrip label="Roster summary" className="mb-4">
+        <KpiTile
+          label="Players"
+          value={roster.length}
+          unit="on the roster"
+          why={
+            <span className="text-muted">
+              {isNFL ? 'A 53-man active roster' : 'The active squad'}
+              <span className="sm:hidden"> · {injured} injured</span>
+            </span>
+          }
+        />
+        <KpiTile
+          label="Injured"
+          value={injured}
+          unit={injured === 1 ? 'player out' : 'players out'}
+          verdict={injured > 0 ? { label: 'Next men up', tone: 'warn' } : { label: 'Full health', tone: 'win' }}
+          why={<span className="text-muted">Counting players on the injury report right now</span>}
+        />
+        <KpiTile
+          label="Average age"
+          value={avgAge.toFixed(1)}
+          unit="years"
+          why={<span className="text-muted">Roster experience across the squad</span>}
+        />
+        {isNFL && (
+          <KpiTile
+            className="max-sm:hidden"
+            label="Reserve lists"
+            value={psCount + irCount}
+            unit="players"
+            why={
+              <span className="text-muted">
+                {psCount} on the practice squad · {irCount} on injured reserve
+              </span>
+            }
+          />
+        )}
+      </KpiStrip>
 
       <Card pad={false}>
-        <div className="flex flex-wrap items-center gap-3 border-b border-line p-3">
-          <div className="flex rounded-lg bg-surface-2 p-0.5">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => {
-                  setTab(t.id)
-                  setPos('ALL')
-                }}
-                className={cn(
-                  'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
+        {phone ? (
+          <div className="flex items-center gap-2 border-b border-line p-3">
+            <Button variant="secondary" icon={<SlidersHorizontal size={16} aria-hidden />} onClick={() => setFiltersOpen(true)}>
+              Filters{activeFilters ? ` (${activeFilters})` : ''}
+            </Button>
+            <span className="min-w-0 flex-1 text-small text-muted">{filtered.length} shown</span>
           </div>
-
-          <div className="flex rounded-lg bg-surface-2 p-0.5">
-            {SIDES.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => setSide(s.id)}
-                className={cn(
-                  'rounded-md px-3 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  side === s.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap gap-1">
-            {(tab === 'overview' ? POSITIONS : RATING_POSITIONS).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPos(p)}
-                className={cn(
-                  'rounded-md px-2 py-1 font-cond text-xs font-700 uppercase transition',
-                  pos === p ? 'text-[var(--team-ink)]' : 'text-muted hover:bg-surface-2',
-                )}
-                style={pos === p ? { background: 'var(--team)' } : undefined}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-
-          <div className="ml-auto flex items-center gap-2">
-            {tab === 'overview' && (
-              <>
-                <div className="flex rounded-lg bg-surface-2 p-0.5">
-                  {([['table', 'Table', List], ['cards', 'Cards', LayoutGrid]] as const).map(([id, label, Icon]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      title={`${label} view`}
-                      onClick={() => setView(id)}
-                      className={cn(
-                        'flex items-center gap-1 rounded-md px-2 py-1 font-cond text-xs font-700 uppercase tracking-wide transition',
-                        view === id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
-                      )}
-                    >
-                      <Icon size={13} /> {label}
-                    </button>
-                  ))}
-                </div>
-                <span className="label">Sort</span>
-                <select
-                  value={sort}
-                  onChange={(e) => setSort(e.target.value as typeof sort)}
-                  className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
-                >
-                  <option value="ovr">Overall</option>
-                  <option value="pot">Potential</option>
-                  <option value="age">Age</option>
-                  <option value="cap">Cap Hit</option>
-                  <option value="name">Name</option>
-                  <option value="stats">Stats</option>
-                </select>
-              </>
+        ) : (
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3 border-b border-line p-3">
+            <div className="min-w-0 flex-1">{filters}</div>
+            {activeFilters > 0 && (
+              <Button variant="quiet" size="sm" onClick={resetFilters}>
+                Clear filters
+              </Button>
             )}
-            <Badge tone="team">{filtered.length} shown</Badge>
+            <Badge tone="neutral">{filtered.length} shown</Badge>
           </div>
-        </div>
+        )}
 
         {tab === 'overview' ? (
           view === 'cards' ? (
@@ -211,7 +334,7 @@ export function Roster() {
                 <PlayerCard key={p.id} player={p} team={league.byId[activeTeamId]} onClick={() => selectPlayer(p.id)} />
               ))}
               {!filtered.length && (
-                <p className="col-span-full px-2 py-6 text-center text-sm text-muted">No players match these filters.</p>
+                <p className="col-span-full px-2 py-6 text-center text-small text-muted">No players match these filters.</p>
               )}
             </div>
           ) : (
@@ -221,41 +344,70 @@ export function Roster() {
                 showPhysicals
                 showFit
                 showDeadMoney
-                scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
-                defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
+                scheme={ocScheme}
+                defScheme={dcScheme}
                 inlinePos={pos !== 'ALL' ? (pos as Position) : undefined}
+                sortKey={sort === 'stats' ? null : sort}
+                sortDir="desc"
+                onSortChange={(key) => {
+                  if (!key) return
+                  if (SORTS.some((s) => s.id === key)) setSort(key as RosterSort)
+                }}
                 emptyText="No players match these filters."
               />
             </div>
           )
         ) : tab === 'ratings' ? (
-          <RatingsTable
-            players={filtered}
-            group={pos}
-            scheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme}
-            defScheme={(league.staff[activeTeamId] ?? []).find((s) => s.role === 'Defensive Coordinator')?.scheme}
-          />
+          <RatingsTable players={filtered} group={pos} scheme={ocScheme} defScheme={dcScheme} />
         ) : (
-          <StatsTable players={filtered} group={pos} season={league.season} level={level} />
+          <StatsTable players={filtered} group={pos} season={league.season} level={levelTier} />
         )}
       </Card>
 
       {isNFL && (
-        <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          <PracticeSquadCard teamId={activeTeamId} />
+        <div className="mt-5 grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <PracticeSquadCard teamId={activeTeamId} onCut={setCutting} />
           <InjuredReserveCard teamId={activeTeamId} />
         </div>
       )}
+
+      {/* Filters — phone sheet */}
+      <Sheet
+        open={phone && filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        eyebrow="Roster"
+        title={`Filters${activeFilters ? ` (${activeFilters})` : ''}`}
+        footer={
+          <>
+            <Button variant="primary" size="lg" onClick={() => setFiltersOpen(false)}>
+              Show {filtered.length} players
+            </Button>
+            {activeFilters > 0 && (
+              <Button variant="quiet" onClick={resetFilters}>
+                Clear filters
+              </Button>
+            )}
+          </>
+        }
+      >
+        {filters}
+      </Sheet>
+
+      {/* Practice-squad cut — the only path to releaseFromPracticeSquad. */}
+      <PracticeSquadCut
+        player={cutting}
+        count={(league.practiceSquad?.[activeTeamId] ?? []).length}
+        onClose={() => setCutting(null)}
+      />
     </div>
   )
 }
 
-function PracticeSquadCard({ teamId }: { teamId: string }) {
+function PracticeSquadCard({ teamId, onCut }: { teamId: string; onCut: (p: Player) => void }) {
   const world = useWorld()
   const freeAgents = world.freeAgents
   const signToPracticeSquad = useGame((s) => s.signToPracticeSquad)
   const promote = useGame((s) => s.promoteFromPracticeSquad)
-  const release = useGame((s) => s.releaseFromPracticeSquad)
   const [pickId, setPickId] = useState('')
 
   const squad = world.practiceSquad?.[teamId] ?? []
@@ -267,7 +419,7 @@ function PracticeSquadCard({ teamId }: { teamId: string }) {
   return (
     <Card>
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Practice Squad</h3>
+        <h3 className="font-display text-[20px] font-800 italic uppercase leading-none text-ink">Practice Squad</h3>
         <Badge tone={squad.length >= 16 ? 'warn' : 'neutral'}>{squad.length}/16</Badge>
       </div>
 
@@ -275,7 +427,7 @@ function PracticeSquadCard({ teamId }: { teamId: string }) {
         <select
           value={pickId}
           onChange={(e) => setPickId(e.target.value)}
-          className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 py-1.5 font-cond text-xs font-600 outline-none"
+          className="min-w-0 flex-1 rounded-[var(--r-md)] border border-line-strong bg-surface px-2 py-1.5 text-ink max-sm:h-11 max-sm:text-[16px] sm:text-small"
         >
           <option value="">Sign a free agent…</option>
           {candidates.map((p) => (
@@ -297,21 +449,71 @@ function PracticeSquadCard({ teamId }: { teamId: string }) {
       </div>
 
       <div className="divide-y divide-line/60">
-        {squad.length === 0 && <p className="py-3 text-xs text-muted">No players on the practice squad.</p>}
-        {squad.map((p) => (
-          <div key={p.id} className="flex items-center gap-3 py-2">
-            <OvrBadge value={p.ovr} pot={p.pot} size={28} />
-            <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
-            <span className="min-w-0 flex-1 truncate text-sm font-600 text-ink">{p.name}</span>
-            <Button size="sm" variant="ghost" onClick={() => promote(p.id)}>Promote</Button>
-            <Button size="sm" variant="danger" onClick={() => release(p.id)}>Cut</Button>
-          </div>
-        ))}
+        {squad.length === 0 && <p className="py-3 text-small text-muted">No players on the practice squad.</p>}
+        {squad.map((p) => {
+          const cutItem: MenuItem = {
+            id: 'cut',
+            label: 'Cut from practice squad…',
+            description: 'Opens a review of what it costs',
+            icon: <UserMinus size={16} />,
+            danger: true,
+            onSelect: () => onCut(p),
+          }
+          return (
+            <div key={p.id} className="flex items-center gap-2.5 py-2">
+              <OvrBadge value={p.ovr} pot={p.pot} size={28} />
+              <span className="w-8 shrink-0 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
+              <span className="min-w-0 flex-1 truncate text-small font-600 text-ink">{p.name}</span>
+              <Button size="sm" variant="secondary" onClick={() => promote(p.id)}>
+                Promote
+              </Button>
+              <OverflowMenu items={[cutItem]} label={`Actions for ${p.name}`} size="sm" />
+            </div>
+          )
+        })}
       </div>
-      <p className="mt-2 text-[11px] leading-snug text-muted">
+      <p className="mt-2 text-label leading-snug text-muted">
         The practice squad develops young players (max 16) without using an active roster spot. Promote them when they're ready.
       </p>
     </Card>
+  )
+}
+
+function PracticeSquadCut({
+  player,
+  count,
+  onClose,
+}: {
+  player: Player | null
+  count: number
+  onClose: () => void
+}) {
+  const release = useGame((s) => s.releaseFromPracticeSquad)
+  const consequences: Consequence[] = player
+    ? [
+        { label: 'Reserve list', value: `${count} → ${Math.max(0, count - 1)} of 16`, tone: 'warn' },
+        { label: 'His deal', value: `${money(player.contract.capHit)} · practice-squad salary` },
+        { label: 'Where he goes', value: 'Back to the free-agent pool' },
+        { label: 'Who decides', value: 'You (roster decisions)' },
+      ]
+    : []
+  return (
+    <ConfirmSheet
+      open={!!player}
+      onClose={onClose}
+      eyebrow="Practice squad"
+      title={player ? `Cut ${player.name}?` : ''}
+      subtitle={player ? `${player.pos} · rated ${player.ovr}/${player.pot}` : undefined}
+      consequences={consequences}
+      confirmLabel="Cut from practice squad"
+      saferAlternative={{ label: 'Keep him on the squad', onClick: onClose }}
+      ledgerNote={null}
+      onConfirm={() => {
+        if (!player) return
+        release(player.id)
+        onClose()
+      }}
+    />
   )
 }
 
@@ -326,25 +528,25 @@ function InjuredReserveCard({ teamId }: { teamId: string }) {
   return (
     <Card>
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Injured Reserve</h3>
+        <h3 className="font-display text-[20px] font-800 italic uppercase leading-none text-ink">Injured Reserve</h3>
         <Badge tone={ir.length ? 'warn' : 'neutral'}>{ir.length}</Badge>
       </div>
 
       <div className="divide-y divide-line/60">
-        {ir.length === 0 && <p className="py-3 text-xs text-muted">No players on injured reserve.</p>}
+        {ir.length === 0 && <p className="py-3 text-small text-muted">No players on injured reserve.</p>}
         {ir.map((p) => {
           const healthy = !p.injured || p.injured.games <= 0
           return (
-            <div key={p.id} className="flex items-center gap-3 py-2">
+            <div key={p.id} className="flex items-center gap-2.5 py-2">
               <OvrBadge value={p.ovr} pot={p.pot} size={28} />
-              <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
+              <span className="w-8 shrink-0 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-600 text-ink">{p.name}</span>
-                <span className="block text-[11px] text-muted">
-                  {p.injured ? `${p.injured.note} · ${p.injured.games}W` : 'Healthy'}
+                <span className="block truncate text-small font-600 text-ink">{p.name}</span>
+                <span className="block text-label text-muted">
+                  {p.injured ? `${p.injured.note} · OUT ${p.injured.games}W` : 'Healthy'}
                 </span>
               </span>
-              <Button size="sm" variant="ghost" disabled={!healthy} onClick={() => activate(p.id)}>
+              <Button size="sm" variant="secondary" disabled={!healthy} onClick={() => activate(p.id)}>
                 Activate
               </Button>
             </div>
@@ -355,18 +557,20 @@ function InjuredReserveCard({ teamId }: { teamId: string }) {
       <div className="mt-4 border-t border-line pt-3">
         <div className="label mb-2">Place on IR</div>
         <div className="space-y-1.5">
-          {eligible.length === 0 && <p className="text-xs text-muted">No injured players available.</p>}
+          {eligible.length === 0 && <p className="text-small text-muted">No injured players available.</p>}
           {eligible.map((p) => (
-            <div key={p.id} className="flex items-center gap-3">
-              <span className="w-8 font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
-              <span className="min-w-0 flex-1 truncate text-sm text-ink-2">{p.name}</span>
-              <span className="text-[11px] text-muted">{p.injured?.games}W</span>
-              <Button size="sm" variant="default" onClick={() => placeOnIR(p.id)}>Place</Button>
+            <div key={p.id} className="flex items-center gap-2.5">
+              <span className="w-8 shrink-0 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
+              <span className="min-w-0 flex-1 truncate text-small text-ink-2">{p.name}</span>
+              <InjuryChip player={p} />
+              <Button size="sm" variant="secondary" onClick={() => placeOnIR(p.id)}>
+                Place
+              </Button>
             </div>
           ))}
         </div>
       </div>
-      <p className="mt-2 text-[11px] leading-snug text-muted">
+      <p className="mt-2 text-label leading-snug text-muted">
         Injured reserve opens an active roster spot while a player heals. Activate him once he's healthy.
       </p>
     </Card>

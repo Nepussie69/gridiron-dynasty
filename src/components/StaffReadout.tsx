@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
 import { cn } from '../lib/cn'
-import { inkOn, money } from '../lib/format'
+import { money } from '../lib/format'
 import type { StaffMember } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { coachEffect } from '../game/engine/coaching'
 import { isFrontOfficeRole } from '../game/engine/hiring'
-import { Badge, OvrBadge } from '../ui/kit'
+import { Avatar, Badge, RatingTile } from '../ui/kit'
 import { HoverCard } from './HoverCard'
 import { cultureLines, staffEffectLines, staffTenureFor, TONE_TEXT, type EffectLine } from './staffEffects'
 
@@ -14,7 +14,7 @@ import { cultureLines, staffEffectLines, staffTenureFor, TONE_TEXT, type EffectL
  * is presentation only (effects are read from the live engine, never invented).
  */
 
-/** Initials badge for the compact org-chart chips. */
+/** Initials badge for the compact org-chart chips (kit Avatar: surface-3 + accent ring, never navy). */
 export function InitialsAvatar({
   name,
   size = 32,
@@ -24,30 +24,14 @@ export function InitialsAvatar({
   size?: number
   className?: string
 }) {
-  const initials = name
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-  const bg = '#0a1626'
-  return (
-    <span
-      className={cn('grid shrink-0 place-items-center rounded-lg font-display font-700 uppercase', className)}
-      style={{ width: size, height: size, background: bg, color: inkOn(bg), fontSize: size * 0.36 }}
-      aria-hidden
-    >
-      {initials}
-    </span>
-  )
+  return <Avatar name={name} size={size} className={className} />
 }
 
 function EffectRow({ line }: { line: EffectLine }) {
   return (
     <div className="flex items-start justify-between gap-2 py-0.5" title={line.hint}>
-      <span className="text-[10px] uppercase tracking-wide text-muted">{line.label}</span>
-      <span className={cn('text-right text-[11px] font-600 tnum', TONE_TEXT[line.tone ?? 'neutral'])}>{line.value}</span>
+      <span className="font-cond text-label font-600 uppercase tracking-[0.06em] text-muted">{line.label}</span>
+      <span className={cn('text-right text-small font-600 tnum', TONE_TEXT[line.tone ?? 'neutral'])}>{line.value}</span>
     </div>
   )
 }
@@ -88,12 +72,12 @@ export function StaffHoverCard({
       content={
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
-            <OvrBadge value={member.rating} size={30} />
+            <RatingTile value={member.rating} size="md" label="Staff rating" />
             <div className="min-w-0">
-              <div className="truncate font-display text-sm font-700 uppercase leading-none text-ink">
+              <div className="truncate font-display text-[17px] font-800 italic uppercase leading-none text-ink">
                 {member.name}
               </div>
-              <div className="mt-0.5 truncate text-[10px] text-muted">
+              <div className="mt-1 truncate text-label text-muted">
                 {member.role} · age {member.age}
               </div>
             </div>
@@ -104,7 +88,7 @@ export function StaffHoverCard({
             <Badge tone="neutral">{member.specialty}</Badge>
           </div>
 
-          <div className="rounded-md border border-line/60 px-1.5 py-1 text-[10px] tnum text-muted">
+          <div className="rounded-[var(--r-md)] border border-line px-2 py-1.5 text-label tnum text-muted">
             <div>
               Contract: {money(member.annual)}/yr · {member.contractYears} yr{member.contractYears === 1 ? '' : 's'} left
             </div>
@@ -113,7 +97,7 @@ export function StaffHoverCard({
           </div>
 
           <div>
-            <div className="label mb-0.5 !text-[9px]">Real effects</div>
+            <div className="label mb-0.5">Real effects</div>
             <div className="divide-y divide-line/40">
               {lines.map((l, i) => (
                 <EffectRow key={`${l.label}-${i}`} line={l} />
@@ -128,22 +112,22 @@ export function StaffHoverCard({
   )
 }
 
-/** Small dashed "Vacant" chip that opens the market filtered to a role. */
+/** Dashed "Vacant" seat that opens the market filtered to a role (kit VacantSeat styling). */
 export function VacantChip({ role, onClick }: { role: string; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center gap-2 rounded-xl border border-dashed border-line px-2.5 py-2 text-left transition hover:border-[var(--team)] hover:bg-surface-2"
+      className="group flex w-full items-center gap-2 rounded-[var(--r-sm)] border border-dashed border-line-strong px-2.5 py-2 text-left transition hover:bg-surface-2 pointer-coarse:min-h-11"
     >
-      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-dashed border-line text-faint">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--r-sm)] border border-dashed border-line-strong text-muted" aria-hidden>
         +
       </span>
       <span className="min-w-0">
-        <span className="block truncate font-cond text-xs font-700 uppercase tracking-wide text-muted group-hover:text-ink">
+        <span className="block truncate font-cond text-small font-700 uppercase tracking-[0.05em] text-ink-2 group-hover:text-ink">
           {role}
         </span>
-        <span className="block text-[10px] text-faint">Vacant — hire</span>
+        <span className="block text-label text-muted">Vacant · hire</span>
       </span>
     </button>
   )
