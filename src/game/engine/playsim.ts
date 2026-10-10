@@ -18,6 +18,7 @@ import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, coachTendency, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
+import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
 
@@ -508,6 +509,11 @@ export interface Play {
   fake?: boolean
   /** R17: a blocked field goal, extra point or punt. */
   blockedKick?: boolean
+  // ── FUTURES #4: special-teams calls ────────────────────────────────────────
+  /** The kicking club's kickoff call (deep / squib / onside / surprise). */
+  kickCall?: KickoffCall
+  /** A special-teams surprise to remember against the club (scouting memory). */
+  stAttempt?: { club: string; kind: 'fake' | 'onside' | 'surprise' }
   // ── R15/R16: reception metadata and on-field participants ──────────────────
   /** R16: the pass was caught (a true reception, including a catch then fumble). */
   reception?: boolean
@@ -2253,7 +2259,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
  */
 const FG_HOLDER_DEPTH = 7
 
-function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'fg', yard: number, env?: SimEnv, margin = 0, n = 0, defId?: string): PlayOutcome {
+export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'fg', yard: number, env?: SimEnv, margin = 0, n = 0, defId?: string, prStrategy: ReturnStrategy = 'default', puntStrategy: PuntStrategy = 'default'): PlayOutcome {
   if (type === 'fg') {
     const k = topGroup(world, offId, ['K'], 1)[0]
     const kA = k ? mkAttrs(k) : {}
@@ -2276,22 +2282,33 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
   }
   const p = topGroup(world, offId, ['P'], 1)[0]
   const pA = p ? mkAttrs(p) : {}
+  // FUTURES #4: the receiving club's punt-return strategy vs the punting club's
+  // punt strategy. Every modifier is identity at the default strategies, so the
+  // base sim is unchanged.
+  const m = puntMods(prStrategy, puntStrategy)
   // R6: the existing distance formula is the GROSS punt; the return (or a
   // touchback) comes out of it, so the net lands at ~40–41 with ~9-yard
   // returns. The lone rng() draw is unchanged; the outcome is a per-play hash.
-  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wind ?? 0) * 0.3)
+  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wind ?? 0) * 0.3 + m.gross)
   const key = `${n}:${offId}:punt`
   const u = h01(`${key}:kind`)
   const pr = defId ? clubReturners(world, defId).pr : undefined
   // R17: a blocked punt is a per-play hash, decided before the kind draw so the
   // existing kind distribution is untouched.
   const blocked = h01(`${key}:block`) < R17.blockPunt
+  // The base kind shares: fairCatch .25 · downed .20 · touchback .08 · muff .01 ·
+  // return .46. A return strategy (or a directional punt) trades the return share
+  // with the fair-catch share; the muff share scales with the fumble multiplier.
+  const fc = 0.25 + m.fcDelta
+  const dn = fc + 0.2
+  const tb = dn + 0.08
+  const mu = tb + 0.01 * clamp(m.fumble, 0.4, 2)
   let kind: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff' | 'blocked'
   if (blocked) kind = 'blocked'
-  else if (u < 0.25) kind = 'fairCatch'
-  else if (u < 0.45) kind = 'downed'
-  else if (u < 0.53) kind = 'touchback'
-  else if (u < 0.54) kind = 'muff'
+  else if (u < fc) kind = 'fairCatch'
+  else if (u < dn) kind = 'downed'
+  else if (u < tb) kind = 'touchback'
+  else if (u < mu) kind = 'muff'
   else kind = 'return'
   // A touchback only fits a punt that can actually reach the end zone.
   if (kind === 'touchback' && yard < 45) kind = 'downed'
@@ -2303,7 +2320,7 @@ function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'f
   if ((kind === 'return' || kind === 'fairCatch' || kind === 'muff') && pr) returnerId = pr.id
   if (kind === 'return' && pr) {
     const cov = defId ? coverageScore(world, defId) : 72
-    retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 7, 14))
+    retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 7 + m.base, 14 * m.spread))
     returnTD = h01(`${key}:td`) < 0.006
     // A return touchdown is caught at the punt's landing spot and taken the rest
     // of the way, so its recorded yardage runs to the goal line.
@@ -2349,6 +2366,92 @@ function resolvePAT(world: World, rng: Rng, offId: string, n = 0, env?: SimEnv):
   }
 }
 
+/** FUTURES #4: a club's special-teams plan (only the user's club can differ). */
+function planForClub(s: GameState, clubId: string): SpecialTeamsPlan {
+  const st = s.ctx?.special
+  if (st && s.ctx && clubId === s.ctx.userTeamId) return normalizeSpecial(st)
+  return DEFAULT_ST
+}
+
+/**
+ * FUTURES #4: the user's non-deep kickoff calls — a squib, an onside or a
+ * surprise onside. Deterministic per-play hashes only (no rng() draw). Mirrors
+ * the AI onside's shape so the ball spot, clock and play log stay consistent.
+ */
+function resolveStKick(
+  world: World, s: GameState, call: KickoffCall, base: string, kicking: string, receiving: string,
+  kA: Record<string, number>, cov: number, alert: number,
+): { scored: boolean } {
+  const kAbbr = world.byId[kicking]?.abbr ?? kicking
+  const rAbbr = world.byId[receiving]?.abbr ?? receiving
+  // A squib never reaches the end zone: no touchback, a short return. The
+  // receiving club lands around its own 30–35.
+  if (call === 'squib') {
+    const returner = clubReturners(world, receiving).kr
+    const cy = clamp(3 + Math.round(h01(`${base}:cy`) * 5), 0, 8)
+    const ry = returner ? Math.max(0, returnYards(base, returnScore(returner), cov, 26, 8)) : 24
+    const returnTD = !!returner && h01(`${base}:sqt`) < 0.001
+    const fumble = !returnTD && !!returner && h01(`${base}:fum`) < 0.008
+    const start = returnTD ? 100 : clamp(cy + ry, 1, 99)
+    pushPlay(s, {
+      type: 'kickoff', concept: 'Squib kick', yards: 0, kickCall: 'squib',
+      result: returnTD ? `Squib kick returned ${ry} yds by ${shortName(returner?.name)} TOUCHDOWN!`
+        : fumble ? `Squib kick returned ${ry} yds, fumbled`
+          : `Squib kick — ${shortName(returner?.name) || rAbbr} returns to the ${start}`,
+      startYard: start, endYard: returnTD ? 100 : start, down: null, distance: null, timeUsed: 5,
+      returnerId: returner?.id, returnYards: returner ? ry : undefined, returnTD, returnKind: 'return',
+      turnover: fumble, scorerId: returnTD ? returner?.id : undefined,
+      fumbleCause: fumble ? 'kickoff' : undefined, fumbleRecoveredBy: fumble ? 'def' : undefined,
+    })
+    if (returnTD) {
+      if (receiving === s.homeId) s.homeScore += 6
+      else s.awayScore += 6
+      statFor(s, receiving).points += 6
+      return { scored: true }
+    }
+    if (fumble) {
+      swapPossession(s)
+      s.yard = clamp(100 - start, 1, 99)
+    } else {
+      s.yard = start
+    }
+    s.down = 1
+    s.distance = 10
+    return { scored: false }
+  }
+  // Onside / surprise onside: a kicker/coverage-scaled recovery chance; a scouted
+  // club's surprise is cut. A failed surprise gives the receiving club the ball
+  // near midfield — the risk that makes it a surprise.
+  const surprise = call === 'surprise'
+  const kpw = kA.KPW ?? 78
+  const kac = kA.KAC ?? 78
+  const recoverChance = surprise ? surpriseChance(kpw, kac, cov, alert) : onsideChance(kpw, kac, cov)
+  const recovered = h01(`${base}:onsiderec`) < recoverChance
+  if (recovered) {
+    // The kicking club falls on its own kick and keeps the ball near midfield.
+    swapPossession(s)
+    s.yard = clamp(42 + Math.round(h01(`${base}:onsidespot`) * 10), 1, 99)
+  } else {
+    s.yard = surprise
+      ? clamp(52 + Math.round(h01(`${base}:surspot`) * 8), 1, 99)
+      : clamp(44 + Math.round(h01(`${base}:onsiderecspot`) * 8), 1, 99)
+  }
+  s.down = 1
+  s.distance = 10
+  const label = surprise ? 'Surprise onside' : 'Onside kick'
+  pushPlay(s, {
+    type: 'kickoff', concept: surprise ? 'Surprise onside kick' : 'Onside kick', yards: 0,
+    kickCall: surprise ? 'surprise' : 'onside',
+    stAttempt: { club: kicking, kind: surprise ? 'surprise' : 'onside' },
+    result: recovered ? `${label} recovered by ${kAbbr}!` : `${label}, recovered by ${rAbbr}`,
+    // FUTURES #4: a kickoff play logs no down & distance (the game state keeps
+    // s.down/s.distance at 1 & 10), exactly like the squib and normal kickoffs.
+    startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 5,
+    returnKind: 'return', turnover: !recovered,
+  })
+  return { scored: false }
+}
+
 /**
  * R6: resolve a kickoff (opening kick, after a score, or a post-safety free
  * kick). `s.offId` is the receiving club and `s.defId` the kicking club. Whether
@@ -2356,20 +2459,56 @@ function resolvePAT(world: World, rng: Rng, offId: string, n = 0, env?: SimEnv):
  * hash; a return sets the receiving club's start spot to the return's end. Rare
  * return touchdowns and lost fumbles are handled here. No rng() draw is added or
  * removed.
+ *
+ * FUTURES #4: when the user's club kicks off it may call the kick through the
+ * existing `decide()` moment system (deep / squib / onside / surprise), and both
+ * clubs' kick + return strategies bend the same hashes. Deep + default is
+ * byte-identical to the pre-feature sim.
  */
-function resolveKickoff(world: World, s: GameState): { scored: boolean } {
+function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?: boolean } {
   const receiving = s.offId
   const kicking = s.defId
   const k = topGroup(world, kicking, ['K'], 1)[0]
   const kA = k ? mkAttrs(k) : {}
   const base = `${s.n}:${kicking}:ko`
-  const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006, 0.42, 0.66)
-  // R17: a desperate, trailing club can try an onside kick (AI situational). A
-  // per-play hash decides whether it is tried and, if so, who recovers. No rng()
-  // draw is added or removed.
   const koMargin = kicking === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const desperate = s.qtr === 4 && s.clock <= 150 && koMargin < 0 && koMargin >= -10
-  if (desperate && h01(`${base}:onside`) < R17.onsideRate) {
+  const cov = coverageScore(world, kicking)
+  const mem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
+  const alert = alertness(mem?.[kicking])
+
+  // FUTURES #4: the user calls their own kickoffs. The moment sits before any
+  // kickoff hash (and before any rng), exactly like the other decision points.
+  const isUserKick = !!s.ctx && kicking === s.ctx.userTeamId
+  const late = s.qtr === 4 && Math.abs(koMargin) <= 10
+  let call: KickoffCall = 'deep'
+  if (isUserKick && late) {
+    const options: MomentOption[] = [
+      { id: 'deep', label: 'Deep kick', hint: 'Kick it deep — the safe call.' },
+      { id: 'squib', label: 'Squib kick', hint: 'No touchback; a short return, ball near their 30.' },
+      { id: 'onside', label: `Onside kick (≈${Math.round(onsideChance(kA.KPW ?? 78, kA.KAC ?? 78, cov) * 100)}%)`, hint: 'A long shot at keeping the ball.' },
+      ...(!desperate ? [{ id: 'surprise', label: `Surprise onside (≈${Math.round(surpriseChance(kA.KPW ?? 78, kA.KAC ?? 78, cov, alert) * 100)}%)`, hint: 'A real shot — but a miss leaves them near midfield.' }] : []),
+    ]
+    const choice = decide(s, {
+      kind: 'kickoff', side: 'hc', teamId: kicking, qtr: s.qtr, clock: fmtClock(s.clock), down: null, distance: null,
+      yard: 35, title: desperate ? 'Kickoff — you need the ball' : 'Kickoff', margin: koMargin,
+      options, defaultId: desperate ? 'onside' : 'deep', ask: late,
+      staffRead: late ? (desperate ? 'You need the ball — onside.' : 'Kick deep unless you need a possession.') : undefined,
+    })
+    if (choice === null) return { scored: false, moment: true }
+    call = choice as KickoffCall
+  }
+
+  if (call === 'squib' || call === 'onside' || call === 'surprise') {
+    return resolveStKick(world, s, call, base, kicking, receiving, kA, cov, alert)
+  }
+
+  // R17: a desperate, trailing AI club can still try an onside kick. FUTURES #4:
+  // a scouted club's trick is a little less likely to be tried. The per-play hash
+  // is unchanged; the memory is empty on a fresh world, so the base sim is exact.
+  const kickST = planForClub(s, kicking)
+  const recST = planForClub(s, receiving)
+  if (!isUserKick && desperate && h01(`${base}:onside`) < R17.onsideRate * (1 - 0.5 * alert)) {
     const recovered = h01(`${base}:onsiderec`) < R17.onsideRecover
     const kAbbr = world.byId[kicking]?.abbr ?? kicking
     const rAbbr = world.byId[receiving]?.abbr ?? receiving
@@ -2385,12 +2524,19 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
     s.distance = 10
     pushPlay(s, {
       type: 'kickoff', concept: 'Onside kick', yards: 0,
+      kickCall: 'onside', stAttempt: { club: kicking, kind: 'onside' },
       result: recovered ? `Onside kick recovered by ${kAbbr}!` : `Onside kick, recovered by ${rAbbr}`,
-      startYard: s.yard, endYard: s.yard, down: 1, distance: 10, timeUsed: 5,
+      // FUTURES #4: log the AI onside like every other kickoff (no down & distance).
+      startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 5,
       returnKind: 'return', turnover: !recovered,
     })
     return { scored: false }
   }
+
+  // FUTURES #4: the kick + return strategies bend the same hashes. Every
+  // modifier is 0/1 at the default strategies, so this is identity by default.
+  const rm = kickReturnMods(recST.kr, kickST.kickoff)
+  const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006 + rm.tb, 0.42, 0.85)
   const returner = clubReturners(world, receiving).kr
   const touchback = !returner || h01(`${base}:tb`) < pTb
   let retYds = 0
@@ -2399,10 +2545,9 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
   let catchYard = 0
   if (!touchback && returner) {
     catchYard = clamp(2 + Math.round(h01(`${base}:cy`) * 7), 0, 9)
-    const cov = coverageScore(world, kicking)
-    retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5, 26))
+    retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5 + rm.base, 26 * rm.spread))
     returnTD = h01(`${base}:td`) < 0.003
-    fumble = !returnTD && h01(`${base}:fum`) < 0.005
+    fumble = !returnTD && h01(`${base}:fum`) < 0.005 * rm.fumble
     if (returnTD) retYds = 100 - catchYard
   }
   const start = touchback ? R2.kickoffYard : returnTD ? 100 : clamp(catchYard + retYds, 1, 99)
@@ -2474,7 +2619,7 @@ function fmtClock(sec: number) {
 }
 
 // ── Resumable game state (L10 G1) ─────────────────────────────────────────────
-export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange'
+export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff'
 /** Which side a moment belongs to (Design rule 5). 'hc' = head-coach only. */
 export type MomentSide = 'off' | 'def' | 'both' | 'hc'
 /** G7 two-minute offensive mode for the current possession. */
@@ -2530,6 +2675,8 @@ export interface GameCtx {
   personnel?: PersonnelSet
   /** L12.6: call every snap on this side (coached games only); unset = key moments only. */
   callAll?: 'off' | 'def' | 'both'
+  /** FUTURES #4: the user's special-teams plan (kicks + return strategies). */
+  special?: SpecialTeamsPlan
 }
 export interface GameState {
   rng: Rng
@@ -2545,7 +2692,7 @@ export interface GameState {
   down: number
   distance: number
   n: number
-  phase: 'play' | 'try' | 'halftime'
+  phase: 'play' | 'try' | 'halftime' | 'kickoff'
   pending: Moment | null
   answers: Record<string, string>
   /** Moments answered on standing orders (Sim to end / fast sim) rather than by the user. */
@@ -2658,7 +2805,7 @@ function pushPlay(s: GameState, p: Omit<Play, 'n' | 'qtr' | 'clock' | 'offId' | 
 
 // ── Decision points (L10 G2) ──────────────────────────────────────────────────
 const MOMENT_CAPS: Record<MomentKind, number> = {
-  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1,
+  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2,
 }
 /** Cap on the big moments. Play calls (call/defCall) have their own caps and do
  *  not count here, so they can never crowd out halftime or a late 2-point try. */
@@ -2781,7 +2928,11 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   if (!isUser && fakeEligible && chosen === 'go') {
     const urgency = margin < 0 ? 1.7 : margin === 0 ? 1 : 0.5
     const styleMult = sheet.fourth === 'aggressive' ? 1.6 : sheet.fourth === 'conservative' ? 0.4 : 1
-    if (h01(`${s.n}:${s.offId}:fake`) < R17.fakeRate * urgency * styleMult) return 'fake'
+    // FUTURES #4: a scouted club is less inclined to try the trick again. The
+    // memory is empty on a fresh world, so the base rate (and calibration) is exact.
+    const mem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
+    const alert = alertness(mem?.[s.offId])
+    if (h01(`${s.n}:${s.offId}:fake`) < R17.fakeRate * urgency * styleMult * (1 - 0.5 * alert)) return 'fake'
   }
   const defaultId = inFgRange ? chosen : chosen === 'fg' ? 'punt' : chosen
   const options: MomentOption[] = [
@@ -3262,7 +3413,17 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
   s.down = 1
   s.distance = 10
   // R6: kick off for real — a touchback or a return (and the rare return score).
-  s.phase = resolveKickoff(world, s).scored ? 'try' : 'play'
+  // FUTURES #4: the kickoff runs in its own step so a kickoff moment never re-runs
+  // the try's rng draws when the user answers it.
+  s.phase = 'kickoff'
+  return 'continue'
+}
+
+/** FUTURES #4: resolve a pending kickoff (its own phase, so moments are re-entrant). */
+function stepKickoff(world: World, s: GameState): 'continue' | 'moment' {
+  const ko = resolveKickoff(world, s)
+  if (ko.moment) return 'moment'
+  s.phase = ko.scored ? 'try' : 'play'
   return 'continue'
 }
 
@@ -3272,6 +3433,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (s.n >= MAX_PLAYS) return 'done'
 
   if (s.phase === 'try') return stepTry(world, s)
+  if (s.phase === 'kickoff') return stepKickoff(world, s)
   if (s.phase === 'halftime') return stepHalftimePhase(world, s)
 
   if (s.clock <= 0) return stepClock(world, s)
@@ -3493,7 +3655,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       restartAfterFieldGoal(world, s, good)
       return 'continue'
     }
-    const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore, s.n, defId)
+    const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore, s.n, defId, planForClub(s, defId).pr, planForClub(s, offId).punt)
     s.clock -= out.timeUsed * s.pace
     const newYard = clamp(s.yard + out.yards, 1, 99)
     pushPlay(s, { ...out, startYard: s.yard, endYard: out.returnTD ? 100 : newYard, down: 4, distance: s.distance })
@@ -3527,6 +3689,14 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   const env = envFor(s)
+  // FUTURES #4: an alerted opponent is a beat quicker against a scouted fake. A
+  // small negative edge, and exactly 0 when there is no scouting read (a fresh
+  // world, a fast sim or the calibration harness is untouched).
+  if (fourthChoice === 'fake') {
+    const stMem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
+    const a = alertFakeEdge(alertness(stMem?.[offId]))
+    if (a !== 0) call = { edge: (call?.edge ?? 0) + a, sackMult: call?.sackMult ?? 1 }
+  }
   const out = concept.type === 'pass'
     ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
     : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
@@ -3579,7 +3749,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     offS.firstDowns += 1
     if (s.down === 3) offS.thirdDownConv += 1
   }
-  pushPlay(s, { ...out, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
+  pushPlay(s, { ...out, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
 
   if (out.defTD) {
     // R6: a takeaway returned for a touchdown (pick-six / fumble return).
@@ -3612,7 +3782,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     swapPossession(s)
     s.down = 1
     s.distance = 10
-    if (resolveKickoff(world, s).scored) s.phase = 'try'
+    // FUTURES #4: the free kick runs in the kickoff phase (see stepTry).
+    s.phase = 'kickoff'
     return 'continue'
   }
 
@@ -3689,6 +3860,9 @@ export function runToMoment(world: World, s: GameState): Moment | null {
 export function runUntil(world: World, s: GameState, stop: 'play' | 'drive' | 'moment'): Moment | null {
   for (;;) {
     if (s.done) return null
+    // A moment raised before the loop (e.g. the opening kickoff in createGame) is
+    // surfaced first — normally only `step` sets `pending`, so this is a no-op.
+    if (s.pending) return s.pending
     const playsBefore = s.plays.length
     const offBefore = s.offId
     const r = step(world, s)
