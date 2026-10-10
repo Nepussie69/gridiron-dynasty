@@ -46,5 +46,5 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 |---|---|
 | Spec | ✅ 2026-10-10 |
 | B2 | ✅ merged into ui-redesign (Claude) |
-| B1 | 🔨 b1a + b1b building (DeepSeek, off main after animfix 1665b00) |
+| B1 | 🔨 b1a ✅ merged; b1b building |
 | B3–B8 | ⏳ prompts b4, b5a/b5b, b7 ready; B3, B6, B8 Claude |
