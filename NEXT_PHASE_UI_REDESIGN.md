@@ -601,7 +601,7 @@ Acceptance:
 | F0 Spec + baseline | ✅ 2026-10-10 |
 | F1 Tokens, team colour, formatting helpers | ✅ f25f84f on ui-redesign (contrast 342/342 pass, 32 clubs × 2 themes) |
 | F2 Kit primitives | ✅ d629294 on ui-redesign (live-checked /kit: menu, ConfirmSheet, focus trap, Esc, phone card rows) |
-| F3 AppShell, navigation, phone shell | ⏳ |
+| F3 AppShell, navigation, phone shell | ✅ 851bc3d on ui-redesign |
 | F4 Staff pilot (reference screen) | ⏳ |
 | D1 Home and career screens | ⏳ |
 | D2 Roster, depth, development, player profile | ⏳ |
