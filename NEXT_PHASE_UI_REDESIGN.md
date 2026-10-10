@@ -609,5 +609,5 @@ Acceptance:
 | D4 Money and transactions | ✅ merged (+ phone tap fixes by orchestrator) |
 | D5 Game day | 🔨 building (off 929b9a1, includes animcontact4) |
 | D6 Game plan | ✅ merged (+ phone tap fixes by orchestrator) |
-| D7 League information | 🔨 building |
+| D7 League information | ✅ merged |
 | V1 Integration and cleanup | ⏳ |
