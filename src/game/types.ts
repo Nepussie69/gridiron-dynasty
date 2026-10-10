@@ -749,6 +749,12 @@ export interface CareerState {
   counter?: { season: number; taken?: boolean }
   /** L9 Z5: rivalry wins this season (the profile reward caps at 2). */
   rivalWins?: { season: number; wins: number }
+  /**
+   * FUTURES #8 (P1): this season's primetime/rivalry swing bookkeeping, so the
+   * profile (+4) and job-security (±6) caps hold and the `balance.ts` review
+   * stays in charge. A legacy save has none until the first stakes game.
+   */
+  stakes?: { season: number; profile: number; security: number }
   /** The boss who is shaping you (#11). */
   mentor?: { name: string; philosophy: string; teamId: string }
   /** People you developed who now run their own programs (#11, FUTURES 21). */

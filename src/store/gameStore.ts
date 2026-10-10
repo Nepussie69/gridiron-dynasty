@@ -57,6 +57,7 @@ import {
 } from '../game/engine/staffAwards'
 import { counterOffer } from '../game/engine/counter'
 import { rivalFor } from '../game/engine/rivalry'
+import { applyStakesSwing, ensureSlots, flexSlots, primetimeSwing, stakesFor, stakesNote } from '../game/engine/primetime'
 import { recordGameStats, boxScore, recordBoxLines, boxPlayerLines, boxTeamTotals } from '../game/engine/stats'
 import { allocProbe } from '../game/engine/statAlloc'
 import { simLeagueGames } from '../game/engine/leagueSim'
@@ -1369,6 +1370,9 @@ export const useGame = create<GameStore>((set, get) => ({
       runEndOfRegularSeason(set, get)
     } else {
       world.week = week + 1
+      // FUTURES #8 (P1): from week 11 on the Sunday Night game two weeks out is
+      // re-picked from current records (hash/record based; no rng draws).
+      flexSlots(world, world.week)
       set({ scoutingPoints: MAX_SCOUT_POINTS })
     }
     const c = get().career!
@@ -1437,6 +1441,24 @@ export const useGame = create<GameStore>((set, get) => ({
           nextCareer = logMoment(nextCareer, { week, text: `Beat ${rival.name}'s ${oppName}.`, tone: 'win' })
         } else if (myScore < oppScore) {
           nextCareer = logMoment(nextCareer, { week, text: `${rival.name} got the better of you.`, tone: 'loss' })
+        }
+      }
+    }
+    // FUTURES #8 (P1): primetime / rivalry stakes — a bigger swing, user club only.
+    // Sits on top of the L9 Z5 rivalry +1; the season caps live on `career.stakes`.
+    if (sim && userGame) {
+      const isHome = userGame.homeId === c.teamId
+      const myScore = isHome ? sim.homeScore : sim.awayScore
+      const oppScore = isHome ? sim.awayScore : sim.homeScore
+      const margin = myScore - oppScore
+      const stakes = stakesFor(world, c, userGame)
+      if (stakes.slot || stakes.rivalry) {
+        const result = margin > 0 ? 'win' : margin < 0 ? 'loss' : 'tie'
+        const swing = primetimeSwing(result, margin, stakes)
+        if (swing.profile || swing.security || swing.morale) {
+          nextCareer = applyStakesSwing(world, nextCareer, swing)
+          const note = stakesNote(world, nextCareer, userGame, stakes, result, swing)
+          pushCareerNews(world, nextCareer, { category: 'Owner', headline: note.headline, body: note.body })
         }
       }
     }
@@ -4147,6 +4169,9 @@ export function migrateWorld(w: World): World {
   w.ir ??= {}
   w.compLedger ??= {}
   w.rivals ??= []
+  // FUTURES #8 (P1): slots arrived after some saves were written; backfill every
+  // unplayed regular-season game (played games keep no slot). Idempotent.
+  ensureSlots(w)
   w.waivers ??= []
   // L12.6 C1: a legacy offseason save lands on the right stage — the draft if
   // the class is unfinished, otherwise camp.

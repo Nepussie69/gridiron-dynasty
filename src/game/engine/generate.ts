@@ -12,6 +12,7 @@ import { makeCharacter } from './character'
 import { makeScoutBias } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
 import { rescaleOvr, rescaleQuantile, unscaleOvr } from './ovrScale'
+import { assignSlots } from './primetime'
 import { STARS } from './starSeed'
 import type { RealCfbPlayer, RealCfbTeam, RealData, RealNflPlayer } from '../data/realData'
 import type { PlayerBoxScore } from './stats'
@@ -36,6 +37,8 @@ export interface Game {
   tier: 'NFL' | 'FBS' | 'FCS'
   postseason?: boolean
   statsDone?: boolean
+  /** FUTURES #8: the national-TV slot for this game, if any (regular season only). */
+  slot?: 'TNF' | 'SNF' | 'MNF'
   /** Season-scoped box score (only kept for the current season). */
   box?: {
     players: PlayerBoxScore[]
@@ -777,7 +780,7 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     draft = draft.concat(extra.map((p, i) => ({ ...p, id: `dx${season}_${i}` })))
   }
 
-  return {
+  const world: World = {
     seed,
     season,
     week: 1,
@@ -811,6 +814,9 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     rivals: generateRivals(rng, season),
     era: makeEra(rng),
   }
+  // FUTURES #8: hash-based primetime slots (no rng draws; pairings unchanged).
+  assignSlots(world)
+  return world
 }
 
 export function zeroRecord(teamId: string): TeamRecord {
@@ -862,4 +868,6 @@ function seedStaffTenure(rng: Rng): Record<string, number> {
 export function regenerateSchedule(world: World) {
   const rng = makeRng(world.seed + world.season * 8161)
   world.schedule = buildSchedule(rng, NFL_TEAMS, 18, 1, true)
+  // FUTURES #8: re-slot the fresh season (hash-based; no rng draws).
+  assignSlots(world)
 }
