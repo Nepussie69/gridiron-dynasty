@@ -4,6 +4,7 @@ import { cn } from '../lib/cn'
 import { capabilities, isGM } from '../game/engine/capabilities'
 import { STARTERS, depthAt } from '../game/engine/depth'
 import { canPitch, pitchSide } from '../game/engine/pitch'
+import { coachLabels } from '../game/engine/playsim'
 import { clubReturners, isReturnEligible, RETURN_INFO, returnerStatus, returnInputs, returnRating, RETURN_WEIGHTS, returnScore } from '../game/engine/returns'
 import type { World } from '../game/engine/generate'
 import type { Player, Position } from '../game/types'
@@ -18,6 +19,7 @@ import {
   OvrBadge,
   OverflowMenu,
   PageHeader,
+  SchemeChip,
   SectionTitle,
   Tabs,
   type MenuItem,
@@ -75,6 +77,13 @@ export function DepthChart() {
   const pitchPositions = pitching && career ? pitchSide(career) : []
   const pitchUsed = !!career?.weekFlags?.pitch
 
+  // The two schemes the sim runs (the OC's and DC's; the engine's default style
+  // when a chair is empty) — shown in the header as on the pre-redesign screen.
+  const schemes = coachLabels(league, activeTeamId)
+  const staff = league.staff[activeTeamId] ?? []
+  const ocVacant = !staff.some((m) => m.role === 'Offensive Coordinator')
+  const dcVacant = !staff.some((m) => m.role === 'Defensive Coordinator')
+
   const unitProps = {
     world: league,
     teamId: activeTeamId,
@@ -121,7 +130,15 @@ export function DepthChart() {
             : 'The head coach sets the depth chart. Click a player to view his full profile.'
         }
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="label">Off</span>
+              <SchemeChip scheme={ocVacant ? `${schemes.ocScheme} (default)` : schemes.ocScheme} state="live" />
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="label">Def</span>
+              <SchemeChip scheme={dcVacant ? `${schemes.dcScheme} (default)` : schemes.dcScheme} state="live" />
+            </span>
             {editable && (
               <Button variant="secondary" size="md" onClick={resetDepthChart} title="Drop your order and fall back to ratings">
                 <RotateCcw size={14} aria-hidden /> Reset to ratings
@@ -201,7 +218,7 @@ function Unit({
 }) {
   return (
     <div>
-      <SectionTitle className="mb-2">{title}</SectionTitle>
+      <SectionTitle spacing="tight">{title}</SectionTitle>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((c) => {
           const players = depthAt(world, teamId, c.pos)
@@ -248,11 +265,20 @@ function Unit({
                             {i + 1}
                           </span>
                           <OvrBadge value={p.ovr} pot={p.pot} size={28} />
-                          <span className="w-8 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
-                          <span className="min-w-0 flex-1 truncate">
-                            <PlayerName player={p} className="text-small font-600 text-ink" />
+                          {/* The card already names the position; on phone the column goes so the name has room. */}
+                          <span className="w-8 font-cond text-label font-700 uppercase text-muted max-sm:hidden">{p.pos}</span>
+                          {/* Name first; the gap to the starter sits under it at 12px (it used to sit beside
+                              the name at the inherited 16px and squeezed backups to "D.."). */}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">
+                              <PlayerName player={p} className="text-small font-600 text-ink" />
+                            </span>
+                            {gap > 0 && (
+                              <span className="block truncate text-label leading-tight" title={`${gap} OVR below the starter`}>
+                                <Delta value={-gap} suffix="OVR" />
+                              </span>
+                            )}
                           </span>
-                          {gap > 0 && <Delta value={-gap} suffix="OVR" />}
                           <InjuryChip player={p} />
                         </button>
                         {editable && (

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
-import { gradeColor, money } from '../lib/format'
+import { money, tierStroke } from '../lib/format'
 import { attributesFor, playerAttrs, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
 import { COMPOSITES, RATING_INFO, groupForPosition, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel } from '../game/engine/style'
@@ -254,7 +254,7 @@ export function PlayerProfile() {
           {retEligible && (
             <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="label !mb-0">Return ability</div>
+                <div className="label">Return ability</div>
                 <span title={RETURN_INFO} className="cursor-help">
                   <OvrBadge value={returnRating(player)} size={34} />
                 </span>
@@ -281,13 +281,13 @@ export function PlayerProfile() {
           )}
 
           {/* 4 · Development */}
-          {(player.age <= 26 || ovrTrend.length) && (
+          {(player.age <= 26 || ovrTrend.length > 0) && (
             <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
               <div className="label mb-1">Development</div>
               <div className="font-cond text-small font-600 text-ink">{devLine}</div>
               {ovrTrend.length >= 2 && (
                 <div className="mt-3 flex items-center gap-4 border-t border-line pt-3">
-                  <Sparkline data={ovrTrend} width={150} height={44} color={gradeColor(player.ovr)} />
+                  <Sparkline data={ovrTrend} width={150} height={44} color={tierStroke(player.ovr)} />
                   <div>
                     <div className="label">OVR history</div>
                     <div className="font-display text-[20px] font-700 tnum leading-none text-ink">
@@ -594,7 +594,7 @@ function ContractTimeline({ contract, team }: { contract: Contract; team?: Team 
   return (
     <div className="mt-4 border-t border-line pt-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="label !mb-0">Contract timeline</span>
+        <span className="label">Contract timeline</span>
         <span className="font-cond text-micro text-muted">cap hit per remaining season</span>
       </div>
       <div className="flex items-end gap-1.5">

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Info } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { Sheet } from '../ui/Overlay'
-import { TOUCH_QUERY, useMediaQuery } from '../ui/hooks'
+import { TOUCH_QUERY, useMediaQuery, useOverlayScopeClass } from '../ui/hooks'
 
 const GAP = 8
 const EDGE = 8
@@ -18,10 +18,12 @@ const CLOSE_DELAY = 140
  * positioned `fixed` from the trigger's rect, so a scrolling column can never
  * clip it, and dismisses on mouse-leave, blur, Escape, or an outside tap.
  *
- * UI redesign F2: the panel is opaque (surface + shadow-2); the ⓘ target is
- * 44px on touch (a 20px glyph with an expanded hit area); on touch devices —
+ * UI redesign F2: the panel is opaque (surface + shadow-2); on touch devices —
  * or any tap that comes from a touch pointer — the details open in a bottom
  * Sheet instead of a hover panel, so nothing is hover-only.
+ * V1: the ⓘ dot keeps its 20px look (24px on touch) but its button is a 44px
+ * hit box on phones (negative margin, so the row layout is unchanged); the
+ * panel keeps the Game Day dark scope via useOverlayScopeClass().
  */
 export function HoverCard({
   content,
@@ -45,6 +47,7 @@ export function HoverCard({
   const [open, setOpen] = useState(false)
   const [sheet, setSheet] = useState(false)
   const touchDevice = useMediaQuery(TOUCH_QUERY)
+  const scope = useOverlayScopeClass()
   const lastPointer = useRef<string>('mouse')
 
   const clearTimer = useCallback(() => {
@@ -183,9 +186,22 @@ export function HoverCard({
             else openNow()
           }}
           onKeyDown={(e) => e.stopPropagation()}
-          className="relative grid h-5 w-5 shrink-0 place-items-center rounded-full border border-line-strong text-muted transition hover:border-[var(--team-accent)] hover:text-ink before:absolute before:-inset-3 before:content-[''] pointer-coarse:h-6 pointer-coarse:w-6"
+          className={cn(
+            'group/info relative grid shrink-0 place-items-center rounded-full text-muted',
+            // Desktop: the 20px dot itself is the button, with a 12px invisible ring of hit area.
+            "h-5 w-5 before:absolute before:-inset-3 before:content-['']",
+            // Phone width: a 44px button around the same dot; −12px margins keep the 20px footprint.
+            'max-sm:pointer-fine:-m-3 max-sm:pointer-fine:h-11 max-sm:pointer-fine:w-11 max-sm:pointer-fine:before:hidden',
+            // Touch: the dot grows to 24px inside a 44px button (−10px margins).
+            'pointer-coarse:-m-2.5 pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:before:hidden',
+          )}
         >
-          <Info size={12} aria-hidden />
+          <span
+            aria-hidden
+            className="grid h-5 w-5 place-items-center rounded-full border border-line-strong transition group-hover/info:border-[var(--team-accent)] group-hover/info:text-ink pointer-coarse:h-6 pointer-coarse:w-6"
+          >
+            <Info size={12} />
+          </span>
         </button>
       )}
       {/* Portal events bubble through the React tree: keep sheet taps away from row handlers. */}
@@ -203,7 +219,10 @@ export function HoverCard({
             data-hovercard-panel=""
             onMouseEnter={openNow}
             onMouseLeave={scheduleClose}
-            className="fixed z-[60] max-h-[60vh] w-[280px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-[var(--r-lg)] border border-line-strong bg-surface p-3 text-small text-ink shadow-[var(--shadow-2)]"
+            className={cn(
+              'fixed z-[60] max-h-[60vh] w-[280px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-[var(--r-lg)] border border-line-strong bg-surface p-3 text-small text-ink shadow-[var(--shadow-2)]',
+              scope,
+            )}
             style={{ left: -9999, top: -9999, visibility: 'hidden' }}
           >
             {content}

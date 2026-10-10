@@ -307,17 +307,18 @@ export function CareerHub() {
                 id="hub-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="mb-5 w-full rounded-[var(--r-md)] border border-line-strong bg-surface-2 px-3 py-2 text-[16px] font-600 text-ink outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-focus)]"
+                className="mb-5 w-full rounded-[var(--r-md)] border border-line-strong bg-surface-2 px-3 py-2 text-[16px] font-600 max-sm:h-11 text-ink outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-focus)]"
               />
 
               <div className="mb-1.5 flex items-baseline justify-between">
                 <span className="label">Track</span>
                 {scenarioLocked && <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">Set by scenario</span>}
               </div>
-              <div className={cn('mb-5', scenarioLocked && 'pointer-events-none opacity-60')}>
+              <div className="mb-5">
                 <SegmentedControl
                   label="Career track"
                   value={path}
+                  disabled={scenarioLocked}
                   onChange={(p) => {
                     if (!scenarioLocked) choosePath(p)
                   }}
@@ -407,7 +408,7 @@ export function CareerHub() {
                       disabled={scenario.forceLowestPrestige}
                       aria-pressed={teamId === t.id}
                       className={cn(
-                        'motion flex items-center gap-2 rounded-[var(--r-sm)] px-2 py-1.5 text-left',
+                        'motion flex items-center gap-2 rounded-[var(--r-sm)] px-2 py-1.5 text-left max-sm:min-h-11 pointer-coarse:min-h-11',
                         scenario.forceLowestPrestige && 'cursor-not-allowed opacity-60',
                         teamId === t.id ? 'bg-surface-3 ring-1 ring-line-strong' : 'hover:bg-surface-3',
                       )}

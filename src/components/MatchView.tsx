@@ -23,7 +23,7 @@ import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { TeamHoverCard } from './TeamHoverCard'
-import { Badge, Button, ConfirmSheet, OverflowMenu, ScoreBlock, TeamCrest, type MenuItem } from '../ui/kit'
+import { Badge, BroadcastScope, Button, ConfirmSheet, OverflowMenu, ScoreBlock, TeamCrest, type MenuItem } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
 
 const CENTER_Y = 26.65
@@ -514,6 +514,7 @@ export function MatchView() {
   }
 
   return (
+    <BroadcastScope>
     <div className="broadcast fixed inset-0 z-50 flex h-screen w-screen flex-col overflow-hidden bg-canvas text-ink">
       {/* ── U2: broadcast scorebug (replaces the header row) ───────────────── */}
       <header className="flex shrink-0 items-center gap-1.5 border-b border-line bg-canvas/60 px-2 py-1.5 sm:gap-2 sm:px-3">
@@ -1035,6 +1036,7 @@ export function MatchView() {
         }}
       />
     </div>
+    </BroadcastScope>
   )
 }
 

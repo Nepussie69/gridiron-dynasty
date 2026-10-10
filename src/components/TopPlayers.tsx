@@ -57,7 +57,7 @@ export function TopPlayers({
   if (!players.length) return null
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="label !mb-0 w-full sm:w-auto">{label}</span>
+      <span className="label w-full sm:w-auto">{label}</span>
       {players.map((p) => {
         const stat = headline(p, seasonLine(p, league.season, level))
         return (

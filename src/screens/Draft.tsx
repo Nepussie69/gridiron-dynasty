@@ -400,7 +400,7 @@ export function Draft() {
         <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
           <Card pad={false} className="order-1 overflow-hidden lg:order-2">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
-              <SectionTitle className="!mb-0">Prospect Board</SectionTitle>
+              <SectionTitle spacing="none">Prospect Board</SectionTitle>
               <Badge tone="neutral">
                 {posFilter === 'ALL' ? `${available.length} remaining` : `${boardShown.length} ${posFilter} · ${available.length} remaining`}
               </Badge>

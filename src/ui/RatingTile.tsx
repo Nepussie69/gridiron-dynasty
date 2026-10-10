@@ -9,7 +9,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Star } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { ratingTier, signed, STAFF_BASELINE, type RatingTier } from '../lib/format'
+import { ratingTier, signed, STAFF_BASELINE, tierStroke, type RatingTier } from '../lib/format'
 
 export type RatingTileSize = 'xs' | 'sm' | 'md' | 'lg'
 const TILE_PX: Record<RatingTileSize, number> = { xs: 24, sm: 32, md: 40, lg: 56 }
@@ -22,11 +22,6 @@ function tierStyle(t: RatingTier, px: number): CSSProperties {
     color: t.ink,
     boxShadow: t.outline ? `inset 0 0 0 ${ring}px ${t.outline}` : undefined,
   }
-}
-
-/** Solid colour of a tier for meters / segments (outline tiers use their outline). */
-function tierSolid(t: RatingTier): string {
-  return t.outline ?? t.fill
 }
 
 /** Five pips; filled count = tier pips (Elite 5 … Depth/Weak 1, Liability 0). */
@@ -96,11 +91,11 @@ export function RatingTile({
       aria-label={name}
       title={name}
       className="inline-flex shrink-0 flex-col items-center justify-center rounded-[var(--r-sm)] font-display font-800 italic leading-none tnum"
-      style={{ width: px, height: px, fontSize: Math.round(px * (inTileWord ? 0.44 : 0.5)), ...tierStyle(t, px) }}
+      style={{ width: px, height: px, fontSize: Math.max(12, Math.round(px * (inTileWord ? 0.44 : 0.5))), ...tierStyle(t, px) }}
     >
       <span className="pr-[0.06em]">{v}</span>
       {inTileWord && (
-        <span className="mt-0.5 font-cond text-micro font-700 not-italic uppercase tracking-[0.08em] opacity-90">
+        <span className="mt-0.5 font-cond text-label font-700 not-italic uppercase leading-none tracking-[0.06em] opacity-90">
           {t.short}
         </span>
       )}
@@ -171,7 +166,7 @@ export function PotBubble({ value, size = 21, className }: { value: number; size
       aria-label={name}
       title={name}
       className={cn('grid shrink-0 place-items-center rounded-[var(--r-xs)] font-display font-800 italic leading-none tnum', className)}
-      style={{ width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.52)), ...tierStyle(t, size) }}
+      style={{ width: size, height: size, fontSize: Math.max(12, Math.round(size * 0.52)), ...tierStyle(t, size) }}
     >
       {value}
     </span>
@@ -217,7 +212,7 @@ export function RangeBubble({
       )}
       style={tierStyle(t, compact ? 20 : 26)}
     >
-      <span className="font-cond text-micro font-700 not-italic uppercase tracking-[0.06em] opacity-85">{kind}</span>
+      <span className="font-cond text-label font-700 not-italic uppercase leading-none tracking-[0.03em] opacity-85">{kind}</span>
       {range}
     </span>
   )
@@ -267,7 +262,7 @@ export function RatingBar({
   label?: string
 }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100))
-  const tierColor = tierSolid(ratingTier((value / max) * 100))
+  const tierColor = tierStroke((value / max) * 100)
   const aria = {
     role: 'meter' as const,
     'aria-valuenow': Math.round(value),

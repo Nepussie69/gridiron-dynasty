@@ -8,6 +8,7 @@ import { TeamHoverCard } from '../components/TeamHoverCard'
 import type { Team } from '../game/types'
 import {
   Badge,
+  BroadcastScope,
   Button,
   Card,
   Dialog,
@@ -133,9 +134,10 @@ export function Schedule() {
               >
                 <div className="w-14 shrink-0">
                   <div className="label">Week {g.week}</div>
-                  <div className="label !normal-case text-muted">{g.home ? 'Home' : 'Away'}</div>
+                  <div className="label normal-case text-muted">{g.home ? 'Home' : 'Away'}</div>
                 </div>
-                <TeamHoverCard team={opp} className="min-w-0 flex-1" info>
+                {/* max-sm:min-w-40 lets the action buttons wrap below instead of squeezing the opponent to a sliver. */}
+                <TeamHoverCard team={opp} className="min-w-0 flex-1 max-sm:min-w-40" info>
                   <button
                     type="button"
                     onClick={() => viewTeam(opp.id)}
@@ -214,6 +216,7 @@ export function Schedule() {
         size="lg"
       >
         {boxGame?.box && (
+          <BroadcastScope>
           <div className="broadcast rounded-[var(--r-lg)] border border-line bg-canvas p-3">
             {boxGame.film && (
               <div className="mb-3 text-small text-ink-2">
@@ -239,6 +242,7 @@ export function Schedule() {
               <BoxScore world={league} teamId={boxGame.homeId} box={boxGame.box.players} onTeamClick={viewTeam} />
             </div>
           </div>
+          </BroadcastScope>
         )}
       </Dialog>
     </div>

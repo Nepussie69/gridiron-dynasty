@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Controls (UI redesign F2, spec §7): Button, IconButton, Tabs,
 // SegmentedControl, FilterChip, OptionCard / OptionGroup.
-// Targets are ≥36px (44px on coarse pointers). Team colour only marks the
-// active tab underline; it never fills a selected control.
+// Targets are ≥36px on desktop and 44px on phones (under 640px, or any coarse
+// pointer); Tabs and SegmentedControl stay 44px below 1024px. Team colour only
+// marks the active tab underline; it never fills a selected control.
 // ─────────────────────────────────────────────────────────────────────────────
 import {
   useLayoutEffect,
@@ -26,7 +27,6 @@ export type ButtonVariant =
   | 'default'
   | 'ghost'
   | 'team'
-  | 'danger'
 
 const VARIANTS: Record<ButtonVariant, string> = {
   // One per view: inverse slab, skewed, italic display type.
@@ -39,19 +39,19 @@ const VARIANTS: Record<ButtonVariant, string> = {
   default: 'bg-surface text-ink border border-line-strong hover:bg-surface-2',
   ghost: 'bg-transparent text-ink-2 border border-transparent hover:bg-surface-2 hover:text-ink',
   team: 'border border-transparent hover:opacity-90',
-  // Deprecated resting "danger": outline + red text, never a red fill at rest.
-  danger: 'bg-surface text-loss border border-line-strong hover:bg-loss-soft',
 }
 
 const SIZES = {
-  sm: 'min-h-8 px-2.5 text-small gap-1.5 pointer-coarse:min-h-11',
-  md: 'min-h-9 px-3.5 text-body gap-2 pointer-coarse:min-h-11',
+  sm: 'min-h-8 px-2.5 text-small gap-1.5 max-sm:min-h-11 pointer-coarse:min-h-11',
+  md: 'min-h-9 px-3.5 text-body gap-2 max-sm:min-h-11 pointer-coarse:min-h-11',
   lg: 'min-h-11 px-5 text-[15px] gap-2',
 } as const
 
 /**
- * The kit button. Legacy props (variant default/ghost/team/danger, size,
- * onClick, disabled, title, className) are unchanged. New:
+ * The kit button. Legacy props (variant default/ghost/team, size, onClick,
+ * disabled, title, className) are unchanged. The old resting 'danger' variant
+ * is gone (V1): destructive actions sit in ⋯ with `danger: true` and confirm
+ * through ConfirmSheet, whose final button is the only `destructive` fill. New:
  *   variant slab | primary | secondary | quiet | destructive
  *   rowSafe  — stop the click bubbling to a clickable row / card
  *   loading  — spinner, aria-busy, not clickable
@@ -191,7 +191,7 @@ export function IconButton({
       onKeyDown={rowSafe ? (e) => e.stopPropagation() : undefined}
       className={cn(
         'motion relative grid shrink-0 place-items-center rounded-[var(--r-md)] text-ink-2 hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-45',
-        'pointer-coarse:min-h-11 pointer-coarse:min-w-11',
+        'max-sm:min-h-11 max-sm:min-w-11 pointer-coarse:min-h-11 pointer-coarse:min-w-11',
         px,
         variant === 'outline' ? 'border border-line' : 'border border-transparent',
         (pressed || ariaExpanded) && 'border-line-strong bg-surface-3 text-ink',
@@ -237,8 +237,9 @@ export interface TabItem<K extends string = string> {
 }
 
 /**
- * Underline tabs: 42px, a 3px team-accent underline that slides, role=tab,
- * arrow keys move and select (automatic activation).
+ * Underline tabs: 42px (44px below 1024px and on touch), a 3px team-accent
+ * underline that slides, role=tab, arrow keys move and select (automatic
+ * activation). `disabled` greys out the whole tab list.
  */
 export function Tabs<K extends string>({
   tabs,
@@ -248,6 +249,7 @@ export function Tabs<K extends string>({
   className,
   stretch = false,
   idBase,
+  disabled = false,
 }: {
   tabs: TabItem<K>[]
   value: K
@@ -258,6 +260,8 @@ export function Tabs<K extends string>({
   stretch?: boolean
   /** Prefix for tab ids; panels can use aria-labelledby={`${idBase}-${id}`}. */
   idBase?: string
+  /** Every tab inert (the current one stays marked). */
+  disabled?: boolean
 }) {
   const listRef = useRef<HTMLDivElement>(null)
   const [bar, setBar] = useState<{ left: number; width: number } | null>(null)
@@ -301,11 +305,11 @@ export function Tabs<K extends string>({
             data-tab={t.id}
             aria-selected={on}
             tabIndex={on ? 0 : -1}
-            disabled={t.disabled}
+            disabled={disabled || t.disabled}
             onClick={() => onChange(t.id)}
             className={cn(
-              'motion flex h-[42px] shrink-0 items-center gap-2 whitespace-nowrap font-cond text-[15px] font-700 uppercase tracking-[0.06em] disabled:opacity-45',
-              'pointer-coarse:h-11',
+              'motion flex h-[42px] shrink-0 items-center gap-2 whitespace-nowrap font-cond text-[15px] font-700 uppercase tracking-[0.06em] disabled:cursor-not-allowed disabled:opacity-45',
+              'max-lg:h-11 max-lg:min-w-11 max-lg:justify-center pointer-coarse:h-11 pointer-coarse:min-w-11',
               stretch && 'flex-1 justify-center',
               on ? 'text-ink' : 'text-muted hover:text-ink-2',
             )}
@@ -335,11 +339,14 @@ export interface SegmentOption<K extends string = string> {
   label: ReactNode
   icon?: ReactNode
   title?: string
+  disabled?: boolean
 }
 
 /**
  * Segmented control: surface-2 track; the active segment is surface-3 with a
- * line-strong ring (never team-filled). Buttons carry aria-pressed.
+ * line-strong ring (never team-filled). Buttons carry aria-pressed. Segments
+ * are 44px tall below 1024px and on touch. `disabled` locks the whole control
+ * (e.g. "Set by scenario"); a single option can also be disabled.
  */
 export function SegmentedControl<K extends string>({
   options,
@@ -347,6 +354,7 @@ export function SegmentedControl<K extends string>({
   onChange,
   label,
   size = 'md',
+  disabled = false,
   className,
 }: {
   options: SegmentOption<K>[]
@@ -354,29 +362,41 @@ export function SegmentedControl<K extends string>({
   onChange: (id: K) => void
   label: string
   size?: 'sm' | 'md'
+  disabled?: boolean
   className?: string
 }) {
   return (
     <div
       role="group"
       aria-label={label}
+      aria-disabled={disabled || undefined}
       onKeyDown={(e) => rove(e, 'button')}
-      className={cn('inline-flex shrink-0 rounded-[var(--r-md)] border border-line bg-surface-2 p-[3px]', className)}
+      className={cn(
+        'inline-flex shrink-0 rounded-[var(--r-md)] border border-line bg-surface-2 p-[3px]',
+        disabled && 'opacity-60',
+        className,
+      )}
     >
       {options.map((o) => {
         const on = o.id === value
+        const off = disabled || o.disabled
         return (
           <button
             key={o.id}
             type="button"
             aria-pressed={on}
             title={o.title}
-            onClick={() => onChange(o.id)}
+            disabled={off}
+            onClick={() => {
+              if (!off) onChange(o.id)
+            }}
             className={cn(
-              'motion flex items-center gap-1.5 whitespace-nowrap rounded-[var(--r-sm)] px-3 font-cond font-700 uppercase tracking-[0.06em]',
+              'motion flex items-center gap-1.5 whitespace-nowrap rounded-[var(--r-sm)] px-3 font-cond font-700 uppercase tracking-[0.06em] disabled:cursor-not-allowed',
               size === 'sm' ? 'h-7 text-label' : 'h-[30px] text-small',
-              'pointer-coarse:h-10',
-              on ? 'bg-surface-3 text-ink shadow-[inset_0_0_0_1px_var(--color-line-strong)]' : 'text-muted hover:text-ink-2',
+              'max-lg:h-11 pointer-coarse:h-11',
+              on ? 'bg-surface-3 text-ink shadow-[inset_0_0_0_1px_var(--color-line-strong)]' : 'text-muted',
+              on || off ? '' : 'hover:text-ink-2',
+              o.disabled && !disabled && 'opacity-45',
             )}
           >
             {o.icon}
@@ -409,7 +429,7 @@ export function FilterChip({
       onClick={() => onChange(!pressed)}
       className={cn(
         'motion inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 font-cond text-small font-700 uppercase tracking-[0.05em]',
-        'pointer-coarse:h-11',
+        'justify-center max-sm:h-11 max-sm:min-w-11 pointer-coarse:h-11 pointer-coarse:min-w-11',
         pressed
           ? 'border-line-strong bg-surface-3 text-ink'
           : 'border-line bg-surface text-ink-2 hover:border-line-strong hover:text-ink',

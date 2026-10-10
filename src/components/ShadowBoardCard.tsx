@@ -77,6 +77,9 @@ export function ShadowBoardCard({ className }: { className?: string }) {
 /**
  * The ☆ toggle shown on any non-own player row. Filled when the player is on
  * the board. stopPropagation keeps it from also selecting the row.
+ * V1: the visible box stays 28px on a phone-width screen, inside a 44px hit
+ * box with −8px margins (row layout unchanged); a coarse pointer keeps the
+ * full 44px box as before.
  */
 export function ShadowStar({ playerId, className }: { playerId: string; className?: string }) {
   const career = useGame((s) => s.career)
@@ -96,12 +99,20 @@ export function ShadowStar({ playerId, className }: { playerId: string; classNam
         toggleShadowBoard(playerId)
       }}
       className={cn(
-        'grid h-7 w-7 shrink-0 place-items-center rounded-[var(--r-md)] border border-line transition pointer-coarse:h-11 pointer-coarse:w-11',
-        on ? 'border-transparent text-[var(--team-accent)]' : 'text-faint hover:border-[var(--team-accent)] hover:text-ink',
+        'group/star grid h-7 w-7 shrink-0 place-items-center rounded-[var(--r-md)]',
+        'max-sm:pointer-fine:-m-2 max-sm:pointer-fine:h-11 max-sm:pointer-fine:w-11 pointer-coarse:h-11 pointer-coarse:w-11',
         className,
       )}
     >
-      <Star size={14} fill={on ? 'currentColor' : 'none'} />
+      <span
+        aria-hidden
+        className={cn(
+          'grid h-7 w-7 place-items-center rounded-[var(--r-md)] border border-line transition pointer-coarse:h-11 pointer-coarse:w-11',
+          on ? 'border-transparent text-[var(--team-accent)]' : 'text-faint group-hover/star:border-[var(--team-accent)] group-hover/star:text-ink',
+        )}
+      >
+        <Star size={14} fill={on ? 'currentColor' : 'none'} />
+      </span>
     </button>
   )
 }

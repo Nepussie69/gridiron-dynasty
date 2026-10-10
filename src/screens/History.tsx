@@ -539,7 +539,8 @@ function TeamTab({ world, db, defaultClub }: { world: World; db: CareerDatabase;
         ) : (
           <div className="max-h-[70vh] overflow-auto">
             <table className="min-w-full border-collapse text-small tnum">
-              <thead>
+              {/* Both header rows (groups + sortable columns) pin while the year list scrolls. */}
+              <thead className="sticky top-0 z-30">
                 <tr className="text-left">
                   <th colSpan={7} className="label border-b border-line bg-surface-2 px-2 py-1.5">
                     Record &amp; context

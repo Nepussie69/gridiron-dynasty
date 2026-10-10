@@ -7,9 +7,9 @@
 //   • teamTokens() for all 32 NFL clubs: accent ≥3:1 and accent-text ≥4.5:1 on
 //     surface; --team-on ≥3:1 on the fill (large slab text); --team-accent-on
 //     ≥4.5:1 on the accent.
-//   • every rating-tier ink pair (filled tiers, outline tiers on their wash,
-//     the gradeColor() shim fills) ≥4.5:1; tier outlines ≥3:1; light Weak
-//     #9A5800 included.
+//   • every rating-tier ink pair (filled tiers, outline tiers on their wash)
+//     ≥4.5:1; tier outlines ≥3:1; light Weak #9A5800 included. (The
+//     gradeColor() shim and its -on tokens were removed in V1.)
 //   • every tone-on-soft pair (brand/win/loss/warn/gold on its -soft wash over
 //     surface and surface-2) ≥4.5:1, plus the neutral text tokens.
 // Token values are parsed from src/index.css (light = @theme, dark = the
@@ -137,10 +137,6 @@ for (const t of themes) {
   check('tier', t, 'liability: number on 10% wash/surface-2', liab, over(liab, 0.1, surface2), 4.5)
   check('tier', t, 'weak: outline on surface', weak, surface, 3)
   check('tier', t, 'liability: outline on surface', liab, surface, 3)
-  // gradeColor() shim still paints solid fills for the outline tiers.
-  check('tier', t, 'shim: depth-on on depth fill', hex(t, 'tier-depth-on'), hex(t, 'tier-depth'), 4.5)
-  check('tier', t, 'shim: weak-on on weak fill', hex(t, 'tier-weak-on'), weak, 4.5)
-  check('tier', t, 'shim: liab-on on liability fill', hex(t, 'tier-liab-on'), liab, 4.5)
 }
 
 // ── 3. team tokens, 32 clubs × 2 themes ──────────────────────────────────────

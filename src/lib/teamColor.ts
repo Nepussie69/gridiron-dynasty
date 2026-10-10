@@ -87,6 +87,18 @@ export function bestInk(bg: string): string {
   return contrast(bg, INK_LIGHT) >= contrast(bg, INK_DARK) ? INK_LIGHT : INK_DARK
 }
 
+/**
+ * Hero slab: a gradient that stays readable end to end. The far stop is the
+ * primary shaded AWAY from its ink (lighter under dark ink, darker under light
+ * ink), so contrast only improves across the slab; the secondary colour is kept
+ * as an edge stripe instead of a gradient stop (PIT gold to black hid dark ink).
+ */
+export function heroSlab(primary: string, secondary: string): { background: string; ink: string; edge: string } {
+  const ink = bestInk(primary)
+  const far = mixHex(primary, ink === INK_DARK ? '#FFFFFF' : '#000000', 0.22) // check-hex-allow: shade target
+  return { background: `linear-gradient(120deg, ${primary}, ${far})`, ink, edge: secondary }
+}
+
 /** Colourfulness (chroma, 0..1). Used to pick which brand colour to mix when neither passes. */
 function chroma(hex: string): number {
   const rgb = parseHex(hex)

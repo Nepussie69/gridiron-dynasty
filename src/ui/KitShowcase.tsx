@@ -322,7 +322,6 @@ function Gallery({ id }: { id: string }) {
           <Button>default</Button>
           <Button variant="ghost">ghost</Button>
           <Button variant="team">team</Button>
-          <Button variant="danger">danger</Button>
           <Button size="sm" variant="primary">
             sm
           </Button>
