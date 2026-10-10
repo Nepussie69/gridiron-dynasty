@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
-import { num } from '../lib/format'
+import { num, ratingTier } from '../lib/format'
 import { teamHistory, teamSeasonStats, type CareerDatabase, type TeamSeasonRecord } from '../game/engine/statsDb'
 import { tierFor } from '../game/engine/career'
 import { STARTERS, depthAt } from '../game/engine/depth'
@@ -8,7 +8,8 @@ import { teamAvgOvr } from '../game/selectors'
 import type { CareerState, LedgerEntry, Player, Position, SeasonStats } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Card, PageHeader, Sparkline, Stat, TeamCrest } from '../ui/kit'
+import { Badge, Card, KpiTile, PageHeader, Sparkline, Tabs, TeamCrest, TierScale } from '../ui/kit'
+import { usePhone } from '../ui/hooks'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // History (L12.12).
@@ -128,6 +129,7 @@ export function History() {
   const world = useWorld()
   const career = useGame((s) => s.career)!
   const db = useGame((s) => s.statsDb)()
+  const phone = usePhone()
   const [tab, setTab] = useState<Tab>('you')
 
   const role = tierFor(career.path, career.level)
@@ -143,23 +145,9 @@ export function History() {
         eyebrow={career.path === 'coach' ? 'Coaching' : 'Personnel'}
         title="History"
         subtitle={`${career.gmName} · ${role.title} · the long view of your career.`}
-        right={
-          <div className="flex rounded-lg bg-surface-2 p-0.5">
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={cn(
-                  'rounded-md px-4 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                  tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        }
       />
+
+      <Tabs label="History sections" value={tab} onChange={setTab} stretch={phone} className="mb-4" tabs={tabs} />
 
       {tab === 'you' && <YouTab world={world} career={career} />}
       {tab === 'team' && <TeamTab world={world} db={db} defaultClub={career.teamId} />}
@@ -205,6 +193,81 @@ function YouTab({ world, career }: { world: World; career: CareerState }) {
 
   const guys = acquiredGuys(world, career)
   const newestFirst = [...history].reverse()
+  const rep = Math.round(career.reputation.results)
+  const gradedCalls = entries.filter((e) => e.hit !== undefined)
+  const ledgerPct = gradedCalls.length ? `${Math.round((gradedCalls.filter((e) => e.hit).length / gradedCalls.length) * 100)}%` : '—'
+
+  // Career tiles, ordered so the numbers your path lives on come first.
+  const tiles: Record<string, ReactNode> = {
+    record: (
+      <KpiTile
+        label="Career record"
+        value={totals.w + totals.l ? `${totals.w}-${totals.l}` : '—'}
+        unit="all seasons"
+        verdict={{ label: `${playoffs} playoff trip${playoffs === 1 ? '' : 's'}`, tone: playoffs > 0 ? 'win' : 'neutral' }}
+        why={<span className="text-muted">{titles} title{titles === 1 ? '' : 's'} · {clubs} club{clubs === 1 ? '' : 's'} coached</span>}
+      />
+    ),
+    picks: (
+      <KpiTile
+        label="Picks made"
+        value={picks}
+        unit="draft picks"
+        why={<span className="text-muted"><b className="font-600 text-ink">{signings}</b> signings · <b className="font-600 text-ink">{trades}</b> trades</span>}
+      />
+    ),
+    extensions: (
+      <KpiTile label="Extensions" value={extensions} unit="contracts" why={<span className="text-muted">Deals you signed to keep your own.</span>} />
+    ),
+    fourth: (
+      <KpiTile
+        label="4th-down calls"
+        value={fourths.length}
+        unit="decisions"
+        verdict={{ label: fourths.length ? `${fourthRate}% converted` : 'none yet', tone: fourths.length && fourthRate >= 60 ? 'win' : 'neutral' }}
+        why={<span className="text-muted">How often your aggression converted.</span>}
+      />
+    ),
+    coached: (
+      <KpiTile
+        label="Coached games"
+        value={coached}
+        unit="games"
+        why={<span className="text-muted">{filmAvg != null ? `film grade avg ${filmAvg}` : 'fast-sim seasons add none'}</span>}
+      />
+    ),
+    guys: (
+      <KpiTile
+        label="My guys"
+        value={guys.length}
+        unit="starters"
+        why={<span className="text-muted">Drafted, signed or traded for, then made a starter.</span>}
+      />
+    ),
+    ledger: (
+      <KpiTile
+        label="Ledger hit rate"
+        value={ledgerPct}
+        unit="hit rate"
+        why={<span className="text-muted">{entries.length} call{entries.length === 1 ? '' : 's'} logged</span>}
+      />
+    ),
+    rep: (
+      <KpiTile
+        label="Reputation"
+        value={rep}
+        unit="/ 100"
+        verdict={{ label: `${ratingTier(rep).label}`, tone: rep >= 82 ? 'win' : rep < 58 ? 'loss' : 'neutral' }}
+        why={<span className="text-muted">Results — the score that travels.</span>}
+      >
+        <TierScale value={rep} label="Reputation" />
+      </KpiTile>
+    ),
+  }
+  const tileOrder =
+    career.path === 'coach'
+      ? ['record', 'coached', 'fourth', 'picks', 'extensions', 'guys', 'ledger', 'rep']
+      : ['record', 'picks', 'extensions', 'guys', 'fourth', 'coached', 'ledger', 'rep']
 
   return (
     <div>
@@ -228,32 +291,12 @@ function YouTab({ world, career }: { world: World; career: CareerState }) {
         </div>
       </Card>
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><Stat label="Career Record" value={totals.w + totals.l ? `${totals.w}-${totals.l}` : '—'} sub={`${playoffs} playoff trip${playoffs === 1 ? '' : 's'} · ${titles} title${titles === 1 ? '' : 's'}`} /></Card>
-        <Card><Stat label="Picks Made" value={picks} sub={`${signings} signings · ${trades} trades`} /></Card>
-        <Card><Stat label="Extensions" value={extensions} sub="contracts you signed" /></Card>
-        <Card>
-          <Stat
-            label="4th-Down Calls"
-            value={fourths.length}
-            sub={fourths.length ? `${fourthRate}% converted/agreed` : 'none yet'}
-            tone={fourths.length && fourthRate >= 60 ? 'win' : undefined}
-          />
-        </Card>
-        <Card><Stat label="Coached Games" value={coached} sub={filmAvg != null ? `film grade avg ${filmAvg}` : 'fast-sim seasons add none'} /></Card>
-        <Card><Stat label="My Guys" value={guys.length} sub="drafted / signed / traded starters" /></Card>
-        <Card>
-          <Stat
-            label="Ledger Hit Rate"
-            value={(() => {
-              const graded = entries.filter((e) => e.hit !== undefined)
-              const hits = graded.filter((e) => e.hit).length
-              return graded.length ? `${Math.round((hits / graded.length) * 100)}%` : '—'
-            })()}
-            sub={`${entries.length} calls logged`}
-          />
-        </Card>
-        <Card><Stat label="Reputation" value={Math.round(career.reputation.results)} sub="Results — the score that travels" /></Card>
+      <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {tileOrder.map((k) => (
+          <div key={k} className="min-w-0">
+            {tiles[k]}
+          </div>
+        ))}
       </div>
 
       <Card pad={false} className="mb-4">
@@ -277,14 +320,14 @@ function YouTab({ world, career }: { world: World; career: CareerState }) {
                 <div className="flex w-40 shrink-0 items-center gap-2">
                   {club && <TeamCrest team={club} size={30} />}
                   <div className="leading-tight">
-                    <div className="font-display text-base font-700 tnum text-ink">{h.season}</div>
-                    <div className="font-cond text-[10px] font-700 uppercase text-muted">{club?.abbr ?? h.team}</div>
+                    <div className="font-display text-[18px] font-800 italic tnum text-ink">{h.season}</div>
+                    <div className="font-cond text-label font-700 uppercase text-muted">{club?.abbr ?? h.team}</div>
                   </div>
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-600 text-ink">{h.role}</span>
-                    <Badge tone="neutral">{h.record || '—'}</Badge>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                    <span className="font-display text-[22px] font-800 italic leading-none tnum text-ink">{h.record || '—'}</span>
+                    <span className="font-600 text-ink-2">{h.role}</span>
                     {champion && <Badge tone="gold">Champions</Badge>}
                     {!champion && madePlayoffs && <Badge tone="info">Playoffs</Badge>}
                     {h.repDelta != null && h.repDelta !== 0 && (
@@ -340,10 +383,10 @@ function YouTab({ world, career }: { world: World; career: CareerState }) {
             const club = g.teamId ? world.byId[g.teamId] : null
             return (
               <div key={g.id} className="flex items-center gap-3 px-4 py-2.5">
-                {club ? <TeamCrest team={club} size={28} /> : <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-3 text-[10px] font-700 text-muted">FA</span>}
+                {club ? <TeamCrest team={club} size={28} /> : <span className="grid h-7 w-7 place-items-center rounded-[var(--r-sm)] bg-surface-3 text-label font-700 text-muted">FA</span>}
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-600 text-ink">{g.name}</div>
-                  <div className="font-cond text-[11px] font-700 uppercase text-muted">
+                  <div className="font-cond text-label font-700 uppercase text-muted">
                     {g.pos} · {g.kind === 'draft' ? 'drafted' : g.kind === 'trade' ? 'traded for' : 'signed'} · {g.seasons} season{g.seasons === 1 ? '' : 's'}
                   </div>
                 </div>
@@ -495,18 +538,33 @@ function TeamTab({ world, db, defaultClub }: { world: World; db: CareerDatabase;
           <div className="px-4 py-10 text-center text-sm text-muted">No seasons recorded for this club yet.</div>
         ) : (
           <div className="max-h-[70vh] overflow-auto">
-            <table className="min-w-full border-collapse text-sm tnum">
+            <table className="min-w-full border-collapse text-small tnum">
               <thead>
                 <tr className="text-left">
-                  <HdrCell className="sticky top-0 z-30" active={sortKey === 'season'} dir={dir} onClick={() => toggleSort('season')}>Season</HdrCell>
-                  <HdrCell className="sticky top-0 z-30" active={sortKey === 'wl'} dir={dir} onClick={() => toggleSort('wl')}>W-L</HdrCell>
-                  <HdrCell className="sticky top-0 z-30" active={sortKey === 'pf'} dir={dir} onClick={() => toggleSort('pf')}>PF</HdrCell>
-                  <HdrCell className="sticky top-0 z-30" active={sortKey === 'pa'} dir={dir} onClick={() => toggleSort('pa')}>PA</HdrCell>
-                  <HdrCell className="sticky top-0 z-30" active={sortKey === 'diff'} dir={dir} onClick={() => toggleSort('diff')}>Diff</HdrCell>
-                  <HdrCell className="sticky top-0 z-30" active={sortKey === 'ovr'} dir={dir} onClick={() => toggleSort('ovr')}>OVR</HdrCell>
-                  <th className="sticky top-0 z-30 border-b border-line glass-2 px-2 py-2" />
+                  <th colSpan={7} className="label border-b border-line bg-surface-2 px-2 py-1.5">
+                    Record &amp; context
+                  </th>
+                  {(view === 'off' || view === 'both') && (
+                    <th colSpan={OFF_COLS.length} className="label border-b border-line bg-surface-2 px-2 py-1.5 text-center">
+                      Offense
+                    </th>
+                  )}
+                  {(view === 'def' || view === 'both') && (
+                    <th colSpan={DEF_COLS.length} className="label border-b border-line bg-surface-2 px-2 py-1.5 text-center">
+                      Defense
+                    </th>
+                  )}
+                </tr>
+                <tr className="text-left">
+                  <HdrCell active={sortKey === 'season'} dir={dir} onClick={() => toggleSort('season')}>Season</HdrCell>
+                  <HdrCell active={sortKey === 'wl'} dir={dir} onClick={() => toggleSort('wl')}>W-L</HdrCell>
+                  <HdrCell active={sortKey === 'pf'} dir={dir} onClick={() => toggleSort('pf')}>PF</HdrCell>
+                  <HdrCell active={sortKey === 'pa'} dir={dir} onClick={() => toggleSort('pa')}>PA</HdrCell>
+                  <HdrCell active={sortKey === 'diff'} dir={dir} onClick={() => toggleSort('diff')}>Diff</HdrCell>
+                  <HdrCell active={sortKey === 'ovr'} dir={dir} onClick={() => toggleSort('ovr')}>OVR</HdrCell>
+                  <th className="border-b border-line glass-2 px-2 py-2" />
                   {cols.map((c) => (
-                    <HdrCell key={c.id} className="sticky top-0 z-30 text-center" title={c.title} active={sortKey === c.id} dir={dir} onClick={() => toggleSort(c.id)}>
+                    <HdrCell key={c.id} className="text-center" title={c.title} active={sortKey === c.id} dir={dir} onClick={() => toggleSort(c.id)}>
                       {c.label}
                     </HdrCell>
                   ))}
@@ -519,7 +577,7 @@ function TeamTab({ world, db, defaultClub }: { world: World; db: CareerDatabase;
                     <tr key={`${r.season}-${r.teamId}`} className={cn('border-b border-line/60', isBest && 'bg-[var(--team-soft)]')}>
                       <td className="whitespace-nowrap px-2 py-1.5 font-600 text-ink">
                         {r.season}
-                        {isBest && <span className="ml-1.5 font-cond text-[10px] font-700 uppercase text-[var(--team)]">Best</span>}
+                        {isBest && <span className="ml-1.5 font-cond text-label font-700 uppercase text-[var(--team-accent-text)]">Best</span>}
                       </td>
                       <td className="whitespace-nowrap px-2 py-1.5 text-ink-2">{r.wins}-{r.losses}</td>
                       <td className="whitespace-nowrap px-2 py-1.5 text-ink-2">{r.pointsFor}</td>
@@ -681,10 +739,10 @@ function TopPlayers({ title, players }: { title: string; players: PlayerLine[] }
       <div className="divide-y divide-line/60">
         {players.map((p) => (
           <div key={p.id} className="flex items-center gap-3 px-4 py-2">
-            <span className="grid h-7 w-9 shrink-0 place-items-center rounded-md bg-surface-3 font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
+            <span className="grid h-7 w-9 shrink-0 place-items-center rounded-[var(--r-sm)] bg-surface-3 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-600 text-ink">{p.name}</div>
-              <div className="text-[11px] text-muted">{lineSummary(p.pos, p.line)}</div>
+              <div className="truncate text-body font-600 text-ink">{p.name}</div>
+              <div className="text-label text-muted">{lineSummary(p.pos, p.line)}</div>
             </div>
           </div>
         ))}
@@ -722,7 +780,7 @@ function HdrCell({
     >
       <span className="inline-flex items-center gap-0.5">
         {children}
-        {active && <span className="text-[9px] leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
+        {active && <span className="text-micro leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
       </span>
     </th>
   )
