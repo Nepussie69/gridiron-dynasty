@@ -2599,14 +2599,16 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
  * goal). `s.yard` is still the kicking club's LOS here, so read it before
  * swapping. No rng is drawn.
  */
-function restartAfterFieldGoal(world: World, s: GameState, good: boolean): void {
+function restartAfterFieldGoal(s: GameState, good: boolean): void {
   // Spot of the kick (holder), measured from the kicking club's own goal line.
   const kickSpot = s.yard - FG_HOLDER_DEPTH
   swapPossession(s)
   s.down = 1
   s.distance = 10
   if (good) {
-    s.phase = resolveKickoff(world, s).scored ? 'try' : 'play'
+    // FUTURES #4: kick off in the kickoff phase, so a late made FG can raise the
+    // user's kickoff call (onside / squib) like a touchdown does.
+    s.phase = 'kickoff'
     return
   }
   s.yard = clamp(100 - kickSpot, 20, 99)
@@ -3470,7 +3472,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       fgS.fgMade += 1
     }
     pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: s.down, distance: s.distance })
-    restartAfterFieldGoal(world, s, good)
+    restartAfterFieldGoal(s, good)
     return 'continue'
   }
 
@@ -3652,7 +3654,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
         fgS.fgMade += 1
       }
       pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: 4, distance: s.distance })
-      restartAfterFieldGoal(world, s, good)
+      restartAfterFieldGoal(s, good)
       return 'continue'
     }
     const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore, s.n, defId, planForClub(s, defId).pr, planForClub(s, offId).punt)
