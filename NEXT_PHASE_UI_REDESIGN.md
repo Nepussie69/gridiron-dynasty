@@ -599,7 +599,7 @@ Acceptance:
 | Step | Status |
 |---|---|
 | F0 Spec + baseline | ✅ 2026-10-10 |
-| F1 Tokens, team colour, formatting helpers | ⏳ |
+| F1 Tokens, team colour, formatting helpers | ✅ f25f84f on ui-redesign (contrast 342/342 pass, 32 clubs × 2 themes) |
 | F2 Kit primitives | ⏳ |
 | F3 AppShell, navigation, phone shell | ⏳ |
 | F4 Staff pilot (reference screen) | ⏳ |
