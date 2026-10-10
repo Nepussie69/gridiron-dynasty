@@ -64,5 +64,5 @@ Background watchers from this chat will not carry over — in the new chat, re-c
 ## Queue after the above (one sim-touching job per area; UI jobs can run in parallel)
 
 1. K/P GP follow-up (after realism merge).
-2. FUTURES: #5 challenges, #6 weather, #7 halftime speech, #8 primetime/rivalry, #11 FA frenzy, #15 injury decisions, #24 trick plays, #2 UI Broadcast 2.0, #26 coach playcalling, #27 draft philosophy, #28 choose coordinators/position coaches, #29 future prospects tab. #20 dropped by user.
+2. FUTURES: #5 challenges, #6 weather, #7 halftime speech, #8 primetime/rivalry, #11 FA frenzy, #15 injury decisions, #24 trick plays, #2 UI Broadcast 2.0, #26 coach playcalling, #27 draft philosophy, #28 choose coordinators/position coaches, #29 future prospects tab, **#30 animation realism (`NEXT_PHASE_ANIM_REALISM.md`: phases 1–8, explained → guided physics → calibrated physics; absorbs animcontact3/4)**. #20 dropped by user.
 3. Offer the user a stable 4173 rebuild once realism + kickoffs + returners are merged (GP fix, ledger, filter all already on main).
