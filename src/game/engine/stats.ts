@@ -5,11 +5,12 @@
 // those lines into each player's career stats (one SeasonStats per pro season).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { GameStatLine, Player, SeasonStats, StatLevel } from '../types'
+import type { GameStatLine, Player, Position, SeasonStats, StatLevel } from '../types'
 import { emptySeason } from '../types'
 import type { GameSim } from './playsim'
 import type { Play } from './playsim'
 import type { World } from './generate'
+import { depthGroup } from './depth'
 
 export interface PlayerBoxScore {
   playerId: string
@@ -225,6 +226,16 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       line.snaps = n
       line.snapPct = s.pct
       line.snapSide = s.side
+    }
+  }
+
+  // Backlog 149: a club's active kicker and punter take the field every game
+  // (kickoffs, punts, FG/PAT), so each is credited exactly one game even though
+  // this box score tracks no kicking stats. One line each, no snaps, no rng.
+  for (const teamId of [sim.homeId, sim.awayId]) {
+    for (const pos of ['K', 'P'] as Position[]) {
+      const sp = depthGroup(world, teamId, [pos], 1)[0]
+      if (sp) ensure(sp.id, teamId)
     }
   }
 
