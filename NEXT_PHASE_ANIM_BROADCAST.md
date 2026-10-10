@@ -46,5 +46,5 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 |---|---|
 | Spec | ✅ 2026-10-10 |
 | B2 | ✅ merged into ui-redesign (Claude) |
-| B1 | 🔨 b1a ✅ merged; b1b building |
+| B1 | ✅ b1a 0e2845f + b1b 9f470fc on main (engagements, events, poses, facing, ball height, camera hints; calibration identical) |
 | B3–B8 | ⏳ prompts b4, b5a/b5b, b7 ready; B3, B6, B8 Claude |
