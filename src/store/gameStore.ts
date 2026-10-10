@@ -151,6 +151,7 @@ import { accessFor } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
 import { STARTERS, depthAt, depthGroup, moveInDepth, resetDepth, setStarterInDepth, topPlayers } from '../game/engine/depth'
+import { isReturnEligible } from '../game/engine/returns'
 import { attributesFor, playerAttrs } from '../game/data/ratings'
 import {
   advanceContacts,
@@ -538,6 +539,10 @@ interface GameStore {
   setStarter: (pos: Position, playerId: string) => void
   /** Depth chart: drop your club's stored order and fall back to ratings. */
   resetDepthChart: () => void
+  /** R6: choose (or clear with null) your club's kick/punt returner. Returns false when rejected. */
+  setReturner: (role: 'kr' | 'pr', playerId: string | null) => boolean
+  /** R6: clear both returner overrides, restoring automatic selection. */
+  resetReturners: () => void
   /** L15: set (or clear) a young player's development focus. */
   setDevFocus: (playerId: string, focus: DevFocusId | null) => void
   /** L15: give every young player the focus that targets his weakest area. */
@@ -906,6 +911,50 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     resetDepth(world, career.teamId)
+    // R6: "reset to ratings" also drops the returner overrides (back to automatic).
+    if (world.returners) delete world.returners[career.teamId]
+    bump(set, get)
+    get().save()
+  },
+
+  // R6: kick/punt returners. The override is validated here, not just in the UI:
+  // only a healthy WR/RB/CB on your own roster can be selected. Updates only the
+  // one role, so choosing a KR never touches the PR (or the depth chart).
+  setReturner: (role, playerId) => {
+    const career = get().career
+    if (!career) return false
+    const teamId = career.teamId
+    if (playerId === null) {
+      const team = world.returners?.[teamId]
+      if (!team || !team[role]) return false
+      delete team[role]
+      if (!team.kr && !team.pr) delete world.returners![teamId]
+      bump(set, get)
+      get().save()
+      return true
+    }
+    const player = (world.roster[teamId] ?? []).find((p) => p.id === playerId)
+    // Enforce eligibility in the store: own club, returner position, healthy.
+    if (!player || !isReturnEligible(player)) {
+      get().showToast('Only a receiver, running back or cornerback can return kicks or punts.')
+      return false
+    }
+    if (player.injured) {
+      get().showToast(`${player.name} is out — pick a healthy returner.`)
+      return false
+    }
+    world.returners ??= {}
+    world.returners[teamId] = { ...(world.returners[teamId] ?? {}), [role]: playerId }
+    bump(set, get)
+    get().save()
+    return true
+  },
+
+  resetReturners: () => {
+    const career = get().career
+    if (!career) return
+    if (!world.returners?.[career.teamId]) return
+    delete world.returners[career.teamId]
     bump(set, get)
     get().save()
   },
