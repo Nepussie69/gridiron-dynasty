@@ -105,11 +105,11 @@ export const R2 = {
   missGain: 0.004,
   missDefDiff: 0.016,
   missCarDiff: 0.015,
-  missPassBump: 0.16,
+  missPassBump: 0.20,
   /** R5: extra yards on a broken tackle are 1..missYardsRange. */
-  missYardsRange: 4,
+  missYardsRange: 3,
   /** R5: talent tilt of the real yardage draw — see sampleYards (bounded, no point mass). */
-  talentTilt: 0.02,
+  talentTilt: 0.03,
   /** Base sack chance per dropback (real rate ≈ 6.5%). */
   sackBase: 0.12,
   /** Base interception chance. */
@@ -119,13 +119,13 @@ export const R2 = {
    *  ~4.34, which also kept the run-heaviest seed's rushing yards above band. */
   runGainCal: 0.726,
   /** Multiplier on the yards-after-catch / style bonus on completions. */
-  yacCal: 1,
+  yacCal: 1.03,
   /** Multiplier on a positive pass gain after the real distribution is sampled.
    *  R2 variance fix: trimmed so the pass-heaviest league's gross/net passing yards
    *  and passing TDs sit inside their bands instead of riding the top edge. */
   passGainCal: 1.055,
   /** Game-clock seconds consumed per second of play time (pace). */
-  pace: 0.835,
+  pace: 0.838,
   /** Where a drive starts after a touchback (2015–2024 average ≈ the 27). */
   kickoffYard: 27,
   /** Pre-snap penalty chance per snap (defense / offense). */

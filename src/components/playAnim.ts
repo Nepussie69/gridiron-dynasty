@@ -859,6 +859,216 @@ function lineDrive(off: Player | undefined, offKey: string, def: Player | undefi
   return clampN((o - d) * 0.035, -1.1, 1.1)
 }
 
+/** A numeric attribute, or `fallback` when the player does not carry it (never
+ *  the overall: a missing route/block rating is league average, as in the sim). */
+function attrNum(p: Player | undefined, key: string, fallback = 70): number {
+  const v = p?.attrs?.[key]
+  return typeof v === 'number' ? v : fallback
+}
+
+/** Best of a set of attributes (a rusher's best move, a blocker's protection). */
+function bestAttr(p: Player | undefined, keys: string[], fallback = 70): number {
+  let best = fallback
+  let any = false
+  for (const k of keys) {
+    const v = p?.attrs?.[k]
+    if (typeof v === 'number') {
+      best = any ? Math.max(best, v) : v
+      any = true
+    }
+  }
+  return any ? best : fallback
+}
+
+// ── pass protection (backlog 152) ────────────────────────────────────────────
+// The pocket is planned as real engagements. The best pass rusher among the
+// front (highest PRS / power / finesse move) is doubled by the two linemen
+// closest to his alignment; the rest are single-blocked; a blitzer the slide
+// does not pick up comes free. Blockers stand on a wall and each rusher attacks
+// one contact-distance in front of it, so a rusher's x is never behind a
+// blocker's and the two centres cannot overlap. A recorded sack or pressure
+// still looks earned: the credited rusher — and only he — beats his blocker(s)
+// home (splitting a double between the pair), while the men who stay blocked
+// never reach the quarterback. Presentation only.
+
+const CONTACT = 1.25 // yd between a blocker's and his rusher's centres
+const LANE_GAP = 1.8 // min y between two blockers on the wall
+const DOUBLE_GAP = 2.4 // y between the two blockers doubling one rusher
+
+/** The best y near `y` that is at least `d` from every lane (avoid packed bodies). */
+function clearY(y: number, lanes: number[], d: number): number {
+  if (!lanes.length) return clampY(y)
+  const L = [...lanes].sort((a, b) => a - b)
+  const cands = [L[0] - d, L[L.length - 1] + d]
+  for (let i = 0; i < L.length - 1; i++) if (L[i + 1] - L[i] >= 2 * d) cands.push((L[i] + L[i + 1]) / 2)
+  let best = cands[0]
+  let bd = Infinity
+  for (const c of cands) {
+    const dd = Math.abs(c - y)
+    if (dd < bd) {
+      bd = dd
+      best = c
+    }
+  }
+  return clampY(best)
+}
+
+/**
+ * Plan and run the pass protection. `rushers` are the front plus any blitzers,
+ * `blockers` the linemen (and a back/tight end staying in). The best rusher is
+ * doubled by the two linemen closest to his alignment; a man left over on a
+ * blitz comes free; the recorded sacker / pressure rusher beats his block
+ * (splitting the double) home. Blockers hold a wall and each rusher attacks one
+ * contact-distance in front of it, so the pairs never overlap. Returns the
+ * doubled and free keys for the probe. Presentation only.
+ */
+function passProtect(
+  m: Record<string, Mover>,
+  f: Formation,
+  los: number,
+  opts: { rushers: string[]; blockers: string[]; winner?: string; qbTarget: Pt; arriveSec: number },
+): { doubled: string[]; free: string[] } {
+  const R = opts.rushers.filter((k) => m[k] && f[k])
+  const B = opts.blockers.filter((k, i, a) => m[k] && f[k] && a.indexOf(k) === i)
+  if (!R.length) return { doubled: [], free: [] }
+  const rush = (k: string) => bestAttr(m[k].player, ['PRS', 'PMV', 'FMV'])
+  const prot = (k: string) => bestAttr(m[k].player, ['PBK', 'PBP', 'PBF'])
+  const rank = [...R].sort((a, b) => rush(b) - rush(a))
+  const primary = rank[0]
+
+  // Assign blockers: the primary is doubled on most dropbacks (occasionally
+  // singled); each other rusher takes the nearest free man, and a rusher left
+  // over comes free.
+  const usedB = new Set<string>()
+  const pairs: { r: string; bs: string[] }[] = []
+  const near = [...B].sort((a, b) => Math.abs(f[a].y - f[primary].y) - Math.abs(f[b].y - f[primary].y))
+  const want = hash(los * 7 + opts.rushers.length * 3 + 19) < 0.82 ? 2 : 1
+  const pbs: string[] = []
+  for (const b of near) {
+    if (pbs.length < want) {
+      pbs.push(b)
+      usedB.add(b)
+    }
+  }
+  pairs.push({ r: primary, bs: pbs })
+  for (const r of rank.slice(1)) {
+    const avail = B.filter((b) => !usedB.has(b))
+    if (!avail.length) {
+      pairs.push({ r, bs: [] })
+      continue
+    }
+    const b = avail.reduce((a, c) => (Math.abs(f[c].y - f[r].y) < Math.abs(f[a].y - f[r].y) ? c : a))
+    usedB.add(b)
+    pairs.push({ r, bs: [b] })
+  }
+
+  // Lane layout. Every blocker stands on the wall at a y, spaced so the bodies
+  // stay apart; a double is 2.4 yd wide so the rusher can split it.
+  const lane: Record<string, number> = {}
+  for (const b of B) lane[b] = clampY(f[b].y)
+  const pairId: Record<string, number> = {}
+  pairs.forEach((pr, i) => {
+    if (pr.bs.length >= 2) for (const b of pr.bs) pairId[b] = i
+  })
+  const samePair = (a: string, b: string) => pairId[a] !== undefined && pairId[a] === pairId[b]
+  for (const pr of pairs) {
+    if (pr.bs.length < 2) continue
+    const [a, b] = pr.bs
+    const mid = (lane[a] + lane[b]) / 2
+    // Keep each man on the side he started on, so the pair opens outward and the
+    // two blockers never swap places (which would cross the rusher's line).
+    const lo = lane[a] <= lane[b] ? a : b
+    const hi = lo === a ? b : a
+    lane[lo] = mid - DOUBLE_GAP / 2
+    lane[hi] = mid + DOUBLE_GAP / 2
+  }
+  const order = [...B].sort((a, b) => lane[a] - lane[b])
+  for (let it = 0; it < 8; it++) {
+    for (let i = 1; i < order.length; i++) {
+      const gap = samePair(order[i - 1], order[i]) ? DOUBLE_GAP : LANE_GAP
+      if (lane[order[i]] - lane[order[i - 1]] < gap) lane[order[i]] = lane[order[i - 1]] + gap
+    }
+    for (let i = order.length - 2; i >= 0; i--) {
+      const gap = samePair(order[i], order[i + 1]) ? DOUBLE_GAP : LANE_GAP
+      if (lane[order[i + 1]] - lane[order[i]] < gap) lane[order[i]] = lane[order[i + 1]] - gap
+    }
+  }
+  for (const b of B) lane[b] = clampY(lane[b])
+  const allLanes = B.map((b) => lane[b])
+
+  // The wall holds its shape and gives ground together, in proportion to the
+  // primary matchup; every rusher attacks a contact-distance in front of it.
+  // Keep the wall a body's length in front of where the passer ends, so a free
+  // rusher coming home through the pocket cannot clip a blocker on a goal-line
+  // play (a safety, where the passer's spot is barely behind the line).
+  const give = clampN((rush(primary) - prot(pbs[0] ?? primary)) * 0.025, -0.3, 1.1)
+  const wallX = clampX(Math.max(los - 0.6 - give, opts.qbTarget.x + 1.4))
+  const contactX = clampX(wallX + give + CONTACT)
+
+  // Plan each pair, and the time the pocket forms (the slowest man to his spot).
+  const plan: { r: string; bs: string[]; pts: Pt[]; burst: Pt[]; after: Pt[] }[] = []
+  let te = 0.12
+  for (const pr of pairs) {
+    const { r } = pr
+    const bs = pr.bs
+    // The lane the rusher attacks: his blocker's lane, the gap of a double, or a
+    // clear gap for a free man.
+    let qY: number
+    if (!bs.length) qY = clearY(f[r].y, allLanes, 1.0)
+    else if (bs.length >= 2) qY = (lane[bs[0]] + lane[bs[1]]) / 2
+    else qY = lane[bs[0]]
+    // Attack in a straight line to the contact point, so the rusher's x is never
+    // behind a blocker's and the centres cannot overlap.
+    const pts: Pt[] = [{ x: contactX, y: clampY(qY) }]
+    te = Math.max(te, straightTime(m[r].pace, Math.hypot(pts[0].x - m[r].x, pts[0].y - m[r].y), 0) + 0.12)
+    for (const b of bs) te = Math.max(te, straightTime(m[b].pace, Math.hypot(wallX - m[b].x, lane[b] - m[b].y), 0) + 0.06)
+    // A free man keeps his clear lane past the wall, then turns for the pocket —
+    // the turn waits until the wall is set so he never crosses a sliding body.
+    const after: Pt[] = []
+    if (!bs.length) {
+      after.push(
+        { x: clampX(wallX - 1.0), y: clampY(qY) },
+        { x: clampX(opts.qbTarget.x), y: clampY(opts.qbTarget.y + ((plan.length % 3) - 1) * 0.9) },
+      )
+    }
+    // The recorded winner's burst home: a doubled man splits the pair; a singled
+    // man swims to his outside shoulder at the line, then straight back. He gets
+    // behind the wall before turning, so his run to the passer clears every body.
+    const burst: Pt[] = []
+    if (opts.winner === r && bs.length) {
+      let burstY = qY
+      if (bs.length < 2) {
+        const side = f[r].y >= qY ? 1 : -1
+        burstY = clearY(clampY(qY + side * 1.15), allLanes, 1.0)
+        burst.push({ x: contactX, y: clampY(burstY) })
+      }
+      burst.push({ x: clampX(wallX - 0.7), y: clampY(burstY) }, { x: clampX(wallX - 1.7), y: clampY(burstY) }, opts.qbTarget)
+    }
+    plan.push({ r, bs, pts, burst, after })
+  }
+  te = Math.min(te, Math.max(0.1, opts.arriveSec - 0.1))
+  const mid = opts.arriveSec - te
+
+  // Every blocker — even one left without a man — steps on to the wall once.
+  for (const b of B) runTimed(m[b], [{ x: wallX, y: lane[b] }], m[b].t, te, false, true)
+  for (const pl of plan) {
+    runTimed(m[pl.r], pl.pts, m[pl.r].t, te, false, true)
+    if (mid <= 0.12) continue
+    if (pl.burst.length) {
+      runTimed(m[pl.r], pl.burst, m[pl.r].t, opts.arriveSec, false, true)
+      // The beaten blockers give ground behind the rush.
+      for (const b of pl.bs) runTimed(m[b], [{ x: clampX(wallX - 0.3), y: lane[b] }], m[b].t, te + mid * 0.5, false, true)
+    } else if (pl.after.length) {
+      // Free: an unblocked rusher turns and comes home by the throw.
+      runTimed(m[pl.r], pl.after, m[pl.r].t, opts.arriveSec, false, true)
+    }
+  }
+  return {
+    doubled: pairs.filter((p) => p.bs.length >= 2).map((p) => p.r),
+    free: pairs.filter((p) => !p.bs.length).map((p) => p.r),
+  }
+}
+
 function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const los = 10 + play.startYard
   const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
@@ -1017,9 +1227,9 @@ function conceptTree(concept: string, rollSide: number): Record<string, string> 
   return Object.keys(tree).length ? { ...fallback, ...tree } : fallback
 }
 
-/** Route running by depth (L12.10 B5): SRR short, MRR intermediate, DRR deep. */
+/** Route running by depth: the same split the sim uses (SRR short, MRR 8–14, DRR 15+). */
 function routeRunRating(p: Player | undefined, depth: number): number {
-  return attrOf(p, depth <= 5 ? 'SRR' : depth <= 12 ? 'MRR' : 'DRR')
+  return attrNum(p, depth > 14 ? 'DRR' : depth > 7 ? 'MRR' : 'SRR', 70)
 }
 
 /** Run a route: high route running = a crisp near-stop cut, low = a rounded drift. */
@@ -1077,20 +1287,41 @@ function routeInfo(name: string): RouteInfo {
  * A defender slower than the shape keeps his full pace (he trails — a genuine
  * blown coverage, matching a recorded big gain).
  */
-function runTimed(mv: Mover, pts: Pt[], fromSec: number, toSec: number) {
+function runTimed(mv: Mover, pts: Pt[], fromSec: number, toSec: number, drift = true, stop = false, maxBoost = 1) {
   if (!pts.length) return
   const all = [{ x: mv.x, y: mv.y }, ...pts]
   const T = Math.max(0.05, toSec - fromSec)
   const saved = mv.pace
-  let D = 0
-  for (let i = 1; i < all.length; i++) D += Math.hypot(all[i].x - all[i - 1].x, all[i].y - all[i - 1].y)
-  // Scale the pace so the move spans exactly the window: with v0=0 and both
-  // speed and accel scaled by f, t(f) ≈ (v/acc)/2 + D/(v·f).
-  const ta = saved.acc > 1e-6 ? saved.top / saved.acc : 0
-  const f = clampN(D / Math.max(1e-6, saved.top * Math.max(0.05, T - ta / 2)), 0.03, 1)
-  if (f < 1) mv.pace = { top: saved.top * f, acc: Math.max(0.05, saved.acc * f) }
-  mv.run(pts, { v0: 0, stop: false })
+  // Scale the pace so the move spans exactly the window. A pure trial timing is
+  // bisected, because the true traversal includes the acceleration ramp and any
+  // plant: the closed-form estimate misses by half a ramp, which left a cover
+  // defender arriving a fraction of a second late (a visibly loose catch). A
+  // cover defender may be boosted a little (technique) so his rating, not raw
+  // speed, sets the gap; the cap is the boost limit.
+  const timeFor = (f: number) => {
+    const k = timedLine(all, { top: saved.top * f, acc: Math.max(0.05, saved.acc * f) }, { v0: 0, stop })
+    return k.length ? k[k.length - 1].t : 0
+  }
+  let f: number
+  if (timeFor(maxBoost) >= T) f = maxBoost
+  else if (timeFor(0.03) <= T) f = 0.03
+  else {
+    let lo = 0.03
+    let hi = maxBoost
+    for (let i = 0; i < 18; i++) {
+      const mid = (lo + hi) / 2
+      if (timeFor(mid) > T) lo = mid
+      else hi = mid
+    }
+    f = (lo + hi) / 2
+  }
+  if (Math.abs(f - 1) > 1e-6) mv.pace = { top: saved.top * f, acc: Math.max(0.05, saved.acc * f) }
+  mv.run(pts, { v0: 0, stop })
   mv.pace = saved
+  if (!drift) {
+    void fromSec
+    return
+  }
   // Last resort: if he still came up short, keep a live drift to the catch so
   // capAt does not freeze him mid-window (v0 carried so there is no speed cliff).
   for (let g = 0; g < 2 && toSec - mv.t > 0.04; g++) {
@@ -1131,44 +1362,107 @@ function keepLive(shape: Pt[], fromSec: number, toSec: number) {
 }
 
 /**
- * A man defender running with a receiver: he aligns 1–7 yd off (press for a
- * good corner, off for a poor one), then mirrors the route with a short
- * reaction lag — in the hip pocket trailing behind on in-breaking routes, over
- * the top on verticals. `tightness` loosens the trail for a recorded big gain.
+ * A man defender running with a receiver (backlog 153). He aligns 1–7 yd off
+ * (press for a good corner, off for a poor one), then mirrors the route: the
+ * separation he gives up at the break comes from the receiver's route running
+ * for that depth (SRR short / MRR 8–14 / DRR deep) against the corner's man
+ * coverage (plus a step of speed/acceleration on verticals). A superior route
+ * runner breaks free by a step or more, an even matchup stays in phase, a
+ * superior cover man mirrors the cut and stays in the hip pocket. The gap then
+ * closes on whatever the recorded result needs at the catch.
  */
 function manTrail(
   def: Mover,
   recvKey: string,
   recv: Mover,
-  opts: { fromSec: number; toSec: number; los: number; cov: number; inw: number; tightness: number; seed: number; routeName: string; zone?: boolean },
+  opts: {
+    fromSec: number
+    toSec: number
+    los: number
+    cov: number
+    inw: number
+    tightness: number
+    seed: number
+    routeName: string
+    zone?: boolean
+    isTarget?: boolean
+    result?: string
+    gain?: number
+  },
 ) {
-  const { fromSec, toSec, los, cov, inw, tightness, seed } = opts
+  const { fromSec, toSec, los, cov, inw, seed } = opts
   const ri = routeInfo(opts.routeName)
-  const lag = clampN(0.24 - (cov - 60) * 0.005, 0.05, 0.26) * (1 + tightness * 1.6)
+  // Matchup: route running for this depth vs the defender's man coverage; a
+  // step for speed/acceleration on a vertical route.
+  const rr = routeRunRating(recv.player, ri.depth)
+  const mcv = attrNum(def.player, 'MCV')
+  let adv = rr - mcv
+  if (ri.vert) {
+    adv += (attrNum(recv.player, 'SPD') - attrNum(def.player, 'SPD')) * 0.5
+    adv += (attrNum(recv.player, 'ACC') - attrNum(def.player, 'ACC')) * 0.25
+  }
+  // Separation the receiver wins at the break, from the matchup.
+  let sepBreak = clampN(1.05 + adv * 0.115, 0.3, 3.0)
+  // The gap at the catch is set by the recorded result.
+  let sepCatch = clampN(0.5 + adv * 0.025, 0.3, 1.3)
+  if (opts.zone) {
+    sepBreak = clampN(sepBreak + 0.35, 0.4, 3.2)
+    sepCatch = clampN(sepCatch + 0.25, 0.4, 1.6)
+  }
+  if (opts.isTarget) {
+    // Converge on the recorded result: a pick needs the defender at the ball; a
+    // big gain leaves him trailing; other completions are contested; an
+    // incomplete can still show a step of separation (a drop) when the receiver
+    // had won the matchup.
+    const gain = opts.gain ?? 0
+    if (/Interception/.test(opts.result ?? '')) {
+      // A pick: the defender is at the ball.
+      sepBreak = Math.min(sepBreak, 1.0)
+      sepCatch = 0.35
+    } else if (/Incomplete/.test(opts.result ?? '')) {
+      // A breakup / near-miss: tight, but a receiver who won the matchup can
+      // still show a step (a drop).
+      sepCatch = clampN(Math.max(sepCatch, sepBreak * 0.5) + opts.tightness * 0.2, 0.3, 1.4)
+    } else if (gain >= 20) {
+      // A big gain: the defender is left trailing, the more so the looser the
+      // play (a genuine blown coverage).
+      sepBreak = clampN(Math.max(sepBreak, 1.8) + opts.tightness * 0.4, 0.4, 3.2)
+      sepCatch = clampN(Math.max(sepCatch, 2.0) + opts.tightness * 0.4, 0.4, 2.6)
+    } else {
+      // A contested completion: the hip pocket.
+      sepCatch = Math.min(sepCatch, 0.8)
+    }
+  }
+  // The cushion only ever shrinks, so the defender never has to out-run the
+  // receiver to close the gap: his path is no longer than the receiver's.
+  sepCatch = Math.min(sepCatch, sepBreak)
   const cushBase = opts.zone ? 1.5 : 1
   // Underneath/quick routes are covered tight (press or off); only vertical
   // routes get a deep cushion. This keeps the defender close from the snap.
   const base = clampN(7 - (cov - 60) * 0.09, 1.5, 7) * cushBase * (0.55 + hash(seed + 5) * 0.45)
-  const cushion = clampN(base * (ri.vert ? 1 : 0.55), 1, 7)
+  const sep0 = clampN(Math.max(base, sepBreak + 1.1), 1.4, 8)
+  const perp = ri.vert ? 0 : ri.inBreak ? inw * 0.8 : -inw * 0.3
   const steps = 26
   const shape: Pt[] = []
   for (let i = 0; i <= steps; i++) {
     const u = i / steps
     const t = fromSec + (toSec - fromSec) * u
-    // The reaction lag closes over the route so the defender arrives at the
-    // catch point with the ball, not trailing the receiver's last step.
-    const tp = ri.vert ? t + lag * (1 - u) : Math.max(0, t - lag * (1 - u))
-    const rp = posAt(recv.path, tp)
-    const perp = ri.vert ? 0 : ri.inBreak ? inw * 0.8 : -inw * 0.3
-    // The cushion shrinks from alignment to the hip pocket over the route.
-    shape.push({ x: clampX(rp.x + cushion * (1 - u)), y: clampY(rp.y + perp) })
+    const rp = posAt(recv.path, t)
+    // A cushion ahead that closes to the break gap, holds it through the cut,
+    // then converges on what the recorded result needs at the catch.
+    const sep = u <= 0.5
+      ? sep0 + (sepBreak - sep0) * (u / 0.5)
+      : u <= 0.78
+        ? sepBreak
+        : sepBreak + (sepCatch - sepBreak) * ((u - 0.78) / 0.22)
+    shape.push({ x: clampX(rp.x + sep), y: clampY(rp.y + perp) })
   }
   // Align on the receiver he is covering (a cushion off him), not on the line:
   // a back or tight end who lines up behind the line would otherwise be left
   // "open" while his man starts ten yards downfield.
   keepLive(shape, fromSec, toSec)
   def.reset(shape[0].x, shape[0].y)
-  runTimed(def, shape, fromSec, toSec)
+  runTimed(def, shape, fromSec, toSec, true, false, 1.1)
   void recvKey
   void los
 }
@@ -1330,16 +1624,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const pa = /Play Action|PA Cross|RPO/.test(concept)
   const side = hash(seed + 3) < 0.5 ? -1 : 1
 
-  // Pocket: OL anchors by PBK/STR, DL rushes by PMV/FMV/BSH, so the better unit wins.
-  for (let i = 0; i < 5; i++) {
-    const drive = lineDrive(m[`ol${i}`].player, 'PBK', m[`dl${Math.min(3, i)}`].player, 'PMV')
-    m[`ol${i}`].run([{ x: los - 1.8 - drive, y: f[`ol${i}`].y + (i - 2) * 0.5 }], { stop: true })
-  }
-  for (let i = 0; i < 4; i++) {
-    const pmv = Math.max(attrOf(m[`dl${i}`].player, 'PMV'), attrOf(m[`dl${i}`].player, 'FMV'))
-    const pen = clampN((pmv - 70) * 0.03, -0.4, 1.0)
-    m[`dl${i}`].run([{ x: los - 1.2 - pen + (i % 2), y: f[`dl${i}`].y + (MID_Y - f[`dl${i}`].y) * 0.3 }], { stop: true })
-  }
+  // Pocket: OL anchor by PBK, DL rush by PMV/FMV, so the better unit wins. The
+  // protection itself is planned later (backlog 152), once the drop and the
+  // throw are known, so a doubled rusher can be shown splitting the block.
 
   // Run fake (play-action / RPO / bootleg): QB and back mesh before the drop.
   const qbPts: Pt[] = []
@@ -1383,9 +1670,20 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   }
 
   const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb']
+  // A receiver whose route is a blocking assignment stays in to protect
+  // (backlog 152); everyone else runs his route.
+  const stayIn = new Set(receivers.filter((k) => k !== tgt && /^(stalk|runFake|block|passBlock)$/.test(routeMap[k] ?? '')))
+  // A back chips an edge or blitzer before releasing into his route.
+  if (play.blitz && tgt !== 'rb' && !stayIn.has('rb')) {
+    const chipR = blitzKeys(seed).reduce((a, k) => (Math.abs(f[k].y - f.rb.y) < Math.abs(f[a].y - f.rb.y) ? k : a))
+    const dir = f.rb.y >= f[chipR].y ? 1 : -1
+    m.rb.run([{ x: clampX(los - 1.6), y: clampY(f[chipR].y + dir * 1.1) }], { stop: true })
+    m.rb.hold(0.1)
+  }
   let catchPt: Pt = { x: los, y: MID_Y }
   let catchSec = 0.4
   for (const k of receivers) {
+    if (stayIn.has(k)) continue
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const inw = inwOf(k)
     const raw = def.wps(f[k].y, los, 1, inw, -inw, side)
@@ -1442,6 +1740,20 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const accKey = depth >= 15 ? 'DAC' : depth >= 9 ? 'MAC' : 'SAC'
   const accuracy = attrOf(qb, accKey)
 
+  // ── pass protection (backlog 152) ─────────────────────────────────────────
+  // The front plus any blitzers rush; the line (and a back/tight end staying
+  // in) slides and doubles the best rusher. The recorded pressure rusher beats
+  // his block home; anyone the slide does not pick up comes free.
+  const blitzK = play.blitz ? blitzKeys(seed) : []
+  const pressureKey = play.pressureId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.pressureId) : undefined
+  passProtect(m, f, los, {
+    rushers: ['dl0', 'dl1', 'dl2', 'dl3', ...blitzK],
+    blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', ...stayIn],
+    winner: pressureKey,
+    qbTarget: posAt(m.qb.path, releaseSec),
+    arriveSec: releaseSec,
+  })
+
   const ball: WP[] = snapBall(m, los, releaseSec)
   const bias = clampN((70 - accuracy) * 0.03, -0.5, 1.0)
   ball.push(
@@ -1463,8 +1775,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const coverId = play.coverId
   const coverKey = coverId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === coverId) : undefined
   const scheme = coverageScheme(play, seed)
-  // Blitz first, so the extra rushers are excluded from the coverage pool (151).
-  const blitzers = play.blitz ? blitzRush(m, f, los, seed, posAt(m.qb.path, releaseSec), releaseSec) : []
+  // Blitzers were already moved as part of the protection (backlog 152); here
+  // the set is only used to keep them out of the coverage pool (151).
+  const blitzers = blitzK
   const isBlitzer = (k: string) => blitzers.includes(k)
   const runners = receivers.filter((k) => pathLen(m[k].path) > 3.5)
   // Separation should match the recorded result: hip-pocket tight on short and
@@ -1499,7 +1812,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   if (runners.includes(tgt)) take(tgt, tgtMan)
   for (const k of runners) if (!assign[k]) take(k)
   for (const recv of Object.keys(assign)) {
-    manTrail(m[assign[recv]], recv, m[recv], { fromSec: 0.1, toSec: trailEnd, los, cov: covOf(assign[recv]), inw: inwOf(recv), tightness, seed, routeName: routeMap[recv] ?? '', zone: zoneLook })
+    manTrail(m[assign[recv]], recv, m[recv], { fromSec: 0.1, toSec: trailEnd, los, cov: covOf(assign[recv]), inw: inwOf(recv), tightness, seed, routeName: routeMap[recv] ?? '', zone: zoneLook, isTarget: recv === tgt, result: play.result, gain: gainYds })
   }
   // Unassigned defenders: safeties over the top, the rest rob / drop into a zone.
   for (const dk of poolAll) {
@@ -1586,27 +1899,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
 }
 
 /**
- * A blitz: the middle linebacker plus one outside linebacker (and sometimes a
- * safety) creep up before the snap and rush the quarterback at their own pace.
+ * The blitz: the middle linebacker plus one outside linebacker (and sometimes a
+ * safety) creep up before the snap and rush. Pure key selection (no movement):
+ * the protection decides who is picked up and who comes free (backlog 152).
  */
-function blitzRush(m: Record<string, Mover>, f: Formation, los: number, seed: number, qbAt: Pt, arriveSec: number): string[] {
-  const keys = ['lb1', hash(seed + 31) < 0.5 ? 'lb0' : 'lb2', ...(hash(seed + 37) < 0.3 ? ['s1'] : [])]
-  keys.forEach((k, i) => {
-    const side = f[k].y < MID_Y ? -1 : 1
-    const pmv = Math.max(attrOf(m[k].player, 'PMV'), attrOf(m[k].player, 'FMV'))
-    const getHome = clampN((pmv - 70) * 0.05, -0.4, 1.2)
-    m[k].reset()
-    m[k].run(
-      [
-        { x: los + 2, y: clampY(f[k].y + (MID_Y - f[k].y) * 0.3) },
-        { x: los - 1, y: clampY(MID_Y + side * (3.5 + i)) },
-        { x: clampX(qbAt.x + 1 - getHome * 2), y: clampY(qbAt.y + side * (1 + i * 0.6)) },
-      ],
-      { stop: true },
-    )
-    if (m[k].t < arriveSec) m[k].hold(arriveSec - m[k].t)
-  })
-  return keys
+function blitzKeys(seed: number): string[] {
+  return ['lb1', hash(seed + 31) < 0.5 ? 'lb0' : 'lb2', ...(hash(seed + 37) < 0.3 ? ['s1'] : [])]
 }
 
 function buildSack(play: Play, ctx: AnimContext): PlayAnim {
@@ -1626,14 +1924,22 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
     return rb - ra
   })[0]
 
-  for (let i = 0; i < 5; i++) m[`ol${i}`].run([{ x: los - 1.8, y: f[`ol${i}`].y }], { stop: true })
-  m.qb.run([{ x: f.qb.x - 3, y: MID_Y }, { x: endX + 0.6, y: MID_Y + dodge * 2.5 }, { x: endX, y: MID_Y + dodge * 3 }], { stop: true })
+  // Protection (backlog 152): the line doubles the best rusher, and the sim's
+  // sacker beats his block — or splits the double — home to the quarterback.
+  const blitzK = play.blitz ? blitzKeys(seed) : []
+  const qbEnd = { x: endX, y: MID_Y + dodge * 3 }
+  m.qb.run([{ x: f.qb.x - 3, y: MID_Y }, { x: endX + 0.6, y: MID_Y + dodge * 2.5 }, qbEnd], { stop: true })
   const sackT = m.qb.t
-  m[rusherKey].run([{ x: los - 2.5, y: f[rusherKey].y + (MID_Y - f[rusherKey].y) * 0.5 }, { x: endX + 0.7, y: MID_Y + dodge * 3 }], { stop: true })
-  for (let i = 0; i < 4; i++) if (`dl${i}` !== rusherKey) m[`dl${i}`].run([{ x: los - 1.4, y: f[`dl${i}`].y }], { stop: true })
+  passProtect(m, f, los, {
+    rushers: ['dl0', 'dl1', 'dl2', 'dl3', ...blitzK],
+    blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4'],
+    winner: rusherKey,
+    qbTarget: qbEnd,
+    arriveSec: sackT,
+  })
   ;['wr0', 'wr1', 'wr2', 'te'].forEach((k, i) => m[k].run([{ x: los + 6 + i * 2, y: f[k].y }], { stop: true }))
   m.rb.run([{ x: los - 4, y: MID_Y - dodge * 3 }], { stop: true })
-  const blitzers = play.blitz ? blitzRush(m, f, los, seed, { x: endX + 0.8, y: MID_Y + dodge * 3 }, sackT) : []
+  const blitzers = blitzK
   ;['cb0', 'cb1', 's0', 's1', 'lb0', 'lb1', 'lb2'].filter((k) => !blitzers.includes(k)).forEach((k) => m[k].run([{ x: f[k].x + 3, y: f[k].y }], { stop: true }))
   const ball = snapBall(m, los, sackT)
   return finish(f, m, { ball, holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }], flights: [] })
