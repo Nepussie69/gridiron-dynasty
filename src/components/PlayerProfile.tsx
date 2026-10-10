@@ -4,6 +4,7 @@ import { attributesFor, playerAttrs, ATTRIBUTE_SCHEMA } from '../game/data/ratin
 import { COMPOSITES, RATING_INFO, groupForPosition, ratingTitle } from '../game/data/ratingInfo'
 import { fitLabel, schemeFit } from '../game/engine/style'
 import { careerTotals, coverageGrade, seasonLine } from '../game/engine/stats'
+import { isReturnEligible, returnInputs, returnRating, RETURN_INFO, RETURN_WEIGHTS, returnScore } from '../game/engine/returns'
 import { experienceLabel } from '../game/engine/progress'
 import { canAskGm, gmAskCovers } from '../game/engine/gmAsk'
 import { gmTargetNeed, monthKeyOf } from '../game/engine/gmDesk'
@@ -43,6 +44,9 @@ export function PlayerProfile() {
   const posGroup = groupForPosition(player.pos)
   const composites = posGroup ? COMPOSITES[posGroup] ?? [] : []
   const attrValues = playerAttrs(player)
+  // R6: eligible returners show how the sim reads their return ability.
+  const retEligible = isReturnEligible(player)
+  const retInputs = retEligible ? returnInputs(player) : []
   const compositeItems = composites.map((c) => ({
     id: c.id,
     label: c.label,
@@ -164,6 +168,35 @@ export function PlayerProfile() {
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+
+          {retEligible && (
+            <div className="rounded-xl border border-line bg-surface p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="label !mb-0">Return ability</div>
+                <span title={RETURN_INFO} className="cursor-help">
+                  <OvrBadge value={returnRating(player)} size={34} />
+                </span>
+              </div>
+              <RatingBar value={returnScore(player)} height={8} />
+              <div className="mt-3 space-y-2">
+                {RETURN_WEIGHTS.map((w, i) => (
+                  <div key={w.key} title={`${w.label} — ${Math.round(w.weight * 100)}% of the Return rating`}>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="font-cond text-xs font-700 uppercase tracking-wide text-ink-2">
+                        {w.label} <span className="text-faint">{w.key}</span> · {Math.round(w.weight * 100)}%
+                      </span>
+                      <span className="font-cond text-xs font-700 tnum text-ink">{retInputs[i]}</span>
+                    </div>
+                    <RatingBar value={retInputs[i]} segments={10} height={6} />
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-xs leading-relaxed text-muted">
+                Kick and punt returner. The Return rating is the sim's return ability, built from the five athletics
+                above with the weights shown.
+              </p>
             </div>
           )}
 

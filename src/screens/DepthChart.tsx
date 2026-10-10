@@ -4,8 +4,9 @@ import { cn } from '../lib/cn'
 import { capabilities, isGM } from '../game/engine/capabilities'
 import { STARTERS, depthAt } from '../game/engine/depth'
 import { canPitch, pitchSide } from '../game/engine/pitch'
+import { clubReturners, isReturnEligible, RETURN_INFO, returnerStatus, returnInputs, returnRating, RETURN_WEIGHTS, returnScore } from '../game/engine/returns'
 import type { World } from '../game/engine/generate'
-import type { Position } from '../game/types'
+import type { Player, Position } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, OvrBadge, PageHeader } from '../ui/kit'
 import { PlayerName } from '../components/PlayerHoverCard'
@@ -43,6 +44,7 @@ export function DepthChart() {
   const setStarter = useGame((s) => s.setStarter)
   const resetDepthChart = useGame((s) => s.resetDepthChart)
   const pitchStarter = useGame((s) => s.pitchStarter)
+  const setReturner = useGame((s) => s.setReturner)
   const staff = league.staff[activeTeamId] ?? []
 
   const editable =
@@ -126,7 +128,24 @@ export function DepthChart() {
           pitchPositions={pitchPositions}
           pitchUsed={pitchUsed}
           onPitch={pitchStarter}
-        />
+        >
+          <ReturnerCard
+            role="kr"
+            world={league}
+            teamId={activeTeamId}
+            editable={editable}
+            onPick={(r, id) => setReturner(r, id)}
+            onAuto={(r) => setReturner(r, null)}
+          />
+          <ReturnerCard
+            role="pr"
+            world={league}
+            teamId={activeTeamId}
+            editable={editable}
+            onPick={(r, id) => setReturner(r, id)}
+            onAuto={(r) => setReturner(r, null)}
+          />
+        </Unit>
       </div>
     </div>
   )
@@ -145,6 +164,7 @@ function Unit({
   pitchPositions,
   pitchUsed,
   onPitch,
+  children,
 }: {
   title: string
   accent: string
@@ -158,6 +178,8 @@ function Unit({
   pitchPositions: Position[]
   pitchUsed: boolean
   onPitch: (pos: Position, playerId: string) => void
+  /** Extra cards (R6 returners) rendered in the same grid as the position cards. */
+  children?: ReactNode
 }) {
   return (
     <div>
@@ -254,6 +276,7 @@ function Unit({
             </Card>
           )
         })}
+        {children}
       </div>
     </div>
   )
@@ -283,5 +306,140 @@ function IconBtn({
     >
       {children}
     </button>
+  )
+}
+
+/** R6: the Return rating bubble — the rounded `returnScore` the sim fields. */
+function ReturnBadge({ player, size = 26, className }: { player: Player; size?: number; className?: string }) {
+  return (
+    <span title={`${player.name} — ${RETURN_INFO}`} className={cn('inline-flex', className)}>
+      <OvrBadge value={returnRating(player)} size={size} />
+    </span>
+  )
+}
+
+/**
+ * R6: the five sim inputs behind the Return rating, using canonical `playerAttrs`
+ * with the same 70 default `returnScore` applies when a position lacks one.
+ */
+function returnStrip(p: Player): string {
+  return returnInputs(p)
+    .map((v, i) => `${RETURN_WEIGHTS[i].key} ${v}`)
+    .join(' · ')
+}
+
+/**
+ * R6: one Kick Returner or Punt Returner card. Shows the effective returner (the
+ * auto pick, or a healthy manual choice), flags a manual pick that has fallen back
+ * after injury/transfer/release, and lists every eligible WR/RB/CB on the roster
+ * sorted by return ability. Read-only for clubs the user does not run.
+ */
+function ReturnerCard({
+  role,
+  world,
+  teamId,
+  editable,
+  onPick,
+  onAuto,
+}: {
+  role: 'kr' | 'pr'
+  world: World
+  teamId: string
+  editable: boolean
+  onPick: (role: 'kr' | 'pr', id: string) => void
+  onAuto: (role: 'kr' | 'pr') => void
+}) {
+  const status = returnerStatus(world, teamId, role)
+  const eff = status.effective
+  const { kr, pr } = clubReturners(world, teamId)
+  const title = role === 'kr' ? 'Kick Returner' : 'Punt Returner'
+  // Every eligible player, healthy first then by return ability — no hidden top-3 cap.
+  const candidates = (world.roster[teamId] ?? [])
+    .filter(isReturnEligible)
+    .sort((a, b) => Number(!!a.injured) - Number(!!b.injured) || returnScore(b) - returnScore(a))
+
+  return (
+    <Card pad={false} className="overflow-hidden">
+      <div className="flex items-center justify-between gap-2 border-b border-line bg-surface-2 px-3 py-1.5">
+        <span className="label">{title}</span>
+        {status.manual ? <Badge tone="team">Set</Badge> : <Badge tone="neutral">Auto</Badge>}
+      </div>
+
+      <div className="flex items-center gap-2.5 px-3 py-2">
+        {eff ? (
+          <>
+            <span className="flex shrink-0 flex-col items-center gap-0.5">
+              <ReturnBadge player={eff} size={30} />
+              <span className="font-cond text-[9px] font-700 uppercase tracking-wide text-muted">RET</span>
+            </span>
+            <div className="min-w-0 flex-1">
+              <PlayerName player={eff} className="text-sm font-600 text-ink" />
+              <div className="truncate text-[11px] text-muted">
+                {status.manual ? 'Selected' : 'Automatic pick'} · {eff.pos}
+              </div>
+            </div>
+            {editable && status.requested && (
+              <Button
+                variant="ghost"
+                size="sm"
+                title={status.manual ? 'Clear this pick and return to Auto' : 'Clear the unavailable pick'}
+                onClick={() => onAuto(role)}
+              >
+                {status.manual ? 'Auto' : 'Clear'}
+              </Button>
+            )}
+          </>
+        ) : (
+          <div className="text-xs text-muted">No eligible returner on the roster.</div>
+        )}
+      </div>
+
+      {status.requested && !status.manual && (
+        <div className="mx-3 mb-2 rounded-md border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] text-warn">
+          {eff ? `Your pick is unavailable — ${eff.name} returns instead.` : 'Your pick is unavailable — no replacement on the roster.'}
+        </div>
+      )}
+
+      {editable && (
+        <div className="max-h-56 divide-y divide-line/60 overflow-y-auto border-t border-line">
+          {candidates.map((p) => {
+            const selected = status.manual && p.id === eff?.id
+            const isKr = kr?.id === p.id
+            const isPr = pr?.id === p.id
+            const out = !!p.injured
+            return (
+              <button
+                key={p.id}
+                type="button"
+                disabled={out}
+                onClick={() => onPick(role, p.id)}
+                title={out ? `${p.name} is out — unavailable` : `Make ${p.name} the ${role === 'kr' ? 'kick' : 'punt'} returner`}
+                className={cn(
+                  'flex w-full items-start gap-2 px-3 py-1.5 text-left transition',
+                  selected ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
+                  out ? 'cursor-not-allowed opacity-50' : '',
+                )}
+              >
+                <ReturnBadge player={p} size={24} className="mt-0.5" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-1">
+                    <PlayerName player={p} className="truncate text-sm font-600 text-ink" />
+                    <span className="font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
+                    {isKr && <Badge tone="team">KR</Badge>}
+                    {isPr && <Badge tone="info">PR</Badge>}
+                    {out && <Badge tone="loss">OUT</Badge>}
+                  </span>
+                  <span className="mt-0.5 block truncate font-cond text-[10px] tnum text-muted" title={RETURN_INFO}>
+                    {returnStrip(p)}
+                  </span>
+                </span>
+                {selected && <span className="shrink-0 text-xs font-700 text-win">✓</span>}
+              </button>
+            )
+          })}
+          {!candidates.length && <div className="px-3 py-3 text-xs text-muted">No eligible players.</div>}
+        </div>
+      )}
+    </Card>
   )
 }

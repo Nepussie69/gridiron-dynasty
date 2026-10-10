@@ -13,7 +13,7 @@
 // helper, so the player on the field is the player in the box score.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Player } from '../types'
+import type { Player, Position } from '../types'
 import type { World } from './generate'
 import { playerAttrs } from '../data/ratings'
 import { depthAt, depthGroup } from './depth'
@@ -22,6 +22,46 @@ export interface ClubReturners {
   kr?: Player
   pr?: Player
 }
+
+/** R6: the positions a club may line up at kick and punt returner. */
+export const RETURN_POSITIONS: readonly Position[] = ['WR', 'RB', 'CB']
+
+/** R6: does this player's position make him eligible to return kicks or punts? */
+export function isReturnEligible(p: Player): boolean {
+  return RETURN_POSITIONS.includes(p.pos)
+}
+
+/**
+ * R6: the rounded 0–100 Return rating the UI shows. It is exactly the sim's
+ * `returnScore`, rounded — one exposed simulation rating, not a saved attribute.
+ */
+export function returnRating(p: Player): number {
+  return Math.round(returnScore(p))
+}
+
+/**
+ * R6: the ratings and weights behind `returnScore`, for the UI breakdown. Mirrors
+ * the formula exactly (speed, acceleration, agility, ball-carrier vision, ball
+ * security), so the displayed rating and the sim never drift.
+ */
+export const RETURN_WEIGHTS: readonly { key: 'SPD' | 'ACC' | 'AGI' | 'BCV' | 'CAR'; label: string; weight: number }[] = [
+  { key: 'SPD', label: 'Speed', weight: 0.32 },
+  { key: 'ACC', label: 'Acceleration', weight: 0.24 },
+  { key: 'AGI', label: 'Agility', weight: 0.2 },
+  { key: 'BCV', label: 'Vision', weight: 0.14 },
+  { key: 'CAR', label: 'Ball security', weight: 0.1 },
+]
+
+/** R6: a player's five return inputs, using canonical attrs (missing = the 70 default). */
+export function returnInputs(p: Player): number[] {
+  const a = attrs(p)
+  return RETURN_WEIGHTS.map((w) => a[w.key] ?? 70)
+}
+
+/** R6: the plain-English explanation of the Return rating and its weights. */
+export const RETURN_INFO =
+  'Return rating — read from the athletic ratings that drive a return: SPD 32% · ACC 24% · AGI 20% · BCV 14% · CAR 10%. ' +
+  'A rating a position does not carry is treated as 70. The sim uses this number for kick and punt returns.'
 
 /** R6: how many return-score points a backup must be within to bench a starter. */
 const COMPARABLE = 3
@@ -93,4 +133,25 @@ export function clubReturners(world: World, teamId: string): ClubReturners {
   const kr = pick(override?.kr) ?? pool[0]
   const pr = pick(override?.pr) ?? pool.find((p) => p.id !== kr?.id) ?? kr
   return { kr, pr }
+}
+
+/** R6: one return role resolved for the UI — who actually lines up, and why. */
+export interface ReturnerStatus {
+  /** The player who will actually line up (an honoured override, else automatic). */
+  effective?: Player
+  /** The stored override id, if the club set one for this role. */
+  requested?: string
+  /** True when the stored override is being honoured (healthy, still on the roster). */
+  manual: boolean
+}
+
+/**
+ * R6: resolve one return role for display, reusing `clubReturners` so the name in
+ * the box is the man on the field. When a stored override is hurt, traded or
+ * released, `effective` is the real automatic replacement and `manual` is false.
+ */
+export function returnerStatus(world: World, teamId: string, role: 'kr' | 'pr'): ReturnerStatus {
+  const requested = world.returners?.[teamId]?.[role]
+  const effective = clubReturners(world, teamId)[role]
+  return { effective, requested, manual: !!requested && effective?.id === requested }
 }
