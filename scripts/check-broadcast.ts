@@ -68,6 +68,10 @@ import {
 } from '../src/components/broadcast/graphics.ts'
 import { BROADCAST_TOKENS, clubSlab, GraphicsLayer, MIN_TEXT_PX, SLAB_INK_MIN, SLAB_LIFT_BELOW } from '../src/components/broadcast/graphicsDraw.ts'
 import { ART } from '../src/components/broadcast/palette.ts'
+import { ballState } from '../src/components/broadcast/ball.ts'
+import { createBallFx, withBallFx } from '../src/components/broadcast/ballFx.ts'
+import { buildFxSchedule, EVENT_FX, SHAKE_YARDS, shakeAt } from '../src/components/broadcast/fxSchedule.ts'
+import type { AnimEventKind } from '../src/components/playAnim.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
 
 let n = 0
@@ -755,6 +759,156 @@ ok(`graphics: every drawn text is >= ${MIN_TEXT_PX} CSS px at DPR 1 and 2 (phone
     }
   }
   assert.ok(drawn > 0, 'no callout was ever placed')
+})
+
+// ── B4: ball + effects ───────────────────────────────────────────────────────
+
+/** A minimal anim carrying one B1 event of `kind`, for the mapping checks. */
+function fxAnim(kind: AnimEventKind): BroadcastAnim {
+  const spot = kind === 'score' ? { x: 110, y: 0.5 } : { x: 50, y: 26 }
+  return {
+    duration: 3000,
+    actors: [
+      { key: 'rb', side: 'off', role: 'RB', path: [{ t: 0, x: 40, y: 26 }, { t: 1, x: 60, y: 26 }] },
+      { key: 'lb', side: 'def', role: 'LB', path: [{ t: 0, x: 45, y: 28 }, { t: 1, x: 55, y: 27 }] },
+    ],
+    ball: [{ t: 0, x: 40, y: 26 }, { t: 1, x: 60, y: 26 }],
+    holders: [{ t: 0, key: 'rb' }],
+    flights: [],
+    events: [{ t: 0.5, kind, keys: ['rb', 'lb'], spot }],
+    poses: {},
+    facing: {},
+    ballZ: [{ t: 0, z: 1 }],
+    camera: { strongSide: 'low', deep: false, focusKey: null, kind: 'scrimmage' },
+  }
+}
+
+ok('B4: every B1 event kind maps to an effect or an explicit ignore (and the map emits exactly that)', () => {
+  const kinds = unionOf('AnimEventKind')
+  assert.ok(kinds.length >= 20, `parsed only ${kinds.length} event kinds`)
+  const keys = Object.keys(EVENT_FX)
+  for (const k of kinds) assert.ok(keys.includes(k), `AnimEventKind '${k}' has no B4 mapping`)
+  for (const k of keys) assert.ok(kinds.includes(k), `B4 maps '${k}', which is not an AnimEventKind`)
+  let fxKinds = 0
+  let ignores = 0
+  for (const k of kinds) {
+    const rule = EVENT_FX[k as AnimEventKind]
+    const anim = fxAnim(k as AnimEventKind)
+    const sch = buildFxSchedule(anim, { reducedMotion: false, quality: 'full' })
+    const fromEv = sch.filter((it) => it.sourceEvent === 0)
+    if (rule.use === 'fx') {
+      fxKinds++
+      assert.ok(rule.kinds.length > 0 && rule.note.length > 8, `${k}: an fx rule needs kinds and a note`)
+      for (const want of rule.kinds) assert.ok(fromEv.some((it) => it.kind === want), `${k}: no '${want}' emitted (got ${fromEv.map((i) => i.kind).join(',') || 'none'})`)
+    } else {
+      ignores++
+      assert.ok(rule.why.length > 8, `${k}: an ignore needs a reason`)
+      assert.equal(fromEv.length, 0, `${k}: ignored but emitted ${fromEv.map((i) => i.kind).join(',')}`)
+    }
+    // No orphan effects: every item's t0 is exactly its source event's time.
+    for (const it of sch) {
+      const src = anim.events![it.sourceEvent]
+      assert.ok(src, `${k}: item sourceEvent ${it.sourceEvent} out of range`)
+      assert.ok(Math.abs(it.t0 - src.t) < 1e-9, `${k}: ${it.kind} t0 ${it.t0} vs event ${src.t} (orphan)`)
+    }
+  }
+  console.log(`      ${fxKinds} event kinds drive effects, ${ignores} are explicit ignores`)
+})
+
+ok('B4: the effect schedule is deterministic per play', () => {
+  for (const k of unionOf('AnimEventKind') as AnimEventKind[]) {
+    const anim = fxAnim(k)
+    const a = JSON.stringify(buildFxSchedule(anim, { reducedMotion: false, quality: 'full' }))
+    const b = JSON.stringify(buildFxSchedule(anim, { reducedMotion: false, quality: 'full' }))
+    assert.equal(a, b, `${k}: schedule differs between builds`)
+  }
+})
+
+ok('B4: the ball stays on or above the turf and is continuous through a flight', () => {
+  // A pass: snap lob, throw, a single-peaked flight, a catch.
+  const anim: BroadcastAnim = {
+    duration: 4000,
+    actors: [
+      { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26 }, { t: 0.4, x: 25, y: 26 }, { t: 1, x: 25, y: 26 }] },
+      { key: 'wr', side: 'off', role: 'WR', path: [{ t: 0, x: 35, y: 24 }, { t: 0.75, x: 60, y: 20 }, { t: 1, x: 62, y: 20 }] },
+    ],
+    ball: [{ t: 0, x: 30, y: 26 }, { t: 0.15, x: 25, y: 26 }, { t: 0.4, x: 25, y: 26 }, { t: 0.75, x: 60, y: 20 }, { t: 1, x: 62, y: 20 }],
+    holders: [{ t: 0, key: null }, { t: 0.15, key: 'qb' }, { t: 0.4, key: null }, { t: 0.75, key: 'wr' }],
+    flights: [{ t0: 0.4, t1: 0.75, height: 3 }],
+    events: [
+      { t: 0.4, kind: 'throw', keys: ['qb', 'wr'], spot: { x: 25, y: 26 } },
+      { t: 0.75, kind: 'catch', keys: ['wr'], spot: { x: 60, y: 20 } },
+    ],
+    poses: {},
+    facing: {},
+    ballZ: [{ t: 0, z: 0.15 }, { t: 0.15, z: 1.1 }, { t: 0.4, z: 2 }, { t: 0.58, z: 5 }, { t: 0.75, z: 1.4 }, { t: 1, z: 1.1 }],
+    camera: { strongSide: 'low', deep: true, focusKey: 'wr', kind: 'scrimmage' },
+  }
+  const N = 240
+  let minZ = Infinity
+  const inFlight: number[] = []
+  for (let k = 0; k <= N; k++) {
+    const t = k / N
+    const s = ballState(anim, t, {})
+    assert.ok(Number.isFinite(s.x) && Number.isFinite(s.y) && Number.isFinite(s.z), `t ${t}: NaN`)
+    minZ = Math.min(minZ, s.z)
+    if (t >= 0.4 && t <= 0.75) inFlight.push(s.z)
+  }
+  assert.ok(minZ >= 0, `ball went below the turf: ${minZ}`)
+  // Continuous: no jump between consecutive 1/120 s samples inside the flight.
+  let worst = 0
+  for (let i = 1; i < inFlight.length; i++) worst = Math.max(worst, Math.abs(inFlight[i] - inFlight[i - 1]))
+  assert.ok(worst <= 0.2, `flight z jumps by ${worst.toFixed(3)} yd in one step`)
+  // Single-peaked.
+  let peaks = 0
+  for (let i = 1; i < inFlight.length - 1; i++) if (inFlight[i] >= inFlight[i - 1] && inFlight[i] > inFlight[i + 1]) peaks++
+  assert.equal(peaks, 1, `flight has ${peaks} peaks`)
+})
+
+ok(`B4: shake is bounded (<= ${(SHAKE_YARDS * 1.2).toFixed(3)} yd) and exactly zero under reduced motion`, () => {
+  const anim = fxAnim('fumble') // a strip: the largest shake amplitude
+  const sch = buildFxSchedule(anim, { reducedMotion: false, quality: 'full' })
+  const shakes = sch.filter((it) => it.kind === 'shake')
+  assert.equal(shakes.length, 1, 'expected exactly one shake on a strip')
+  const it = shakes[0]
+  let peak = 0
+  for (let i = 0; i <= 400; i++) {
+    const t = it.t0 + ((it.t1 - it.t0) * i) / 400
+    const o = shakeAt(sch, t)
+    peak = Math.max(peak, Math.hypot(o.x, o.y, o.z))
+  }
+  assert.ok(peak <= SHAKE_YARDS * 1.2 + 1e-9, `peak shake ${peak.toFixed(4)} yd exceeds the bound`)
+  assert.ok(peak > 0, 'shake never moved')
+  // Exactly 0 after the window (and before it).
+  assert.deepEqual(shakeAt(sch, it.t1 + 1e-6), { x: 0, y: 0, z: 0 })
+  assert.deepEqual(shakeAt(sch, it.t0 - 1e-6), { x: 0, y: 0, z: 0 })
+  // Reduced motion: no shake at all, and the offset is 0 at every sample.
+  const rm = buildFxSchedule(anim, { reducedMotion: true, quality: 'full' })
+  assert.equal(rm.filter((x) => x.kind === 'shake').length, 0, 'reduced motion still scheduled a shake')
+  for (let i = 0; i <= 20; i++) assert.deepEqual(shakeAt(rm, i / 20), { x: 0, y: 0, z: 0 })
+})
+
+ok("B4: the composer drives B3's layer (placeholder off, ball + effects in the depth sort) and never shakes under reduced motion", () => {
+  const anim = fxAnim('catch')
+  const l = new ActorLayer()
+  l.setPlay({ anim, offClub: NFL0, defClub: NFL1, offHome: true })
+  const fx = createBallFx({ anim, offenseClub: NFL0, defenseClub: NFL1, reducedMotion: false, quality: 'full' })
+  const hook = withBallFx(l, fx, () => l.t)
+  assert.equal(l.drawBall, false, "B3's placeholder ball was not turned off")
+  assert.equal(typeof l.ground, 'function', 'the turf-level ground hook was not attached')
+  assert.equal(typeof l.addItems, 'function', 'the depth-sorted items hook was not attached')
+  const frame = frameFor(1, 45)
+  l.t = 0.5
+  l.trace = true
+  hook(stubCtx(), makeCamera(frame.camera, VP), frame, { dpr: 1, ...VP })
+  const kinds = l.lastOrder.map((o) => o.kind)
+  assert.ok(kinds.includes('extra'), 'the B4 ball was not inserted into the depth sort')
+  assert.ok(!kinds.includes('ball'), "B3's placeholder ball is still drawn")
+  // No shake scheduled: the pose is returned unchanged (identity).
+  assert.deepEqual(fx.shakePose(frame.camera, 0.5), frame.camera)
+  // Reduced motion never shakes.
+  const rm = createBallFx({ anim, offenseClub: NFL0, defenseClub: NFL1, reducedMotion: true, quality: 'full' })
+  assert.deepEqual(rm.shakePose(frame.camera, 0.5), frame.camera)
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)
