@@ -39,4 +39,4 @@ Do not re-implement these; extend them.
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-10 |
-| Implementation (wt-stcalls from 1cbd4dd) | ✅ fd10d23 + fix1 (onside default when desperate); verified 2026-10-10, held for integration onto the accepted realism engine |
+| Implementation (wt-stcalls from 1cbd4dd) | ✅ fd10d23 + fix1 + fix2; merged to main 2026-10-10 with realism + kickoffs (made FG kicks off via the kickoff phase) |
