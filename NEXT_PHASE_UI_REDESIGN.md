@@ -606,7 +606,7 @@ Acceptance:
 | D1 Home and career screens | ✅ d0a9bd7 (+ phone grid fix by orchestrator) |
 | D2 Roster, depth, development, player profile | ✅ merged (+ phone grid/tap fixes by orchestrator) |
 | D3 Draft and scouting | ✅ 7c266a3 (+ phone grid fix by orchestrator) |
-| D4 Money and transactions | 🔨 building |
+| D4 Money and transactions | ✅ merged (+ phone tap fixes by orchestrator) |
 | D5 Game day | 🔨 building (off 929b9a1, includes animcontact4) |
 | D6 Game plan | 🔨 building |
 | D7 League information | ⏳ |
