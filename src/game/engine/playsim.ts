@@ -1795,11 +1795,20 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   }
 }
 
+/**
+ * Kick mechanics shared by FG distance and missed-FG placement. The kicker
+ * lines up 7 yards behind the LOS (holder), so a try from `yard` is
+ * `100 - yard + 10 + FG_HOLDER_DEPTH` yards and the spot of the kick sits at
+ * `yard - FG_HOLDER_DEPTH` from the kicking club's own goal line.
+ */
+const FG_HOLDER_DEPTH = 7
+
 function resolveSpecial(world: World, rng: Rng, offId: string, type: 'punt' | 'fg', yard: number, env?: SimEnv, margin = 0, n = 0, defId?: string): PlayOutcome {
   if (type === 'fg') {
     const k = topGroup(world, offId, ['K'], 1)[0]
     const kA = k ? mkAttrs(k) : {}
-    const dist = 100 - yard + 17
+    // 10 = end zone + goalposts, FG_HOLDER_DEPTH = holder behind the LOS.
+    const dist = 100 - yard + 10 + FG_HOLDER_DEPTH
     // L12 E2: an aware kicker is steadier in a one-score fourth quarter.
     const late = (env?.qtr ?? 0) >= 4 && Math.abs(margin) <= 3
     const power = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
@@ -1943,12 +1952,16 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
 /**
  * backlog126: restart after a field-goal attempt. A make kicks off for real
  * (a touchback, a return, or the rare return score); a miss hands the ball to
- * the defense where it was kicked — never a kickoff — and no worse than the
- * receiving club's own 20. `s.yard` is still the kicking club's spot here, so
- * read it before swapping. No rng is drawn.
+ * the defense at the spot of the kick — the holder sits FG_HOLDER_DEPTH yards
+ * behind the LOS, toward the kicking club's own goal — and never a kickoff.
+ * NFL rule: the defense takes over at the spot of the kick, or its own 20 if
+ * that spot is inside the 20 (i.e. whichever is farther from the defense's
+ * goal). `s.yard` is still the kicking club's LOS here, so read it before
+ * swapping. No rng is drawn.
  */
 function restartAfterFieldGoal(world: World, s: GameState, good: boolean): void {
-  const kickSpot = s.yard + 8
+  // Spot of the kick (holder), measured from the kicking club's own goal line.
+  const kickSpot = s.yard - FG_HOLDER_DEPTH
   swapPossession(s)
   s.down = 1
   s.distance = 10
