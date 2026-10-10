@@ -23,6 +23,13 @@ export function spaceBucket(space: number): SpaceBucket {
   return 'comfortable'
 }
 
+/** Tone for a cap-space figure in dollars: over the cap is a loss, tight is a warning, flush is a win. */
+export function capSpaceTone(space: number): 'loss' | 'warn' | 'win' | undefined {
+  if (space < 0) return 'loss'
+  const bucket = spaceBucket(space)
+  return bucket === 'tight' ? 'warn' : bucket === 'flush' ? 'win' : undefined
+}
+
 /** Does this rung get to file a cap memo right now? */
 export function canFileMemo(world: World, career: CareerState): boolean {
   if (!capabilities(career).can.has('manageCap')) return false

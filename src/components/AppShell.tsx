@@ -30,6 +30,7 @@ import { SCREENS, useGame, useWorld, userCtx, type ScreenId } from '../store/gam
 import { tierFor } from '../game/engine/career'
 import { stageOf } from '../game/engine/draft'
 import { accessFor } from '../game/engine/access'
+import { capSpaceTone } from '../game/engine/capMemo'
 import { AccessBadge } from './AccessBadge'
 import { CommandPalette } from './CommandPalette'
 import type { AccessArea } from '../game/engine/access'
@@ -417,7 +418,7 @@ export function TopBar() {
             icon={DollarSign}
             label="Cap Space"
             value={<TweenNumber value={space} format={(n) => money(n)} />}
-            tone={space < 5 ? 'loss' : space > 25 ? 'win' : undefined}
+            tone={capSpaceTone(space)}
           />
         )}
         {accessArea && <AccessBadge area={accessArea} />}
@@ -522,14 +523,14 @@ function ScorePill({
   icon?: IconType
   label: string
   value: ReactNode
-  tone?: 'win' | 'loss'
+  tone?: 'win' | 'loss' | 'warn'
 }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-white/20 bg-black/15 px-2.5 py-1 leading-tight">
       {Icon && <Icon size={14} className="text-white/70" />}
       <div>
         <div className="label !text-[9px] !text-white/60">{label}</div>
-        <div className={cn('font-display text-base font-700 tnum', tone === 'win' ? 'text-[#8ef0b5]' : tone === 'loss' ? 'text-[#ffb3ba]' : 'text-white')}>
+        <div className={cn('font-display text-base font-700 tnum', tone === 'win' ? 'text-[#8ef0b5]' : tone === 'loss' ? 'text-[#ffb3ba]' : tone === 'warn' ? 'text-[#ffd58a]' : 'text-white')}>
           {value}
         </div>
       </div>

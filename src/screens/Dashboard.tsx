@@ -24,6 +24,7 @@ import { rivalTitle } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerPersonalityLabel, ownerProfile } from '../game/engine/owner'
 import { rivalFor } from '../game/engine/rivalry'
 import { hasRoom } from '../game/engine/room'
+import { capSpaceTone } from '../game/engine/capMemo'
 import { CulturePanel } from '../components/CulturePanel'
 import { KeysCard } from '../components/KeysCard'
 import { OfficeScene } from '../components/OfficeScene'
@@ -140,10 +141,14 @@ export function Dashboard() {
               label="Cap Space"
               value={money(space)}
               sub={`of $279.2M limit`}
-              tone={space < 5 ? 'loss' : space > 25 ? 'win' : undefined}
+              tone={capSpaceTone(space)}
             />
             <div className="mt-3">
-              <RatingBar value={Math.min(100, (space / 60) * 100 + 40)} color={space < 5 ? '#dc2937' : '#05914f'} />
+              {/* Full bar at $30M+ of room; empty when at or over the cap. */}
+              <RatingBar
+                value={Math.max(0, Math.min(100, (space / 30_000_000) * 100))}
+                color={capSpaceTone(space) === 'win' ? 'var(--color-win)' : capSpaceTone(space) === undefined ? 'var(--color-brand)' : capSpaceTone(space) === 'warn' ? 'var(--color-warn)' : 'var(--color-loss)'}
+              />
             </div>
           </Card>
         ) : (
