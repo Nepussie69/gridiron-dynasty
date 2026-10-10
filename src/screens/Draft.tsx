@@ -1,5 +1,6 @@
 import { CalendarClock, FastForward, LayoutGrid, List, Timer, Trophy } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import type { Position } from '../game/types'
 import { cn } from '../lib/cn'
 import { gradeColor } from '../lib/format'
 import { DRAFT_ROUNDS, currentRound, currentTeamId, draftOpen, overallPick, rookieProjection, stageOf, stagesUntilDraft } from '../game/engine/draft'
@@ -12,6 +13,9 @@ import { DraftTradePanel } from '../components/DraftTradePanel'
 import { RatingRing } from '../components/PlayerCard'
 import { Badge, Button, Card, PageHeader, RatingBar, RookieRangeBadges, Stat, TeamCrest } from '../ui/kit'
 
+/** Canonical position order for the board filter (matches Roster / Free Agency). */
+const BOARD_POSITIONS: Position[] = ['QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
+
 export function Draft() {
   const league = useWorld()
   const career = useGame((s) => s.career)!
@@ -21,6 +25,7 @@ export function Draft() {
   const simToMyPick = useGame((s) => s.simToMyPick)
   const finishDraft = useGame((s) => s.finishDraft)
   const [boardView, setBoardView] = useState<'list' | 'cards'>('list')
+  const [posFilter, setPosFilter] = useState<Position | 'ALL'>('ALL')
 
   const teamId = currentTeamId(league)
   const onClock = teamId ? league.byId[teamId] : null
@@ -40,6 +45,14 @@ export function Draft() {
       ? `The draft opens in April (${untilDraft} stage${untilDraft === 1 ? '' : 's'} away).`
       : 'The draft is in April — scout the class now.'
   const available = league.draft.filter((p) => !p.draftedBy).sort((a, b) => b.grade - a.grade)
+
+  // Display-only position filter for the Prospect Board. Drafting / advising /
+  // auto picks all read the full `available` list; only what we render changes.
+  const classPositions = useMemo(
+    () => BOARD_POSITIONS.filter((p) => league.draft.some((d) => d.pos === p)),
+    [league.draft],
+  )
+  const boardShown = posFilter === 'ALL' ? available : available.filter((p) => p.pos === posFilter)
 
   const myPicks = league.draft.filter((p) => p.draftedBy === career.teamId)
   const board = career.userBoard ?? []
@@ -184,10 +197,14 @@ export function Draft() {
           <DraftTradePanel />
 
           <Card pad={false}>
-            <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-line px-4 py-2">
               <span className="label">Prospect Board · Best Available</span>
-              <div className="flex items-center gap-2">
-                <Badge tone="team">{available.length} remaining</Badge>
+              <div className="flex shrink-0 items-center gap-2">
+                <Badge tone="team">
+                  {posFilter === 'ALL'
+                    ? `${available.length} remaining`
+                    : `${boardShown.length} ${posFilter} · ${available.length} remaining`}
+                </Badge>
                 <div className="flex rounded-lg bg-surface-2 p-0.5">
                   {([['list', 'List', List], ['cards', 'Cards', LayoutGrid]] as const).map(([id, label, Icon]) => (
                     <button
@@ -206,9 +223,25 @@ export function Draft() {
                 </div>
               </div>
             </div>
+            <div className="flex items-center gap-1 overflow-x-auto border-b border-line px-3 py-1.5">
+              {(['ALL', ...classPositions] as (Position | 'ALL')[]).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPosFilter(p)}
+                  className={cn(
+                    'shrink-0 rounded-md px-2 py-0.5 font-cond text-[11px] font-700 uppercase tracking-wide transition',
+                    posFilter === p ? 'text-[var(--team-ink)]' : 'text-muted hover:bg-surface-2',
+                  )}
+                  style={posFilter === p ? { background: 'var(--team)' } : undefined}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
             {boardView === 'cards' ? (
               <div className="grid max-h-[560px] grid-cols-1 gap-3 overflow-y-auto p-3 sm:grid-cols-2">
-                {available.map((p) => {
+                {boardShown.map((p) => {
                   const read = readProspect(career, p)
                   const rank = board.indexOf(p.id)
                   const rr = readRookieRanges(career, p, league.draft)
@@ -270,10 +303,15 @@ export function Draft() {
                     </div>
                   )
                 })}
+                {!boardShown.length && (
+                  <div className="col-span-full px-4 py-6 text-center text-sm text-muted">
+                    {posFilter === 'ALL' ? 'No prospects left on the board.' : `No ${posFilter} prospects left on the board.`}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
-                {available.map((p) => {
+                {boardShown.map((p) => {
                   const read = readProspect(career, p)
                   const rank = board.indexOf(p.id)
                   const rr = readRookieRanges(career, p, league.draft)
@@ -319,6 +357,11 @@ export function Draft() {
                     </div>
                   )
                 })}
+                {!boardShown.length && (
+                  <div className="px-4 py-6 text-center text-sm text-muted">
+                    {posFilter === 'ALL' ? 'No prospects left on the board.' : `No ${posFilter} prospects left on the board.`}
+                  </div>
+                )}
               </div>
             )}
           </Card>
