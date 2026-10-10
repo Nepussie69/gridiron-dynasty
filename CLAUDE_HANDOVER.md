@@ -4,7 +4,7 @@ Prepared 2026-10-10 19:20 AEDT, refreshed 19:25, by Claude Opus 5.5 for a fresh 
 
 ## First 5 minutes in the new chat
 
-1. `pgrep -fl "gridiron-work/ds-push-"` — at 19:25 two runners were alive: realism (pid 13517, realism15fix7) and animcontact (pid 24045, animcontact3b); kickoffs-fix1 exited 19:27 and animcontact3 exited 19:29 (see table). Tail `~/gridiron-work/logs/{realism,kickoffs,animcontact}.log` and read the worker report at the end of the newest `logs/events/<name>.tryN.jsonl`.
+1. `pgrep -fl "gridiron-work/ds-push-"` — at 19:25 two runners were alive: realism (pid 13517, realism15fix7) and animcontact (pid 26268, animcontact3b relaunched 19:4x with absolute prompt path); kickoffs-fix1 exited 19:27 and animcontact3 exited 19:29 (see table). Tail `~/gridiron-work/logs/{realism,kickoffs,animcontact}.log` and read the worker report at the end of the newest `logs/events/<name>.tryN.jsonl`.
 2. Re-arm a watcher per live runner (`while kill -0 <pid>; do sleep 30; done`) and keep `caffeinate -i -w <pid>` on each.
 3. Do the returners browser check and merge (only gate left), then review stcalls `fd10d23`.
 4. For each runner that has exited: snapshot source-only, run the independent gates in a review worktree, follow the table below.
