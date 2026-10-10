@@ -1,13 +1,16 @@
 # Claude handover — Gridiron Dynasty
 
-Prepared 2026-10-10 19:20 AEDT, refreshed 19:25, by Claude Opus 5.5 for a fresh chat. Supersedes the 04:39 Codex handover. Read AGENTS.md first, then this file. `PLAYTEST_BACKLOG.md` rows 136–155 are this session's requests.
+Prepared 2026-10-10 19:20 AEDT, refreshed 20:25 by Claude Opus 5.5 for a move to the user's other Claude account (new chat). Read AGENTS.md first, then this file. `PLAYTEST_BACKLOG.md` rows 136–161 are the latest requests. Only ONE orchestrator chat at a time — the old chat is stopped once the new one takes over.
 
 ## First 5 minutes in the new chat
 
-1. `pgrep -fl "gridiron-work/ds-push-"` — at 19:25 two runners were alive: realism (pid 13517, realism15fix7) and animcontact (pid 26268, animcontact3b relaunched 19:4x with absolute prompt path); kickoffs-fix1 exited 19:27 and animcontact3 exited 19:29 (see table). Tail `~/gridiron-work/logs/{realism,kickoffs,animcontact}.log` and read the worker report at the end of the newest `logs/events/<name>.tryN.jsonl`.
-2. Re-arm a watcher per live runner (`while kill -0 <pid>; do sleep 30; done`) and keep `caffeinate -i -w <pid>` on each.
-3. Do the returners browser check and merge (only gate left), then review stcalls `fd10d23`.
-4. For each runner that has exited: snapshot source-only, run the independent gates in a review worktree, follow the table below.
+1. `pgrep -fl "gridiron-work/ds-push-"` — at 20:25 two runners were alive: **realism** (runner pid 13517, realism15fix7, try 2 after a 2700s hard timeout on try 1) and **animcontact** (runner pid 26268, animcontact3b, try 2 after an 1800s idle watchdog; IDLE=1800). Tail `~/gridiron-work/logs/{realism,animcontact}.log` and read the worker report at the end of the newest `logs/events/<name>.tryN.jsonl`. The realism worker runs parameter sweeps in OpenCode temp copies (`$TMPDIR/opencode/w1..w5`, via the OpenCode desktop `serve` process) — that is the worker, not another orchestrator.
+2. Re-arm a watcher per live runner (`while kill -0 <pid>; do sleep 30; done`, run in background) and check `caffeinate -i -w <pid>` exists for each (`pgrep -fl "caffeinate -i -w"`).
+3. realism exits → independent calib (31/31 ×3 seeds), `passid.mjs` (team pass-share SD 0.035–0.045 on all seeds), anim, eq, smokes. Pass → integrate realism + kickoffs (`34d4394`, already independently verified, backlog 161) in a spare worktree off main, re-verify, merge.
+4. animcontact exits → review diff, anim 100%, calib identical to `logs/animcontact3-calib-before.out`, probe; then launch `prompts/animcontact4.txt` with `IDLE=1800 ~/gridiron-work/ds-wt animcontact $HOME/gridiron-work/prompts/animcontact4.txt` (ABSOLUTE prompt path).
+5. Then review stcalls `fd10d23`.
+
+State at 20:25: main `d6bce6f` == origin/main (user-approved pushes at 19:27 and ~19:55). Returners merged `a8cf4e3` after browser check (backlog 159). Stable 4173 still HELD.
 
 ## Ground rules (unchanged, user-confirmed)
 
@@ -42,7 +45,7 @@ Browser checks: add a config to `.claude/launch.json` pointing vite at the workt
 
 ## Main
 
-`d4cc425` (local, not pushed). Merged this session (all verified: build, lint 4, browser):
+`d6bce6f` (pushed, == origin/main). Merged (returners a8cf4e3 on top of) (all verified: build, lint 4, browser):
 - `59452b7` Contract Ledger OVR + POT sortable columns (#146)
 - `0b1bb9a` Draft prospect board position filter (#148)
 - FUTURES #26–#29 added (playcalling, draft philosophy, coordinator/position-coach hiring, future prospects tab); FUTURES 1a2 Stars corrected to merged.
