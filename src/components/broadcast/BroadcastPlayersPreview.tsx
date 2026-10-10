@@ -11,7 +11,11 @@
 // the real ball (arc, spiral wobble, trail, shrinking shadow, landing marker) and
 // draws the event-driven effects (sparkle, burst, impact ring, turf bits, TD
 // celebration, crossbar glints) through the actor hook's ball / ground / items
-// insertion point. Mounted only in the hidden #/kit page.
+// insertion point. B6b: a Replays setting (Big plays / All / Off) replays the
+// play after the live run when replay.ts's rules say so, and a Replay button
+// plays the live play then forces its replay: team-colour wipe, the replay
+// director's higher camera, slower playback, a freeze at the key moment and
+// the telestrations; Skip ends it at once. Mounted only in the hidden #/kit page.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NFL_TEAMS } from '../../game/data/nflTeams'
@@ -24,10 +28,13 @@ import { ActorLayer, type ActorPlay } from './actors'
 import type { BroadcastAnim } from './animData'
 import { createBallFx, withBallFx, type BallFx } from './ballFx'
 import { MID_WIDTH, offenseToWorld, orbitPose, type CameraPose, type Direction } from './camera'
+import type { Director } from './director'
 import { buildGraphicsTimeline, type GraphicsMode, type GraphicsTimeline, type PersonInfo } from './graphics'
 import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { posAt } from './interp'
 import { BroadcastRenderer, FrameWindow } from './renderer'
+import { ReplayPlayer, replayPlan, type ReplayPhase, type ReplaySetting } from './replay'
+import { attachTelestrator, TelestratorLayer } from './telestrator'
 
 type Shot = 'skycam' | 'sideline' | 'reverse' | 'tight'
 type Size = 'wide' | 'phone' | 'full'
@@ -68,6 +75,9 @@ interface Built {
   tl: GraphicsTimeline
   /** B4 ball wobble inputs: the thrower's ratings (presentation only) and pressure. */
   fx: { thrower?: { thp?: number; tha?: number }; pressured?: boolean }
+  /** B6b: the recorded play (replay rules) and the replay director factory (B5, profile 'replay'). */
+  play: Play
+  replayDirector: (vp: { w: number; h: number }) => Director
 }
 
 const ord = (n: number) => (n === 1 ? '1ST' : n === 2 ? '2ND' : n === 3 ? '3RD' : `${n}TH`)
@@ -102,7 +112,11 @@ async function simulateSample(homeId: string, awayId: string, seed: number): Pro
 }
 
 async function buildSample(s: Sample, idx: number): Promise<Built> {
-  const [{ buildPlayAnim, targetKey, snapYard }, { actorPlayers, teamJerseys }] = await Promise.all([import('../playAnim'), import('../jersey')])
+  const [{ buildPlayAnim, targetKey, snapYard }, { actorPlayers, teamJerseys }, { createBroadcastDirector }] = await Promise.all([
+    import('../playAnim'),
+    import('../jersey'),
+    import('./directorRules'),
+  ])
   const play = s.plays[idx]
   const next = s.plays[idx + 1]
   const byId = new Map(s.world.players.map((p) => [p.id, p]))
@@ -149,7 +163,21 @@ async function buildSample(s: Sample, idx: number): Promise<Built> {
     possession: offHome ? 'home' : 'away',
     tl,
     fx,
+    play,
+    replayDirector: (vp) => {
+      const d = createBroadcastDirector({ profile: 'replay', viewport: vp })
+      d.reset(play, anim)
+      return d
+    },
   }
+}
+
+/** A director pose (offence frame) in world coordinates (180° turn when the offence attacks −x). */
+function poseToWorld(p: CameraPose, dir: Direction): CameraPose {
+  if (dir === 1) return p
+  const a = offenseToWorld(p.pos[0], p.pos[1], dir)
+  const b = offenseToWorld(p.target[0], p.target[1], dir)
+  return { pos: [a.x, a.y, p.pos[2]], target: [b.x, b.y, p.target[2]], fovDeg: p.fovDeg }
 }
 
 function shotPose(shot: Shot, dir: Direction, fx: number, fy: number, phone: boolean): CameraPose {
@@ -186,6 +214,9 @@ interface Readout {
   /** B4 ball + effects cost (ms). */
   fxAvg: number
   fxP95: number
+  /** B6b telestrator cost (ms). */
+  teleAvg: number
+  teleP95: number
   /** Nothing changed since the last report (paused / settled): no frames drawn. */
   idle: boolean
 }
@@ -207,11 +238,15 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
   const [sprites, setSprites] = useState(true)
   const [graphics, setGraphics] = useState<GraphicsMode>('full')
   const [effects, setEffects] = useState<EffectsMode>('full')
+  const [replays, setReplays] = useState<ReplaySetting>('big')
+  const [replayPhase, setReplayPhase] = useState<ReplayPhase | null>(null)
   const [scrub, setScrub] = useState(0)
   const [readout, setReadout] = useState<Readout | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tRef = useRef(0)
-  const live = useRef({ built: null as Built | null, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, scrubbing: false, graphics, effects, reduced })
+  const live = useRef({ built: null as Built | null, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, scrubbing: false, graphics, effects, reduced, replays, forceReplay: false })
+  /** B6b replay controls the loop reads (start / skip). */
+  const replayCtl = useRef({ start: (_force: boolean) => {}, skip: () => {} })
 
   // Simulate a game when the matchup changes (results are keyed by matchup, so
   // a stale one simply reads as "loading").
@@ -251,8 +286,8 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
   const built = builtState && builtState.sample === sample && builtState.idx === playIdx ? builtState.b : null
   const error = errorState && errorState.key === matchKey ? errorState.msg : null
   useEffect(() => {
-    live.current = { ...live.current, built, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, graphics, effects, reduced }
-  }, [built, shot, playing, reduced, speed, sprites, size, homeId, awayId, theme, graphics, effects])
+    live.current = { ...live.current, built, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, graphics, effects, reduced, replays }
+  }, [built, shot, playing, reduced, speed, sprites, size, homeId, awayId, theme, graphics, effects, replays])
 
   // Renderer + actor layer + loop.
   useEffect(() => {
@@ -265,6 +300,15 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
     const gfx = new GraphicsLayer(layer, readGfxTokens(cv))
     gfx.vignette = true
     r.hooks.overlay = gfx.hook
+    // B6b: the telestrator wraps the graphics (strokes under the HUD, the wipe
+    // and REPLAY bug over it) and takes the vignette over from the graphics.
+    const tele = new TelestratorLayer(readGfxTokens(cv), layer)
+    attachTelestrator(r, tele, gfx)
+    const twin = new FrameWindow(120)
+    let rp: ReplayPlayer | null = null
+    let rpDirector: Director | null = null
+    let rpBuilt: Built | null = null
+    let lastPhase: ReplayPhase | null = null
     const gwin = new FrameWindow(120)
     // B4: the ball + effects composer for the loaded play (rebuilt on play /
     // quality / reduced-motion change). `fxwin` times its draw work.
@@ -337,6 +381,81 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         pendingSec = s
       },
     }
+    let rpHold = false
+    /** Start a replay of `b` when the rules (or a forced request) say so. */
+    const startReplay = (b: Built, force: boolean): boolean => {
+      const L = live.current
+      const plan = replayPlan(b.play, b.anim, { setting: L.replays, force, reducedMotion: L.reduced, playback: L.graphics === 'fast' ? 'fast' : 'live' })
+      if (!plan.replay) return false
+      rp = new ReplayPlayer(plan)
+      rpBuilt = b
+      rpHold = false
+      rpDirector = b.replayDirector({ w: Math.max(1, cv.clientWidth || 1280), h: Math.max(1, cv.clientHeight || 720) })
+      tele.setReplay(plan, b.anim, b.actorPlay.offClub, b.actorPlay.defClub, b.actorPlay.numbers)
+      tele.frame = rp.frame()
+      return true
+    }
+    const maybeReplay = (b: Built): boolean => {
+      const L = live.current
+      const force = L.forceReplay
+      if (!force && L.replays === 'off') return false
+      return startReplay(b, force)
+    }
+    const endReplay = () => {
+      rp = null
+      rpBuilt = null
+      rpDirector = null
+      rpHold = false
+      live.current.forceReplay = false
+      tele.frame = null
+      tele.setReplay(null, null)
+      if (lastPhase !== null) {
+        lastPhase = null
+        setReplayPhase(null)
+      }
+    }
+    replayCtl.current = {
+      /** force: replay the play right after its live run (the Replay button). */
+      start: (force: boolean) => {
+        const b = loaded
+        if (!b) return
+        endReplay()
+        live.current.forceReplay = force
+        sec = live.current.graphics === 'full' && !live.current.reduced ? b.tl.start : 0
+        tRef.current = 0
+        drivenT = 0
+        hold = 0
+      },
+      skip: () => rp?.skip(),
+    }
+    const dbg = (window as unknown as Record<string, Record<string, unknown>>).__broadcastB3
+    dbg.tele = tele
+    dbg.twin = twin
+    dbg.replay = {
+      /** Start the forced replay of the loaded play now (no live run first). */
+      now: () => {
+        if (!loaded || !startReplay(loaded, true)) return false
+        sec = loaded.tl.end
+        return true
+      },
+      skip: () => rp?.skip(),
+      /** Hold the replay at replay second s (null resumes). */
+      seek: (s: number | null) => {
+        if (!rp) return null
+        if (s == null) {
+          rpHold = false
+          return null
+        }
+        rpHold = true
+        return rp.seek(s)
+      },
+      get plan() {
+        return rp?.plan ?? null
+      },
+      get frame() {
+        return rp?.frame() ?? null
+      },
+    }
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop)
       const L = live.current
@@ -392,41 +511,84 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
       }
       layer.useSprites = L.sprites
       let settling = false
-      if (b && pendingSec != null) {
-        sec = pendingSec
-        pendingSec = null
-        tRef.current = Math.max(0, Math.min(1, sec / b.tl.duration))
-        drivenT = tRef.current
-      } else if (b && L.graphics === 'full' && L.playing && !L.scrubbing) {
-        // Graphics clock: pre-snap lead → play → toast hold, then loop.
-        if (tRef.current !== drivenT) sec = tRef.current * b.tl.duration
-        sec += dt * L.speed
-        if (sec > b.tl.end + 0.4) sec = b.tl.start
-        tRef.current = Math.max(0, Math.min(1, sec / b.tl.duration))
-        drivenT = tRef.current
-      } else if (b && tRef.current !== drivenT) {
-        // Scrubbed / seeked: the graphics follow the play time.
-        sec = tRef.current * b.tl.duration
-        drivenT = tRef.current
-      }
-      gfx.mode = L.graphics
+      // B6b: a replay in progress owns the clock (live end frame → wipe → replay → wipe → live).
+      if (rp && rpBuilt !== b) endReplay()
       gfx.reducedMotion = L.reduced
-      gfx.sec = sec
-      if (b) {
+      tele.reducedMotion = L.reduced
+      if (rp && b) {
+        const f = rpHold ? rp.frame() : rp.advance(L.playing && !L.scrubbing ? dt * L.speed : 0)
+        if (f.phase === 'done') {
+          endReplay()
+          sec = L.graphics === 'full' && !L.reduced ? b.tl.start : 0
+          tRef.current = 0
+        } else {
+          tele.frame = f
+          if (f.showReplay) {
+            // The replay: chip only (no live callouts / toast over the telestrations).
+            tRef.current = f.t
+            gfx.mode = L.graphics === 'off' ? 'off' : 'fast'
+            gfx.sec = f.t * b.tl.duration
+          } else if (f.phase === 'wipeOut') {
+            tRef.current = 0
+            gfx.mode = L.graphics
+            gfx.sec = L.graphics === 'full' ? b.tl.start : 0
+          } else {
+            tRef.current = 1
+            gfx.mode = L.graphics
+            gfx.sec = sec
+          }
+          layer.t = tRef.current
+          drivenT = tRef.current
+        }
+        if (f.phase !== lastPhase) {
+          lastPhase = f.phase === 'done' ? null : f.phase
+          setReplayPhase(lastPhase)
+        }
+      }
+      if (!rp) {
+        if (b && pendingSec != null) {
+          sec = pendingSec
+          pendingSec = null
+          tRef.current = Math.max(0, Math.min(1, sec / b.tl.duration))
+          drivenT = tRef.current
+        } else if (b && L.graphics === 'full' && L.playing && !L.scrubbing) {
+          // Graphics clock: pre-snap lead → play → toast hold, then (replay or) loop.
+          if (tRef.current !== drivenT) sec = tRef.current * b.tl.duration
+          sec += dt * L.speed
+          if (sec > b.tl.end + 0.4) {
+            // A replay keeps the toast on the live end frame under the wipe.
+            if (!maybeReplay(b)) sec = b.tl.start
+            else sec = b.tl.end
+          }
+          tRef.current = Math.max(0, Math.min(1, sec / b.tl.duration))
+          drivenT = tRef.current
+        } else if (b && tRef.current !== drivenT) {
+          // Scrubbed / seeked: the graphics follow the play time.
+          sec = tRef.current * b.tl.duration
+          drivenT = tRef.current
+        }
+        gfx.mode = L.graphics
+        gfx.sec = sec
+      }
+      if (b && !rp) {
         const D = layer.duration
         if (L.playing && !L.scrubbing && L.graphics !== 'full') {
           if (tRef.current >= 1) {
             hold += dt
             if (hold > 1.4) {
-              tRef.current = 0
               hold = 0
+              if (!maybeReplay(b)) tRef.current = 0
             }
           } else tRef.current = Math.min(1, tRef.current + (dt * L.speed) / D)
-          sec = tRef.current * b.tl.duration
-          drivenT = tRef.current
-          gfx.sec = sec
+          if (!rp) {
+            sec = tRef.current * b.tl.duration
+            drivenT = tRef.current
+            gfx.sec = sec
+          }
         }
         layer.t = tRef.current
+      }
+      if (b && !(rp && tele.frame?.showReplay)) {
         // Follow the ball (B5 replaces this with the camera director).
         const bp = posAt(b.anim.ball, tRef.current)
         const bw = layer.anim ? offenseToWorld(bp.x, bp.y, b.dir) : focus
@@ -434,7 +596,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         const k = 1 - Math.pow(0.02, dt)
         focus = { x: focus.x + (bw.x - focus.x) * k, y: focus.y + (bw.y - focus.y) * k }
       }
-      const sig = `${builtGen}|${tRef.current}|${sec}|${L.graphics}|${L.effects}|${L.shot}|${L.phone}|${L.sprites}|${L.homeId}|${L.awayId}|${L.theme}|${cv.clientWidth}x${cv.clientHeight}@${window.devicePixelRatio}|${layer.sprites.ready}`
+      const sig = `${builtGen}|${tRef.current}|${sec}|${rp ? rp.sec : -1}|${L.graphics}|${L.effects}|${L.shot}|${L.phone}|${L.sprites}|${L.homeId}|${L.awayId}|${L.theme}|${cv.clientWidth}x${cv.clientHeight}@${window.devicePixelRatio}|${layer.sprites.ready}`
       const dirty = settling || sig !== lastSig
       lastSig = sig
       if (dirty) {
@@ -465,6 +627,8 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
             gfxP95: gwin.p95,
             fxAvg: fxwin.avg,
             fxP95: fxwin.p95,
+            teleAvg: twin.avg,
+            teleP95: twin.p95,
             idle: false,
           })
         } else if (!reportedIdle) {
@@ -481,7 +645,9 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
       const L = live.current
       const dir = b?.dir ?? 1
       fxAcc.v = 0
-      const pose0 = shotPose(L.shot, dir, focus.x + dir * 4, focus.y, L.phone)
+      // B6b: the replay director's higher camera while the replay shows.
+      const pose0 =
+        rp && rpDirector && tele.frame?.showReplay ? poseToWorld(rpDirector.toCamera(rpDirector.shotAt(layer.t)), dir) : shotPose(L.shot, dir, focus.x + dir * 4, focus.y, L.phone)
       // B4 camera shake moves the whole scene (pos and target together); it is
       // exactly 0 outside a big hit and 0 under reduced motion.
       const pose = fx ? fx.shakePose(pose0, layer.t) : pose0
@@ -498,6 +664,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         time: tRef.current,
       })
       gwin.push(gfx.stats.ms)
+      if (rp) twin.push(tele.stats.ms)
       if (fx) fxwin.push(fxAcc.v)
       if (b) {
         act.push(layer.stats.ms)
@@ -529,7 +696,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
       {readout.idle ? 'idle (nothing changed; not redrawing)' : `${readout.fps.toFixed(0)} fps`} · frame {readout.avg.toFixed(2)} ms avg / {readout.p95.toFixed(2)} p95 · players {readout.actAvg.toFixed(2)} ms avg /{' '}
       {readout.actP95.toFixed(2)} p95 / {readout.actWorst.toFixed(1)} worst · {readout.drawn}/{readout.figures} figures drawn · sprites {readout.sprites} (
       {(readout.hitRate * 100).toFixed(0)}% hit) · graphics {readout.gfxAvg.toFixed(2)} ms avg / {readout.gfxP95.toFixed(2)} p95 · effects {readout.fxAvg.toFixed(2)} ms avg /{' '}
-      {readout.fxP95.toFixed(2)} p95 · {readout.w}×{readout.h} @{readout.dpr}x
+      {readout.fxP95.toFixed(2)} p95 · telestrator {readout.teleAvg.toFixed(2)} ms avg / {readout.teleP95.toFixed(2)} p95 · {readout.w}×{readout.h} @{readout.dpr}x
     </div>
   )
 
@@ -659,6 +826,32 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
             { id: 'off', label: 'Off' },
           ]}
         />
+        <SegmentedControl
+          label="Replays"
+          size="sm"
+          value={replays}
+          onChange={setReplays}
+          options={[
+            { id: 'big', label: 'Big plays' },
+            { id: 'all', label: 'All' },
+            { id: 'off', label: 'Off' },
+          ]}
+        />
+        <Button
+          size="sm"
+          onClick={() => {
+            replayCtl.current.start(true)
+            setPlaying(true)
+          }}
+          disabled={!built || graphics === 'fast'}
+        >
+          Replay
+        </Button>
+        {replayPhase && (
+          <Button size="sm" onClick={() => replayCtl.current.skip()}>
+            Skip replay
+          </Button>
+        )}
       </div>
       {error && <div className="text-small text-loss">Could not build the sample: {error}</div>}
       {!sample && !error && <div className="label">Simulating a sample game…</div>}
