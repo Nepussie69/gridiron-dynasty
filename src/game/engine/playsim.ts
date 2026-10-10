@@ -21,6 +21,8 @@ import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } fro
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
+import { officiate } from './review'
+import type { PlayReview, PendingReview, ChallengeState } from './review'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -522,6 +524,9 @@ export interface Play {
   /** R15: the scrimmage players on the field for this snap (offence / defence ids). */
   onFieldOff?: string[]
   onFieldDef?: string[]
+  // ── FUTURES #5: replay review ──────────────────────────────────────────────
+  /** A booth or challenge review of this play (display-only in the booth domain). */
+  review?: PlayReview
 }
 
 export interface GameSim {
@@ -1134,7 +1139,7 @@ export function coachLabels(world: World, teamId: string) {
 }
 
 // ── Play resolution ──────────────────────────────────────────────────────────
-interface PlayOutcome {
+export interface PlayOutcome {
   type: Play['type']
   concept: string
   yards: number
@@ -2638,7 +2643,7 @@ function fmtClock(sec: number) {
 }
 
 // ── Resumable game state (L10 G1) ─────────────────────────────────────────────
-export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff'
+export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff' | 'challenge'
 /** Which side a moment belongs to (Design rule 5). 'hc' = head-coach only. */
 export type MomentSide = 'off' | 'def' | 'both' | 'hc'
 /** G7 two-minute offensive mode for the current possession. */
@@ -2790,6 +2795,11 @@ export interface GameState {
   // ── R17: kicking realism ───────────────────────────────────────────────────
   /** Wind for the kick hook (mph, positive into the kicker's face). 0 = calm. */
   wind: number
+  // ── FUTURES #5: replay review ──────────────────────────────────────────────
+  /** A challenge-domain ruling awaiting the hurt club's decision (C2). */
+  review?: PendingReview | null
+  /** Red-flag challenges left / won / lost per club. Not reset at halftime. */
+  challenges?: Record<string, ChallengeState>
 }
 
 const MAX_PLAYS = 210
@@ -2829,12 +2839,15 @@ function pushPlay(s: GameState, p: Omit<Play, 'n' | 'qtr' | 'clock' | 'offId' | 
 
 // ── Decision points (L10 G2) ──────────────────────────────────────────────────
 const MOMENT_CAPS: Record<MomentKind, number> = {
-  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2,
+  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2, challenge: 3,
 }
 /** Cap on the big moments. Play calls (call/defCall) have their own caps and do
  *  not count here, so they can never crowd out halftime or a late 2-point try. */
 const TOTAL_MOMENT_CAP = 8
 const isPlayCall = (k: MomentKind) => k === 'call' || k === 'defCall'
+/** Moments exempt from the total cap: play calls and (FUTURES #5) red flags, so a
+ *  challenge can never crowd out halftime or a late 2-point try. */
+const capExempt = (k: MomentKind) => isPlayCall(k) || k === 'challenge'
 
 interface DecisionSpec {
   kind: MomentKind
@@ -2901,7 +2914,7 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
   const uncapped = (spec.kind === 'call' && (callAll === 'off' || callAll === 'both')) ||
     (spec.kind === 'defCall' && (callAll === 'def' || callAll === 'both'))
   const canAsk = isUser && scopeAllows(s.ctx!.scope, spec.side) && spec.ask &&
-    (isPlayCall(spec.kind) || s.momentsUsed < TOTAL_MOMENT_CAP) && (uncapped || (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind])
+    (capExempt(spec.kind) || s.momentsUsed < TOTAL_MOMENT_CAP) && (uncapped || (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind])
   if (canAsk) {
     const us = spec.teamId === s.homeId ? s.homeScore : s.awayScore
     const them = spec.teamId === s.homeId ? s.awayScore : s.homeScore
@@ -2910,7 +2923,7 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
       down: spec.down, distance: spec.distance, yard: spec.yard, us, them,
       title: spec.title, options: spec.options, defaultId: spec.defaultId, staffRead: spec.staffRead,
     }
-    if (!isPlayCall(spec.kind)) s.momentsUsed += 1
+    if (!capExempt(spec.kind)) s.momentsUsed += 1
     s.kindUsed[spec.kind] = (s.kindUsed[spec.kind] ?? 0) + 1
     return null
   }
@@ -3304,6 +3317,8 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     driveSnaps: 0,
     pIndex: new Map(world.players.map((p) => [p.id, p])),
     wind: 0,
+    review: null,
+    challenges: { [homeId]: { left: 2, won: 0, lost: 0 }, [awayId]: { left: 2, won: 0, lost: 0 } },
   }
   s.defId = s.offId === homeId ? awayId : homeId
   // Backlog 149 follow-up: snapshot the active K/P for each club now, while the
@@ -3459,6 +3474,160 @@ function stepKickoff(world: World, s: GameState): 'continue' | 'moment' {
   const ko = resolveKickoff(world, s)
   if (ko.moment) return 'moment'
   s.phase = ko.scored ? 'try' : 'play'
+  return 'continue'
+}
+
+/**
+ * Apply a resolved scrimmage play to the game state — clock, timeouts, team
+ * stats, safety, touchdown, turnover and downs. Extracted verbatim from the tail
+ * of `step()` (FUTURES #5) so a review can re-apply a corrected ruling without
+ * re-running the resolvers and without drawing the rng. Behaviour is unchanged.
+ * `defCall` is the defensive call to record (the user's call or their standing
+ * plan); the offensive class is derived from the outcome, exactly as before.
+ */
+function applyScrimmageOutcome(
+  world: World,
+  s: GameState,
+  out: PlayOutcome,
+  fourthChoice: 'go' | 'fg' | 'punt' | 'fake' | null,
+  offId: string,
+  defId: string,
+  defCall: DefCall | undefined,
+): 'continue' | 'done' {
+  // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
+  const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
+  let t = out.timeUsed * s.pace * baseTimeScale(world, offId) * tempoMult
+  if (usedTimeout(world, s, offId, defId, out)) t = Math.min(t, 6)
+  // T2M: a carry out of bounds stops the clock at the end of the play — no 40s
+  // runoff; only the few seconds the play itself took count.
+  if (out.outOfBounds) t = Math.min(t, 6)
+  s.clock -= t
+  const offS = statFor(s, offId)
+  const defS = statFor(s, defId)
+  const isPass = out.type === 'pass'
+  offS.plays += 1
+  if (isPass) {
+    offS.passAtt += 1
+    if (isSack(out)) {
+      // R16: a strip sack is still a sack; a lost ball is also a fumble.
+      offS.sacksTaken += 1; defS.sacks += 1
+      if (out.turnover) offS.fumbles += 1
+    } else if (out.intId) {
+      // A tipped/muffed interception is still an interception.
+      offS.ints += 1; defS.ints += 1
+    } else if (out.fumbleId || out.muffedCatch) {
+      // R16: a catch that came loose still counts as a completion for yards; only
+      // a ball the defence recovered is a lost fumble (turnover).
+      offS.passComp += 1; offS.passYds += out.yards
+      if (out.turnover) offS.fumbles += 1
+    } else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += out.yards }
+  } else {
+    offS.rushAtt += 1
+    offS.rushYds += Math.max(0, out.yards)
+    if (out.turnover) offS.fumbles += 1
+  }
+  offS.top += out.timeUsed * s.pace
+  if (s.down === 3) offS.thirdDownAtt += 1
+
+  // R6: a safety — a run or sack stopped in the end zone when the offense started
+  // inside its own 3 (deterministic hash, ~0.04 per team-game).
+  const safety = !out.turnover && !out.defTD && (out.type === 'run' || isSack(out)) &&
+    s.yard <= 4 && s.yard + out.yards <= 0 && h01(`${s.n}:${offId}:safety`) < 1
+  const gainedYard = clamp(s.yard + out.yards, 0, 100)
+  const endYard = out.defTD ? 100 : safety ? 0 : gainedYard
+  const scored = endYard >= 100 && !out.turnover && !out.defTD
+  if (!out.turnover && (scored || out.yards >= s.distance)) {
+    offS.firstDowns += 1
+    if (s.down === 3) offS.thirdDownConv += 1
+  }
+  pushPlay(s, { ...out, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(out.type === 'run' ? 'run' : 'pass', out.passDepth ?? 0), defCall })
+
+  if (out.defTD) {
+    // R6: a takeaway returned for a touchdown (pick-six / fumble return).
+    const scoring = defId
+    if (scoring === s.homeId) s.homeScore += 6
+    else s.awayScore += 6
+    statFor(s, scoring).points += 6
+    const last = s.plays[s.plays.length - 1]
+    last.result = 'TOUCHDOWN!'
+    last.scorerId = out.scorerId
+    last.scorerName = world.players.find((p) => p.id === out.scorerId)?.name ?? ''
+    // The scoring club attempts the extra point, then kicks off (handled by `try`).
+    swapPossession(s)
+    s.down = 1
+    s.distance = 10
+    if (s.qtr <= 4) {
+      s.phase = 'try'
+      return 'continue'
+    }
+    pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+    return 'done'
+  }
+
+  if (safety) {
+    // R6: two points to the defense; the club that gave it up free-kicks away.
+    const scoring = defId
+    if (scoring === s.homeId) s.homeScore += 2
+    else s.awayScore += 2
+    statFor(s, scoring).points += 2
+    swapPossession(s)
+    s.down = 1
+    s.distance = 10
+    // FUTURES #4: the free kick runs in the kickoff phase (see stepTry).
+    s.phase = 'kickoff'
+    return 'continue'
+  }
+
+  if (out.turnover) {
+    swapPossession(s)
+    s.yard = 100 - clamp(s.yard + out.yards, 1, 99)
+    s.down = 1
+    s.distance = 10
+    return 'continue'
+  }
+
+  if (scored) {
+    const scorer = out.carrierId ? (world.players.find((p) => p.id === out.carrierId)?.name ?? '') : ''
+    if (offId === s.homeId) s.homeScore += 6
+    else s.awayScore += 6
+    offS.points += 6
+    offS.td += 1
+    if (isPass) offS.passTD += 1
+    else offS.rushTD += 1
+    const last = s.plays[s.plays.length - 1]
+    last.result = 'TOUCHDOWN!'
+    last.scorerName = scorer
+    last.scorerId = out.carrierId
+    // extra point / two-point try (in overtime it's sudden death — no try needed)
+    if (s.qtr <= 4) {
+      s.phase = 'try'
+      return 'continue'
+    }
+    swapPossession(s)
+    s.yard = R2.kickoffYard
+    s.down = 1
+    s.distance = 10
+    pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+    return 'done'
+  }
+
+  s.yard = endYard
+  const gained = out.yards
+  if (gained >= s.distance) {
+    s.down = 1
+    s.distance = Math.min(10, 100 - s.yard)
+  } else {
+    s.down += 1
+    s.distance -= gained
+    if (s.down > 4) {
+      // failed to convert on 4th (go-for-it), turnover on downs
+      swapPossession(s)
+      s.yard = 100 - s.yard
+      s.down = 1
+      s.distance = 10
+      return 'continue'
+    }
+  }
   return 'continue'
 }
 
@@ -3738,141 +3907,18 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // R15: charge the snap (and its stamina cost) to the players actually on the field.
   chargeSnaps(s, out)
 
-  // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
-  const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
-  let t = out.timeUsed * s.pace * baseTimeScale(world, offId) * tempoMult
-  if (usedTimeout(world, s, offId, defId, out)) t = Math.min(t, 6)
-  // T2M: a carry out of bounds stops the clock at the end of the play — no 40s
-  // runoff; only the few seconds the play itself took count.
-  if (out.outOfBounds) t = Math.min(t, 6)
-  s.clock -= t
-  const offS = statFor(s, offId)
-  const defS = statFor(s, defId)
-  const isPass = out.type === 'pass'
-  offS.plays += 1
-  if (isPass) {
-    offS.passAtt += 1
-    if (isSack(out)) {
-      // R16: a strip sack is still a sack; a lost ball is also a fumble.
-      offS.sacksTaken += 1; defS.sacks += 1
-      if (out.turnover) offS.fumbles += 1
-    } else if (out.intId) {
-      // A tipped/muffed interception is still an interception.
-      offS.ints += 1; defS.ints += 1
-    } else if (out.fumbleId || out.muffedCatch) {
-      // R16: a catch that came loose still counts as a completion for yards; only
-      // a ball the defence recovered is a lost fumble (turnover).
-      offS.passComp += 1; offS.passYds += out.yards
-      if (out.turnover) offS.fumbles += 1
-    } else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += out.yards }
-  } else {
-    offS.rushAtt += 1
-    offS.rushYds += Math.max(0, out.yards)
-    if (out.turnover) offS.fumbles += 1
+  // FUTURES #5: the officiating layer marks close plays and, in the booth domain,
+  // records what the replay showed. C1 always applies the truth, so outcomes and
+  // the rng stream are unchanged. A booth review record rides the pushed play.
+  const off = officiate(world, s, out, fourthChoice)
+  const playIdx = s.plays.length
+  const defCall = userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined)
+  const result = applyScrimmageOutcome(world, s, off.applied, fourthChoice, offId, defId, defCall)
+  if (off.review) {
+    const rec = s.plays[playIdx]
+    if (rec) rec.review = off.review
   }
-  offS.top += out.timeUsed * s.pace
-  if (s.down === 3) offS.thirdDownAtt += 1
-
-  // R6: a safety — a run or sack stopped in the end zone when the offense started
-  // inside its own 3 (deterministic hash, ~0.04 per team-game).
-  const safety = !out.turnover && !out.defTD && (out.type === 'run' || isSack(out)) &&
-    s.yard <= 4 && s.yard + out.yards <= 0 && h01(`${s.n}:${offId}:safety`) < 1
-  const gainedYard = clamp(s.yard + out.yards, 0, 100)
-  const endYard = out.defTD ? 100 : safety ? 0 : gainedYard
-  const scored = endYard >= 100 && !out.turnover && !out.defTD
-  if (!out.turnover && (scored || out.yards >= s.distance)) {
-    offS.firstDowns += 1
-    if (s.down === 3) offS.thirdDownConv += 1
-  }
-  pushPlay(s, { ...out, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(concept.type, concept.depth), defCall: userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined) })
-
-  if (out.defTD) {
-    // R6: a takeaway returned for a touchdown (pick-six / fumble return).
-    const scoring = defId
-    if (scoring === s.homeId) s.homeScore += 6
-    else s.awayScore += 6
-    statFor(s, scoring).points += 6
-    const last = s.plays[s.plays.length - 1]
-    last.result = 'TOUCHDOWN!'
-    last.scorerId = out.scorerId
-    last.scorerName = world.players.find((p) => p.id === out.scorerId)?.name ?? ''
-    // The scoring club attempts the extra point, then kicks off (handled by `try`).
-    swapPossession(s)
-    s.down = 1
-    s.distance = 10
-    if (s.qtr <= 4) {
-      s.phase = 'try'
-      return 'continue'
-    }
-    pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
-    return 'done'
-  }
-
-  if (safety) {
-    // R6: two points to the defense; the club that gave it up free-kicks away.
-    const scoring = defId
-    if (scoring === s.homeId) s.homeScore += 2
-    else s.awayScore += 2
-    statFor(s, scoring).points += 2
-    swapPossession(s)
-    s.down = 1
-    s.distance = 10
-    // FUTURES #4: the free kick runs in the kickoff phase (see stepTry).
-    s.phase = 'kickoff'
-    return 'continue'
-  }
-
-  if (out.turnover) {
-    swapPossession(s)
-    s.yard = 100 - clamp(s.yard + out.yards, 1, 99)
-    s.down = 1
-    s.distance = 10
-    return 'continue'
-  }
-
-  if (scored) {
-    const scorer = out.carrierId ? (world.players.find((p) => p.id === out.carrierId)?.name ?? '') : ''
-    if (offId === s.homeId) s.homeScore += 6
-    else s.awayScore += 6
-    offS.points += 6
-    offS.td += 1
-    if (isPass) offS.passTD += 1
-    else offS.rushTD += 1
-    const last = s.plays[s.plays.length - 1]
-    last.result = 'TOUCHDOWN!'
-    last.scorerName = scorer
-    last.scorerId = out.carrierId
-    // extra point / two-point try (in overtime it's sudden death — no try needed)
-    if (s.qtr <= 4) {
-      s.phase = 'try'
-      return 'continue'
-    }
-    swapPossession(s)
-    s.yard = R2.kickoffYard
-    s.down = 1
-    s.distance = 10
-    pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
-    return 'done'
-  }
-
-  s.yard = endYard
-  const gained = out.yards
-  if (gained >= s.distance) {
-    s.down = 1
-    s.distance = Math.min(10, 100 - s.yard)
-  } else {
-    s.down += 1
-    s.distance -= gained
-    if (s.down > 4) {
-      // failed to convert on 4th (go-for-it), turnover on downs
-      swapPossession(s)
-      s.yard = 100 - s.yard
-      s.down = 1
-      s.distance = 10
-      return 'continue'
-    }
-  }
-  return 'continue'
+  return result
 }
 
 /**

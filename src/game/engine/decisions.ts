@@ -12,13 +12,18 @@ import { clamp, hash32 } from './rng'
 
 export type FourthStyle = 'conservative' | 'standard' | 'aggressive'
 
+/** FUTURES #5: how eagerly a club throws the red flag. */
+export type ChallengeStyle = 'aggressive' | 'standard' | 'conservative'
+
 export interface CallSheet {
   fourth: FourthStyle
   twoPoint: 'chart' | 'kick' | 'go'
   timeouts: 'save' | 'aggressive'
+  /** FUTURES #5: red-flag appetite. Optional so saves written before it still load. */
+  challenges?: ChallengeStyle
 }
 
-export const DEFAULT_CALL_SHEET: CallSheet = { fourth: 'standard', twoPoint: 'chart', timeouts: 'save' }
+export const DEFAULT_CALL_SHEET: CallSheet = { fourth: 'standard', twoPoint: 'chart', timeouts: 'save', challenges: 'standard' }
 
 export interface Situation {
   yard: number
@@ -241,7 +246,9 @@ export function coachTendency(world: World, teamId: string): CoachTendency {
 /** An AI club's call sheet, derived from its coaching tendencies (R18). */
 export function aiCallSheet(world: World, teamId: string): CallSheet {
   const t = coachTendency(world, teamId)
-  return { fourth: t.fourth, twoPoint: t.twoPoint, timeouts: t.timeouts }
+  // FUTURES #5: a club challenges as aggressively as it goes for it (a hash-based
+  // coin on top of this lives in C2's aiThrows).
+  return { fourth: t.fourth, twoPoint: t.twoPoint, timeouts: t.timeouts, challenges: t.fourth }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
