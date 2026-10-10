@@ -5,7 +5,7 @@
 // control) and inside the always-dark `.broadcast` scope, with the club picker
 // writing the same contrast-checked team tokens AppShell writes.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useLayoutEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useLayoutEffect, useState, type ReactNode } from 'react'
 import { ArrowRight, BarChart3, Eye, LayoutGrid, Search, Table2, UserMinus, UserSearch } from 'lucide-react'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import { rootTeamVars, TEAM_VAR_NAMES } from '../lib/teamColor'
@@ -57,6 +57,9 @@ import {
   VacantSeat,
   WithInspector,
 } from './kit'
+
+// Broadcast 2.5D B2: field + stadium renderer preview (own chunk).
+const BroadcastFieldPreview = lazy(() => import('../components/broadcast/BroadcastFieldPreview'))
 
 const SAMPLE_RATINGS = [93, 85, 77, 69, 61, 57, 53, 48, 45]
 
@@ -593,6 +596,14 @@ export default function KitShowcase() {
           <div className="label mb-3">.broadcast scope (always dark)</div>
           <Gallery id="bc" />
         </div>
+        <Section
+          title="Broadcast field (2.5D, B2)"
+          note="Canvas renderer: perspective camera, field, stands and LED ribbons, LOS + first-down line on the turf. Sample: 3rd & 6 at the opponent 38; the club picker is the home club. Drift stops under reduced motion."
+        >
+          <Suspense fallback={<div className="label">Loading broadcast field…</div>}>
+            <BroadcastFieldPreview homeId={team.id} />
+          </Suspense>
+        </Section>
       </main>
     </div>
   )
