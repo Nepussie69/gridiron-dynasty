@@ -15,7 +15,7 @@ import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, fi
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
-import { NO_USER_BONUS, coachEffect, userBonusFromSkills } from '../game/engine/coaching'
+import { NO_USER_BONUS, coachEffect, userBonusFromSkills, userSeat } from '../game/engine/coaching'
 import {
   gainGameReps,
   gainSeasonTraining,
@@ -164,7 +164,7 @@ import {
   ownerMandate,
 } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerProfile } from '../game/engine/owner'
-import { advanceCoachingTree, poachAssistant } from '../game/engine/coachingTree'
+import { advanceCoachingTree, backfillAICoordinators, poachAssistant } from '../game/engine/coachingTree'
 import {
   OWNER_STAFF_FUND_INTEREST,
   grantLabels,
@@ -1833,6 +1833,8 @@ export const useGame = create<GameStore>((set, get) => ({
     indexPlayers(world)
     // If a firing was never resolved, take the default road back (#17).
     const resolved = career.wilderness && !career.wilderness.path ? applyWilderness(world, career, 'consult') : career
+    // Backlog 193/185: a change of employer never strands a vacant coordinator.
+    if (resolved.teamId !== career.teamId) backfillAICoordinators(world, resolved.teamId)
     // #11/#20: a fresh season question, clean moment log, and a new ambition slate.
     const seasonCareer: CareerState = {
       ...resolved,
@@ -2406,6 +2408,8 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career) return
     const next = applyWilderness(world, career, pathId)
     set({ career: next, activeTeamId: next.teamId, tick: get().tick + 1 })
+    // Backlog 193/185: the club you were let go from must not keep a vacant chair.
+    backfillAICoordinators(world, next.teamId)
     get().showToast(`The Wilderness: ${pathId}. The climb restarts.`)
     get().save()
   },
@@ -2434,6 +2438,9 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     const promoted = promote(career, offer)
     set({ career: promoted, activeTeamId: offer.teamId, offers: [], modal: 'none', tick: get().tick + 1 })
+    // Backlog 193/185: leaving a club behind never strands a vacant coordinator
+    // chair — the club you left gets an AI replacement at once.
+    backfillAICoordinators(world, offer.teamId)
     let msg = `You won the job — ${offer.title} for the ${world.byId[offer.teamId].name}.`
     if (pitch?.length) {
       const { matched } = pitchBonus(offer, career.path, portfolioItems(world, career), pitch)
@@ -3814,7 +3821,7 @@ function applyUserCoaching(career: CareerState | null) {
     situational: b.situational,
     // Backlog 193: only a coordinator rung (FBS level 2, NFL level 6) sits in an
     // OC/DC chair. A head coach's own skill doesn't fill a vacant coordinator seat.
-    seat: career.path === 'coach' && (career.level === 2 || career.level === 6) ? b.seat : undefined,
+    seat: userSeat(career),
   })
 }
 
@@ -4525,6 +4532,12 @@ function runEndOfRegularSeason(
   // Backlog 185: also reset when the coordinator is a NEW person or the same man
   // changes scheme (world.staffTenureRef remembers the last id+scheme seen).
   advanceStaffTenure(world)
+
+  // Backlog 193/185: if the user fired a coordinator and then left the club, the
+  // AI would otherwise carry a permanent vacant-seat floor. Fill any empty OC/DC
+  // chair on a non-user club at rollover (deterministic, no rng draw). The user's
+  // own chair is left open so they can still hire.
+  backfillAICoordinators(world, career?.teamId)
 
   // Playbook mastery grows between seasons (training, OTAs, camp). FUTURES 12: a
   // player holding out skips camp, so he earns no between-season mastery gain

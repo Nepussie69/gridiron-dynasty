@@ -10,6 +10,7 @@ import type { StaffMember } from '../types'
 import { coachEffect } from './coaching'
 import type { World } from './generate'
 import { FIRST, LAST } from './names'
+import { noteCoordinatorChange } from './playbook'
 import { clamp, hash32, type Rng } from './rng'
 import type { Reputation } from './career'
 
@@ -209,5 +210,9 @@ export function applyHire(world: World, teamId: string, candidate: HireCandidate
   if (candidate.role === ANALYTICS_ROLE) {
     world.analyticsPool = (world.analyticsPool ?? []).filter((m) => m.id !== candidate.id)
   }
+  // Backlog 185 (fix): a new OC/DC (or a scheme install) resets continuity now, at
+  // the moment of the hire — not a season later at the regular-season tick.
+  const side = member.role === 'Offensive Coordinator' ? 'off' : member.role === 'Defensive Coordinator' ? 'def' : null
+  if (side) noteCoordinatorChange(world, teamId, side)
   return member
 }

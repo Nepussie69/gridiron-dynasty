@@ -129,13 +129,35 @@ export function userBonusFromSkills(
   if (!holdsRole || !skills) return NO_USER_BONUS
   const schemeEdge = ((skills.scheme - 40) / 60) * 3 // ~ −2..+3
   const leadEdge = ((skills.leadership - 40) / 60) * 1.5
+  // Backlog 193/185: this helper deliberately does NOT set `seat`. Only a career
+  // that actually sits in a coordinator chair holds it, and that rule lives in one
+  // place — userSeat() below — so no caller can accidentally treat a head coach's
+  // skill as filling a vacant coordinator seat.
   return {
     off: focus === 'def' ? leadEdge * 0.4 : schemeEdge + leadEdge * 0.3,
     def: focus === 'off' ? leadEdge * 0.4 : schemeEdge + leadEdge * 0.3,
     development: 1 + leadEdge / 40,
     situational: leadEdge * 0.4,
-    seat: focus,
   }
+}
+
+/**
+ * Backlog 193/185: the coordinator seat a career personally holds, if any.
+ *
+ * Only a coordinator rung (FBS level 2, NFL level 6) actually sits in an OC/DC
+ * chair; a head coach's or front-office skill does not fill a vacant seat, so
+ * their side still takes the vacancy floor. `unitFocus` picks the side, defaulting
+ * to both. Single source of truth for the rule, shared by applyUserCoaching and
+ * any readout that needs to know which seat the user occupies.
+ */
+export function userSeat(career: {
+  path?: string
+  level?: number
+  unitFocus?: string
+} | null | undefined): 'off' | 'def' | 'both' | undefined {
+  if (!career || career.path !== 'coach') return undefined
+  if (career.level !== 2 && career.level !== 6) return undefined
+  return career.unitFocus === 'off' || career.unitFocus === 'def' ? career.unitFocus : 'both'
 }
 
 /** Short label for the UI. */

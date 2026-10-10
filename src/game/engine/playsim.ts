@@ -1255,7 +1255,10 @@ function pickConcept(rng: Rng, style: OffenseStyle, down: number, distance: numb
 // ── L10 G8/G9: tendencies, the call matrix, and the AI's counter-calls ────────
 
 function coordRating(world: World, teamId: string, role: 'Offensive Coordinator' | 'Defensive Coordinator'): number {
-  return (world.staff[teamId] ?? []).find((x) => x.role === role)?.rating ?? 74
+  // Backlog 193/185: a VACANT coordinator seat is not an average one. Return a
+  // floor rating so an empty chair counters tendencies like a poor coach instead
+  // of a league-average (74) one, consistent with the on-field vacancy floor.
+  return (world.staff[teamId] ?? []).find((x) => x.role === role)?.rating ?? 51
 }
 
 function normalizeDist<T extends string>(dist: Record<T, number>, keys: readonly T[]): Record<T, number> {
