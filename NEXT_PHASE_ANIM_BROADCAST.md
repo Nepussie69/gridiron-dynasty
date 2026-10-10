@@ -52,6 +52,6 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 | B5b | 🔨 DeepSeek building (special rules: kickoff/punt/returns, reset cost cap) |
 | B4 | 🔨 DeepSeek building |
 | B7 | ⏳ DeepSeek, next free slot (2-job cap) |
-| B6a graphics | ✅ on main (B8 note: renderer vignette off; FG kicker mapping) |
+| B6a graphics | ✅ on main (B8 note: renderer vignette off; FG kicker mapping verified OK on real plays) |
 | B6b telestrator replay | ⏳ Claude, after B4 (ball/effects) |
 | B8 | ⏳ Claude, after B4–B7 |
