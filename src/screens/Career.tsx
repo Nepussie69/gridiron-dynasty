@@ -3,8 +3,8 @@ import { ArrowUp, Briefcase, CheckCircle2, Circle, Copy, Plus, Repeat2, Sparkles
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import {
-  ladderFor,
   masteryCarryOver,
+  nflLadder,
   overallRep,
   progressToNext,
   roleMastery as getRoleMastery,
@@ -100,9 +100,12 @@ export function Career() {
 
   const team = league.byId[career.teamId]
   const resume = portfolioItems(league, career)
-  const ladder = ladderFor(career.path)
+  // Only the NFL rungs are reachable in this build, so the player sees the NFL
+  // ladder — and, because nflLadder filters rungs, rung.level is not its index.
+  const ladder = nflLadder(career.path)
   const current = tierFor(career.path, career.level)
-  const next = ladder[career.level + 1]
+  const currentRung = ladder.findIndex((r) => r.level === career.level)
+  const next = ladder.find((r) => r.level > career.level)
   const rec = recordOf(league, career.teamId)
   const overall = overallRep(career.reputation)
   const hitRate = career.hits + career.misses ? Math.round((career.hits / (career.hits + career.misses)) * 100) : 0
@@ -425,7 +428,7 @@ export function Career() {
                 <h3 className="font-display text-lg font-700 uppercase tracking-wide">
                   {career.path === 'coach' ? 'Coaching Ladder' : 'Personnel Ladder'}
                 </h3>
-                <Badge tone="team">Level {career.level + 1} of {ladder.length}</Badge>
+                <Badge tone="team">Level {currentRung >= 0 ? currentRung + 1 : 1} of {ladder.length}</Badge>
               </div>
               <div className="space-y-1">
                 {ladder.map((rung) => {

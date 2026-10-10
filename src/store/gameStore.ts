@@ -4769,7 +4769,7 @@ function runEndOfRegularSeason(
       pushCareerNews(world, careerNext, {
         category: 'Career',
         headline: `Fired: ${tierFor(career.path, career.level).title} role ends`,
-        body: `After a season that fell short, you were let go as ${tierFor(career.path, career.level).title} for the ${world.byId[career.teamId].name}. The Wilderness is open — a year on TV, consulting, college, or the UFL. Pick your road back.`,
+        body: `After a season that fell short, you were let go as ${tierFor(career.path, career.level).title} for the ${world.byId[career.teamId].name}. The Wilderness is open — a year on TV, consulting, a sports agency, or the UFL. Pick your road back.`,
       })
     } else if (wonTitle) {
       pushCareerNews(world, careerNext, {
