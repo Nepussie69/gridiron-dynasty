@@ -1940,6 +1940,25 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean } {
   return { scored: false }
 }
 
+/**
+ * backlog126: restart after a field-goal attempt. A make kicks off for real
+ * (a touchback, a return, or the rare return score); a miss hands the ball to
+ * the defense where it was kicked — never a kickoff — and no worse than the
+ * receiving club's own 20. `s.yard` is still the kicking club's spot here, so
+ * read it before swapping. No rng is drawn.
+ */
+function restartAfterFieldGoal(world: World, s: GameState, good: boolean): void {
+  const kickSpot = s.yard + 8
+  swapPossession(s)
+  s.down = 1
+  s.distance = 10
+  if (good) {
+    s.phase = resolveKickoff(world, s).scored ? 'try' : 'play'
+    return
+  }
+  s.yard = clamp(100 - kickSpot, 20, 99)
+}
+
 // ── Game driver ───────────────────────────────────────────────────────────────
 function fmtClock(sec: number) {
   const s = Math.max(0, Math.floor(sec))
@@ -2389,7 +2408,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
     }
     s.qbChangeChecked = true
   }
-  return stepHalftime(s)
+  return stepHalftime(world, s)
 }
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
@@ -2583,7 +2602,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
 }
 
 /** End-of-quarter / overtime bookkeeping. No rng is drawn here. */
-function stepClock(s: GameState): 'continue' | 'done' {
+function stepClock(world: World, s: GameState): 'continue' | 'done' {
   if (s.qtr === 2) {
     pushPlay(s, { type: 'end', concept: 'End of Half', yards: 0, result: 'Halftime', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
     s.phase = 'halftime'
@@ -2594,11 +2613,15 @@ function stepClock(s: GameState): 'continue' | 'done' {
       // Overtime: 10-minute period, first score wins (simplified).
       s.qtr += 1
       s.clock = 600
+      pushPlay(s, { type: 'end', concept: 'End of Regulation', yards: 0, result: 'Tied — Overtime', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+      // backlog126: the overtime period opens with a real kickoff.
       swapPossession(s)
-      s.yard = R2.kickoffYard
       s.down = 1
       s.distance = 10
-      pushPlay(s, { type: 'end', concept: 'End of Regulation', yards: 0, result: 'Tied — Overtime', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+      if (resolveKickoff(world, s).scored) {
+        pushPlay(s, { type: 'end', concept: 'Overtime', yards: 0, result: 'Walk-off score — Final (OT)', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
+        return 'done'
+      }
       return 'continue'
     }
     pushPlay(s, { type: 'end', concept: 'End of Regulation', yards: 0, result: 'Final', startYard: s.yard, endYard: s.yard, down: null, distance: null, timeUsed: 0 })
@@ -2614,15 +2637,16 @@ function stepClock(s: GameState): 'continue' | 'done' {
 }
 
 /** Halftime: possession flips to start Q3, timeouts reset (G6/G7). */
-function stepHalftime(s: GameState): 'continue' {
+function stepHalftime(world: World, s: GameState): 'continue' {
   s.qtr = 3
   s.clock = 900
   swapPossession(s)
-  s.yard = R2.kickoffYard
   s.down = 1
   s.distance = 10
   s.timeouts = { [s.homeId]: 3, [s.awayId]: 3 }
-  s.phase = 'play'
+  // backlog126: the second half opens with a real kickoff (a touchback or a
+  // return, and the rare return score).
+  s.phase = resolveKickoff(world, s).scored ? 'try' : 'play'
   return 'continue'
 }
 
@@ -2694,7 +2718,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (s.phase === 'try') return stepTry(world, s)
   if (s.phase === 'halftime') return stepHalftimePhase(world, s)
 
-  if (s.clock <= 0) return stepClock(s)
+  if (s.clock <= 0) return stepClock(world, s)
 
   // L10 G7: two-minute and clock moments sit at the very start, before any rng.
   if (checkTwoMinute(s) === 'moment') return 'moment'
@@ -2727,10 +2751,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       fgS.fgMade += 1
     }
     pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: s.down, distance: s.distance })
-    swapPossession(s)
-    s.yard = R2.kickoffYard
-    s.down = 1
-    s.distance = 10
+    restartAfterFieldGoal(world, s, good)
     return 'continue'
   }
 
@@ -2911,10 +2932,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
         fgS.fgMade += 1
       }
       pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: 4, distance: s.distance })
-      swapPossession(s)
-      s.yard = R2.kickoffYard
-      s.down = 1
-      s.distance = 10
+      restartAfterFieldGoal(world, s, good)
       return 'continue'
     }
     const out = resolveSpecial(world, s.rng, offId, 'punt', s.yard, envFor(s), offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore, s.n, defId)
