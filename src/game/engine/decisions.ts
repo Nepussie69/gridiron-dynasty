@@ -144,6 +144,47 @@ export const OFF_PASS_RATE: Record<string, number> = {
   'RPO Heavy': 0.5084,
 }
 
+/** R18.2: how far each club's coordinator-scheme identity is pushed out from its
+ *  own league's mean identity. 1 = the shipped/verified balance (exactly R2's
+ *  identity); >1 widens the scheme spread toward the real football spread. Because
+ *  every club is measured against its own world's mean, the club-to-club spread
+ *  grows while the league's average identity — and so its overall run/pass volume —
+ *  is held exactly in place. This is the whole widening: a single dial. */
+const PASS_ID_WIDEN = 1.9
+
+/** R18.2: the league's own mean coordinator-scheme identity (NFL clubs only). The
+ *  widening pivots on this, so it does not move and neither does the average pass
+ *  rate. Cached per world and week; a club's staff does not change within a week. */
+const passIdMeans = new WeakMap<World, { key: string; mean: number }>()
+function worldPassMean(world: World): number {
+  const key = `${world.season}:${world.week}`
+  const hit = passIdMeans.get(world)
+  if (hit && hit.key === key) return hit.mean
+  let sum = 0
+  let n = 0
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL') continue
+    const oc = (world.staff[t.id] ?? []).find((s) => s.role === 'Offensive Coordinator')
+    sum += OFF_PASS_RATE[oc?.scheme ?? ''] ?? OFF_PASS_RATE['Pro Style']
+    n += 1
+  }
+  const mean = n ? sum / n : OFF_PASS_RATE['Pro Style']
+  passIdMeans.set(world, { key, mean })
+  return mean
+}
+
+/** R18.2: a club's pass-rate identity — its coordinator's scheme, widened out from
+ *  its own league's mean identity by PASS_ID_WIDEN. The single source both the sim
+ *  (offStyle) and the scouting card read; the widening is world-centred, so the
+ *  average pass rate — and every calibration band — is untouched and only the
+ *  spread between clubs moves. Deterministic, never an rng() draw, so the seed
+ *  stream and coached/sim equivalence are unaffected. */
+export function offPassRate(world: World, _teamId: string, scheme: string | undefined): number {
+  const base = OFF_PASS_RATE[scheme ?? ''] ?? OFF_PASS_RATE['Pro Style']
+  const mean = worldPassMean(world)
+  return clamp(mean + PASS_ID_WIDEN * (base - mean), 0.08, 0.92)
+}
+
 export interface CoachTendency {
   /** 4th-down aggressiveness. */
   fourth: FourthStyle
@@ -192,7 +233,7 @@ export function coachTendency(world: World, teamId: string): CoachTendency {
   const fourth: FourthStyle = aggro >= 0.8 ? 'aggressive' : aggro <= -0.8 ? 'conservative' : 'standard'
   const twoPoint: CoachTendency['twoPoint'] = aggro >= 0.7 ? 'go' : 'chart'
   const timeouts: CoachTendency['timeouts'] = hcRating >= 75 || hc?.specialty === 'Play Calling' ? 'aggressive' : 'save'
-  const passRate = OFF_PASS_RATE[oc?.scheme ?? ''] ?? OFF_PASS_RATE['Pro Style']
+  const passRate = offPassRate(world, teamId, oc?.scheme)
   const tempo = clamp((OC_TEMPO[oc?.scheme ?? ''] ?? 0) + (ocRating - 74) / 120, -1, 1)
   return { fourth, twoPoint, passRate, timeouts, tempo }
 }
