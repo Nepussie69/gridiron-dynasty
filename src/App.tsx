@@ -58,7 +58,7 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div className="grid h-screen w-screen place-items-center bg-canvas">
+      <div className="grid h-dvh w-full place-items-center bg-canvas">
         <div className="text-center">
           <div className="font-display text-4xl font-700 uppercase tracking-wide">
             Gridiron <span className="text-brand">Dynasty</span>
