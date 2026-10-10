@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   Award,
@@ -25,7 +25,8 @@ import {
   Users,
 } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { inkOn, money } from '../lib/format'
+import { money } from '../lib/format'
+import { rootTeamVars, TEAM_VAR_NAMES, type ThemeName } from '../lib/teamColor'
 import { SCREENS, useGame, useWorld, userCtx, type ScreenId } from '../store/gameStore'
 import { tierFor } from '../game/engine/career'
 import { stageOf } from '../game/engine/draft'
@@ -568,20 +569,45 @@ function WeekPill({
   )
 }
 
+/** The theme actually showing: a pinned data-theme, else the OS preference. */
+function getResolvedTheme(): ThemeName {
+  const t = document.documentElement.getAttribute('data-theme')
+  if (t === 'dark' || t === 'light') return t
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function subscribeResolvedTheme(onChange: () => void) {
+  const mq = window.matchMedia('(prefers-color-scheme: dark)')
+  mq.addEventListener('change', onChange)
+  const mo = new MutationObserver(onChange)
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  return () => {
+    mq.removeEventListener('change', onChange)
+    mo.disconnect()
+  }
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const team = league.byId[activeTeamId]
   const toast = useGame((s) => s.toast)
 
-  const themeVars = {
-    '--team': team.primary,
-    '--team-2': team.secondary,
-    '--team-ink': inkOn(team.primary),
-  } as React.CSSProperties
+  // F1: contrast-checked team tokens live on <html> so portals, modals and
+  // MatchView inherit them. --team / --team-soft alias --team-accent /
+  // --team-tint in index.css.
+  const theme = useSyncExternalStore(subscribeResolvedTheme, getResolvedTheme, () => 'light' as ThemeName)
+  useLayoutEffect(() => {
+    const el = document.documentElement
+    const vars = rootTeamVars(team.primary, team.secondary, theme)
+    for (const [k, v] of Object.entries(vars)) el.style.setProperty(k, v)
+    return () => {
+      for (const k of TEAM_VAR_NAMES) el.style.removeProperty(k)
+    }
+  }, [team.primary, team.secondary, theme])
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-canvas" style={themeVars}>
+    <div className="flex h-screen w-screen overflow-hidden bg-canvas">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
