@@ -107,6 +107,8 @@ export interface RendererOptions {
   goalposts?: boolean
   /** Darken the frame edges (default true). */
   vignette?: boolean
+  /** Draw profile: 'lite' uses flat fills, fewer subdivisions and no grain. */
+  quality?: 'full' | 'lite'
   /** Club lookup (default: NFL_TEAMS by id). */
   resolveClub?: (id: string) => ClubLike | undefined
   onFrame?: (stats: FrameStats) => void
@@ -213,6 +215,7 @@ export class BroadcastRenderer {
       cacheMargin: opts.cacheMargin ?? 0.06,
       endZones: opts.endZones ?? 'home',
       vignette: opts.vignette ?? true,
+      quality: opts.quality ?? 'full',
       goalposts: opts.goalposts ?? true,
       resolveClub: opts.resolveClub ?? defaultResolve,
     }
@@ -234,6 +237,19 @@ export class BroadcastRenderer {
   setDprCap(cap: number): void {
     this.opts.dprCap = cap
     this.measure()
+  }
+
+  /**
+   * Switch the draw profile (Lite: flat sky/crowd/LED, fewer subdivisions, no
+   * turf grain). Rebuilds the textures and drops the static cache once.
+   */
+  setQuality(q: 'full' | 'lite'): void {
+    if (q === this.opts.quality) return
+    this.opts.quality = q
+    this.fieldTex = null
+    this.standTex = null
+    this.turfGraphics.clear()
+    this.cache = null
   }
 
   /** Drop every texture and the static cache (fonts loaded, club colours changed…). */
@@ -291,28 +307,30 @@ export class BroadcastRenderer {
 
   private ensureTextures(frame: BroadcastFrame): { field: FieldTextures; stands: StadiumTextures; key: string } {
     const font = displayFont()
+    const lite = this.opts.quality === 'lite'
     const home = this.club(frame.homeTeamId)
     const away = this.club(frame.awayTeamId)
     const right = this.opts.endZones === 'split' ? away : home
-    const fk = `${home.id}|${right.id}|${home.primary}|${home.secondary}|${right.primary}|${right.secondary}`
+    const fk = `${home.id}|${right.id}|${home.primary}|${home.secondary}|${right.primary}|${right.secondary}|${lite ? 'L' : 'F'}`
     if (!this.fieldTex || fk !== this.fieldKey) {
       this.fieldTex = buildFieldTextures(home, right, home, font)
       this.fieldKey = fk
     }
     const homeD = frame.possession === 'away'
-    const sk = `${home.id}|${away.id}|${home.primary}|${away.primary}|${homeD ? 'D' : 'O'}`
+    const sk = `${home.id}|${away.id}|${home.primary}|${away.primary}|${homeD ? 'D' : 'O'}|${lite ? 'L' : 'F'}`
     if (!this.standTex || sk !== this.standKey) {
-      this.standTex = buildStadiumTextures(home, away, homeD, font)
+      this.standTex = buildStadiumTextures(home, away, homeD, font, lite)
       this.standKey = sk
     }
     return { field: this.fieldTex, stands: this.standTex, key: `${fk}#${sk}#${this.texVersion}` }
   }
 
   private paintStatic(target: Ctx, cam: Camera, field: FieldTextures, stands: StadiumTextures): void {
+    const lite = this.opts.quality === 'lite'
     target.setTransform(1, 0, 0, 1, 0, 0)
-    drawSky(target, target.canvas.width, target.canvas.height)
-    drawFieldGround(target, cam, field)
-    drawStands(target, cam, stands)
+    drawSky(target, target.canvas.width, target.canvas.height, lite)
+    drawFieldGround(target, cam, field, lite)
+    drawStands(target, cam, stands, lite)
     drawFieldFurniture(target, cam, { goalposts: this.opts.goalposts })
   }
 

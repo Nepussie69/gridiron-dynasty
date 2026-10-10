@@ -123,7 +123,7 @@ export function buildFieldTextures(left: ClubLike, right: ClubLike, home: ClubLi
 }
 
 /** Turf: apron, 5-yard stripes, mowing cross-hatch, end zones and their wordmarks. */
-function drawTurf(ctx: Ctx, c: Camera, tex: FieldTextures): void {
+function drawTurf(ctx: Ctx, c: Camera, tex: FieldTextures, lite = false): void {
   fillPoly(ctx, c, Q(-14, -10, FL + 14, FW + 10), ART.apron)
   // Alternating 5-yard stripes as two paths (no full-field underpaint).
   for (const [start, col] of [
@@ -135,36 +135,41 @@ function drawTurf(ctx: Ctx, c: Camera, tex: FieldTextures): void {
     ctx.fillStyle = col
     ctx.fill()
   }
-  ctx.beginPath()
-  for (let y = 0; y < FW; y += (FW / 16) * 2) pathPoly(ctx, c, Q(10, y, 110, y + FW / 16))
-  ctx.fillStyle = 'rgba(255,255,255,.022)'
-  ctx.fill()
-  // End zones + a faint diagonal sheen.
+  if (!lite) {
+    // Turf grain: mowing cross-hatch (skipped in Lite).
+    ctx.beginPath()
+    for (let y = 0; y < FW; y += (FW / 16) * 2) pathPoly(ctx, c, Q(10, y, 110, y + FW / 16))
+    ctx.fillStyle = 'rgba(255,255,255,.022)'
+    ctx.fill()
+  }
+  // End zones + a faint diagonal sheen (the sheen is grain; Lite skips it).
   fillPoly(ctx, c, Q(0, 0, 10, FW), tex.leftEndZone)
   fillPoly(ctx, c, Q(110, 0, 120, FW), tex.rightEndZone)
-  ctx.beginPath()
-  const cl = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-  for (let k = -6; k < 16; k++) {
-    for (const base of [0, 110]) {
-      const x0 = base + k * 1.4
-      const pts: Vec3[] = [
-        [cl(x0, base, base + 10), 0, 0],
-        [cl(x0 + 0.7, base, base + 10), 0, 0],
-        [cl(x0 + 3.7, base, base + 10), FW, 0],
-        [cl(x0 + 3, base, base + 10), FW, 0],
-      ]
-      pathPoly(ctx, c, pts)
+  if (!lite) {
+    ctx.beginPath()
+    const cl = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+    for (let k = -6; k < 16; k++) {
+      for (const base of [0, 110]) {
+        const x0 = base + k * 1.4
+        const pts: Vec3[] = [
+          [cl(x0, base, base + 10), 0, 0],
+          [cl(x0 + 0.7, base, base + 10), 0, 0],
+          [cl(x0 + 3.7, base, base + 10), FW, 0],
+          [cl(x0 + 3, base, base + 10), FW, 0],
+        ]
+        pathPoly(ctx, c, pts)
+      }
     }
+    ctx.fillStyle = 'rgba(0,0,0,.07)'
+    ctx.fill()
   }
-  ctx.fillStyle = 'rgba(0,0,0,.07)'
-  ctx.fill()
   // Wordmarks: bottoms face the goal line, so they read from the field.
-  drawTex(ctx, c, tex.rightMark, [111.6, MY + 19.85, 0], [0, -39.7, 0], [6.8, 0, 0], 14, 3)
-  drawTex(ctx, c, tex.leftMark, [8.4, MY - 19.85, 0], [0, 39.7, 0], [-6.8, 0, 0], 14, 3)
+  drawTex(ctx, c, tex.rightMark, [111.6, MY + 19.85, 0], [0, -39.7, 0], [6.8, 0, 0], lite ? 6 : 14, lite ? 1 : 3)
+  drawTex(ctx, c, tex.leftMark, [8.4, MY - 19.85, 0], [0, 39.7, 0], [-6.8, 0, 0], lite ? 6 : 14, lite ? 1 : 3)
 }
 
 /** Border, yard lines, hashes, inbound marks, PAT marks, numbers, arrows, logo. */
-function drawMarkings(ctx: Ctx, c: Camera, tex: FieldTextures): void {
+function drawMarkings(ctx: Ctx, c: Camera, tex: FieldTextures, lite = false): void {
   ctx.beginPath()
   pathPoly(ctx, c, Q(-2, -2, FL + 2, 0))
   pathPoly(ctx, c, Q(-2, FW, FL + 2, FW + 2))
@@ -194,13 +199,14 @@ function drawMarkings(ctx: Ctx, c: Camera, tex: FieldTextures): void {
   ctx.fillStyle = ART.paintSoft
   ctx.fill()
   // Numbers: near side reads from the near sideline, far side from the far one.
+  const nSub = lite ? 2 : 3
   for (let X = 20; X <= 100; X += 10) {
     const v = X <= 60 ? X - 10 : 110 - X
     const img = tex.numbers[v]
     if (!img) continue
     const y0 = NUM_TOP - NUM_H
-    drawTex(ctx, c, img, [X - NUM_W / 2, y0, 0], [NUM_W, 0, 0], [0, NUM_H, 0], 3, 2)
-    drawTex(ctx, c, img, [X + NUM_W / 2, FW - y0, 0], [-NUM_W, 0, 0], [0, -NUM_H, 0], 3, 2)
+    drawTex(ctx, c, img, [X - NUM_W / 2, y0, 0], [NUM_W, 0, 0], [0, NUM_H, 0], nSub, lite ? 1 : 2)
+    drawTex(ctx, c, img, [X + NUM_W / 2, FW - y0, 0], [-NUM_W, 0, 0], [0, -NUM_H, 0], nSub, lite ? 1 : 2)
   }
   // Arrows beside the top half of each number, pointing to the nearer goal line.
   ctx.beginPath()
@@ -224,7 +230,7 @@ function drawMarkings(ctx: Ctx, c: Camera, tex: FieldTextures): void {
   ctx.fillStyle = ART.paintSoft
   ctx.fill()
   // Midfield logo, upright from the near (broadcast) sideline.
-  drawTex(ctx, c, tex.logo, [FL / 2 - 3, MY - 3, 0], [6, 0, 0], [0, 6, 0], 4, 4)
+  drawTex(ctx, c, tex.logo, [FL / 2 - 3, MY - 3, 0], [6, 0, 0], [0, 6, 0], lite ? 2 : 4, lite ? 2 : 4)
 }
 
 /** Orange pylons at the eight end-zone corners (camera-facing boxes). */
@@ -279,9 +285,9 @@ export function drawGoalposts(ctx: Ctx, c: Camera, end: 'both' | 'left' | 'right
 }
 
 /** Ground layer of the field (everything flat). Static — cached by the renderer. */
-export function drawFieldGround(ctx: Ctx, c: Camera, tex: FieldTextures): void {
-  drawTurf(ctx, c, tex)
-  drawMarkings(ctx, c, tex)
+export function drawFieldGround(ctx: Ctx, c: Camera, tex: FieldTextures, lite = false): void {
+  drawTurf(ctx, c, tex, lite)
+  drawMarkings(ctx, c, tex, lite)
 }
 
 /** Upright field furniture (pylons, goalposts). Static — drawn after the stands. */

@@ -46,6 +46,7 @@ import { tierFor } from '../game/engine/career'
 import { capSpace, recordOf, recordStr, rosterOf, scheduleFor, teamAvgOvr } from '../game/selectors'
 import type { Team } from '../game/types'
 import { CommandPalette } from './CommandPalette'
+import { BroadcastSettings } from './broadcast/BroadcastSettings'
 import {
   Avatar,
   Badge,
@@ -977,6 +978,7 @@ function SettingsHost() {
             ]}
           />
         </div>
+        <BroadcastSettings row={row} />
         <div className={cn(row, 'hidden lg:flex')}>
           <span className="label">Sidebar</span>
           <SegmentedControl

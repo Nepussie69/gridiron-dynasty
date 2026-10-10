@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, PanelBottom, Play, Shield, SkipForward, Target, Timer, Wind, Zap } from 'lucide-react'
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, PanelBottom, Play, Settings, Shield, SkipForward, Target, Timer, Wind, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, penaltyTotals, PENALTY_INFO, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
@@ -23,8 +23,12 @@ import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { TeamHoverCard } from './TeamHoverCard'
-import { Badge, BroadcastScope, Button, ConfirmSheet, OverflowMenu, ScoreBlock, TeamCrest, type MenuItem } from '../ui/kit'
+import { Badge, BroadcastScope, Button, ConfirmSheet, IconButton, OverflowMenu, ScoreBlock, TeamCrest, type MenuItem } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
+import BroadcastBoundary from './broadcast/BroadcastBoundary'
+import { buildLivePlay, createLiveBroadcast, latchLiveView, reportFallback, useLiveView, type LiveBroadcast } from './broadcast/liveView'
+import { autoStartLevel } from './broadcast/quality'
+import { deviceKey, setAutoQState, useViewSettings } from './broadcast/viewSettings'
 
 const CENTER_Y = 26.65
 const W = 120
@@ -342,6 +346,67 @@ export function MatchView() {
     return new Map([...teamJerseys(world, match.homeId), ...teamJerseys(world, match.awayId)])
   }, [world, match])
 
+  // ── B7: the live view — 2.5D skycam vs the existing top-down SVG ────────────
+  // A width change (or explicit setting) switches at the next play boundary; a
+  // session fallback switches to top-down at once (latchLiveView).
+  const view = useLiveView()
+  const vsettings = useViewSettings()
+  const homeId = match?.homeId
+  const awayId = match?.awayId
+  const liveCanvasRef = useRef<HTMLCanvasElement>(null)
+  const liveCtlRef = useRef<LiveBroadcast | null>(null)
+  const autoQRef = useRef(vsettings.autoQ)
+  const [liveChip, setLiveChip] = useState(false)
+  useEffect(() => {
+    autoQRef.current = vsettings.autoQ
+  }, [vsettings.autoQ])
+  const broadcastLive = !!match && latchLiveView(`${matchSeq}:${idx}`, view.live, !!view.fallback) === 'broadcast'
+
+  // Mount the composed 2.5D view (renderer + actors + graphics + director) once
+  // per view / matchup / quality; the canvas keeps a fixed CSS size, so a DPR
+  // cap or quality change never shifts the layout.
+  useEffect(() => {
+    if (!broadcastLive || !homeId || !awayId) {
+      liveCtlRef.current?.destroy()
+      liveCtlRef.current = null
+      return
+    }
+    const cv = liveCanvasRef.current
+    if (!cv) return
+    const ctl = createLiveBroadcast(cv, {
+      homeTeamId: homeId,
+      awayTeamId: awayId,
+      profile: view.cameraProfile,
+      phase: 'live',
+      qualitySetting: vsettings.quality,
+      qualityStart: autoStartLevel(autoQRef.current, deviceKey()),
+      reducedMotion: reduced,
+      live: view.live,
+      onFallback: (f) => reportFallback(f),
+      onAutoQ: (a) => setAutoQState(a),
+    })
+    liveCtlRef.current = ctl
+    return () => {
+      ctl?.destroy()
+      if (liveCtlRef.current === ctl) liveCtlRef.current = null
+    }
+  }, [broadcastLive, homeId, awayId, view.cameraProfile, view.live, vsettings.quality, reduced])
+
+  // Load each recorded play into the live view (the PlayAnim is the truth; only
+  // the drawing differs from the top-down view).
+  useEffect(() => {
+    const ctl = liveCtlRef.current
+    if (!ctl || !homeId || !awayId || !play || !anim) return
+    ctl.setPlay(
+      buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }),
+    )
+  }, [broadcastLive, homeId, awayId, play, anim, actorMap, numbers])
+
+  // Feed the animation clock (identical play duration in Full and Lite).
+  useEffect(() => {
+    liveCtlRef.current?.setTime(clock.i === idx ? clock.t : 0)
+  }, [clock, idx])
+
   // auto-advance
   useEffect(() => {
     if (!match || !playing || frozen || !play) return
@@ -550,6 +615,13 @@ export function MatchView() {
           <ScoreBlock team={home} score={shownScore.home} hasBall={play.offId === home.id} timeouts={gameDay?.state.timeouts?.[home.id]} align="right" />
         </TeamHoverCard>
         <OverflowMenu items={gameMenu} label="Game options" size="sm" className="ml-0.5 shrink-0 self-center" />
+        <IconButton
+          label="View settings"
+          className="shrink-0 self-center"
+          onClick={() => window.dispatchEvent(new Event('gd:settings'))}
+        >
+          <Settings size={17} />
+        </IconButton>
       </header>
 
       {/* ── Body: field + decisions (left), side panel (right) ─────────────── */}
@@ -557,6 +629,13 @@ export function MatchView() {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
           {/* Field */}
           <div ref={fieldRef} className="relative min-h-[140px] flex-1 p-3 pb-0">
+            {broadcastLive ? (
+              <BroadcastBoundary onError={() => reportFallback('render-error')}>
+                <div className="relative h-full w-full">
+                  <canvas ref={liveCanvasRef} className="absolute inset-0 block h-full w-full" role="img" aria-label="Broadcast 2.5D game view" />
+                </div>
+              </BroadcastBoundary>
+            ) : (
             <svg viewBox={vb} preserveAspectRatio="xMidYMid meet" className="h-full w-full">
               <defs>
                 <filter id="gd-dot-shadow" x="-60%" y="-60%" width="220%" height="220%">
@@ -749,6 +828,7 @@ export function MatchView() {
                 <rect x={mx(anim.flag.x) - 0.5} y={anim.flag.y - 0.5} width={1} height={1} fill="var(--color-warn)" stroke="var(--color-canvas)" strokeWidth={0.08} />
               )}
             </svg>
+            )}
 
             {/* glass down & distance chip (top-left) */}
             <div className="pointer-events-none absolute left-4 top-3 z-10 flex flex-wrap items-center gap-2">
@@ -773,6 +853,21 @@ export function MatchView() {
             >
               {fullField ? 'Follow' : 'Full field'}
             </button>
+
+            {/* B7: a quiet, dismissible note when the 2.5D view fell back. */}
+            {view.fallback && !liveChip && (
+              <div className="absolute bottom-3 left-4 z-10 flex items-center gap-2 rounded-md border border-line-strong bg-canvas/70 px-2.5 py-1 font-cond text-label uppercase tracking-wide text-ink-2 shadow-lg backdrop-blur-sm">
+                <span>Top-down view — 2.5D unavailable here</span>
+                <button
+                  type="button"
+                  onClick={() => setLiveChip(true)}
+                  aria-label="Dismiss the 2.5D notice"
+                  className="grid h-5 w-5 place-items-center rounded text-muted hover:text-ink"
+                >
+                  ×
+                </button>
+              </div>
+            )}
 
             {/* play-result toast */}
             {toast && (

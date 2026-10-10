@@ -47,24 +47,35 @@ function ledBoard(w: number, words: string[], art: ReturnType<typeof clubArt>, f
  * Build the bowl textures for the home club. `homeOnDefense` puts DEFENSE
  * chants on the ribbons, otherwise the club's name.
  */
-export function buildStadiumTextures(home: ClubLike, away: ClubLike, homeOnDefense: boolean, font: string): StadiumTextures {
+export function buildStadiumTextures(home: ClubLike, away: ClubLike, homeOnDefense: boolean, font: string, lite = false): StadiumTextures {
   const art = clubArt(home)
   const awayArt = clubArt(away)
-  const crowd = makeCanvas(1024, 256, (g, w, h) => {
-    const gr = g.createLinearGradient(0, 0, 0, h)
-    gr.addColorStop(0, ART.crowdTop)
-    gr.addColorStop(1, ART.crowdLow)
-    g.fillStyle = gr
-    g.fillRect(0, 0, w, h)
+  const crowdW = lite ? 512 : 1024
+  const crowdH = lite ? 128 : 256
+  const crowd = makeCanvas(crowdW, crowdH, (g, w, h) => {
+    if (lite) {
+      // Flat crowd: no vertical gradient, fewer rows / dots.
+      g.fillStyle = ART.crowdLow
+      g.fillRect(0, 0, w, h)
+    } else {
+      const gr = g.createLinearGradient(0, 0, 0, h)
+      gr.addColorStop(0, ART.crowdTop)
+      gr.addColorStop(1, ART.crowdLow)
+      g.fillStyle = gr
+      g.fillRect(0, 0, w, h)
+    }
     const R = rng(42)
     // Mostly home colours, a sprinkle of the visitors.
     const cols = [...art.crowd, awayArt.endZone]
-    for (let row = 0; row < 26; row++) {
-      const y = 8 + row * 9.4
-      const shade = 0.45 + 0.55 * (row / 26)
+    const rows = lite ? 13 : 26
+    const rowStep = h / rows
+    const dotStep = lite ? 7.4 : 4.2
+    for (let row = 0; row < rows; row++) {
+      const y = 4 + row * rowStep
+      const shade = 0.45 + 0.55 * (row / rows)
       g.fillStyle = 'rgba(0,0,0,.35)'
       g.fillRect(0, y + 6, w, 2)
-      for (let x = 0; x < w; x += 4.2 + R() * 1.6) {
+      for (let x = 0; x < w; x += dotStep + R() * 1.6) {
         g.globalAlpha = shade * (0.55 + R() * 0.45)
         g.fillStyle = cols[Math.floor(R() * cols.length)]
         g.fillRect(x, y + R() * 1.5, 3, 5)
@@ -74,7 +85,8 @@ export function buildStadiumTextures(home: ClubLike, away: ClubLike, homeOnDefen
       }
     }
     g.globalAlpha = 1
-    for (let i = 0; i < 60; i++) {
+    const sparks = lite ? 20 : 60
+    for (let i = 0; i < sparks; i++) {
       g.fillStyle = `rgba(255,255,255,${0.4 + R() * 0.6})`
       g.fillRect(R() * w, R() * h, 1.5, 1.5)
     }
@@ -120,7 +132,13 @@ let skyStrip: HTMLCanvasElement | null = null
  * 1-px strip and stretched (a full-frame gradient fill is slow on software
  * rasterisers).
  */
-export function drawSky(ctx: Ctx, w: number, h: number): void {
+export function drawSky(ctx: Ctx, w: number, h: number, lite = false): void {
+  if (lite) {
+    // Flat bowl haze (no gradient fill).
+    ctx.fillStyle = ART.skyMid
+    ctx.fillRect(0, 0, w, h)
+    return
+  }
   if (!skyStrip) {
     skyStrip = makeCanvas(1, 256, (g, sw, sh) => {
       const bg = g.createLinearGradient(0, 0, 0, sh)
@@ -135,7 +153,7 @@ export function drawSky(ctx: Ctx, w: number, h: number): void {
 }
 
 /** Stands, LED walls and fascia, culled and painted back to front. */
-export function drawStands(ctx: Ctx, c: Camera, tex: StadiumTextures): void {
+export function drawStands(ctx: Ctx, c: Camera, tex: StadiumTextures, lite = false): void {
   const vis: { s: Section; d: number; standVis: boolean; wallVis: boolean }[] = []
   for (const s of SECTIONS) {
     const [ox, oy] = s.out
@@ -163,7 +181,7 @@ export function drawStands(ctx: Ctx, c: Camera, tex: StadiumTextures): void {
     const SU: Vec3 = [s.U[0] + ux * 2 * ext, s.U[1] + uy * 2 * ext, 0]
     const SV: Vec3 = [ox * depth, oy * depth, rise]
     if (standVis) {
-      drawTex(ctx, c, tex.crowd, so, SU, SV, s.nx, 3)
+      drawTex(ctx, c, tex.crowd, so, SU, SV, lite ? Math.max(6, s.nx >> 1) : s.nx, lite ? 2 : 3)
       // Roof fascia with floodlights along the top back of the stand.
       drawTex(ctx, c, tex.fascia, [so[0] + SV[0], so[1] + SV[1], wall + rise], SU, [0, 0, fascia], s.nx, 1)
     }
