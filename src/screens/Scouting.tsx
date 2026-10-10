@@ -417,7 +417,7 @@ export function Scouting() {
         <div className="flex flex-col gap-4">
           <Card pad={false} className="order-1 overflow-hidden lg:order-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
-              <SectionTitle className="!mb-0">Class Board</SectionTitle>
+              <SectionTitle spacing="none">Class Board</SectionTitle>
               <div className="flex flex-wrap items-center gap-2">
                 {canConvictHere && (
                   <Badge tone="win"><Flame size={11} /> Conviction {convicted.length}/{MAX_CONVICTION}</Badge>

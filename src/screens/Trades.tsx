@@ -1022,7 +1022,7 @@ function AssetColumn({
           ))}
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="label !mb-0">Sort</span>
+          <span className="label">Sort</span>
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as AssetSort)}

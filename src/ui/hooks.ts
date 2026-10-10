@@ -2,7 +2,7 @@
 // Kit hooks (UI redesign F2). Plain .ts so the .tsx kit files export only
 // components (keeps the react only-export-components lint count at 4).
 // ─────────────────────────────────────────────────────────────────────────────
-import { useEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
+import { createContext, useContext, useEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
 import type { ThemeName } from '../lib/teamColor'
 import { useGame } from '../store/gameStore'
 import { ACCESS_META, accessFor, type AccessArea, type AccessLevel } from '../game/engine/access'
@@ -59,6 +59,21 @@ function subscribeResolvedTheme(onChange: () => void) {
 
 export function useResolvedTheme(): ThemeName {
   return useSyncExternalStore(subscribeResolvedTheme, getResolvedTheme, () => 'light' as ThemeName)
+}
+
+// ── Overlay scope ────────────────────────────────────────────────────────────
+/**
+ * True inside an always-dark `.broadcast` surface (Game Day). Kit overlays
+ * portal to document.body, outside that scope, so they read this and re-apply
+ * the `broadcast` class on their portal root — a ⋯ menu, sheet or hover panel
+ * opened from Game Day stays dark on the light app theme. Provided by
+ * <BroadcastScope> (src/ui/Overlay.tsx).
+ */
+export const BroadcastScopeContext = createContext(false)
+
+/** The extra class a portalled overlay needs to keep its opener's scope. */
+export function useOverlayScopeClass(): string | undefined {
+  return useContext(BroadcastScopeContext) ? 'broadcast' : undefined
 }
 
 const FOCUSABLE =

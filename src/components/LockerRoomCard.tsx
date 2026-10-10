@@ -124,7 +124,7 @@ export function LockerRoomCard({ teamId, className }: { teamId: string; classNam
                   <button
                     type="button"
                     onClick={() => selectPlayer(p.id)}
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left max-sm:min-h-11 pointer-coarse:min-h-11"
                     title="Open player profile"
                   >
                     <OvrBadge value={p.ovr} size={26} />
@@ -165,7 +165,7 @@ export function LockerRoomCard({ teamId, className }: { teamId: string; classNam
                     <button
                       type="button"
                       onClick={() => selectPlayer(p.id)}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left max-sm:min-h-11 pointer-coarse:min-h-11"
                       title="Open player profile"
                     >
                       <OvrBadge value={p.ovr} pot={p.pot} size={26} />
@@ -215,7 +215,7 @@ export function LockerRoomCard({ teamId, className }: { teamId: string; classNam
                     <button
                       type="button"
                       onClick={() => selectPlayer(p.id)}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left max-sm:min-h-11 pointer-coarse:min-h-11"
                       title="Open player profile"
                     >
                       <OvrBadge value={p.ovr} size={26} />

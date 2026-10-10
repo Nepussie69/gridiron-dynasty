@@ -71,7 +71,7 @@ export function AnalyticsCard({ oppId, home, className }: { oppId?: string; home
       {wp && (
         <div className="mt-3 rounded-lg border border-line px-3 py-2">
           <div className="mb-1 flex items-center justify-between">
-            <span className="label !mb-0">Win projection</span>
+            <span className="label">Win projection</span>
             <span className="font-cond text-small font-700 tnum text-ink">
               {Math.round(wp.value * 100)}%
               <span className="text-muted"> ±{Math.round(wp.margin * 100)}</span>

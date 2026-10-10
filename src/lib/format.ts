@@ -1,5 +1,4 @@
 import { capSpaceTone } from '../game/engine/capMemo'
-import { bestInk, parseHex } from './teamColor'
 
 export function money(n: number, opts: { sign?: boolean } = {}) {
   const sign = opts.sign && n > 0 ? '+' : ''
@@ -79,44 +78,14 @@ export function ratingTier(v: number): RatingTier {
   return TIERS.find((t) => v >= t.min) ?? TIERS[TIERS.length - 1]
 }
 
-/** Solid colour token per tier, used by the deprecated gradeColor() shim. */
-const TIER_SOLID: Record<TierKey, string> = {
-  elite: 'var(--color-tier-elite)',
-  pro: 'var(--color-tier-pro)',
-  starter: 'var(--color-tier-starter)',
-  rotation: 'var(--color-tier-rotation)',
-  depth: 'var(--color-tier-depth)',
-  weak: 'var(--color-tier-weak)',
-  liability: 'var(--color-tier-liab)',
-}
-const TIER_SOLID_ON: Record<string, string> = {
-  'var(--color-tier-elite)': 'var(--color-tier-on)',
-  'var(--color-tier-pro)': 'var(--color-tier-on)',
-  'var(--color-tier-starter)': 'var(--color-tier-on)',
-  'var(--color-tier-rotation)': 'var(--color-tier-on)',
-  'var(--color-tier-depth)': 'var(--color-tier-depth-on)',
-  'var(--color-tier-weak)': 'var(--color-tier-weak-on)',
-  'var(--color-tier-liab)': 'var(--color-tier-liab-on)',
-}
-
 /**
- * @deprecated Use ratingTier(). Kept so existing screens compile: returns the
- * tier's solid colour token (a CSS var string, usable as background / stroke).
+ * The tier's colour for a MARK (a meter segment, a ring, a sparkline): the
+ * fill of a filled tier, the outline of an outline tier. Never a background
+ * behind text — tiles use ratingTier().fill / .ink / .outline.
  */
-export function gradeColor(v: number) {
-  return TIER_SOLID[ratingTier(v).key]
-}
-
-/**
- * Contrast-aware ink for a background: #FFFFFF or #0B1220, whichever has the
- * higher WCAG contrast. Also accepts the tier tokens gradeColor() returns.
- * @deprecated for tiers — use ratingTier().ink.
- */
-export function inkOn(bg: string) {
-  const tierOn = TIER_SOLID_ON[bg]
-  if (tierOn) return tierOn
-  if (!parseHex(bg)) return 'var(--color-ink)'
-  return bestInk(bg)
+export function tierStroke(v: number): string {
+  const t = ratingTier(v)
+  return t.outline ?? t.fill
 }
 
 /** Light tint of a hex color, for soft team backgrounds. */

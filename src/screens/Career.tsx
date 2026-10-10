@@ -454,7 +454,6 @@ export function Career() {
                           <Button
                             size="sm"
                             variant="secondary"
-                            className="!px-2"
                             disabled={skillPoints <= 0 || value >= 99}
                             title="Spend 1 point for +2"
                             aria-label={`Spend a point on ${SKILL_LABELS[key]}`}

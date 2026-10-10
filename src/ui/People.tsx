@@ -38,7 +38,7 @@ export function Avatar({
       style={{
         width: size,
         height: size,
-        fontSize: Math.max(11, Math.round(size * 0.4)),
+        fontSize: Math.max(12, Math.round(size * 0.4)),
         boxShadow:
           ring === 'accent'
             ? 'inset 0 0 0 1.5px var(--team-accent)'

@@ -51,7 +51,7 @@ import {
 } from '../ui/kit'
 import { gateMenuItem, useAccessLevel, useMediaQuery, usePhone, WIDE_QUERY } from '../ui/hooks'
 import { DataTable, type Column } from '../components/DataTable'
-import { coachEffect, staffGrade, type CoachEffect } from '../game/engine/coaching'
+import { staffGrade, type CoachEffect } from '../game/engine/coaching'
 import {
   ANALYTICS_ROLE,
   DEF_SCHEMES,
@@ -77,14 +77,18 @@ import {
   memberEffect,
   onFieldState,
   schemeStateOf,
+  seatHolds,
   staffChangeImpact,
+  staffCoachEffect,
   staffEffectLines,
   staffTenureFor,
   TONE_TEXT,
+  userCoordinatorSeat,
   vacancyCost,
   type EngineLimits,
   type LiveSchemes,
   type RoleGroup,
+  type UserSeat,
 } from '../components/staffEffects'
 
 // ── Seats, labels, persistence ───────────────────────────────────────────────
@@ -229,6 +233,8 @@ interface Ctx {
   teamId: string
   staff: StaffMember[]
   eff: CoachEffect
+  /** The coordinator chair the user holds on this club (never vacant; backlog 193). */
+  seat: UserSeat
   lim: EngineLimits
   live: LiveSchemes
   payroll: number
@@ -295,7 +301,10 @@ export function Staff() {
   }
 
   // ── Engine readings ──
-  const eff = coachEffect(league, activeTeamId)
+  // Staff-only effect with backlog 193's vacancy rule: an empty OC/DC chair
+  // costs the floor unless the user sits in it (coordinator rungs 2 and 6).
+  const seat = userCoordinatorSeat(career, activeTeamId)
+  const eff = staffCoachEffect(league, activeTeamId, seat)
   const lim = engineLimits(league)
   const on = onFieldState(eff, lim)
   const grade = staffGrade(eff)
@@ -429,6 +438,7 @@ export function Staff() {
     teamId: activeTeamId,
     staff,
     eff,
+    seat,
     lim,
     live,
     payroll,
@@ -446,7 +456,7 @@ export function Staff() {
 
   // ── Fire review (decide only) ──
   const fireConsequences = (m: StaffMember): Consequence[] => {
-    const rows = staffChangeImpact(league, activeTeamId, m.role, { removeId: m.id })
+    const rows = staffChangeImpact(league, activeTeamId, m.role, { removeId: m.id }, seat)
     const out: Consequence[] = [
       { label: 'Remaining contract', value: `${money(m.annual * m.contractYears)} (${m.contractYears} yr) · no buyout` },
       { label: 'Staff payroll', value: `${money(payroll)} → ${money(payroll - m.annual)}` },
@@ -459,7 +469,7 @@ export function Staff() {
         tone: r.better === false ? 'loss' : r.better ? 'win' : undefined,
       })
     }
-    if (!rows.length) out.push({ label: 'Sim effect', value: vacancyCost(m.role) })
+    if (!rows.length) out.push({ label: 'Sim effect', value: vacancyCost(m.role, seatHolds(seat, m.role)) })
     out.push({ label: 'Who decides', value: 'You (Decision Maker)' })
     return out
   }
@@ -468,7 +478,7 @@ export function Staff() {
   const hireConsequences = (c: HireCandidate, salary: number, scheme?: string): Consequence[] => {
     const cur = holderOf(c.role)
     const after = payroll - (cur?.annual ?? 0) + salary
-    const rows = staffChangeImpact(league, activeTeamId, c.role, { add: { ...c, scheme: scheme ?? c.scheme } })
+    const rows = staffChangeImpact(league, activeTeamId, c.role, { add: { ...c, scheme: scheme ?? c.scheme } }, seat)
     const out: Consequence[] = [
       { label: 'Offer', value: `${money(salary)}/yr × 3 yr` },
       cur
@@ -875,7 +885,12 @@ function NameButton({ m, onClick, className }: { m: StaffMember; onClick: () => 
     <button
       type="button"
       onClick={onClick}
-      className={cn('min-w-0 text-left hover:underline hover:decoration-line-strong hover:underline-offset-4', className)}
+      className={cn(
+        'min-w-0 text-left hover:underline hover:decoration-line-strong hover:underline-offset-4',
+        // Phone / touch: a ≥44px-tall hit box around the name; the negative margin keeps the row height.
+        'max-sm:-my-[13px] max-sm:py-[13px] pointer-coarse:-my-[13px] pointer-coarse:py-[13px]',
+        className,
+      )}
       title={`Open ${m.name}'s readout`}
     >
       {m.name}
@@ -1033,7 +1048,7 @@ function OrgChart({
     <VacantSeat
       key={role}
       role={SHORT_ROLE[role] ?? role}
-      consequence={vacancyCost(role)}
+      consequence={vacancyCost(role, seatHolds(ctx.seat, role))}
       compact={compact}
       action={{ label: 'Find a hire', onClick: () => onVacant(role) }}
     />
@@ -1041,7 +1056,7 @@ function OrgChart({
 
   return (
     <div className="space-y-4">
-      <SectionTitle className="!mb-2">Coaching tree</SectionTitle>
+      <SectionTitle spacing="tight">Coaching tree</SectionTitle>
       <TierLegend className="mb-3" />
 
       {hc ? <HeadCoachSlab m={hc} ctx={ctx} /> : vacantSeat('Head Coach')}
@@ -1703,9 +1718,13 @@ function MarketCard({
   const salary = open ? offer : candidate.askingSalary
   const payrollAfter = ctx.payroll - (current?.annual ?? 0) + salary
   const headroom = staffBudget - payrollAfter
-  const impact = staffChangeImpact(ctx.world, ctx.teamId, candidate.role, {
-    add: { ...candidate, scheme: schemes.length ? scheme : candidate.scheme },
-  })
+  const impact = staffChangeImpact(
+    ctx.world,
+    ctx.teamId,
+    candidate.role,
+    { add: { ...candidate, scheme: schemes.length ? scheme : candidate.scheme } },
+    ctx.seat,
+  )
   const shownScheme = schemes.length ? scheme : candidate.scheme
   const s = schemeStateOf({ role: candidate.role, scheme: shownScheme }, ctx.live, OFF_SCHEMES, DEF_SCHEMES)
   // A coordinator candidate is compared with the coordinator he would replace
@@ -1757,7 +1776,7 @@ function MarketCard({
             <Effect value={candidate.askingSalary - current.annual} kind="money" goodWhen="down" unit="/yr" />
           </div>
         ) : (
-          <div className="text-muted">No current {SHORT_ROLE[candidate.role] ?? candidate.role}: {vacancyCost(candidate.role)}.</div>
+          <div className="text-muted">No current {SHORT_ROLE[candidate.role] ?? candidate.role}: {vacancyCost(candidate.role, seatHolds(ctx.seat, candidate.role))}.</div>
         )}
         {impact.map((r) => (
           <div key={r.label} className="flex flex-wrap items-center gap-x-2">

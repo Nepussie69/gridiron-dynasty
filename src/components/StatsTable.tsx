@@ -348,7 +348,7 @@ export function StatsTable({
           <div className="border-t border-line p-3 text-center">
             <button
               onClick={onShowMore}
-              className="rounded-md bg-surface-2 px-4 py-1.5 font-cond text-xs font-700 uppercase text-ink-2 hover:bg-surface-3"
+              className="rounded-md bg-surface-2 px-4 py-1.5 font-cond text-xs font-700 uppercase text-ink-2 hover:bg-surface-3 max-sm:min-h-11 pointer-coarse:min-h-11"
             >
               Show more ({sorted.length - limit} remaining)
             </button>

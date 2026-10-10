@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { inkOn } from '../lib/format'
+import { bestInk, parseHex } from '../lib/teamColor'
 import type { Team } from '../game/types'
 import { RatingBar } from './RatingTile'
 import { SegmentedControl } from './Controls'
@@ -14,7 +14,8 @@ import { SegmentedControl } from './Controls'
 //                   BudgetMeter, Delta, Effect, Money, SchemeChip
 //   Controls.tsx    Button, IconButton, Tabs, SegmentedControl, FilterChip,
 //                   OptionGroup, OptionCard
-//   Overlay.tsx     Dialog, Sheet, ConfirmSheet, OverflowMenu, Inspector, WithInspector
+//   Overlay.tsx     Dialog, Sheet, ConfirmSheet, OverflowMenu, Inspector, WithInspector,
+//                   BroadcastScope (overlays opened on Game Day keep the dark scope)
 //   Access.tsx      GatedAction, AccessBanner
 //   People.tsx      Avatar, VacantSeat
 //   ScoreBlock.tsx  ScoreBlock, Scoreline
@@ -257,14 +258,23 @@ export function Card({
 export function SectionTitle({
   children,
   right,
+  spacing = 'normal',
   className,
 }: {
   children: ReactNode
   right?: ReactNode
+  /** Space below the title: normal 12px, tight 8px, none (inside a toolbar row). */
+  spacing?: 'normal' | 'tight' | 'none'
   className?: string
 }) {
   return (
-    <div className={cn('mb-3 flex items-center justify-between gap-3', className)}>
+    <div
+      className={cn(
+        'flex items-center justify-between gap-3',
+        spacing === 'normal' ? 'mb-3' : spacing === 'tight' ? 'mb-2' : 'mb-0',
+        className,
+      )}
+    >
       <h3 className="flex items-center gap-2.5 font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
         <span aria-hidden className="h-[18px] w-[5px] shrink-0 bg-[var(--team-accent)] [transform:skewX(var(--skew))]" />
         {children}
@@ -305,22 +315,38 @@ export function PageHeader({
 }
 
 // ── Team crest ───────────────────────────────────────────────────────────────
+/** Ink for a monogram on a club fill (hex) — the higher-contrast of white / ink. */
+function crestInk(fill: string): string {
+  return parseHex(fill) ? bestInk(fill) : 'var(--color-ink)'
+}
+
+/**
+ * Below this size a three-letter monogram cannot sit at the 12px type floor,
+ * so the crest is drawn as a plain club-colour mark (the name stays in the
+ * tooltip and the accessible name). Every small crest sits beside the club
+ * name or abbreviation.
+ */
+const CREST_MONOGRAM_MIN = 24
+
 export function TeamCrest({ team, size = 40 }: { team: Team; size?: number }) {
-  const bg = team.primary
+  const name = team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name
+  const mono = size >= CREST_MONOGRAM_MIN
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-lg font-display font-700 uppercase leading-none"
+      className="grid shrink-0 place-items-center overflow-hidden rounded-lg font-display font-700 uppercase leading-none"
       style={{
         width: size,
         height: size,
         background: `linear-gradient(150deg, ${team.primary}, ${team.secondary})`,
-        color: inkOn(bg),
-        fontSize: size * 0.4,
+        color: crestInk(team.primary),
+        fontSize: Math.max(12, Math.round(size * 0.4)),
         boxShadow: `inset 0 0 0 2px rgba(255,255,255,0.25)`,
       }}
-      title={team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name}
+      title={name}
+      role={mono ? undefined : 'img'}
+      aria-label={mono ? undefined : name}
     >
-      {(team.abbr || team.name).slice(0, 3)}
+      {mono && (team.abbr || team.name).slice(0, 3)}
     </div>
   )
 }
@@ -516,6 +542,7 @@ export function RadarChart({
   if (items.length < 3) return null
   const cx = size / 2
   const cy = size / 2
+  // Room for the 12px axis labels ("PASS RUSH 82") outside the outer ring.
   const r = size / 2 - 30
   const n = items.length
   const angle = (i: number) => (Math.PI * 2 * i) / n - Math.PI / 2
@@ -528,7 +555,7 @@ export function RadarChart({
   const rings = [0.25, 0.5, 0.75, 1]
   const dataPts = items.map((it, i) => at(i, it.value))
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={className}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={cn('overflow-visible', className)}>
       {rings.map((f) => (
         <polygon
           key={f}
@@ -548,7 +575,8 @@ export function RadarChart({
         <circle key={i} cx={p[0]} cy={p[1]} r={2.4} fill={color} />
       ))}
       {items.map((it, i) => {
-        const [lx, ly] = at(i, max + 16)
+        const lx = cx + Math.cos(angle(i)) * (r + 8)
+        const ly = cy + Math.sin(angle(i)) * (r + 8)
         const anchor = Math.abs(lx - cx) < 6 ? 'middle' : lx > cx ? 'start' : 'end'
         return (
           <text
@@ -557,7 +585,7 @@ export function RadarChart({
             y={ly}
             textAnchor={anchor}
             dominantBaseline="middle"
-            fontSize={10}
+            fontSize={12}
             className="font-cond tnum"
             fill="var(--color-muted)"
             style={{ fontWeight: 700, textTransform: 'uppercase' }}
@@ -571,21 +599,23 @@ export function RadarChart({
 }
 
 export function TeamTag({ team, size = 22 }: { team: Team; size?: number }) {
+  const mono = size >= CREST_MONOGRAM_MIN
   return (
     <span className="inline-flex items-center gap-1.5">
       <span
-        className="grid place-items-center rounded font-display font-700 uppercase"
+        aria-hidden
+        className="grid place-items-center overflow-hidden rounded font-display font-700 uppercase"
         style={{
           width: size,
           height: size,
           background: `linear-gradient(150deg, ${team.primary}, ${team.secondary})`,
-          color: inkOn(team.primary),
-          fontSize: size * 0.42,
+          color: crestInk(team.primary),
+          fontSize: Math.max(12, Math.round(size * 0.42)),
         }}
       >
-        {(team.abbr || team.name).slice(0, 3)}
+        {mono && (team.abbr || team.name).slice(0, 3)}
       </span>
-      <span className="text-sm font-600 text-ink">{team.tier === 'NFL' ? team.name : team.name}</span>
+      <span className="text-sm font-600 text-ink">{team.name}</span>
     </span>
   )
 }
@@ -627,7 +657,7 @@ export {
   OptionCard,
 } from './Controls'
 export type { ButtonVariant, TabItem, SegmentOption } from './Controls'
-export { Dialog, Sheet, ConfirmSheet, OverflowMenu, Inspector, WithInspector } from './Overlay'
+export { Dialog, Sheet, ConfirmSheet, OverflowMenu, Inspector, WithInspector, BroadcastScope } from './Overlay'
 export type { Consequence, MenuItem } from './Overlay'
 export { GatedAction, AccessBanner } from './Access'
 export { Avatar, VacantSeat } from './People'

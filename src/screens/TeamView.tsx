@@ -1,7 +1,7 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { ArrowLeft, SlidersHorizontal } from 'lucide-react'
 import { money, ordinal } from '../lib/format'
-import { bestInk } from '../lib/teamColor'
+import { heroSlab } from '../lib/teamColor'
 import { capSpace, recordOf, recordStr, rosterOf } from '../game/selectors'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import { RATING_GROUPS, groupPositions } from '../game/data/ratingInfo'
@@ -125,8 +125,9 @@ export function TeamView() {
   )
 
   const heroStyle = {
-    background: `linear-gradient(120deg, ${team.primary}, ${team.secondary})`,
-    '--team-on': bestInk(team.primary),
+    background: heroSlab(team.primary, team.secondary).background,
+    boxShadow: `inset 0 -4px 0 ${team.secondary}`,
+    '--team-on': heroSlab(team.primary, team.secondary).ink,
     color: 'var(--team-on)',
   } as CSSProperties
 

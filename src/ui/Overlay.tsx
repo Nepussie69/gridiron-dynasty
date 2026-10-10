@@ -23,7 +23,17 @@ import { createPortal } from 'react-dom'
 import { MoreHorizontal, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { Button, IconButton } from './Controls'
-import { useMediaQuery, useModal, WIDE_QUERY } from './hooks'
+import { BroadcastScopeContext, useMediaQuery, useModal, useOverlayScopeClass, WIDE_QUERY } from './hooks'
+
+/**
+ * Marks its subtree as an always-dark broadcast surface for kit overlays:
+ * Dialog / Sheet / ConfirmSheet / OverflowMenu / HoverCard opened inside
+ * render with the `.broadcast` token scope even though they portal to <body>.
+ * Wrap the element that carries `className="broadcast"` (MatchView's root).
+ */
+export function BroadcastScope({ children }: { children: ReactNode }) {
+  return <BroadcastScopeContext.Provider value>{children}</BroadcastScopeContext.Provider>
+}
 
 // ── Modal base ────────────────────────────────────────────────────────────────
 
@@ -46,11 +56,12 @@ function ModalFrame({
   children: ReactNode
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
+  const scope = useOverlayScopeClass()
   useModal(panelRef, open, onClose)
   if (!open || typeof document === 'undefined') return null
   const width = size === 'sm' ? 'sm:max-w-[400px]' : size === 'lg' ? 'sm:max-w-[720px]' : 'sm:max-w-[520px]'
   return createPortal(
-    <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center sm:p-6" data-kit-overlay="">
+    <div className={cn('fixed inset-0 z-[70] flex items-end justify-center sm:items-center sm:p-6', scope)} data-kit-overlay="">
       <div
         aria-hidden
         className="kit-fade absolute inset-0 bg-[rgb(3_6_12/0.62)]"
@@ -311,6 +322,7 @@ export function OverflowMenu({
   const btnRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuId = useId()
+  const scope = useOverlayScopeClass()
   const safe = items.filter((i) => !i.danger)
   const danger = items.filter((i) => i.danger)
 
@@ -449,7 +461,7 @@ export function OverflowMenu({
             aria-label={label}
             onKeyDown={onMenuKey}
             onClick={(e) => e.stopPropagation()}
-            className="kit-wipe fixed z-[60] rounded-[var(--r-lg)] border border-line-strong bg-surface-2 p-1.5 text-ink shadow-[var(--shadow-2)]"
+            className={cn('kit-wipe fixed z-[60] rounded-[var(--r-lg)] border border-line-strong bg-surface-2 p-1.5 text-ink shadow-[var(--shadow-2)]', scope)}
             style={{ left: -9999, top: -9999, visibility: 'hidden' }}
           >
             {safe.map(renderItem)}

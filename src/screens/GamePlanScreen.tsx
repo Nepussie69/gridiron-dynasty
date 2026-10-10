@@ -341,7 +341,7 @@ function CoordinatorAdviceCard({ oppId }: { oppId?: string }) {
             return (
               <div key={a.side} className="rounded-[var(--r-md)] bg-surface-2 p-3">
                 <div className="flex items-center gap-2">
-                  <span className="label !mb-0">{a.coach} · {a.side === 'off' ? 'OC' : 'DC'}</span>
+                  <span className="label">{a.coach} · {a.side === 'off' ? 'OC' : 'DC'}</span>
                   <Badge tone={tone[a.confidence]} className="ml-auto">{a.confidence}</Badge>
                 </div>
                 <div className="mt-1 text-ink-2">
@@ -554,7 +554,7 @@ function RatingColumn({
                 {r[k].toFixed(1)}
                 {rank > 0 && <span className={cn('ml-0.5 font-cond text-micro sm:ml-1', rankColor(rank))}>#{rank}</span>}
               </div>
-              <div className="label mt-0.5 !text-micro">{k === 'overall' ? 'OVR' : k.toUpperCase()}</div>
+              <div className="label mt-0.5 leading-none">{k === 'overall' ? 'OVR' : k.toUpperCase()}</div>
             </div>
           )
         })}
@@ -601,11 +601,11 @@ function RateList({ label, rate, right }: { label: string; rate?: TeamRateEntry;
       <div className="label mb-1 truncate">{label}</div>
       {rate ? (
         <div className="space-y-0.5">
-          <div className="label !mb-0 text-faint">Offense</div>
+          <div className="label text-faint">Offense</div>
           {row('Points/G', rate.pf, rate.ranks.pf, 'Points scored per game')}
           {row('Pass yds/G', rate.passYds, rate.ranks.passYds, 'Passing yards per game')}
           {row('Rush yds/G', rate.rushYds, rate.ranks.rushYds, 'Rushing yards per game')}
-          <div className="label !mb-0 mt-1 text-faint">Defense</div>
+          <div className="label mt-1 text-faint">Defense</div>
           {row('Pts allowed/G', rate.pa, rate.ranks.pa, 'Points allowed per game')}
           {row('Pass allowed/G', rate.passYdsAllowed, rate.ranks.passYdsAllowed, 'Pass yards allowed per game')}
           {row('Rush allowed/G', rate.rushYdsAllowed, rate.ranks.rushYdsAllowed, 'Rush yards allowed per game')}

@@ -1,6 +1,6 @@
-import type { StaffMember } from '../game/types'
+import type { CareerState, StaffMember } from '../game/types'
 import type { World } from '../game/engine/generate'
-import { coachEffect, type CoachEffect } from '../game/engine/coaching'
+import { coachEffect, coordinatorEdge, NO_USER_BONUS, type CoachEffect, type UserCoachingBonus } from '../game/engine/coaching'
 import { isFrontOfficeRole, ANALYTICS_ROLE } from '../game/engine/hiring'
 import { ANALYTICS_LEVEL_LABEL, analyticsLevel } from '../game/engine/analytics'
 import { AXIS_LABEL, isEvaluator, learnedBias } from '../game/engine/scoutBias'
@@ -21,10 +21,52 @@ import { AXIS_LABEL, isEvaluator, learnedBias } from '../game/engine/scoutBias'
 /** League-average staff rating used by coaching.ts to measure effects. */
 export const STAFF_BASELINE = 74
 
-/** coaching.ts edge(): rating → play-calling edge, clamped to ±4.5. */
-export function edgeOf(rating: number | null | undefined): number {
-  if (rating == null) return 0
-  return Math.max(-4.5, Math.min(4.5, (rating - STAFF_BASELINE) * 0.2))
+/**
+ * coaching.ts coordinatorEdge(): rating → play-calling edge, clamped to ±4.5.
+ * Backlog 193: a vacant seat (null) costs the floor (−4.5), not league average,
+ * unless the user holds that seat personally (`heldByUser`) — then it is 0.
+ */
+export function edgeOf(rating: number | null | undefined, heldByUser = false): number {
+  return coordinatorEdge(rating ?? null, heldByUser)
+}
+
+// ── The user's own coordinator seat (backlog 193) ────────────────────────────
+
+/** Which coordinator chair the user sits in on a club, if any. */
+export type UserSeat = UserCoachingBonus['seat']
+
+/**
+ * The coordinator seat the USER personally holds on `teamId`. Mirrors
+ * applyUserCoaching() in gameStore.ts: only the coaching path's coordinator
+ * rungs (FBS level 2, NFL level 6) sit in an OC/DC chair — a head coach's own
+ * skill does not fill a vacant coordinator seat. `unitFocus` picks the side.
+ */
+export function userCoordinatorSeat(career: CareerState | null | undefined, teamId: string): UserSeat {
+  if (!career || career.teamId !== teamId) return undefined
+  if (career.path !== 'coach' || (career.level !== 2 && career.level !== 6)) return undefined
+  return career.unitFocus ?? 'both'
+}
+
+/** Does the user's seat cover this coordinator role? */
+export function seatHolds(seat: UserSeat, role: string): boolean {
+  if (!seat) return false
+  if (role === 'Offensive Coordinator') return seat === 'off' || seat === 'both'
+  if (role === 'Defensive Coordinator') return seat === 'def' || seat === 'both'
+  return false
+}
+
+/** Staff-only engine effect (no user skill bonus) with the user's seat rule applied. */
+function seatOnly(seat: UserSeat): UserCoachingBonus {
+  return seat ? { ...NO_USER_BONUS, seat } : NO_USER_BONUS
+}
+
+/**
+ * coachEffect() for the club's staff, as the Staff screen shows it: the staff's
+ * own effect (the user's skill bonus is not added) with backlog 193's vacancy
+ * rule — a vacant OC/DC costs the floor unless the user holds that seat.
+ */
+export function staffCoachEffect(world: World, teamId: string, seat?: UserSeat): CoachEffect {
+  return coachEffect(world, teamId, seatOnly(seat))
 }
 
 /** coaching.ts development formula applied to one position coach's OVR. */
@@ -326,9 +368,9 @@ export function withStaff(world: World, teamId: string, staff: StaffMember[]): W
   return { ...world, staff: { ...world.staff, [teamId]: staff } }
 }
 
-/** coachEffect() for a hypothetical staff list. */
-export function effectWith(world: World, teamId: string, staff: StaffMember[]): CoachEffect {
-  return coachEffect(withStaff(world, teamId, staff), teamId)
+/** coachEffect() for a hypothetical staff list (`seat`: the user's own coordinator chair). */
+export function effectWith(world: World, teamId: string, staff: StaffMember[], seat?: UserSeat): CoachEffect {
+  return coachEffect(withStaff(world, teamId, staff), teamId, seatOnly(seat))
 }
 
 function probeMember(role: string, rating: number): StaffMember {
@@ -475,12 +517,17 @@ function clampNote(b: Clamp, a: Clamp, changed: boolean): string | null {
  * Before → after engine truth for a staffing change on the user's club:
  * remove `removeId` and/or put `add` in its role (a hire replaces the holder,
  * as applyHire() does). Only the metrics that role moves are returned.
+ * Both sides come from coachEffect(), so a vacant OC/DC reads as the floor
+ * (backlog 193): letting a coordinator go shows "→ −4.5", hiring into an empty
+ * chair shows "−4.5 →". `seat` is the user's own chair (userCoordinatorSeat),
+ * which is never vacant.
  */
 export function staffChangeImpact(
   world: World,
   teamId: string,
   role: string,
   change: { removeId?: string; add?: StaffMember },
+  seat?: UserSeat,
 ): ImpactRow[] {
   const lim = engineLimits(world)
   const cur = world.staff[teamId] ?? []
@@ -489,8 +536,8 @@ export function staffChangeImpact(
     next = next.filter((m) => m.role !== change.add!.role)
     next = [...next, change.add]
   }
-  const b = coachEffect(world, teamId)
-  const a = effectWith(world, teamId, next)
+  const b = staffCoachEffect(world, teamId, seat)
+  const a = effectWith(world, teamId, next, seat)
   const eq = (x: number, y: number) => Math.abs(x - y) < 1e-6
   const row = (label: string, before: number, after: number, kind: 'edge' | 'mult', clampFn?: (v: number) => Clamp): ImpactRow => ({
     label,
@@ -517,15 +564,24 @@ export function impactText(r: ImpactRow): string {
   return `${f(r.before)} → ${f(r.after)}`
 }
 
-/** What an empty seat costs, in plain words (engine: a vacant coordinator counts as league average). */
-export function vacancyCost(role: string): string {
+/**
+ * What an empty seat costs, in plain words. Engine (backlog 193): a vacant
+ * OC/DC costs the floor edge (coordinatorEdge(null)), not league average; a
+ * chair the user holds personally (`heldByUser`) is not vacant.
+ */
+export function vacancyCost(role: string, heldByUser = false): string {
+  const floor = `${signed(coordinatorEdge(null))} / snap`
   switch (role) {
     case 'Head Coach':
       return 'situational calls run at league average until hired'
     case 'Offensive Coordinator':
-      return 'no live offensive scheme; the edge counts as league average'
+      return heldByUser
+        ? 'you call the offense yourself; no vacancy penalty'
+        : `no live offensive scheme; the offense edge sits at the floor (${floor}) until hired`
     case 'Defensive Coordinator':
-      return 'no live defensive scheme; the edge counts as league average'
+      return heldByUser
+        ? 'you call the defense yourself; no vacancy penalty'
+        : `no live defensive scheme; the defense edge sits at the floor (${floor}) until hired`
     case 'Special Teams Coordinator':
       return 'special-teams situational counts as league average'
     case 'QB Coach':

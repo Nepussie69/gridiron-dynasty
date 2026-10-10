@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { cn } from '../lib/cn'
-import { gradeColor, inkOn, money } from '../lib/format'
+import { money, tierStroke } from '../lib/format'
+import { bestInk, parseHex } from '../lib/teamColor'
 import type { Player, Team } from '../game/types'
 import { DevBadge, OvrBadge, PotBubble } from '../ui/kit'
 import { InjuryChip } from './PlayerTable'
@@ -39,7 +40,7 @@ export function RatingRing({
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const pct = Math.max(0, Math.min(100, value))
-  const ring = color ?? gradeColor(value)
+  const ring = color ?? tierStroke(value)
   return (
     <span className={cn('relative grid shrink-0 place-items-center', className)} style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
@@ -57,7 +58,7 @@ export function RatingRing({
       </svg>
       <span
         className="absolute font-display font-700 tnum leading-none"
-        style={{ fontSize: size * 0.34, color: 'var(--color-ink)' }}
+        style={{ fontSize: Math.max(12, Math.round(size * 0.34)), color: 'var(--color-ink)' }}
       >
         {value}
       </span>
@@ -121,7 +122,7 @@ export function PlayerCard({
           className="relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-[var(--r-md)]"
           style={{ background: bg, boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.18)' }}
         >
-          <PlayerSilhouette className="h-12 w-12" fill={team ? inkOn(team.primary) : 'var(--color-faint)'} />
+          <PlayerSilhouette className="h-12 w-12" fill={team && parseHex(team.primary) ? bestInk(team.primary) : 'var(--color-faint)'} />
           <span className="absolute inset-x-0 bottom-0 bg-slab/85 py-0.5 text-center font-cond text-label font-700 uppercase tracking-widest text-on-slab">
             {player.pos}
           </span>
@@ -152,7 +153,7 @@ export function PlayerCard({
 
       <div className="flex items-center justify-between gap-2 border-t border-line bg-surface-2/60 px-3 py-1.5">
         <span className="flex items-center gap-1.5">
-          <span className="label !mb-0">Ceiling</span>
+          <span className="label">Ceiling</span>
           <PotBubble value={player.pot} size={24} />
         </span>
         {footer ?? (

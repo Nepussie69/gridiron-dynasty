@@ -3,7 +3,7 @@ import { cn } from '../lib/cn'
 import { leagueGroups } from '../game/data/leagueGroups'
 import { recordOf, rosterOf, teamAvgOvr } from '../game/selectors'
 import { recordBook, teamHistory } from '../game/engine/statsDb'
-import { bestInk } from '../lib/teamColor'
+import { heroSlab } from '../lib/teamColor'
 import { useGame, useWorld } from '../store/gameStore'
 import {
   Avatar,
@@ -20,8 +20,9 @@ import { usePhone } from '../ui/hooks'
 /** Gradient hero slab with contrast-checked ink: --team-on is set for the club shown. */
 function HeroSlab({ team, children }: { team: { primary: string; secondary: string }; children: React.ReactNode }) {
   const style = {
-    background: `linear-gradient(120deg, ${team.primary}, ${team.secondary})`,
-    '--team-on': bestInk(team.primary),
+    background: heroSlab(team.primary, team.secondary).background,
+    boxShadow: `inset 0 -4px 0 ${team.secondary}`,
+    '--team-on': heroSlab(team.primary, team.secondary).ink,
     color: 'var(--team-on)',
   } as CSSProperties
   return (
