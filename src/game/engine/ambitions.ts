@@ -21,7 +21,7 @@ import { unscaleOvr } from './ovrScale'
 
 export const MAX_AMBITIONS = 3
 
-function divisionRival(world: World, career: CareerState): string {
+export function divisionRival(world: World, career: CareerState): string {
   const me = world.byId[career.teamId]
   const pool = NFL_TEAMS.filter(
     (t) => t.id !== career.teamId && t.conference === me.conference && t.division === me.division,
