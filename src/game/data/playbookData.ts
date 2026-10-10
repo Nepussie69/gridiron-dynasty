@@ -152,6 +152,8 @@ export interface SimConcept {
   depth: number
   yac: number
   description: string
+  /** R15: the offensive personnel grouping this concept runs from (11/12/21/…). */
+  personnel?: Personnel
 }
 
 const byName = new Map(PLAYBOOK.map((p) => [p.name, p]))
@@ -167,7 +169,7 @@ export function formationForConcept(name: string): string {
 const sim = (name: string): SimConcept => {
   const p = byName.get(name)
   if (!p) throw new Error(`missing playbook play: ${name}`)
-  return { name: p.name, type: p.type, depth: p.depth, yac: p.yac, description: p.description }
+  return { name: p.name, type: p.type, depth: p.depth, yac: p.yac, description: p.description, personnel: p.personnel }
 }
 
 /** Any playbook play as a sim concept (L12.10 B6: a user-picked play). */

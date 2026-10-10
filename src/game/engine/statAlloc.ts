@@ -10,7 +10,7 @@
 import type { GameStatLine, Player, Position } from '../types'
 import { playerAttrs } from '../data/ratings'
 import { coachEffect } from './coaching'
-import { depthGroup } from './depth'
+import { depthAt, depthGroup } from './depth'
 import type { Game, World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
 import { currentSeason, recordGameStats } from './stats'
@@ -137,6 +137,80 @@ function detCount(total: number, rate: number, key: string): number {
   const expected = total * rate
   const base = Math.floor(expected)
   return base + (hashUnit(`${key}:frac`) < expected - base ? 1 : 0)
+}
+
+/**
+ * R15: deterministic fast-sim snap allocation. A player's share of his club's
+ * typical ~63 snaps from his position and depth rank, so simmed seasons carry
+ * snap % exactly like a played game. Rank-aware, so a backup QB/lineman is never
+ * handed a starter's 100%. No rng() draw is used.
+ */
+function snapShare(world: World, teamId: string, p: Player): number {
+  const rank = depthAt(world, teamId, p.pos).filter((x) => !x.injured).findIndex((x) => x.id === p.id)
+  const r = rank < 0 ? 9 : rank
+  switch (p.pos) {
+    case 'QB': return r === 0 ? 1 : 0.06
+    // OL start 2 OT + 2 OG + 1 C; only those ranks are full-time. A reserve who
+    // is merely high on a positional depth chart (rank < 5) is NOT a starter.
+    case 'OT': case 'OG': return r < 2 ? 1 : 0.12
+    case 'C': return r < 1 ? 1 : 0.12
+    case 'RB': return r === 0 ? 0.6 : r === 1 ? 0.3 : 0.1
+    case 'FB': return 0.22
+    case 'WR': return [0.85, 0.78, 0.64, 0.22, 0.1][r] ?? 0.08
+    case 'TE': return r === 0 ? 0.75 : r === 1 ? 0.3 : 0.1
+    // Defence: the base 11 are 4 DL + 2–3 LB + 3 CB + 2 S. Only the starters and
+    // the first rotational sub are full-time; the rest sit below FAST_SNAP_MIN, so
+    // a side's snap shares sum to ~11 rather than every backup drawing a share.
+    case 'DE': case 'DT': return r < 2 ? 0.82 : r === 2 ? 0.35 : 0.1
+    case 'LB': return r < 2 ? 0.85 : r === 2 ? 0.5 : 0.12
+    case 'CB': return r < 2 ? 0.85 : r === 2 ? 0.45 : 0.1
+    case 'S': return r < 2 ? 0.9 : r === 2 ? 0.2 : 0.08
+    default: return 0
+  }
+}
+
+/** R15: the fixed per-side snap denominator the fast allocator measures against. */
+const FAST_SIDE_SNAPS = 63
+/** R15: a share below this is not a real game appearance (no GP credit). */
+const FAST_SNAP_MIN = 0.15
+
+/**
+ * R15: one final line per participant. Merges a player's rushing + receiving (and
+ * any other) lines so snaps and games are counted once, adds snap-only lines for
+ * linemen and statless defenders who actually played, then stamps each line with
+ * the snap numerator and per-side denominator. No rng() draw is consumed, so the
+ * production totals and the seed stream are unchanged.
+ */
+function finalizeTeamLines(world: World, teamId: string, lines: { playerId: string; line: GameStatLine }[]): { playerId: string; line: GameStatLine }[] {
+  const byId = new Map<string, GameStatLine>()
+  for (const { playerId, line } of lines) {
+    const cur = byId.get(playerId)
+    if (!cur) { byId.set(playerId, { ...line, playerId }); continue }
+    for (const [k, v] of Object.entries(line)) {
+      if (k === 'playerId' || typeof v !== 'number') continue
+      const rec = cur as unknown as Record<string, number>
+      rec[k] = (rec[k] ?? 0) + v
+    }
+  }
+  const byPlayer = new Map(world.players.map((p) => [p.id, p]))
+  for (const p of world.roster[teamId] ?? []) {
+    if (p.injured || byId.has(p.id)) continue
+    if (p.side !== 'OFF' && p.side !== 'DEF') continue
+    if (snapShare(world, teamId, p) < FAST_SNAP_MIN) continue
+    byId.set(p.id, { playerId: p.id })
+  }
+  const out: { playerId: string; line: GameStatLine }[] = []
+  for (const [id, line] of byId) {
+    const p = byPlayer.get(id)
+    if (!p || p.injured) continue
+    const share = snapShare(world, teamId, p)
+    if (share <= 0) continue
+    line.snaps = Math.round(FAST_SIDE_SNAPS * share)
+    line.snapSide = FAST_SIDE_SNAPS
+    line.snapPct = Math.max(0, Math.min(100, Math.round(share * 1000) / 10))
+    out.push({ playerId: id, line })
+  }
+  return out
 }
 
 /**
@@ -404,6 +478,9 @@ export function allocateTeamGame(
     }
   }
 
+  // R15: snaps / GP are stamped once per player in statGame (after merging the
+  // rushing + receiving lines), so they are never double counted.
+
   return { lines: out, offense, defMissed }
 }
 
@@ -568,6 +645,10 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
   // opponent's passing production. Deterministic, so the rng stream is unchanged.
   allocateCoverageAndPressure(world, homeAlloc, awayAlloc, `${game.week}:${game.homeId}:cov`)
   allocateCoverageAndPressure(world, awayAlloc, homeAlloc, `${game.week}:${game.awayId}:cov`)
+  // R15: merge each player's lines and stamp snaps/GP once (no-stat participants
+  // such as linemen get a snap-only line).
+  const homeLines = finalizeTeamLines(world, game.homeId, homeAlloc.lines)
+  const awayLines = finalizeTeamLines(world, game.awayId, awayAlloc.lines)
   const sim: GameSim = {
     homeId: game.homeId,
     awayId: game.awayId,
@@ -579,8 +660,8 @@ export function statGame(world: World, game: Game, season: number, level: 'NFL' 
       away: { plays: 60, points: game.awayScore, passAtt: 0, passComp: 0, passYds: 0, passTD: 0, ints: 0, rushAtt: 0, rushYds: 0, rushTD: 0, sacks: 3, sacksTaken: 3, firstDowns: 20, thirdDownAtt: 12, thirdDownConv: 5, fumbles: 0, td: 0, fgAtt: 2, fgMade: 1, twoAtt: 0, twoMade: 0, top: 1800 },
     },
     generated: true,
-    homeLines: homeAlloc.lines,
-    awayLines: awayAlloc.lines,
+    homeLines,
+    awayLines,
   }
   recordAllocatedStats(world, sim, season, level)
 }
@@ -639,6 +720,11 @@ function recordAllocatedStats(world: World, sim: GameSim, season: number, level:
       entry.defYdsAllowed = (entry.defYdsAllowed ?? 0) + (line.defYdsAllowed ?? 0)
       entry.defTDAllowed = (entry.defTDAllowed ?? 0) + (line.defTDAllowed ?? 0)
       entry.defIntsCov = (entry.defIntsCov ?? 0) + (line.defIntsCov ?? 0)
+      // R15: snap totals kept as numerator/denominator (never a biased average;
+      // an unmeasured game contributes nothing rather than a 0%).
+      entry.snaps = (entry.snaps ?? 0) + (line.snaps ?? 0)
+      entry.snapSide = (entry.snapSide ?? 0) + (line.snapSide ?? 0)
+      if (line.snapSide) entry.snapPct = Math.round(((entry.snaps ?? 0) / entry.snapSide) * 1000) / 10
     }
   }
 }

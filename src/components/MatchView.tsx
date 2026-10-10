@@ -1526,12 +1526,16 @@ export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClic
         { k: 'passYds', l: 'YDS' }, { k: 'passTD', l: 'TD' }, { k: 'ints', l: 'INT' },
         { k: 'sk', l: 'SK', title: 'Times sacked (sack yards lost in season stats)' },
         { k: 'passerRating', l: 'RTG', fmt: (r) => passerRating(r).toFixed(1) },
+        { k: 'pressurePct', l: 'PRS%', title: 'Pressured % (pressures faced ÷ dropbacks)', fmt: (r) => { const db = (r.passAtt ?? 0) + (r.sk ?? 0); return db > 0 ? `${(((r.pressured ?? 0) / db) * 100).toFixed(1)}%` : '—' } },
+        { k: 'snapPct', l: 'SNP%', title: 'Snaps played share', fmt: (r) => (r.snapPct == null ? '—' : `${r.snapPct.toFixed(0)}%`) },
       ]} />}
       {rushing.length > 0 && <BoxBlock title="Rushing" rows={rushing} fp={fp} cols={[
         { k: 'rushAtt', l: 'CAR' }, { k: 'rushYds', l: 'YDS' }, { k: 'rushTD', l: 'TD' },
+        { k: 'snapPct', l: 'SNP%', title: 'Snaps played share', fmt: (r) => (r.snapPct == null ? '—' : `${r.snapPct.toFixed(0)}%`) },
       ]} />}
       {receiving.length > 0 && <BoxBlock title="Receiving" rows={receiving} fp={fp} cols={[
         { k: 'rec', l: 'REC' }, { k: 'recYds', l: 'YDS' }, { k: 'recTD', l: 'TD' },
+        { k: 'snapPct', l: 'SNP%', title: 'Snaps played share', fmt: (r) => (r.snapPct == null ? '—' : `${r.snapPct.toFixed(0)}%`) },
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' },
@@ -1544,6 +1548,7 @@ export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClic
         { k: 'defComp', l: 'REC', w: 'w-10', title: 'Receptions allowed / targets in coverage', fmt: (r) => `${r.defComp ?? 0}/${r.defTargets ?? 0}` },
         { k: 'defYdsAllowed', l: 'ALW', title: 'Yards allowed in coverage' },
         { k: 'coverageGrade', l: 'COV', title: 'Coverage grade', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
+        { k: 'snapPct', l: 'SNP%', title: 'Snaps played share', fmt: (r) => (r.snapPct == null ? '—' : `${r.snapPct.toFixed(0)}%`) },
       ]} />}
       {returns.length > 0 && <BoxBlock title="Returns" rows={returns} fp={fp} cols={[
         { k: 'kickRet', l: 'KR', title: 'Kickoff returns' }, { k: 'kickRetYds', l: 'YDS', title: 'Kickoff return yards' },

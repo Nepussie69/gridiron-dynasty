@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronRight, ClipboardList, Repeat, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
-import { DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
+import { coachTendency, DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
 import { capabilities } from '../game/engine/capabilities'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from '../components/PlanEditor'
@@ -56,6 +56,7 @@ export function GamePlanScreen() {
       ? coachLabels(league, opp.id).dcScheme
       : coachLabels(league, opp.id).ocScheme
     : undefined
+  const oppTend = opp ? coachTendency(league, opp.id) : null
 
   return (
     <div>
@@ -177,6 +178,13 @@ export function GamePlanScreen() {
               <div className="border-t border-line px-4 py-2.5 text-xs text-muted">
                 Opponent runs <strong className="text-ink">{opponentScheme}</strong>
                 {side === 'off' ? ' defense' : ' offense'} — plan accordingly.
+                {oppTend && (
+                  <div className="mt-0.5">
+                    Coach {oppTend.fourth === 'aggressive' ? 'attacks on 4th' : oppTend.fourth === 'conservative' ? 'plays it safe on 4th' : 'is by the book on 4th'} ·{' '}
+                    <strong className="text-ink-2">{oppTend.passRate >= 0.58 ? 'pass-heavy' : oppTend.passRate <= 0.5 ? 'run-leaning' : 'balanced'}</strong> ·{' '}
+                    {oppTend.tempo >= 0.25 ? 'up-tempo' : oppTend.tempo <= -0.15 ? 'deliberate' : 'normal tempo'}
+                  </div>
+                )}
               </div>
             </Card>
           )}
