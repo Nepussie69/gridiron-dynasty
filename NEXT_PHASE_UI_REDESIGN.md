@@ -608,6 +608,6 @@ Acceptance:
 | D3 Draft and scouting | ✅ 7c266a3 (+ phone grid fix by orchestrator) |
 | D4 Money and transactions | ✅ merged (+ phone tap fixes by orchestrator) |
 | D5 Game day | 🔨 building (off 929b9a1, includes animcontact4) |
-| D6 Game plan | 🔨 building |
-| D7 League information | ⏳ |
+| D6 Game plan | ✅ merged (+ phone tap fixes by orchestrator) |
+| D7 League information | 🔨 building |
 | V1 Integration and cleanup | ⏳ |
