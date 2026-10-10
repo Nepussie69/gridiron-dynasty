@@ -2398,8 +2398,8 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
     const choice = decide(s, {
       kind: 'kickoff', side: 'hc', teamId: kicking, qtr: s.qtr, clock: fmtClock(s.clock), down: null, distance: null,
       yard: 35, title: desperate ? 'Kickoff — you need the ball' : 'Kickoff', margin: koMargin,
-      options, defaultId: 'deep', ask: late,
-      staffRead: late ? 'Kick deep unless you need a possession.' : undefined,
+      options, defaultId: desperate ? 'onside' : 'deep', ask: late,
+      staffRead: late ? (desperate ? 'You need the ball — onside.' : 'Kick deep unless you need a possession.') : undefined,
     })
     if (choice === null) return { scored: false, moment: true }
     call = choice as KickoffCall
