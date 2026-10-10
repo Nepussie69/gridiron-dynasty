@@ -7,7 +7,11 @@
 // camera stands in for B5's director. B6a: a Graphics toggle layers the
 // broadcast graphics (chip, play clock, lower third, result toast, callouts)
 // on the overlay hook; with graphics on the clock also runs the pre-snap lead
-// and holds for the toast. Mounted only in the hidden #/kit page.
+// and holds for the toast. B4: an Effects toggle swaps B3's placeholder ball for
+// the real ball (arc, spiral wobble, trail, shrinking shadow, landing marker) and
+// draws the event-driven effects (sparkle, burst, impact ring, turf bits, TD
+// celebration, crossbar glints) through the actor hook's ball / ground / items
+// insertion point. Mounted only in the hidden #/kit page.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NFL_TEAMS } from '../../game/data/nflTeams'
@@ -18,6 +22,7 @@ import { Button, SegmentedControl } from '../../ui/Controls'
 import { useMediaQuery, useResolvedTheme } from '../../ui/hooks'
 import { ActorLayer, type ActorPlay } from './actors'
 import type { BroadcastAnim } from './animData'
+import { createBallFx, withBallFx, type BallFx } from './ballFx'
 import { MID_WIDTH, offenseToWorld, orbitPose, type CameraPose, type Direction } from './camera'
 import { buildGraphicsTimeline, type GraphicsMode, type GraphicsTimeline, type PersonInfo } from './graphics'
 import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
@@ -27,6 +32,8 @@ import { BroadcastRenderer, FrameWindow } from './renderer'
 type Shot = 'skycam' | 'sideline' | 'reverse' | 'tight'
 type Size = 'wide' | 'phone' | 'full'
 type Kind = 'pass' | 'incomplete' | 'run' | 'sack' | 'int' | 'td' | 'punt' | 'kickoff' | 'fg' | 'pat' | 'all'
+/** B4 ball + effects: full quality, lite (fewer particles, dpr-friendly), or off (B3's placeholder). */
+type EffectsMode = 'full' | 'lite' | 'off'
 
 const KINDS: { id: Kind; label: string; test: (p: Play) => boolean }[] = [
   { id: 'pass', label: 'Pass', test: (p) => p.type === 'pass' && !p.result.startsWith('Sack') && p.result !== 'Incomplete' && !p.result.startsWith('Interception') },
@@ -59,6 +66,8 @@ interface Built {
   possession: 'home' | 'away'
   /** B6a graphics timeline for this play. */
   tl: GraphicsTimeline
+  /** B4 ball wobble inputs: the thrower's ratings (presentation only) and pressure. */
+  fx: { thrower?: { thp?: number; tha?: number }; pressured?: boolean }
 }
 
 const ord = (n: number) => (n === 1 ? '1ST' : n === 2 ? '2ND' : n === 3 ? '3RD' : `${n}TH`)
@@ -121,6 +130,11 @@ async function buildSample(s: Sample, idx: number): Promise<Built> {
     if (p) people[a.key] = { name: p.name, pos: p.pos, number: numbers[a.key] }
   }
   const tl = buildGraphicsTimeline({ anim, play, offense: club(play.offId), defense: club(defId), people })
+  const qb = actors.get('qb')
+  const fx = {
+    thrower: qb ? { thp: qb.attrs?.['THP'], tha: qb.attrs?.['THA'] } : undefined,
+    pressured: !!play.pressure,
+  }
   const offHome = play.offId === s.homeId
   const scrimmage = play.type === 'run' || play.type === 'pass'
   const los = play.type === 'kickoff' ? null : 10 + snapYard(play)
@@ -134,6 +148,7 @@ async function buildSample(s: Sample, idx: number): Promise<Built> {
     turfText: scrimmage && play.down != null && play.distance != null ? `${ord(play.down)} & ${play.startYard + play.distance >= 100 ? 'GOAL' : play.distance}` : null,
     possession: offHome ? 'home' : 'away',
     tl,
+    fx,
   }
 }
 
@@ -168,6 +183,9 @@ interface Readout {
   /** Graphics layer cost (ms). */
   gfxAvg: number
   gfxP95: number
+  /** B4 ball + effects cost (ms). */
+  fxAvg: number
+  fxP95: number
   /** Nothing changed since the last report (paused / settled): no frames drawn. */
   idle: boolean
 }
@@ -188,11 +206,12 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
   const [speed, setSpeed] = useState(1)
   const [sprites, setSprites] = useState(true)
   const [graphics, setGraphics] = useState<GraphicsMode>('full')
+  const [effects, setEffects] = useState<EffectsMode>('full')
   const [scrub, setScrub] = useState(0)
   const [readout, setReadout] = useState<Readout | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tRef = useRef(0)
-  const live = useRef({ built: null as Built | null, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, scrubbing: false, graphics, reduced })
+  const live = useRef({ built: null as Built | null, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, scrubbing: false, graphics, effects, reduced })
 
   // Simulate a game when the matchup changes (results are keyed by matchup, so
   // a stale one simply reads as "loading").
@@ -232,8 +251,8 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
   const built = builtState && builtState.sample === sample && builtState.idx === playIdx ? builtState.b : null
   const error = errorState && errorState.key === matchKey ? errorState.msg : null
   useEffect(() => {
-    live.current = { ...live.current, built, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, graphics, reduced }
-  }, [built, shot, playing, reduced, speed, sprites, size, homeId, awayId, theme, graphics])
+    live.current = { ...live.current, built, shot, playing: playing && !reduced, speed, sprites, phone: size === 'phone', homeId, awayId, theme, graphics, effects, reduced }
+  }, [built, shot, playing, reduced, speed, sprites, size, homeId, awayId, theme, graphics, effects])
 
   // Renderer + actor layer + loop.
   useEffect(() => {
@@ -247,6 +266,35 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
     gfx.vignette = true
     r.hooks.overlay = gfx.hook
     const gwin = new FrameWindow(120)
+    // B4: the ball + effects composer for the loaded play (rebuilt on play /
+    // quality / reduced-motion change). `fxwin` times its draw work.
+    const fxwin = new FrameWindow(120)
+    let fx: BallFx | null = null
+    let lastFxSig = ''
+    const fxAcc = { v: 0 }
+    const timedFx = (f: BallFx): BallFx => {
+      const g = f.ground.bind(f)
+      const air = f.air.bind(f)
+      const items = f.items.bind(f)
+      return {
+        ...f,
+        ground: (...args: Parameters<BallFx['ground']>) => {
+          const s = performance.now()
+          g(...args)
+          fxAcc.v += performance.now() - s
+        },
+        air: (...args: Parameters<BallFx['air']>) => {
+          const s = performance.now()
+          air(...args)
+          fxAcc.v += performance.now() - s
+        },
+        items: (...args: Parameters<BallFx['items']>) => {
+          const s = performance.now()
+          items(...args)
+          fxAcc.v += performance.now() - s
+        },
+      }
+    }
     // Graphics clock (seconds; negative = pre-snap) and the play time it last drove.
     let sec = 0
     let drivenT = 0
@@ -311,6 +359,33 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         focus = offenseToWorld(p0.x, p0.y, b.dir)
         hold = 0
       }
+      // B4: (re)build the ball + effects composer when the play, quality or
+      // reduced-motion changes. With effects off, B3's placeholder ball stays.
+      const fxSig = `${builtGen}|${L.effects}|${L.reduced}`
+      if (b && L.effects !== 'off' && fxSig !== lastFxSig) {
+        fx = timedFx(
+          createBallFx({
+            anim: b.anim,
+            offenseClub: b.actorPlay.offClub,
+            defenseClub: b.actorPlay.defClub,
+            reducedMotion: L.reduced,
+            quality: L.effects === 'lite' ? 'lite' : 'full',
+            thrower: b.fx.thrower,
+            pressured: b.fx.pressured,
+          }),
+        )
+        // withBallFx turns B3's placeholder ball off and wires the ball + ground
+        // effects into its depth sort; B6a's overlay hook is untouched.
+        r.hooks.actors = withBallFx(layer, fx, () => layer.t)
+        lastFxSig = fxSig
+      } else if (L.effects === 'off' && lastFxSig !== 'off') {
+        fx = null
+        layer.drawBall = true
+        layer.ground = undefined
+        layer.addItems = undefined
+        r.hooks.actors = layer.hook
+        lastFxSig = 'off'
+      }
       if (L.theme !== theme) {
         theme = L.theme
         layer.sprites.refreshFont()
@@ -359,7 +434,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         const k = 1 - Math.pow(0.02, dt)
         focus = { x: focus.x + (bw.x - focus.x) * k, y: focus.y + (bw.y - focus.y) * k }
       }
-      const sig = `${builtGen}|${tRef.current}|${sec}|${L.graphics}|${L.shot}|${L.phone}|${L.sprites}|${L.homeId}|${L.awayId}|${L.theme}|${cv.clientWidth}x${cv.clientHeight}@${window.devicePixelRatio}|${layer.sprites.ready}`
+      const sig = `${builtGen}|${tRef.current}|${sec}|${L.graphics}|${L.effects}|${L.shot}|${L.phone}|${L.sprites}|${L.homeId}|${L.awayId}|${L.theme}|${cv.clientWidth}x${cv.clientHeight}@${window.devicePixelRatio}|${layer.sprites.ready}`
       const dirty = settling || sig !== lastSig
       lastSig = sig
       if (dirty) {
@@ -388,6 +463,8 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
             dpr: r.pixelRatio,
             gfxAvg: gwin.avg,
             gfxP95: gwin.p95,
+            fxAvg: fxwin.avg,
+            fxP95: fxwin.p95,
             idle: false,
           })
         } else if (!reportedIdle) {
@@ -403,8 +480,13 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
     const draw = (b: Built | null) => {
       const L = live.current
       const dir = b?.dir ?? 1
+      fxAcc.v = 0
+      const pose0 = shotPose(L.shot, dir, focus.x + dir * 4, focus.y, L.phone)
+      // B4 camera shake moves the whole scene (pos and target together); it is
+      // exactly 0 outside a big hit and 0 under reduced motion.
+      const pose = fx ? fx.shakePose(pose0, layer.t) : pose0
       r.draw({
-        camera: shotPose(L.shot, dir, focus.x + dir * 4, focus.y, L.phone),
+        camera: pose,
         losYard: b?.los ?? null,
         firstDownYard: b?.fd ?? null,
         direction: dir,
@@ -416,6 +498,7 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
         time: tRef.current,
       })
       gwin.push(gfx.stats.ms)
+      if (fx) fxwin.push(fxAcc.v)
       if (b) {
         act.push(layer.stats.ms)
         hits += layer.stats.spriteHits
@@ -445,7 +528,8 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
     <div className="font-cond text-small tabular-nums text-muted" aria-live="off">
       {readout.idle ? 'idle (nothing changed; not redrawing)' : `${readout.fps.toFixed(0)} fps`} · frame {readout.avg.toFixed(2)} ms avg / {readout.p95.toFixed(2)} p95 · players {readout.actAvg.toFixed(2)} ms avg /{' '}
       {readout.actP95.toFixed(2)} p95 / {readout.actWorst.toFixed(1)} worst · {readout.drawn}/{readout.figures} figures drawn · sprites {readout.sprites} (
-      {(readout.hitRate * 100).toFixed(0)}% hit) · graphics {readout.gfxAvg.toFixed(2)} ms avg / {readout.gfxP95.toFixed(2)} p95 · {readout.w}×{readout.h} @{readout.dpr}x
+      {(readout.hitRate * 100).toFixed(0)}% hit) · graphics {readout.gfxAvg.toFixed(2)} ms avg / {readout.gfxP95.toFixed(2)} p95 · effects {readout.fxAvg.toFixed(2)} ms avg /{' '}
+      {readout.fxP95.toFixed(2)} p95 · {readout.w}×{readout.h} @{readout.dpr}x
     </div>
   )
 
@@ -561,6 +645,17 @@ export default function BroadcastPlayersPreview({ homeId = 'ATL' }: { homeId?: s
           options={[
             { id: 'full', label: 'Graphics' },
             { id: 'fast', label: 'Sim-to-end' },
+            { id: 'off', label: 'Off' },
+          ]}
+        />
+        <SegmentedControl
+          label="Effects"
+          size="sm"
+          value={effects}
+          onChange={setEffects}
+          options={[
+            { id: 'full', label: 'Ball + FX' },
+            { id: 'lite', label: 'Lite' },
             { id: 'off', label: 'Off' },
           ]}
         />
