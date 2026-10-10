@@ -607,7 +607,7 @@ Acceptance:
 | D2 Roster, depth, development, player profile | ✅ merged (+ phone grid/tap fixes by orchestrator) |
 | D3 Draft and scouting | ✅ 7c266a3 (+ phone grid fix by orchestrator) |
 | D4 Money and transactions | ✅ merged (+ phone tap fixes by orchestrator) |
-| D5 Game day | 🔨 building (off 929b9a1, includes animcontact4) |
+| D5 Game day | ✅ merged (+ phone tap fixes by orchestrator) |
 | D6 Game plan | ✅ merged (+ phone tap fixes by orchestrator) |
 | D7 League information | ✅ merged |
 | V1 Integration and cleanup | ⏳ |
