@@ -33,7 +33,7 @@ export function AnalyticsCard({ oppId, home, className }: { oppId?: string; home
           Hire an analyst to sharpen your win probability, get 4th-down recommendations on game day, and
           project the opponent&rsquo;s tendencies before kickoff. Better analysts read it more clearly.
         </p>
-        <Button size="sm" variant="team" onClick={() => setScreen('staff')}>
+        <Button size="sm" variant="secondary" onClick={() => setScreen('staff')}>
           Hire an analyst
         </Button>
       </Card>
@@ -72,12 +72,12 @@ export function AnalyticsCard({ oppId, home, className }: { oppId?: string; home
         <div className="mt-3 rounded-lg border border-line px-3 py-2">
           <div className="mb-1 flex items-center justify-between">
             <span className="label !mb-0">Win projection</span>
-            <span className="font-cond text-sm font-700 tnum text-ink">
+            <span className="font-cond text-small font-700 tnum text-ink">
               {Math.round(wp.value * 100)}%
               <span className="text-muted"> ±{Math.round(wp.margin * 100)}</span>
             </span>
           </div>
-          <div className="text-[11px] text-muted">
+          <div className="text-small text-muted">
             {wp.factors.join(' · ')} · {wp.confidence} confidence
           </div>
         </div>
@@ -89,10 +89,10 @@ export function AnalyticsCard({ oppId, home, className }: { oppId?: string; home
           <div className="overflow-hidden rounded-lg border border-line">
             {tendencyReportBuckets(rows).map(([bucket, list], i) => (
               <div key={bucket} className={i ? 'border-t border-line' : undefined}>
-                <div className="bg-surface-2/60 px-3 py-1 font-cond text-[10px] font-700 uppercase tracking-wide text-faint">
+                <div className="bg-surface-2 px-3 py-1 font-cond text-label font-700 uppercase tracking-wide text-faint">
                   {BUCKET_LABEL[bucket]}
                 </div>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 px-3 py-1.5 text-[11px]">
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 px-3 py-1.5 text-small">
                   {list.map((r) => (
                     <div key={`${r.side}-${r.bucket}`} className="flex items-center justify-between gap-2">
                       <span className="text-muted">{r.side === 'off' ? 'They call' : 'They play'}</span>
@@ -111,7 +111,7 @@ export function AnalyticsCard({ oppId, home, className }: { oppId?: string; home
         </div>
       )}
 
-      <p className="mt-3 text-[11px] text-muted">
+      <p className="mt-3 text-small text-muted">
         On a coached 4th down, your analyst&rsquo;s recommendation appears on the call card. It is advice you
         can ignore — the game plays out exactly as it would with nobody in the room.
       </p>
