@@ -553,6 +553,14 @@ export interface GameSim {
   snaps?: Record<string, number>
   /** Scrimmage snaps run by each club's offence / defence (the snap-% denominator). */
   snapSide?: Record<string, { off: number; def: number }>
+  /**
+   * Backlog 149 follow-up: the K/P each club actually took the field with,
+   * snapshotted at kickoff (before any post-game injury heal). The box score
+   * credits these ids so a weekly injury roll can never move a game to a backup
+   * who did not play (or credit one who sat). Absent on fast-sim games and old
+   * saves; the box score then falls back to the depth chart.
+   */
+  specialists?: Record<string, { K?: string; P?: string }>
   /** Final in-game fatigue per player (probe/reporting only). */
   fatigue?: Record<string, number>
 }
@@ -2763,6 +2771,11 @@ export interface GameState {
   snaps: Record<string, number>
   /** Scrimmage snaps run by each club's offence / defence (the snap-% denominator). */
   snapSide: Record<string, { off: number; def: number }>
+  /**
+   * Backlog 149 follow-up: the K/P each club takes the field with, fixed at
+   * kickoff so the box score credits the specialists the sim actually used.
+   */
+  specialists: Record<string, { K?: string; P?: string }>
   /** Scrimmage snaps on the current possession (for the long-drive fatigue bonus). */
   driveSnaps: number
   /** Player index for O(1) lookups while charging snaps (not persisted). */
@@ -3280,11 +3293,22 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     fat: {},
     snaps: {},
     snapSide: {},
+    specialists: {},
     driveSnaps: 0,
     pIndex: new Map(world.players.map((p) => [p.id, p])),
     wind: 0,
   }
   s.defId = s.offId === homeId ? awayId : homeId
+  // Backlog 149 follow-up: snapshot the active K/P for each club now, while the
+  // injury list is still the one the game kicks off with. The resolvers read the
+  // same depthGroup during the game, so this is exactly who takes the field; the
+  // box score credits these ids instead of re-querying a healed depth chart.
+  for (const id of [homeId, awayId]) {
+    s.specialists[id] = {
+      K: depthGroup(world, id, ['K'], 1)[0]?.id,
+      P: depthGroup(world, id, ['P'], 1)[0]?.id,
+    }
+  }
   // L12.9 K1: unit cohesion (relative to the league mean) nudges pre-snap penalty
   // and fumble thresholds. Computed once here — pure arithmetic, no rng draw.
   {
@@ -3902,6 +3926,7 @@ export function finishGame(s: GameState): GameSim {
     decisions: s.decisions.length ? s.decisions : undefined,
     snaps: s.snaps,
     snapSide: s.snapSide,
+    specialists: s.specialists,
     fatigue: s.fat,
   }
 }
