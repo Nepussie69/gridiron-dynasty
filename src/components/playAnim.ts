@@ -914,6 +914,24 @@ function clearY(y: number, lanes: number[], d: number): number {
 }
 
 /**
+ * A rusher breaking home: straight back in his own lane to behind the wall,
+ * then an eased bend to `target`. The bend starts with no sideways heading (so
+ * there is no right-angle plant) yet the sideways cut happens well behind every
+ * blocker, and the path finishes exactly on `target`.
+ */
+function breakHome(wallX: number, qY: number, target: Pt): Pt[] {
+  const g1 = { x: clampX(wallX - 1.7), y: qY }
+  const out: Pt[] = [{ x: clampX(wallX - 0.7), y: qY }, g1]
+  const n = 6
+  for (let i = 1; i <= n; i++) {
+    const s = i / n
+    out.push({ x: clampX(g1.x + (target.x - g1.x) * s), y: clampY(qY + (target.y - qY) * s * s) })
+  }
+  out[out.length - 1] = target
+  return out
+}
+
+/**
  * Plan and run the pass protection. `rushers` are the front plus any blitzers,
  * `blockers` the linemen (and a back/tight end staying in). The best rusher is
  * doubled by the two linemen closest to his alignment; a man left over on a
@@ -1005,62 +1023,81 @@ function passProtect(
   const wallX = clampX(Math.max(los - 0.6 - give, opts.qbTarget.x + 1.4))
   const contactX = clampX(wallX + give + CONTACT)
 
-  // Plan each pair, and the time the pocket forms (the slowest man to his spot).
+  // Plan each pair: the lane a rusher attacks, the contact point, and — for the
+  // recorded winner — the burst home. A double's gap and every assigned lane are
+  // treated as occupied, so a free man or the winner's swim is never sent to
+  // stand on a teammate (backlog 152 follow-up).
+  const pairMid = pairs.map((pr) => (pr.bs.length >= 2 ? (lane[pr.bs[0]] + lane[pr.bs[1]]) / 2 : NaN))
+  const occupied = [...allLanes]
+  for (const midY of pairMid) if (Number.isFinite(midY)) occupied.push(midY)
   const plan: { r: string; bs: string[]; pts: Pt[]; burst: Pt[]; after: Pt[] }[] = []
-  let te = 0.12
-  for (const pr of pairs) {
-    const { r } = pr
-    const bs = pr.bs
-    // The lane the rusher attacks: his blocker's lane, the gap of a double, or a
-    // clear gap for a free man.
+  let teAll = 0.12
+  for (let pi = 0; pi < pairs.length; pi++) {
+    const { r } = pairs[pi]
+    const bs = pairs[pi].bs
+    // The lane the rusher attacks: his blocker's lane, the gap of a double, a
+    // clear gap for a free man, or (the recorded winner, singled) his blocker's
+    // outside shoulder kept clear of everyone else.
     let qY: number
-    if (!bs.length) qY = clearY(f[r].y, allLanes, 1.0)
-    else if (bs.length >= 2) qY = (lane[bs[0]] + lane[bs[1]]) / 2
-    else qY = lane[bs[0]]
+    if (bs.length >= 2) qY = pairMid[pi]
+    else if (!bs.length) {
+      // A free man keeps his own alignment lane (so he never crosses the wall on
+      // the way in); only if that lane is packed does he step to a clear one.
+      qY = clampY(f[r].y)
+      if (occupied.some((l) => Math.abs(l - qY) < 1.0)) qY = clearY(qY, occupied, 1.0)
+      occupied.push(qY)
+    } else if (r === opts.winner) {
+      // Swim to the blocker's outside shoulder, but only to a lane that is
+      // clear of everyone (including double gaps and other rushers' lanes), so
+      // he never crosses a body at the wall.
+      const side = f[r].y >= lane[bs[0]] ? 1 : -1
+      qY = clearY(clampY(lane[bs[0]] + side * 1.15), occupied, 1.3)
+      occupied.push(qY)
+    } else qY = lane[bs[0]]
+    qY = clampY(qY)
     // Attack in a straight line to the contact point, so the rusher's x is never
-    // behind a blocker's and the centres cannot overlap.
-    const pts: Pt[] = [{ x: contactX, y: clampY(qY) }]
-    te = Math.max(te, straightTime(m[r].pace, Math.hypot(pts[0].x - m[r].x, pts[0].y - m[r].y), 0) + 0.12)
-    for (const b of bs) te = Math.max(te, straightTime(m[b].pace, Math.hypot(wallX - m[b].x, lane[b] - m[b].y), 0) + 0.06)
-    // A free man keeps his clear lane past the wall, then turns for the pocket —
-    // the turn waits until the wall is set so he never crosses a sliding body.
+    // behind a blocker's and the centres cannot overlap. The winner is left out
+    // of the shared pocket time: his own burst sets when he breaks free.
+    const pts: Pt[] = [{ x: contactX, y: qY }]
+    const approach = straightTime(m[r].pace, Math.hypot(pts[0].x - m[r].x, pts[0].y - m[r].y), 0) + 0.12
+    if (r !== opts.winner) teAll = Math.max(teAll, approach)
+    for (const b of bs) teAll = Math.max(teAll, straightTime(m[b].pace, Math.hypot(wallX - m[b].x, lane[b] - m[b].y), 0) + 0.06)
+    // A free man keeps his clear lane past the wall, then turns for the pocket.
     const after: Pt[] = []
     if (!bs.length) {
-      after.push(
-        { x: clampX(wallX - 1.0), y: clampY(qY) },
-        { x: clampX(opts.qbTarget.x), y: clampY(opts.qbTarget.y + ((plan.length % 3) - 1) * 0.9) },
-      )
+      after.push(...breakHome(wallX, qY, { x: clampX(opts.qbTarget.x), y: clampY(opts.qbTarget.y + ((plan.length % 2) - 0.5) * 1.8) }))
     }
-    // The recorded winner's burst home: a doubled man splits the pair; a singled
-    // man swims to his outside shoulder at the line, then straight back. He gets
-    // behind the wall before turning, so his run to the passer clears every body.
-    const burst: Pt[] = []
-    if (opts.winner === r && bs.length) {
-      let burstY = qY
-      if (bs.length < 2) {
-        const side = f[r].y >= qY ? 1 : -1
-        burstY = clearY(clampY(qY + side * 1.15), allLanes, 1.0)
-        burst.push({ x: contactX, y: clampY(burstY) })
-      }
-      burst.push({ x: clampX(wallX - 0.7), y: clampY(burstY) }, { x: clampX(wallX - 1.7), y: clampY(burstY) }, opts.qbTarget)
-    }
+    // The recorded winner's burst home: straight back through his lane (a
+    // double's gap, his outside shoulder, or a free lane), then an eased bend to
+    // the passer — no right-angle plant, and it ends exactly on him.
+    const burst: Pt[] = opts.winner === r ? breakHome(wallX, qY, opts.qbTarget) : []
     plan.push({ r, bs, pts, burst, after })
   }
-  te = Math.min(te, Math.max(0.1, opts.arriveSec - 0.1))
-  const mid = opts.arriveSec - te
+  const teCap = Math.max(0.1, opts.arriveSec - 0.1)
+  const te = Math.min(teAll, teCap)
 
   // Every blocker — even one left without a man — steps on to the wall once.
   for (const b of B) runTimed(m[b], [{ x: wallX, y: lane[b] }], m[b].t, te, false, true)
   for (const pl of plan) {
-    runTimed(m[pl.r], pl.pts, m[pl.r].t, te, false, true)
-    if (mid <= 0.12) continue
-    if (pl.burst.length) {
-      runTimed(m[pl.r], pl.burst, m[pl.r].t, opts.arriveSec, false, true)
-      // The beaten blockers give ground behind the rush.
-      for (const b of pl.bs) runTimed(m[b], [{ x: clampX(wallX - 0.3), y: lane[b] }], m[b].t, te + mid * 0.5, false, true)
-    } else if (pl.after.length) {
-      // Free: an unblocked rusher turns and comes home by the throw.
-      runTimed(m[pl.r], pl.after, m[pl.r].t, opts.arriveSec, false, true)
+    const final = pl.r === opts.winner ? pl.burst : pl.after
+    if (!final.length) {
+      // Blocked, and not the recorded winner: he never reaches the passer.
+      runTimed(m[pl.r], pl.pts, m[pl.r].t, te, false, true)
+      continue
+    }
+    // Time the leg that gets home at the recorded arrival, then engage only
+    // long enough to start it so he arrives on time: a short window never skips
+    // it (backlog 152 follow-up). The winner ends exactly on the passer; a free
+    // teammate is nudged a body's width aside so the two never share a lane.
+    const k = timedLine([pl.pts[0], ...final], m[pl.r].pace, { v0: 0, stop: true })
+    const dur = k.length ? k[k.length - 1].t : 0
+    const engage = clampN(opts.arriveSec - dur, 0.1, teCap)
+    runTimed(m[pl.r], pl.pts, m[pl.r].t, engage, false, true)
+    runTimed(m[pl.r], final, m[pl.r].t, opts.arriveSec, false, true, 1.6)
+    // The beaten blockers give ground behind the rush.
+    if (pl.r === opts.winner) {
+      const gt = Math.max(te + 0.05, engage + Math.max(0, opts.arriveSec - engage) * 0.5)
+      for (const b of pl.bs) runTimed(m[b], [{ x: clampX(wallX - 0.3), y: lane[b] }], m[b].t, gt, false, true)
     }
   }
   return {
@@ -1670,11 +1707,13 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   }
 
   const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb']
-  // A receiver whose route is a blocking assignment stays in to protect
-  // (backlog 152); everyone else runs his route.
-  const stayIn = new Set(receivers.filter((k) => k !== tgt && /^(stalk|runFake|block|passBlock)$/.test(routeMap[k] ?? '')))
-  // A back chips an edge or blitzer before releasing into his route.
-  if (play.blitz && tgt !== 'rb' && !stayIn.has('rb')) {
+  // Only a tight end / back assigned to pass-protect (block/passBlock) stays in
+  // (backlog 152); a screen "stalk" or a play-action "runFake" is a route, not
+  // protection, and runs like everyone else (backlog 152 follow-up).
+  const stayIn = new Set(receivers.filter((k) => k !== tgt && (k === 'te' || k === 'rb' || k === 'fb') && /^(block|passBlock)$/.test(routeMap[k] ?? '')))
+  // A back chips an edge or blitzer before releasing into his route — but a back
+  // selling a run fake (play-action / RPO) has a fake to run, not a chip.
+  if (play.blitz && tgt !== 'rb' && !stayIn.has('rb') && routeMap.rb !== 'runFake') {
     const chipR = blitzKeys(seed).reduce((a, k) => (Math.abs(f[k].y - f.rb.y) < Math.abs(f[a].y - f.rb.y) ? k : a))
     const dir = f.rb.y >= f[chipR].y ? 1 : -1
     m.rb.run([{ x: clampX(los - 1.6), y: clampY(f[chipR].y + dir * 1.1) }], { stop: true })
@@ -1746,8 +1785,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // his block home; anyone the slide does not pick up comes free.
   const blitzK = play.blitz ? blitzKeys(seed) : []
   const pressureKey = play.pressureId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.pressureId) : undefined
+  // The recorded pressure rusher always rushes, even when the sim credited a
+  // linebacker the slide never sent (backlog 152 follow-up).
+  const rushers = ['dl0', 'dl1', 'dl2', 'dl3', ...blitzK]
+  if (pressureKey && !rushers.includes(pressureKey)) rushers.push(pressureKey)
   passProtect(m, f, los, {
-    rushers: ['dl0', 'dl1', 'dl2', 'dl3', ...blitzK],
+    rushers,
     blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', ...stayIn],
     winner: pressureKey,
     qbTarget: posAt(m.qb.path, releaseSec),
@@ -1776,9 +1819,14 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const coverKey = coverId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === coverId) : undefined
   const scheme = coverageScheme(play, seed)
   // Blitzers were already moved as part of the protection (backlog 152); here
-  // the set is only used to keep them out of the coverage pool (151).
-  const blitzers = blitzK
+  // the set is only used to keep them out of the coverage pool (151). The
+  // recorded pressure rusher counts as a blitzer so he is never sent to cover.
+  const blitzers = pressureKey && !blitzK.includes(pressureKey) ? [...blitzK, pressureKey] : blitzK
   const isBlitzer = (k: string) => blitzers.includes(k)
+  // Pursuit after the catch: the coverage players converge on the ball carrier.
+  // Pass rushers stay in the pocket behind the wall instead of chasing upfield
+  // through the line (which would clip a blocker).
+  const pursuers = DEF_KEYS.filter((k) => !isBlitzer(k))
   const runners = receivers.filter((k) => pathLen(m[k].path) > 3.5)
   // Separation should match the recorded result: hip-pocket tight on short and
   // contested plays, looser on a recorded big gain (a blown coverage).
@@ -1883,7 +1931,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // coverage chases, but nothing forces a tackle.
     m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: true })
     const endSec = m[tgt].t
-    chaseCarrier(m, DEF_KEYS, catchSec, m[tgt], endSec, seed)
+    chaseCarrier(m, pursuers, catchSec, m[tgt], endSec, seed)
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
     return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
@@ -1892,7 +1940,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // In bounds and short of the goal line: the credited tackler (when the sim
   // named one) — else the defender who can actually arrive first — meets the
   // receiver at the recorded stop while he keeps running at his ratings' pace.
-  const res = resolveCarry({ m, carrierKey: tgt, spot, tacklerKeys: DEF_KEYS, prefer: creditKey, seed })
+  const res = resolveCarry({ m, carrierKey: tgt, spot, tacklerKeys: pursuers, prefer: creditKey, seed })
   capAll(m, ALL_KEYS(f), res.endSec)
   ball.push(...shadow(m[tgt].path, catchSec).slice(1))
   return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
@@ -1926,12 +1974,21 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
 
   // Protection (backlog 152): the line doubles the best rusher, and the sim's
   // sacker beats his block — or splits the double — home to the quarterback.
+  // The credited sacker always rushes, even when the sim picked a linebacker the
+  // blitz package never sent (backlog 152 follow-up).
   const blitzK = play.blitz ? blitzKeys(seed) : []
+  const rushers = ['dl0', 'dl1', 'dl2', 'dl3', ...blitzK]
+  if (!rushers.includes(rusherKey)) rushers.push(rusherKey)
   const qbEnd = { x: endX, y: MID_Y + dodge * 3 }
-  m.qb.run([{ x: f.qb.x - 3, y: MID_Y }, { x: endX + 0.6, y: MID_Y + dodge * 2.5 }, qbEnd], { stop: true })
+  // A sack takes 2.5-3.5 s of real time: give the pocket a realistic duration so
+  // the recorded rusher can actually get home (a 1.7 s drop would make any rush
+  // arrive "late"). The drop shape and the final spot are unchanged.
+  const qbPts: Pt[] = [{ x: f.qb.x - 3, y: MID_Y }, { x: endX + 0.6, y: MID_Y + dodge * 2.5 }, qbEnd]
+  const pocketT = clampN(2.3 + (los - endX) * 0.09, 2.3, 3.5)
+  runTimed(m.qb, qbPts, 0, pocketT, false, true)
   const sackT = m.qb.t
   passProtect(m, f, los, {
-    rushers: ['dl0', 'dl1', 'dl2', 'dl3', ...blitzK],
+    rushers,
     blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4'],
     winner: rusherKey,
     qbTarget: qbEnd,
@@ -1939,7 +1996,7 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   })
   ;['wr0', 'wr1', 'wr2', 'te'].forEach((k, i) => m[k].run([{ x: los + 6 + i * 2, y: f[k].y }], { stop: true }))
   m.rb.run([{ x: los - 4, y: MID_Y - dodge * 3 }], { stop: true })
-  const blitzers = blitzK
+  const blitzers = blitzK.includes(rusherKey) ? blitzK : [...blitzK, rusherKey]
   ;['cb0', 'cb1', 's0', 's1', 'lb0', 'lb1', 'lb2'].filter((k) => !blitzers.includes(k)).forEach((k) => m[k].run([{ x: f[k].x + 3, y: f[k].y }], { stop: true }))
   const ball = snapBall(m, los, sackT)
   return finish(f, m, { ball, holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }], flights: [] })
