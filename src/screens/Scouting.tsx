@@ -1,31 +1,49 @@
-import { useMemo, useState, useEffect } from 'react'
-import { Eye, Flag, Flame, Phone, Search, Star, Target, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Eye, Flag, Flame, Phone, Search, SlidersHorizontal, Star, Target } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { gradeColor } from '../lib/format'
 import type { DraftProspect, Recommendation } from '../game/types'
 import { ensureProspectPools } from '../game/engine/progress'
-import { readProspect, readRookieRanges, scoutRegion, inProspectScope } from '../game/engine/evaluation'
+import { inProspectScope, readProspect, readRookieRanges, scoutRegion } from '../game/engine/evaluation'
 import { accessFor } from '../game/engine/access'
 import { CHARACTER_FACETS, FACET_LABEL } from '../game/engine/character'
 import { isEvaluator, learnedBias, scoutReport } from '../game/engine/scoutBias'
 import { canSetTrust, departmentGrade } from '../game/engine/department'
 import { MAX_CONVICTION, canConvict, convictionIds } from '../game/engine/conviction'
-import { MAX_RED_FLAGS, canRedFlag, redFlagIds } from '../game/engine/redflag'
+import { MAX_RED_FLAGS, canRedFlag, isRedFlaggable, redFlagIds } from '../game/engine/redflag'
 import { MAX_TRAVEL_COVERAGE, coverageOf } from '../game/engine/scoutTravel'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
-import { AccessBadge } from '../components/AccessBadge'
 import { CombineCard } from '../components/CombineCard'
 import { ScoutTravelCard } from '../components/ScoutTravelCard'
 import { DataTable, type Column } from '../components/DataTable'
-import { Badge, Button, Card, PageHeader, RookieRangeBadges, Stat } from '../ui/kit'
+import {
+  AccessBanner,
+  Badge,
+  Button,
+  Card,
+  FilterChip,
+  Inspector,
+  KpiStrip,
+  KpiTile,
+  OverflowMenu,
+  PageHeader,
+  RatingTile,
+  RookieRangeBadges,
+  SectionTitle,
+  Sheet,
+  TierLegend,
+  WithInspector,
+  type MenuItem,
+} from '../ui/kit'
+import { usePhone, useMediaQuery, WIDE_QUERY } from '../ui/hooks'
 
 const POS_FILTERS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
-const RECS: { id: Recommendation; label: string; tone: 'win' | 'info' | 'warn' | 'loss' }[] = [
-  { id: 'Blue Chip', label: 'Blue Chip', tone: 'win' },
-  { id: 'Starter', label: 'Starter', tone: 'info' },
-  { id: 'Depth', label: 'Depth', tone: 'warn' },
-  { id: 'Pass', label: 'Pass', tone: 'loss' },
+/** The four calls. Every chip is neutral; Pass is muted, never red. */
+const RECS: { id: Recommendation; label: string }[] = [
+  { id: 'Blue Chip', label: 'Blue Chip' },
+  { id: 'Starter', label: 'Starter' },
+  { id: 'Depth', label: 'Depth' },
+  { id: 'Pass', label: 'Pass' },
 ]
 
 export function Scouting() {
@@ -38,8 +56,19 @@ export function Scouting() {
   const scoutProspect = useGame((s) => s.scoutProspect)
   const investigateCharacter = useGame((s) => s.investigateCharacter)
   const scoutLevel = accessFor(career, 'scouting')
+  const phone = usePhone()
+  const wide = useMediaQuery(WIDE_QUERY)
   const [pos, setPos] = useState('ALL')
   const [showAll, setShowAll] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+
+  const toggleConviction = useGame((s) => s.toggleConviction)
+  const canConvictHere = canConvict(career)
+  const convicted = canConvictHere ? convictionIds(league, career) : []
+
+  const toggleRedFlag = useGame((s) => s.toggleRedFlag)
+  const canRedFlagHere = canRedFlag(career)
+  const redFlagged = canRedFlagHere ? redFlagIds(league, career) : []
 
   const pool = league.draft
   const region = scoutRegion(career)
@@ -61,69 +90,142 @@ export function Scouting() {
   )
 
   const graded = pool.filter((p) => p.recommendation).length
+  const hitRate = career.hits + career.misses ? Math.round((career.hits / (career.hits + career.misses)) * 100) : 0
+  const hitTone = hitRate >= 60 ? 'win' : hitRate >= 40 ? 'neutral' : 'warn'
+  const hitWord = hitRate >= 60 ? 'Sharp' : hitRate >= 40 ? 'Mixed' : 'Cold'
 
-  const toggleConviction = useGame((s) => s.toggleConviction)
-  const canConvictHere = canConvict(career)
-  const convicted = canConvictHere ? convictionIds(league, career) : []
+  const locked = scoutLevel === 'locked'
+  const charDoneOf = (p: DraftProspect) => !p.character || (p.characterReads ?? []).length >= CHARACTER_FACETS.length
 
-  const toggleRedFlag = useGame((s) => s.toggleRedFlag)
-  const canRedFlagHere = canRedFlag(career)
-  const redFlagged = canRedFlagHere ? redFlagIds(league, career) : []
+  const quickMenu = (p: DraftProspect): MenuItem[] => {
+    const noPts = points <= 0
+    const charDone = charDoneOf(p)
+    const items: MenuItem[] = [
+      {
+        id: 'scout',
+        label: 'Scout prospect',
+        description: locked ? 'Scouting is locked at this rung' : noPts ? 'No scouting points left this week' : 'Spends 1 scouting point · sharpens his range',
+        icon: <Search size={16} />,
+        disabled: locked || noPts,
+        onSelect: () => scoutProspect(p.id),
+      },
+      {
+        id: 'char',
+        label: 'Character read',
+        description: locked ? 'Scouting is locked at this rung' : charDone ? 'Character fully uncovered' : 'Free · twice a week',
+        icon: <Phone size={16} />,
+        disabled: locked || charDone,
+        onSelect: () => investigateCharacter(p.id),
+      },
+    ]
+    if (canConvictHere) {
+      const on = convicted.includes(p.id)
+      const flagged = redFlagged.includes(p.id)
+      const full = !on && convicted.length >= MAX_CONVICTION
+      items.push({
+        id: 'conviction',
+        label: on ? 'Remove conviction call' : 'Pound the table',
+        description: on
+          ? 'Take your conviction call back'
+          : full
+            ? `Conviction calls are full (${MAX_CONVICTION})`
+            : flagged
+              ? 'He is red-flagged — clear the flag first'
+              : 'Your read the club must not ignore',
+        icon: <Flame size={16} />,
+        disabled: full || flagged,
+        onSelect: () => toggleConviction(p.id),
+      })
+    }
+    if (canRedFlagHere) {
+      const on = redFlagged.includes(p.id)
+      const convict = convicted.includes(p.id)
+      const full = !on && redFlagged.length >= MAX_RED_FLAGS
+      const flaggable = isRedFlaggable(league, p.id)
+      items.push({
+        id: 'redflag',
+        label: on ? 'Clear the red flag' : 'Red flag him',
+        description: on
+          ? 'Put him back on the board'
+          : full
+            ? `Red flags are full (${MAX_RED_FLAGS})`
+            : convict
+              ? 'He is a conviction call — a prospect can only be one'
+              : !flaggable
+                ? 'Only for prospects the league rates (top 64)'
+                : 'Take him off your club’s board',
+        icon: <Flag size={16} />,
+        disabled: full || convict || (!on && !flaggable),
+        onSelect: () => toggleRedFlag(p.id),
+      })
+    }
+    return items
+  }
 
   const columns: Column<DraftProspect>[] = [
     {
-      key: 'range',
-      label: 'Now · Ceiling',
-      className: 'w-[128px]',
-      sortValue: (p) => reads.get(p.id)?.center ?? 0,
-      render: (p) => {
-        const r = reads.get(p.id)!
-        if (!r.visible) {
-          return <span className="grid h-7 w-14 place-items-center rounded-md bg-surface-3 font-cond text-[11px] font-700 text-muted">OUT</span>
-        }
-        const rr = ranges.get(p.id)!
-        return <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} />
-      },
-    },
-    { key: 'pos', label: 'Pos', className: 'w-12', sortValue: (p) => p.pos, render: (p) => <span className="font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span> },
-    {
       key: 'name',
       label: 'Prospect',
-      className: 'min-w-[180px]',
+      card: 'title',
       sortValue: (p) => p.name,
       render: (p) => {
         const r = reads.get(p.id)!
         return (
-          <div className="min-w-0">
-            <div className="truncate font-600 text-ink">{p.name}</div>
-            <div className="truncate text-[11px] text-muted">
-              {p.college} · {p.classYear}{!r.visible ? ` · ${r.region} (out of region)` : ''}
-            </div>
-          </div>
+          <span className="block min-w-0">
+            <span className="block truncate font-600 text-ink">{p.name}</span>
+            <span className="block truncate text-small text-muted">
+              {p.college} · {p.classYear}
+              {!r.visible ? ` · ${r.region} (out of region)` : ''}
+            </span>
+          </span>
         )
+      },
+    },
+    {
+      key: 'pos',
+      label: 'Pos',
+      card: 'value',
+      sortValue: (p) => p.pos,
+      render: (p) => <span className="font-cond text-small font-700 uppercase text-ink-2">{p.pos}</span>,
+    },
+    {
+      key: 'range',
+      label: 'Now · Ceiling',
+      headerTitle: 'Your rookie read on the NFL scale, separated from the college grade. Tightens as you scout and travel.',
+      card: 'meta',
+      sortValue: (p) => reads.get(p.id)?.center ?? 0,
+      render: (p) => {
+        const r = reads.get(p.id)!
+        if (!r.visible) {
+          return <span className="whitespace-nowrap rounded-[var(--r-xs)] bg-surface-3 px-1.5 py-1 font-cond text-small font-700 uppercase text-muted">OUT of region</span>
+        }
+        const rr = ranges.get(p.id)!
+        return <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact />
       },
     },
     {
       key: 'conf',
       label: 'Known',
-      className: 'w-28',
+      card: 'value',
       sortValue: (p) => reads.get(p.id)?.confidence ?? 0,
       render: (p) => {
         const r = reads.get(p.id)!
         return (
-          <div className="flex items-center gap-2">
-            <span className="w-8 font-cond text-xs font-700 tnum text-ink-2">{r.confidence}%</span>
-            <div className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-3">
-              {r.visible && <div className="h-full rounded-full" style={{ width: `${r.confidence}%`, background: r.confidence > 70 ? '#05914f' : '#d98207' }} />}
-            </div>
-          </div>
+          <span className="flex items-center gap-2">
+            <span className="w-9 font-cond text-small font-700 tnum text-ink-2">{r.confidence}%</span>
+            <span className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-3">
+              {r.visible && (
+                <span className={cn('block h-full rounded-full', r.confidence >= 70 ? 'bg-win' : 'bg-warn')} style={{ width: `${r.confidence}%` }} />
+              )}
+            </span>
+          </span>
         )
       },
     },
     {
       key: 'road',
       label: 'Road',
-      className: 'w-14',
+      card: 'value',
       sortValue: (p) => coverageOf(career, p.id),
       render: (p) => {
         const d = coverageOf(career, p.id)
@@ -133,7 +235,7 @@ export function Scouting() {
             title={d ? `Travel coverage ${d}/${MAX_TRAVEL_COVERAGE} — a tighter read` : 'No travel yet'}
           >
             {Array.from({ length: MAX_TRAVEL_COVERAGE }, (_, i) => (
-              <span key={i} className={cn('h-2 w-2 rounded-[2px]', i < d ? 'bg-[var(--team)]' : 'bg-surface-3')} />
+              <span key={i} className={cn('h-2 w-2 rounded-[2px]', i < d ? 'bg-[var(--team-accent)]' : 'bg-surface-3')} />
             ))}
           </span>
         )
@@ -142,88 +244,47 @@ export function Scouting() {
     {
       key: 'rec',
       label: 'Call',
-      className: 'w-24',
+      card: 'value',
       sortValue: (p) => p.recommendation ?? '',
       render: (p) =>
         p.recommendation ? (
-          <Badge tone={RECS.find((x) => x.id === p.recommendation)?.tone ?? 'neutral'}>{p.recommendation}</Badge>
+          p.recommendation === 'Pass' ? (
+            <Badge tone="neutral" className="text-muted">{p.recommendation}</Badge>
+          ) : (
+            <Badge tone="neutral">{p.recommendation}</Badge>
+          )
         ) : (
-          <Badge tone="neutral">Ungraded</Badge>
+          <Badge tone="neutral" className="text-muted">Ungraded</Badge>
         ),
     },
     {
       key: 'quick',
-      label: 'Quick',
-      className: 'w-28',
-      render: (p) => {
-        const locked = scoutLevel === 'locked'
-        const noPts = points <= 0
-        const charDone = !p.character || (p.characterReads ?? []).length >= CHARACTER_FACETS.length
-        return (
-          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <button
-              type="button"
-              title={locked ? 'Scouting is locked at this rung' : noPts ? 'No scouting points left this week' : 'Scout prospect (1 pt)'}
-              disabled={locked}
-              onClick={() => scoutProspect(p.id)}
-              className={cn(
-                'inline-flex items-center gap-1 rounded-md border px-1.5 py-1 font-cond text-[10px] font-700 uppercase tracking-wide transition',
-                locked || noPts
-                  ? 'border-line text-faint opacity-60'
-                  : 'border-line text-ink-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
-              )}
-            >
-              <Search size={11} /> Scout
-            </button>
-            <button
-              type="button"
-              title={locked ? 'Scouting is locked at this rung' : charDone ? 'Character fully uncovered' : 'Character read (free, twice a week)'}
-              disabled={locked || charDone}
-              onClick={() => investigateCharacter(p.id)}
-              className={cn(
-                'grid h-6 w-6 place-items-center rounded-md border transition',
-                locked || charDone
-                  ? 'border-line text-faint opacity-60'
-                  : 'border-line text-ink-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
-              )}
-            >
-              <Phone size={11} />
-            </button>
-            {canConvictHere && (
-              <button
-                type="button"
-                title={convicted.includes(p.id) ? 'Remove your conviction call' : 'Pound the table for this prospect'}
-                onClick={() => toggleConviction(p.id)}
-                className={cn(
-                  'grid h-6 w-6 place-items-center rounded-md border transition',
-                  convicted.includes(p.id)
-                    ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]'
-                    : 'border-line text-ink-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
-                )}
-              >
-                <Flame size={11} />
-              </button>
-            )}
-            {canRedFlagHere && (
-              <button
-                type="button"
-                title={redFlagged.includes(p.id) ? 'Remove the red flag' : 'Red flag this prospect (take him off the board)'}
-                onClick={() => toggleRedFlag(p.id)}
-                className={cn(
-                  'grid h-6 w-6 place-items-center rounded-md border transition',
-                  redFlagged.includes(p.id)
-                    ? 'border-transparent bg-[var(--team)] text-[var(--team-ink)]'
-                    : 'border-line text-ink-2 hover:border-[var(--team)] hover:bg-[var(--team-soft)]',
-                )}
-              >
-                <Flag size={11} />
-              </button>
-            )}
-          </div>
-        )
-      },
+      label: 'Actions',
+      align: 'right',
+      card: 'aside',
+      render: (p) => <OverflowMenu items={quickMenu(p)} label={`Quick actions for ${p.name}`} size="sm" />,
     },
   ]
+
+  const selected = sorted.find((p) => p.id === selectedId) ?? pool.find((p) => p.id === selectedId) ?? null
+  const convSelected = !!selected && convicted.includes(selected.id)
+  const flagSelected = !!selected && redFlagged.includes(selected.id)
+  const activeFilters = (pos !== 'ALL' ? 1 : 0) + (showAll ? 1 : 0)
+
+  const posFilters = (
+    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Position filter">
+      {POS_FILTERS.map((p) => (
+        <FilterChip key={p} pressed={pos === p} onChange={() => setPos(p)}>
+          {p}
+        </FilterChip>
+      ))}
+      {career.level < 2 && (
+        <FilterChip pressed={showAll} onChange={setShowAll}>
+          {showAll ? `All ${pool.length}` : `My region (${region})`}
+        </FilterChip>
+      )}
+    </div>
+  )
 
   return (
     <div>
@@ -232,222 +293,333 @@ export function Scouting() {
         title="Scouting Board"
         subtitle="Evaluating this year's draft class. Spend points to sharpen the range, then file your call."
         right={
-          <div className="flex items-center gap-2">
-            <AccessBadge area="scouting" />
-            <Badge tone={points > 0 ? 'team' : 'loss'}>
-              {points} / {MAX_SCOUT_POINTS} scouting points
-            </Badge>
-          </div>
+          <Badge tone={points > 0 ? 'neutral' : 'warn'}>
+            {points} / {MAX_SCOUT_POINTS} scouting points
+          </Badge>
         }
       />
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><Stat label="Prospects" value={pool.length} sub={career.level < 2 ? `${region} region · ${outOfScope} out of scope` : 'national board'} /></Card>
-        <Card><Stat label="You've Graded" value={graded} sub="calls filed" /></Card>
-        <Card>
-          <Stat label="Your Hit Rate" value={`${career.hits + career.misses ? Math.round((career.hits / (career.hits + career.misses)) * 100) : 0}%`} sub={`${career.hits} hits`} tone="win" />
-        </Card>
-        <Card><Stat label="Reputation" value={overallRep(career.reputation)} sub="drives your next job" /></Card>
-      </div>
+      <AccessBanner
+        area="scouting"
+        className="mb-4"
+        message={
+          scoutLevel === 'advise' ? (
+            <>
+              <b className="font-600 text-ink">You advise on this class.</b> Your calls and red flags are logged to your
+              Ledger — the club weighs them against consensus.
+            </>
+          ) : (
+            <>
+              <b className="font-600 text-ink">You can read the board at this rung.</b> Scout prospects to sharpen the
+              range, then file your call.
+            </>
+          )
+        }
+      />
 
-      <CombineCard className="mb-4" />
-      <ScoutTravelCard className="mb-4" />
-
-      <div className="mb-3 flex flex-wrap items-center gap-1">
-        {POS_FILTERS.map((p) => (
-          <button
-            key={p}
-            onClick={() => setPos(p)}
-            className={cn(
-              'rounded-md px-2.5 py-1 font-cond text-xs font-700 uppercase transition',
-              pos === p ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-2',
-            )}
-            style={pos === p ? { background: 'var(--team)' } : undefined}
-          >
-            {p}
-          </button>
-        ))}
-        {career.level < 2 && (
-          <button
-            onClick={() => setShowAll((v) => !v)}
-            className="ml-auto rounded-md border border-line px-2.5 py-1 font-cond text-xs font-700 uppercase text-muted hover:bg-surface-2"
-          >
-            {showAll ? `Showing all ${pool.length}` : `My region (${region})`}
-          </button>
-        )}
-      </div>
-
-      <Card pad={false} className="overflow-hidden">
-        <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2">
-          <span className="label">Class Board · by your read</span>
-          <div className="flex items-center gap-2">
-            {canConvictHere && (
-              <Badge tone="gold"><Flame size={11} /> Conviction {convicted.length}/{MAX_CONVICTION}</Badge>
-            )}
-            {canRedFlagHere && (
-              <Badge tone="warn"><Flag size={11} /> Red flags {redFlagged.length}/{MAX_RED_FLAGS}</Badge>
-            )}
-            <span className="text-[10px] text-faint">click a row to open the report · click a column to sort · quick buttons scout in place</span>
-          </div>
-        </div>
-        <DataTable
-          rows={sorted}
-          columns={columns}
-          rowKey={(p) => p.id}
-          selectedKey={selectedId}
-          expandedKey={selectedId}
-          renderExpanded={(p) => <ProspectDetail prospect={p} />}
-          onRowClick={(p) => selectProspect(selectedId === p.id ? null : p.id)}
-          defaultSortKey="range"
-          rank
-          maxHeight="calc(100vh - 340px)"
-          emptyText="No prospects match these filters."
+      <KpiStrip label="Scouting summary" className="mb-4">
+        <KpiTile
+          label="Prospects"
+          value={pool.length}
+          unit="in the class"
+          why={
+            <span className="text-muted">
+              {career.level < 2 ? `${region} region · ${outOfScope} out of scope` : 'National board'}
+            </span>
+          }
         />
-      </Card>
+        <KpiTile
+          label="You've graded"
+          value={graded}
+          unit="calls filed"
+          why={<span className="text-muted">One call per prospect · logged to your Ledger</span>}
+        />
+        <KpiTile
+          label="Your hit rate"
+          value={`${hitRate}%`}
+          unit="of your calls"
+          verdict={{ label: hitWord, tone: hitTone }}
+          why={
+            <span className="text-muted">
+              {career.hits} hits · {career.misses} misses graded two seasons on
+            </span>
+          }
+        />
+        <KpiTile
+          label="Reputation"
+          value={overallRep(career.reputation)}
+          unit="grade"
+          why={<span className="text-muted max-sm:hidden">Drives your next job and who will listen</span>}
+        />
+      </KpiStrip>
+
+      <WithInspector
+        open={!!selected && wide}
+        inspector={
+          <Inspector
+            open={!!selected}
+            onClose={() => selectProspect(null)}
+            eyebrow={selected ? `Scouting report · ${selected.pos}` : undefined}
+            title={selected ? selected.name : ''}
+            actions={
+              selected && (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    icon={<Search size={15} aria-hidden />}
+                    disabled={locked || points <= 0}
+                    title={locked ? 'Scouting is locked at this rung' : points <= 0 ? 'No scouting points left this week' : 'Spends 1 scouting point'}
+                    onClick={() => scoutProspect(selected.id)}
+                  >
+                    Scout · {points} pts
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    icon={<Phone size={15} aria-hidden />}
+                    disabled={locked || charDoneOf(selected)}
+                    title={charDoneOf(selected) ? 'Character fully uncovered' : 'Free · twice a week'}
+                    onClick={() => investigateCharacter(selected.id)}
+                  >
+                    Character read
+                  </Button>
+                  {canConvictHere && (
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      className={convSelected ? 'text-win' : undefined}
+                      icon={<Flame size={15} aria-hidden />}
+                      onClick={() => toggleConviction(selected.id)}
+                    >
+                      {convSelected ? 'Un-pick conviction' : 'Pound the table'}
+                    </Button>
+                  )}
+                  {canRedFlagHere && !convSelected && (
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      className={flagSelected ? 'text-warn' : undefined}
+                      icon={<Flag size={15} aria-hidden />}
+                      onClick={() => toggleRedFlag(selected.id)}
+                    >
+                      {flagSelected ? 'Clear red flag' : 'Red flag'}
+                    </Button>
+                  )}
+                </>
+              )
+            }
+          >
+            {selected && <ProspectReport prospect={selected} />}
+          </Inspector>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <Card pad={false} className="order-1 overflow-hidden lg:order-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
+              <SectionTitle className="!mb-0">Class Board</SectionTitle>
+              <div className="flex flex-wrap items-center gap-2">
+                {canConvictHere && (
+                  <Badge tone="win"><Flame size={11} /> Conviction {convicted.length}/{MAX_CONVICTION}</Badge>
+                )}
+                {canRedFlagHere && (
+                  <Badge tone="warn"><Flag size={11} /> Red flags {redFlagged.length}/{MAX_RED_FLAGS}</Badge>
+                )}
+              </div>
+            </div>
+
+            <TierLegend className="border-b border-line px-4 py-2 max-sm:hidden" />
+
+            {/* Position filter — inline chips on desktop, a sheet on phone. */}
+            <div className="border-b border-line px-3 py-2 max-sm:hidden">{posFilters}</div>
+            <div className="flex items-center gap-2 border-b border-line px-3 py-2 sm:hidden">
+              <Button variant="secondary" size="sm" icon={<SlidersHorizontal size={15} aria-hidden />} onClick={() => setFiltersOpen(true)}>
+                Filters{activeFilters ? ` (${activeFilters})` : ''}
+              </Button>
+              <span className="min-w-0 flex-1 truncate text-small text-muted">
+                {sorted.length} of {pool.length} · by your read
+              </span>
+            </div>
+
+            <div className="p-1 sm:p-0">
+              <DataTable
+                label="Class board"
+                rows={sorted}
+                columns={columns}
+                rowKey={(p) => p.id}
+                selectedKey={selectedId}
+                onRowClick={(p) => selectProspect(selectedId === p.id ? null : p.id)}
+                defaultSortKey="range"
+                rank
+                maxHeight="calc(100vh - 340px)"
+                emptyText="No prospects match these filters."
+              />
+            </div>
+          </Card>
+
+          <CombineCard className="order-2 lg:order-1" />
+          <ScoutTravelCard className="order-3 lg:order-2" />
+        </div>
+      </WithInspector>
+
+      <Sheet open={phone && filtersOpen} onClose={() => setFiltersOpen(false)} eyebrow="Class board" title="Filters">
+        {posFilters}
+      </Sheet>
     </div>
   )
 }
 
-/** The full scouting report, rendered inline beneath the clicked row. */
-function ProspectDetail({ prospect: open }: { prospect: DraftProspect }) {
+/** The full scouting report — the Inspector / bottom-sheet body. */
+function ProspectReport({ prospect }: { prospect: DraftProspect }) {
   const league = useWorld()
   const career = useGame((s) => s.career)!
   const points = useGame((s) => s.scoutingPoints)
   const scoutProspect = useGame((s) => s.scoutProspect)
   const setRecommendation = useGame((s) => s.setRecommendation)
   const investigateCharacter = useGame((s) => s.investigateCharacter)
-  const selectProspect = useGame((s) => s.selectProspect)
 
-  const read = readProspect(career, open)
-  const rr = readRookieRanges(career, open, league.draft)
+  const read = readProspect(career, prospect)
+  const rr = readRookieRanges(career, prospect, league.draft)
   const level = accessFor(career, 'scouting')
   const canGrade = level !== 'locked'
   const showStaff = level === 'decide' || career.level >= 4
 
   return (
-    <div className="border-l-4 border-[var(--team)] bg-surface p-4">
+    <div className="space-y-4">
       <div className="flex items-start gap-3">
         <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} className="mt-1" />
         <div className="min-w-0 flex-1">
-          <div className="label mb-0.5">Your Read · {read.bandLabel}</div>
-          <h3 className="truncate font-display text-2xl font-700 uppercase leading-none text-ink">{open.name}</h3>
-          <div className="mt-1 font-cond text-sm text-muted">
-            {open.pos} · {open.college} · {open.classYear} · Age {open.age}
+          <div className="label text-[var(--team-accent-text)]">Your read · {read.bandLabel}</div>
+          <div className="mt-1 font-cond text-small text-muted">
+            {prospect.pos} · {prospect.college} · {prospect.classYear} · Age {prospect.age}
           </div>
         </div>
-        <button
-          onClick={() => selectProspect(null)}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-surface-2 hover:text-ink"
-          title="Close report"
-        >
-          <X size={16} />
-        </button>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr]">
-        <div>
-          <div className="grid grid-cols-2 gap-2">
-            <MiniStat label="Consensus" value={read.consensus ?? '—'} />
-            <MiniStat label="Confidence" value={`${read.confidence}%`} />
-          </div>
-
-          {read.truth != null ? (
-            <div className="mt-3 rounded-lg bg-[#101820] p-3 text-white">
-              <div className="label mb-1 !text-white/60">Scout's Truth</div>
-              <div className="flex items-center gap-2 text-sm">
-                <Eye size={14} /> True grade: <strong className="font-700">{read.truth}</strong> · Production {open.production}
-              </div>
+      <section className="grid grid-cols-2 gap-2">
+        <div className="rounded-[var(--r-md)] border border-line px-3 py-2">
+          <div className="label">Consensus</div>
+          {read.consensus != null ? (
+            <div className="mt-1">
+              <RatingTile value={read.consensus} size="sm" college label="Consensus grade" />
             </div>
           ) : (
-            <p className="mt-3 rounded-lg bg-surface-2 p-3 text-xs text-muted">
-              {read.consensus == null
-                ? 'The true grade stays hidden at your rung. Scout him and trust the range.'
-                : 'Keep scouting to sharpen the read — or rise high enough to see the truth.'}
-            </p>
+            <div className="mt-1 text-small text-muted">Hidden at your rung</div>
           )}
-
-          {read.disagreement && <div className="mt-2 rounded-lg bg-warn-soft p-2.5 text-xs text-warn">{read.disagreement}</div>}
-
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {open.traits.map((t) => <Badge key={t} tone="team">{t}</Badge>)}
-          </div>
-
-          <div className="mt-3 rounded-lg bg-surface-2 p-3">
-            <div className="label mb-1 flex items-center gap-1"><Star size={11} /> Area Notes</div>
-            <p className="text-sm leading-relaxed text-ink-2">{open.notes}</p>
-          </div>
-
-          <Button
-            variant="team"
-            className="mt-4 w-full"
-            disabled={points <= 0 || level === 'locked'}
-            onClick={() => scoutProspect(open.id)}
-          >
-            <Search size={15} /> Scout Prospect ({points} pts left)
-          </Button>
         </div>
-
-        <div>
-          <div className="rounded-lg border border-line p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="label">Character · hidden</div>
-              <span className="text-[10px] text-faint">filter shows talent, not makeup</span>
-            </div>
-            <div className="space-y-1.5">
-              {CHARACTER_FACETS.map((f) => {
-                const r = (open.characterReads ?? []).find((x) => x.facet === f)
-                return (
-                  <div key={f} className="flex items-center justify-between text-xs">
-                    <span className="font-cond font-700 uppercase text-muted">{FACET_LABEL[f]}</span>
-                    {r ? (
-                      <span className="flex items-center gap-1.5">
-                        <Badge tone={f === 'offFieldRisk' ? (r.value > 55 ? 'loss' : r.value > 35 ? 'warn' : 'win') : (r.value >= 70 ? 'win' : r.value >= 45 ? 'info' : 'warn')}>
-                          {r.label}
-                        </Badge>
-                        <span className="text-[10px] text-faint">{r.confidence}% sure</span>
-                      </span>
-                    ) : (
-                      <span className="text-faint">Unknown</span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-            <Button
-              size="sm"
-              className="mt-2 w-full"
-              disabled={level === 'locked' || (open.characterReads ?? []).length >= CHARACTER_FACETS.length}
-              onClick={() => investigateCharacter(open.id)}
-            >
-              <Phone size={13} /> Character read
-            </Button>
-          </div>
-
-          <div className="mt-3">
-            <div className="label mb-2 flex items-center gap-1"><Target size={11} /> File Recommendation</div>
-            <div className="grid grid-cols-2 gap-2">
-              {RECS.map((r) => (
-                <button
-                  key={r.id}
-                  disabled={!canGrade}
-                  onClick={() => setRecommendation(open.id, r.id)}
-                  className={cn(
-                    'rounded-lg border px-2 py-2 font-cond text-xs font-700 uppercase tracking-wide transition disabled:opacity-40',
-                    open.recommendation === r.id ? 'border-transparent bg-ink text-canvas' : 'border-line hover:bg-surface-2',
-                  )}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-muted">
-              Blue Chip = Round 1 · Starter = Rounds 2-3 · Depth = Rounds 4-7 · Pass = Undrafted. Every call is logged to your Ledger.
-            </p>
-          </div>
-
-          {showStaff && <StaffBoard teamId={career.teamId} prospectId={open.id} className="mt-3" />}
+        <div className="rounded-[var(--r-md)] border border-line px-3 py-2">
+          <div className="label">Confidence</div>
+          <div className="mt-1 font-display text-[22px] font-800 italic leading-none text-ink tnum">{read.confidence}%</div>
         </div>
+      </section>
+
+      {read.truth != null ? (
+        <div className="broadcast rounded-[var(--r-md)] border border-line bg-surface-2 px-3 py-2.5">
+          <div className="label mb-1.5 text-[var(--team-accent-text)]">Scout&rsquo;s truth</div>
+          <div className="flex flex-wrap items-center gap-2 text-small text-ink">
+            <Eye size={14} aria-hidden /> True grade
+            <RatingTile value={read.truth} size="sm" college label="True grade" />
+            <span className="text-muted">· Production {prospect.production}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="rounded-[var(--r-md)] border border-line bg-surface-2 px-3 py-2.5 text-small text-muted">
+          {read.consensus == null
+            ? 'The true grade stays hidden at your rung. Scout him and trust the range.'
+            : 'Keep scouting to sharpen the read — or rise high enough to see the truth.'}
+        </p>
+      )}
+
+      {read.disagreement && <div className="rounded-[var(--r-md)] bg-warn-soft px-3 py-2 text-small text-warn">{read.disagreement}</div>}
+
+      <div className="flex flex-wrap gap-1.5">
+        {prospect.traits.map((t) => (
+          <Badge key={t} tone="neutral">{t}</Badge>
+        ))}
       </div>
+
+      <div className="rounded-[var(--r-md)] border border-line px-3 py-2.5">
+        <div className="label mb-1 flex items-center gap-1">
+          <Star size={11} aria-hidden /> Area notes
+        </div>
+        <p className="text-small leading-relaxed text-ink-2">{prospect.notes}</p>
+      </div>
+
+      <Button
+        variant="secondary"
+        className="w-full"
+        disabled={points <= 0 || level === 'locked'}
+        onClick={() => scoutProspect(prospect.id)}
+      >
+        <Search size={15} aria-hidden /> Scout prospect ({points} pts left)
+      </Button>
+
+      <section className="rounded-[var(--r-md)] border border-line p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="label">Character · hidden</div>
+          <span className="text-micro text-faint">talent, not makeup</span>
+        </div>
+        <div className="space-y-1.5">
+          {CHARACTER_FACETS.map((f) => {
+            const r = (prospect.characterReads ?? []).find((x) => x.facet === f)
+            return (
+              <div key={f} className="flex items-center justify-between gap-2 text-small">
+                <span className="font-cond font-700 uppercase text-muted">{FACET_LABEL[f]}</span>
+                {r ? (
+                  <span className="flex items-center gap-1.5">
+                    <Badge tone={f === 'offFieldRisk' ? (r.value > 55 ? 'loss' : r.value > 35 ? 'warn' : 'win') : r.value >= 70 ? 'win' : r.value >= 45 ? 'info' : 'warn'}>
+                      {r.label}
+                    </Badge>
+                    <span className="text-micro text-faint">{r.confidence}% sure</span>
+                  </span>
+                ) : (
+                  <span className="text-small text-faint">Unknown</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="mt-2 w-full"
+          disabled={level === 'locked' || (prospect.characterReads ?? []).length >= CHARACTER_FACETS.length}
+          onClick={() => investigateCharacter(prospect.id)}
+        >
+          <Phone size={13} aria-hidden /> Character read
+        </Button>
+      </section>
+
+      <section>
+        <div className="label mb-2 flex items-center gap-1">
+          <Target size={11} aria-hidden /> File recommendation
+        </div>
+        <div className="grid grid-cols-2 gap-2" role="group" aria-label="Recommendation">
+          {RECS.map((r) => {
+            const on = prospect.recommendation === r.id
+            return (
+              <button
+                key={r.id}
+                type="button"
+                aria-pressed={on}
+                disabled={!canGrade}
+                onClick={() => setRecommendation(prospect.id, r.id)}
+                className={cn(
+                  'motion rounded-[var(--r-md)] border px-2 py-2 font-cond text-small font-700 uppercase tracking-[0.05em] transition disabled:cursor-not-allowed disabled:opacity-40',
+                  on ? 'border-line-strong bg-surface-3 text-ink' : cn('border-line hover:bg-surface-2', r.id === 'Pass' ? 'text-muted' : 'text-ink-2'),
+                )}
+              >
+                {r.label}
+              </button>
+            )
+          })}
+        </div>
+        <p className="mt-2 text-micro leading-snug text-muted">
+          Blue Chip = Round 1 · Starter = Rounds 2-3 · Depth = Rounds 4-7 · Pass = Undrafted. Every call is logged to your Ledger.
+        </p>
+      </section>
+
+      {showStaff && <StaffBoard teamId={career.teamId} prospectId={prospect.id} />}
     </div>
   )
 }
@@ -469,14 +641,15 @@ function StaffBoard({ teamId, prospectId, className }: { teamId: string; prospec
   const deptGrade = departmentGrade(league, career, prospect)
   return (
     <Card className={className}>
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Staff Board</h3>
-        <span className="text-[10px] text-faint">their reports, not the truth</span>
-      </div>
+      <SectionTitle right={<span className="text-micro text-faint">their reports, not the truth</span>}>Staff Board</SectionTitle>
       {canTrust && (
-        <div className="mb-2 flex items-center justify-between rounded-md bg-surface-2 px-2.5 py-1.5">
-          <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-muted">Department grade</span>
-          <span className="font-display text-sm font-700 tnum text-ink">{deptGrade ?? '—'}</span>
+        <div className="mb-2 flex items-center justify-between rounded-[var(--r-md)] bg-surface-2 px-2.5 py-1.5">
+          <span className="font-cond text-small font-700 uppercase tracking-wide text-muted">Department grade</span>
+          {deptGrade != null ? (
+            <RatingTile value={deptGrade} size="xs" college label="Department grade" />
+          ) : (
+            <span className="text-small text-muted">—</span>
+          )}
         </div>
       )}
       <div className="space-y-2">
@@ -485,52 +658,41 @@ function StaffBoard({ teamId, prospectId, className }: { teamId: string; prospec
           const grade = scoutReport(m, prospect)
           const trust = career.scoutTrust?.[m.id] ?? 'normal'
           return (
-            <div key={m.id} className="flex items-center gap-3 text-sm">
+            <div key={m.id} className="flex items-center gap-3 text-small">
               <div className="min-w-0 flex-1">
                 <div className="truncate font-600 text-ink">{m.name}</div>
-                <div className="truncate text-[11px] text-muted">
+                <div className="truncate text-micro text-muted">
                   {m.role}
                   {learned.label ? ` · ${learned.label}` : learned.samples ? ` · ${learned.samples} calls` : ' · no history yet'}
                 </div>
               </div>
               {canTrust && (
-                <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-1" role="group" aria-label={`Trust in ${m.name}`}>
                   {TRUST_OPTIONS.map((t) => (
                     <button
                       key={t.id}
                       type="button"
                       title={t.title}
+                      aria-pressed={trust === t.id}
                       onClick={() => setScoutTrust(m.id, t.id)}
                       className={cn(
-                        'rounded px-1.5 py-0.5 font-cond text-[9px] font-700 uppercase tracking-wide transition',
-                        trust === t.id ? 'text-[var(--team-ink)]' : 'text-muted hover:bg-surface-2',
+                        'motion rounded-[var(--r-xs)] border px-1.5 py-1 font-cond text-micro font-700 uppercase tracking-[0.05em] transition',
+                        trust === t.id ? 'border-line-strong bg-surface-3 text-ink' : 'border-line text-muted hover:bg-surface-2',
                       )}
-                      style={trust === t.id ? { background: 'var(--team)' } : undefined}
                     >
                       {t.label}
                     </button>
                   ))}
                 </div>
               )}
-              <span className="grid h-8 w-10 place-items-center rounded-md font-display text-sm font-700 tnum" style={{ background: gradeColor(grade), color: '#fff' }}>
-                {grade}
-              </span>
+              <RatingTile value={grade} size="sm" college label={`${m.name}'s report`} />
             </div>
           )
         })}
       </div>
-      <p className="mt-2 text-[11px] leading-snug text-muted">
+      <p className="mt-2 text-micro leading-snug text-muted">
         Bias is learned from their Ledger over seasons. Read it and you'll know whose grades to shade up or down.
       </p>
     </Card>
-  )
-}
-
-function MiniStat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-lg border border-line py-1.5 text-center">
-      <div className="label !text-[9px]">{label}</div>
-      <div className="font-display text-lg font-700 tnum text-ink">{value}</div>
-    </div>
   )
 }

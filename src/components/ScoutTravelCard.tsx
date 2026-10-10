@@ -14,7 +14,7 @@ import {
 } from '../game/engine/scoutTravel'
 import { readRookieRanges } from '../game/engine/evaluation'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card, RookieRangeBadges } from '../ui/kit'
+import { Badge, Button, Card, RookieRangeBadges, SectionTitle } from '../ui/kit'
 
 const KINDS: TravelKind[] = ['allStar', 'proDay', 'campus']
 const KIND_ICON: Record<TravelKind, typeof Plane> = { allStar: Sparkles, proDay: Users, campus: Eye }
@@ -26,7 +26,7 @@ function CoverageMeter({ depth, className }: { depth: number; className?: string
       {Array.from({ length: MAX_TRAVEL_COVERAGE }, (_, i) => (
         <span
           key={i}
-          className={cn('h-1.5 w-2 rounded-[2px]', i < depth ? 'bg-[var(--team)]' : 'bg-surface-3')}
+          className={cn('h-1.5 w-2 rounded-[2px]', i < depth ? 'bg-[var(--team-accent)]' : 'bg-surface-3')}
         />
       ))}
     </span>
@@ -76,37 +76,47 @@ export function ScoutTravelCard({ className }: { className?: string }) {
 
   return (
     <Card className={className}>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex min-w-0 items-center gap-1.5 font-display text-lg font-700 uppercase tracking-wide">
-          <Plane size={15} className="shrink-0 text-[var(--team)]" /> Scouting Travel
-        </h3>
-        <div className="flex flex-wrap items-center justify-end gap-1.5">
-          <Badge tone={left > 0 ? 'team' : 'loss'}>
-            {left} / {TRAVEL_BUDGET} trips
-          </Badge>
-          <Badge tone="neutral">{covered} covered</Badge>
-          <Button size="sm" variant="primary" disabled={left <= 0} onClick={autoScoutTravel} title="Spend the budget by your board's top needs">
-            <Sparkles size={13} /> Auto
-          </Button>
-        </div>
-      </div>
-      <p className="mb-3 text-sm leading-snug text-muted">
+      <SectionTitle
+        right={
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <Badge tone={left > 0 ? 'neutral' : 'warn'}>
+              {left} / {TRAVEL_BUDGET} trips
+            </Badge>
+            <Badge tone="neutral">{covered} covered</Badge>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={left <= 0}
+              onClick={autoScoutTravel}
+              title="Spend the budget by your board's top needs"
+            >
+              <Sparkles size={13} aria-hidden /> Auto
+            </Button>
+          </div>
+        }
+      >
+        <span className="flex items-center gap-1.5">
+          <Plane size={16} className="shrink-0 text-[var(--team-accent-text)]" aria-hidden /> Scouting Travel
+        </span>
+      </SectionTitle>
+
+      <p className="mb-3 text-small leading-snug text-muted">
         Send your scouts on the road before the draft. Coverage tightens every read — the more looks a prospect gets, the
         sharper his Now / Ceiling range.
       </p>
 
       <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
         <div>
-          <div className="mb-1.5 flex items-center gap-1.5 rounded-lg border border-line px-2 py-1">
-            <Search size={13} className="shrink-0 text-faint" />
+          <div className="mb-1.5 flex items-center gap-1.5 rounded-[var(--r-md)] border border-line px-2.5 py-1.5">
+            <Search size={13} className="shrink-0 text-faint" aria-hidden />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search the class board…"
-              className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-faint"
+              className="w-full bg-transparent text-small text-ink outline-none placeholder:text-faint max-sm:text-[16px]"
             />
           </div>
-          <div className="max-h-56 space-y-0.5 overflow-y-auto pr-0.5">
+          <div className="max-h-56 space-y-0.5 overflow-y-auto pr-0.5 max-sm:max-h-none max-sm:overflow-visible">
             {matches.length ? (
               matches.map((p) => {
                 const on = selected === p.id
@@ -118,13 +128,13 @@ export function ScoutTravelCard({ className }: { className?: string }) {
                     type="button"
                     onClick={() => setSelected(p.id)}
                     className={cn(
-                      'flex w-full items-center justify-between gap-2 rounded-md border px-2 py-1 text-left transition',
-                      on ? 'border-[var(--team)] bg-[var(--team-soft)]' : 'border-transparent hover:bg-surface-2',
+                      'flex w-full items-center justify-between gap-2 rounded-[var(--r-md)] border px-2 py-1.5 text-left transition',
+                      on ? 'border-line-strong bg-surface-3' : 'border-transparent hover:bg-surface-2',
                     )}
                   >
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-600 text-ink">{p.name}</span>
-                      <span className="flex items-center gap-1.5 font-cond text-[10px] font-700 uppercase text-muted">
+                      <span className="block truncate text-small font-600 text-ink">{p.name}</span>
+                      <span className="flex items-center gap-1.5 font-cond text-micro font-700 uppercase text-muted">
                         <span className="min-w-0 truncate">
                           {p.pos} · {p.college}
                         </span>
@@ -136,26 +146,26 @@ export function ScoutTravelCard({ className }: { className?: string }) {
                 )
               })
             ) : (
-              <p className="px-1 py-3 text-sm text-muted">No prospects match that search.</p>
+              <p className="px-1 py-3 text-small text-muted">No prospects match that search.</p>
             )}
           </div>
         </div>
 
         <div>
           {prospect ? (
-            <div className="rounded-lg border border-line bg-surface-2 p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-600 text-ink">
+            <div className="rounded-[var(--r-md)] border border-line bg-surface-2 p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-small font-600 text-ink">
                   {prospect.name}{' '}
-                  <span className="font-cond text-[11px] font-700 uppercase text-muted">{prospect.pos}</span>
+                  <span className="font-cond text-micro font-700 uppercase text-muted">{prospect.pos}</span>
                 </span>
-                <span className="flex shrink-0 items-center gap-1.5 font-cond text-[11px] text-muted">
+                <span className="flex shrink-0 items-center gap-1.5 font-cond text-micro text-muted">
                   {rr && <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact />}
-                  <span>{prospect.confidence}% known</span>
+                  <span className="tnum">{prospect.confidence}% known</span>
                 </span>
               </div>
               <div className="mb-2 flex items-center justify-between">
-                <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-muted">Coverage</span>
+                <span className="font-cond text-small font-700 uppercase tracking-wide text-muted">Coverage</span>
                 <CoverageMeter depth={depth} />
               </div>
               <div className="grid gap-1.5 sm:grid-cols-3">
@@ -169,27 +179,27 @@ export function ScoutTravelCard({ className }: { className?: string }) {
                   return (
                     <Button
                       key={kind}
-                      variant="team"
+                      variant="secondary"
                       size="sm"
                       disabled={disabled}
                       title={why}
                       onClick={() => scoutTravelAction(prospect.id, kind)}
                     >
-                      <Icon size={13} /> {TRAVEL_LABEL[kind].split(' ')[0]}
-                      <span className="ml-0.5 text-[10px] opacity-80">{cost}</span>
+                      <Icon size={13} aria-hidden /> {TRAVEL_LABEL[kind].split(' ')[0]}
+                      <span className="ml-0.5 text-micro opacity-80">{cost}</span>
                     </Button>
                   )
                 })}
               </div>
-              <p className="mt-2 text-[11px] leading-snug text-muted">
+              <p className="mt-2 text-micro leading-snug text-muted">
                 {depth >= MAX_TRAVEL_COVERAGE
                   ? `You have all ${MAX_TRAVEL_COVERAGE} looks on ${prospect.name} — his range will not tighten further this season.`
                   : TRAVEL_BLURB[KINDS[0]]}
               </p>
             </div>
           ) : (
-            <div className="grid h-full place-items-center rounded-lg border border-dashed border-line p-4 text-center">
-              <p className="text-sm text-muted">Pick a prospect to send a scout.</p>
+            <div className="grid h-full place-items-center rounded-[var(--r-md)] border border-dashed border-line-strong p-4 text-center">
+              <p className="text-small text-muted">Pick a prospect to send a scout.</p>
             </div>
           )}
         </div>
