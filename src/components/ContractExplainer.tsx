@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { money } from '../lib/format'
 import { SALARY_CAP, deadMoney, remainingContractValue } from '../game/engine/cap'
 import { marketAsk } from '../game/engine/negotiation'
@@ -11,6 +12,9 @@ import type { Player } from '../game/types'
  * the Cap screen it explains — for the rung you are actually on — who negotiates,
  * what the GM weighs, that the cap is fixed, and the dead-money rule, with the
  * live numbers for the player in front of you.
+ *
+ * D4: the panel now names the player it is explaining (each fact once, but the
+ * subject matters here).
  */
 export function ContractExplainer({ player, className }: { player?: Player; className?: string }) {
   const career = useGame((s) => s.career)!
@@ -30,9 +34,12 @@ export function ContractExplainer({ player, className }: { player?: Player; clas
 
   return (
     <div className={className}>
-      <div className="label mb-1.5">How extensions work</div>
-      <p className="text-xs leading-relaxed text-muted">{who}</p>
-      <ul className="mt-2 space-y-1 text-xs leading-relaxed text-muted">
+      <div className="label mb-1.5">
+        How extensions work
+        {player && <span className="text-ink-2"> · {player.name}</span>}
+      </div>
+      <p className="text-small leading-relaxed text-muted">{who}</p>
+      <ul className="mt-2 space-y-1 text-small leading-relaxed text-muted">
         <li>
           · The salary cap is <span className="font-600 text-ink-2">fixed at {money(SALARY_CAP)}</span> (the 2025
           number) every season — it never grows.
@@ -67,11 +74,11 @@ export function ContractExplainer({ player, className }: { player?: Player; clas
   )
 }
 
-function ExplainerStat({ label, value }: { label: string; value: React.ReactNode }) {
+function ExplainerStat({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div>
-      <div className="label !text-[9px]">{label}</div>
-      <div className="font-cond text-sm font-700 tnum text-ink">{value}</div>
+    <div className="min-w-0">
+      <div className="label">{label}</div>
+      <div className="truncate font-display text-[16px] font-800 italic leading-none text-ink tnum">{value}</div>
     </div>
   )
 }

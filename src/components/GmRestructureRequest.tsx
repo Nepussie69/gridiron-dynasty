@@ -1,14 +1,18 @@
 import { useState } from 'react'
 import { Sparkles } from 'lucide-react'
 import { cn } from '../lib/cn'
+import { money } from '../lib/format'
 import { gmRestructureTargets } from '../game/engine/gmDesk'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button } from '../ui/kit'
+import { Badge, Button, OptionCard, OptionGroup } from '../ui/kit'
 
 /**
  * L12.14 C6: the GM only restructures to clear cap for a NAMED target, so this
  * picker (reusing the Cap-memo chip pattern) makes you name one. Shared by the
  * GM requests desk and the Cap screen. Personnel rungs never see it.
+ *
+ * D4: neutral option cards (no team fill), and the request is a real
+ * `requestGmRestructure` call — the coach's recommendation, not a dead control.
  */
 export function GmRestructureRequest({ className, compact }: { className?: string; compact?: boolean }) {
   const league = useWorld()
@@ -29,37 +33,43 @@ export function GmRestructureRequest({ className, compact }: { className?: strin
       </div>
 
       {targets.length === 0 ? (
-        <p className="text-xs leading-relaxed text-muted">
+        <p className="text-small leading-relaxed text-muted">
           No {bothSides ? 'trade or free-agent' : 'same-side trade or free-agent'} target to clear space for. Track
           someone on the shadow board, or open Free Agency or the Trade Center first.
         </p>
       ) : (
         <>
-          <div className={cn('flex flex-wrap gap-1.5', compact && 'max-h-36 overflow-y-auto')}>
+          <OptionGroup
+            label="Restructure target"
+            className={cn('max-h-60 overflow-y-auto', compact && 'max-h-36')}
+          >
             {targets.map((t) => (
-              <button
+              <OptionCard
                 key={t.id}
-                type="button"
-                onClick={() => setTargetId((cur) => (cur === t.id ? null : t.id))}
-                className={cn(
-                  'rounded-lg border px-2.5 py-1 text-left transition',
-                  t.id === targetId
-                    ? 'border-[var(--team)] bg-[var(--team-soft)]'
-                    : 'border-line bg-surface-2 hover:border-line-strong',
-                )}
-              >
-                <span className="block text-xs font-600 text-ink">{t.name}</span>
-                <span className="block font-cond text-[10px] font-700 uppercase text-muted">
-                  {t.kind === 'sign' ? 'FA' : 'Trade'} · {t.pos} {t.ovr} ·{' '}
-                  {t.need > 0 ? `needs $${(t.need / 1e6).toFixed(1)}M` : 'already fits'}
-                </span>
-              </button>
+                selected={t.id === targetId}
+                title={t.name}
+                description={
+                  <>
+                    {t.kind === 'sign' ? 'Free agent' : 'Trade target'} · {t.pos} {t.ovr}
+                  </>
+                }
+                meta={
+                  t.need > 0 ? (
+                    <span className="whitespace-nowrap text-small font-600 text-ink-2 tnum">
+                      needs {money(t.need)}
+                    </span>
+                  ) : (
+                    <span className="text-small text-muted">already fits</span>
+                  )
+                }
+                onSelect={() => setTargetId((cur) => (cur === t.id ? null : t.id))}
+              />
             ))}
-          </div>
+          </OptionGroup>
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
-              variant="team"
+              variant="secondary"
               size="sm"
               disabled={!picked}
               title={picked ? `Ask the GM to clear cap for ${picked.name}` : 'Pick a target first'}
@@ -68,7 +78,7 @@ export function GmRestructureRequest({ className, compact }: { className?: strin
               <Sparkles size={14} /> Restructure for {picked ? picked.name : 'a target'}
             </Button>
             {picked && picked.need <= 0 && (
-              <span className="text-[11px] text-muted">Already fits — the GM will refuse an unnecessary restructure.</span>
+              <span className="text-small text-muted">Already fits — the GM will refuse an unnecessary restructure.</span>
             )}
           </div>
         </>
