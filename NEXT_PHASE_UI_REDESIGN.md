@@ -610,4 +610,4 @@ Acceptance:
 | D5 Game day | ✅ merged (+ phone tap fixes by orchestrator) |
 | D6 Game plan | ✅ merged (+ phone tap fixes by orchestrator) |
 | D7 League information | ✅ merged |
-| V1 Integration and cleanup | ⏳ |
+| V1 Integration and cleanup | ✅ 0d557e0; ui-redesign merged into main 9ce3993 (93/93 bands, eq 20/20, anim 100%) |
