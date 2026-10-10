@@ -38,6 +38,9 @@ export const TELE_PEN = '#FFE14D' // check-hex-allow: telestrator pen ink (broad
 /** Label sizes (CSS px at layout scale 1; never below MIN_TEXT_PX). */
 export const TELE_TEXT = { big: 26, label: 17, sub: 14, bug: 17, bugSub: 14 } as const
 
+/** Deepest the pocket outline reaches behind the shallowest OL (yd). */
+const POCKET_MAX_DEPTH = 6.5
+
 const SKEW = Math.tan((10 * Math.PI) / 180)
 const TURF_Z = 0.05
 
@@ -308,8 +311,17 @@ export class TelestratorLayer {
         const ol = it.keys.slice(0, -1).map((k) => posAt(path(k), it.at))
         ol.sort((a, b) => a.y - b.y)
         const qb = posAt(path(qbK), it.at)
-        const back = qb.x - 1.6
-        const ring: { x: number; y: number }[] = [{ x: back, y: ol[0].y - 1.8 }, ...ol.map((p) => ({ x: Math.max(p.x, qb.x + 1.2) + 0.4, y: p.y })), { x: back, y: ol[ol.length - 1].y + 1.8 }]
+        // The back of the pocket sits behind the QB, but never deeper than a
+        // normal 7-step set behind the line (a sacked / flushed QB can be 10+ yd
+        // deep, which drew a wide trapezoid — B8).
+        let olFront = Infinity
+        for (const p of ol) olFront = Math.min(olFront, p.x)
+        const back = Math.max(qb.x - 1.6, olFront - POCKET_MAX_DEPTH)
+        // The cup closes behind the line's centre (a pocket, not a trapezoid
+        // wider than the line), whichever way the QB drifted.
+        const mid = (ol[0].y + ol[ol.length - 1].y) / 2
+        const half = Math.max(2.2, Math.min(4, (ol[ol.length - 1].y - ol[0].y) * 0.3))
+        const ring: { x: number; y: number }[] = [{ x: back, y: mid - half }, ...ol.map((p) => ({ x: Math.max(p.x, qb.x + 1.2) + 0.4, y: p.y })), { x: back, y: mid + half }]
         // Densify (smooth on screen) then draw on.
         const dense: Pt[] = []
         for (let i = 0; i < ring.length - 1; i++) {
