@@ -1,8 +1,25 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { gradeColor, inkOn } from '../lib/format'
+import { inkOn } from '../lib/format'
 import type { Team } from '../game/types'
+import { RatingBar } from './RatingTile'
+import { SegmentedControl } from './Controls'
+
+// UI redesign F2: the kit is split across src/ui/*.tsx and re-exported here so
+// every `from '../ui/kit'` import keeps working. New primitives live in:
+//   RatingTile.tsx  RatingTile, TierPips, TierLegend, OvrBadge, PotBubble,
+//                   RangeBubble, RookieRangeBadges, RatingBar, DevBadge, TierNumber
+//   Kpi.tsx         KpiStrip, KpiTile, VerdictChip, DivergingMeter, TierScale,
+//                   BudgetMeter, Delta, Effect, Money, SchemeChip
+//   Controls.tsx    Button, IconButton, Tabs, SegmentedControl, FilterChip,
+//                   OptionGroup, OptionCard
+//   Overlay.tsx     Dialog, Sheet, ConfirmSheet, OverflowMenu, Inspector, WithInspector
+//   Access.tsx      GatedAction, AccessBanner
+//   People.tsx      Avatar, VacantSeat
+//   ScoreBlock.tsx  ScoreBlock, Scoreline
+//   hooks.ts        useMediaQuery, usePhone, useResolvedTheme, useModal,
+//                   useAccessLevel, gateMenuItem
 
 // ── Theme preference (U3) ────────────────────────────────────────────────────
 type ThemePref = 'system' | 'light' | 'dark'
@@ -46,6 +63,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
       <button
         type="button"
         title={`Theme: ${cur.label} (click to change)`}
+        aria-label={`Theme: ${cur.label} (click to change)`}
         onClick={() => setPref(options[(idx + 1) % options.length].id)}
         className="motion grid h-8 w-full place-items-center rounded-md border border-line bg-surface text-muted hover:text-ink"
       >
@@ -60,9 +78,11 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
           key={id}
           type="button"
           title={label}
+          aria-label={label}
+          aria-pressed={pref === id}
           onClick={() => setPref(id)}
           className={cn(
-            'motion flex items-center justify-center gap-1 rounded-md px-1 py-1 font-cond text-[10px] font-700 uppercase tracking-wide',
+            'motion flex items-center justify-center gap-1 rounded-md px-1 py-1 font-cond text-label font-700 uppercase tracking-wide',
             pref === id ? 'bg-surface-2 text-ink shadow-sm' : 'text-muted hover:text-ink-2',
           )}
         >
@@ -172,47 +192,63 @@ export function useDensity() {
 /** Comfortable / Compact segmented control, rendered by each of the tables. */
 export function DensityToggle({ className }: { className?: string }) {
   const { density, set } = useDensity()
-  const options: Density[] = ['comfortable', 'compact']
   return (
-    <div
-      className={cn('inline-flex items-center rounded-md border border-line bg-surface-2 p-0.5', className)}
-      title="Row density"
-    >
-      {options.map((o) => (
-        <button
-          key={o}
-          type="button"
-          onClick={() => set(o)}
-          className={cn(
-            'motion rounded px-2 py-0.5 font-cond text-[10px] font-700 uppercase tracking-wide',
-            density === o ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
-          )}
-        >
-          {o === 'comfortable' ? 'Comfortable' : 'Compact'}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      label="Row density"
+      size="sm"
+      value={density}
+      onChange={set}
+      className={className}
+      options={[
+        { id: 'comfortable', label: 'Comfortable' },
+        { id: 'compact', label: 'Compact' },
+      ]}
+    />
   )
 }
 
 // ── Layout primitives ────────────────────────────────────────────────────────
+/**
+ * Card tiers (spec §7): base (surface, line, shadow-1, lg radius); feature (a
+ * team slab block down the left edge); call (needs-a-call: a 2px warn left
+ * edge plus an optional chip).
+ */
 export function Card({
   className,
   children,
   pad = true,
+  tier = 'base',
+  callLabel,
 }: {
   className?: string
   children: ReactNode
   pad?: boolean
+  tier?: 'base' | 'feature' | 'call'
+  /** Chip text for tier="call" ("Needs a call"). */
+  callLabel?: ReactNode
 }) {
   return (
     <div
       className={cn(
-        'motion card-shadow rounded-2xl border border-line bg-surface',
+        'motion relative rounded-[var(--r-lg)] border border-line bg-surface shadow-[var(--shadow-1)]',
+        tier === 'feature' && 'overflow-hidden pl-[18px]',
+        tier === 'call' && 'shadow-[inset_2px_0_0_var(--color-warn),var(--shadow-1)]',
         pad && 'p-4',
+        pad && tier === 'feature' && 'pl-[34px]',
         className,
       )}
     >
+      {tier === 'feature' && (
+        <span
+          aria-hidden
+          className="absolute inset-y-0 left-0 w-[18px] bg-[var(--team-fill)] shadow-[inset_-4px_0_0_var(--team-fill-2),var(--team-slab-ring)]"
+        />
+      )}
+      {tier === 'call' && callLabel && (
+        <span className="mb-2 flex h-[22px] w-fit items-center rounded-[var(--r-xs)] bg-warn-soft px-2 font-cond text-label font-700 uppercase tracking-[0.07em] text-warn">
+          {callLabel}
+        </span>
+      )}
       {children}
     </div>
   )
@@ -229,7 +265,10 @@ export function SectionTitle({
 }) {
   return (
     <div className={cn('mb-3 flex items-center justify-between gap-3', className)}>
-      <h3 className="font-display text-lg font-700 uppercase tracking-wide text-ink">{children}</h3>
+      <h3 className="flex items-center gap-2.5 font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
+        <span aria-hidden className="h-[18px] w-[5px] shrink-0 bg-[var(--team-accent)] [transform:skewX(var(--skew))]" />
+        {children}
+      </h3>
       {right}
     </div>
   )
@@ -248,12 +287,17 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        {eyebrow && <div className="label mb-1">{eyebrow}</div>}
-        <h1 className="font-display text-4xl font-700 uppercase leading-none tracking-tight text-ink">
+      <div className="min-w-0">
+        {eyebrow && (
+          <div className="mb-2 flex items-center gap-2 font-cond text-label font-600 uppercase tracking-[0.12em] text-[var(--team-accent-text)]">
+            <span aria-hidden className="h-[3px] w-[18px] bg-[var(--team-accent)] [transform:skewX(var(--skew))]" />
+            {eyebrow}
+          </div>
+        )}
+        <h1 className="font-display text-[28px] font-800 italic uppercase leading-none tracking-[0.005em] text-ink sm:text-hero">
           {title}
         </h1>
-        {subtitle && <p className="mt-1.5 max-w-2xl text-sm text-muted">{subtitle}</p>}
+        {subtitle && <p className="mt-1.5 max-w-2xl text-body text-muted">{subtitle}</p>}
       </div>
       {right}
     </div>
@@ -305,7 +349,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-cond text-[11px] font-700 uppercase tracking-wide',
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--r-xs)] border px-1.5 py-0.5 font-cond text-label font-700 uppercase tracking-[0.05em]',
         TONES[tone],
         className,
       )}
@@ -320,143 +364,12 @@ export function Chip({ children, className }: { children: ReactNode; className?:
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[11px] font-500 text-ink-2',
+        'inline-flex items-center whitespace-nowrap rounded-full border border-line bg-surface-2 px-2 py-0.5 text-label font-500 text-ink-2',
         className,
       )}
     >
       {children}
     </span>
-  )
-}
-
-export function DevBadge({ dev }: { dev: string }) {
-  const map: Record<string, string> = {
-    'X-Factor': 'bg-[#101820] text-white',
-    Superstar: 'bg-[#e31837] text-white',
-    Star: 'bg-[#0b62ff] text-white',
-    Starter: 'bg-win-soft text-win',
-    Depth: 'bg-surface-3 text-muted',
-    Backup: 'bg-surface-3 text-faint',
-  }
-  return (
-    <span className={cn('rounded px-1.5 py-0.5 font-cond text-[10px] font-700 uppercase tracking-wide', map[dev] ?? map.Depth)}>
-      {dev}
-    </span>
-  )
-}
-
-// ── Ratings ──────────────────────────────────────────────────────────────────
-// L11.5 Q13 / L12.8: `pot` shows the ceiling as a smaller bubble beside the OVR badge, coloured by its grade.
-export function OvrBadge({ value, pot, size = 34 }: { value: number; pot?: number; size?: number }) {
-  const c = gradeColor(value)
-  return (
-    <span className="inline-flex shrink-0 items-center gap-0.5">
-      <span
-        className="grid shrink-0 place-items-center rounded-md font-display font-700 tnum"
-        style={{ width: size, height: size, background: c, color: inkOn(c), fontSize: size * 0.46 }}
-      >
-        {value}
-      </span>
-      {pot != null && (() => {
-        // The ceiling gets its own smaller bubble, coloured by how good it is.
-        const pc = gradeColor(pot)
-        const ps = Math.max(16, Math.round(size * 0.62))
-        return (
-          <span
-            title={`Potential (ceiling) ${pot}`}
-            className="grid shrink-0 place-items-center rounded-[5px] font-display font-700 tnum"
-            style={{ width: ps, height: ps, background: pc, color: inkOn(pc), fontSize: Math.max(9, Math.round(ps * 0.5)), opacity: 0.9 }}
-          >
-            {pot}
-          </span>
-        )
-      })()}
-    </span>
-  )
-}
-
-// L12.7 D5: a prospect's read on the NFL rookie scale — "NOW 64–69" and
-// "CEIL 80–88" side by side, each coloured by its midpoint like `OvrBadge`.
-// `compact` shrinks the bubbles (not the labels) for tight rows.
-export function RookieRangeBadges({
-  now,
-  ceiling,
-  compact = false,
-  className,
-}: {
-  now: [number, number]
-  ceiling: [number, number]
-  compact?: boolean
-  className?: string
-}) {
-  return (
-    <span className={cn('inline-flex shrink-0 items-center gap-1', className)}>
-      <RangeBubble kind="NOW" lo={now[0]} hi={now[1]} compact={compact} />
-      <RangeBubble kind="CEIL" lo={ceiling[0]} hi={ceiling[1]} compact={compact} />
-    </span>
-  )
-}
-
-function RangeBubble({ kind, lo, hi, compact }: { kind: 'NOW' | 'CEIL'; lo: number; hi: number; compact: boolean }) {
-  const mid = Math.round((lo + hi) / 2)
-  const c = gradeColor(mid)
-  const range = lo === hi ? `${lo}` : `${lo}–${hi}`
-  return (
-    <span
-      title={`${kind === 'NOW' ? 'Rookie rating range' : 'Ceiling range'} ${range} — tighter as you scout him`}
-      className={cn(
-        'inline-flex shrink-0 items-center gap-0.5 rounded-[5px] font-display font-700 tnum leading-none',
-        compact ? 'px-1 py-0.5 text-[9px]' : 'px-1.5 py-1 text-[11px]',
-      )}
-      style={{ background: c, color: inkOn(c), opacity: kind === 'CEIL' ? 0.9 : 1 }}
-    >
-      <span className={cn('font-cond font-700 uppercase tracking-wide opacity-80', compact ? 'text-[7px]' : 'text-[8px]')}>{kind}</span>
-      {range}
-    </span>
-  )
-}
-
-export function RatingBar({
-  value,
-  max = 100,
-  color,
-  height = 6,
-  segments = 0,
-}: {
-  value: number
-  max?: number
-  color?: string
-  height?: number
-  /** When > 0, draw a discrete segmented meter. Filled segments use the tier
-   *  colour for their band unless an explicit `color` is given. */
-  segments?: number
-}) {
-  const pct = Math.max(0, Math.min(100, (value / max) * 100))
-  if (segments > 0) {
-    const filled = Math.round((pct / 100) * segments)
-    return (
-      <div className="flex w-full items-stretch gap-[2px]" style={{ height }}>
-        {Array.from({ length: segments }, (_, i) => {
-          const band = ((i + 0.5) / segments) * max
-          const seg = color ?? gradeColor(band)
-          return (
-            <span
-              key={i}
-              className="min-w-0 flex-1 rounded-[2px]"
-              style={{ background: i < filled ? seg : 'var(--color-surface-3)' }}
-            />
-          )
-        })}
-      </div>
-    )
-  }
-  return (
-    <div className="w-full overflow-hidden rounded-full bg-surface-3" style={{ height }}>
-      <div
-        className="h-full rounded-full"
-        style={{ width: `${pct}%`, background: color ?? 'var(--team)' }}
-      />
-    </div>
   )
 }
 
@@ -677,51 +590,46 @@ export function TeamTag({ team, size = 22 }: { team: Team; size?: number }) {
   )
 }
 
-// ── Buttons ──────────────────────────────────────────────────────────────────
-export function Button({
-  children,
-  onClick,
-  variant = 'default',
-  size = 'md',
-  className,
-  disabled,
-  title,
-}: {
-  children: ReactNode
-  onClick?: () => void
-  variant?: 'default' | 'primary' | 'ghost' | 'team' | 'danger'
-  size?: 'sm' | 'md' | 'lg'
-  className?: string
-  disabled?: boolean
-  title?: string
-}) {
-  const variants: Record<string, string> = {
-    default: 'bg-surface border border-line hover:bg-surface-2 text-ink',
-    primary: 'bg-ink text-canvas hover:opacity-90 border border-transparent',
-    ghost: 'bg-transparent hover:bg-surface-2 text-ink-2 border border-transparent',
-    danger: 'bg-loss-soft text-loss border border-loss/30 hover:bg-loss/15',
-    team: 'text-[var(--team-ink)] border border-transparent hover:opacity-90',
-  }
-  const sizes: Record<string, string> = {
-    sm: 'px-2.5 py-1 text-xs',
-    md: 'px-3.5 py-1.5 text-sm',
-    lg: 'px-5 py-2.5 text-sm',
-  }
-  return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'motion inline-flex items-center justify-center gap-1.5 rounded-lg font-cond font-700 uppercase tracking-wide active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-        variants[variant],
-        sizes[size],
-        className,
-      )}
-      style={variant === 'team' ? { background: 'var(--team)', color: 'var(--team-ink)' } : undefined}
-    >
-      {children}
-    </button>
-  )
-}
+// ── Re-exports (F2 split files) ──────────────────────────────────────────────
+export {
+  RatingTile,
+  TierPips,
+  TierLegend,
+  OvrBadge,
+  PotBubble,
+  RangeBubble,
+  RookieRangeBadges,
+  RatingBar,
+  DevBadge,
+  TierNumber,
+} from './RatingTile'
+export type { RatingTileSize } from './RatingTile'
+export {
+  KpiStrip,
+  KpiTile,
+  VerdictChip,
+  DivergingMeter,
+  TierScale,
+  BudgetMeter,
+  Delta,
+  Effect,
+  Money,
+  SchemeChip,
+} from './Kpi'
+export type { EffectKind, SchemeState } from './Kpi'
+export {
+  Button,
+  IconButton,
+  Tabs,
+  SegmentedControl,
+  FilterChip,
+  OptionGroup,
+  OptionCard,
+} from './Controls'
+export type { ButtonVariant, TabItem, SegmentOption } from './Controls'
+export { Dialog, Sheet, ConfirmSheet, OverflowMenu, Inspector, WithInspector } from './Overlay'
+export type { Consequence, MenuItem } from './Overlay'
+export { GatedAction, AccessBanner } from './Access'
+export { Avatar, VacantSeat } from './People'
+export { ScoreBlock, Scoreline } from './ScoreBlock'
+export type { ScoreTeam } from './ScoreBlock'

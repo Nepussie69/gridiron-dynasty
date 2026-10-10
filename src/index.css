@@ -415,6 +415,45 @@ table[data-density='compact'] {
 
 .gd-pill-slide { transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1); }
 
+/* ── F2 kit overlays: sheets slide up (d3), dialogs pop, menus wipe in (d2) ── */
+@keyframes kit-sheet-up {
+  from { transform: translateY(40%); opacity: 0.3; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes kit-pop-in {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes kit-wipe-in {
+  from { clip-path: inset(0 0 100% 0); opacity: 0.4; }
+  to { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+@keyframes kit-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@utility kit-sheet {
+  animation: kit-sheet-up var(--d3) var(--ease-settle) both;
+}
+@utility kit-pop {
+  animation: kit-pop-in var(--d2) var(--ease-settle) both;
+}
+@utility kit-wipe {
+  animation: kit-wipe-in var(--d2) var(--ease-wipe) both;
+}
+@utility kit-fade {
+  animation: kit-fade-in var(--d2) ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kit-sheet,
+  .kit-pop,
+  .kit-wipe,
+  .kit-fade,
+  .sm\:kit-pop {
+    animation: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .gd-toast,
   .gd-burst,
