@@ -1,95 +1,68 @@
 # Claude handover — Gridiron Dynasty
 
-Prepared 2026-10-10 04:39 AEDT by GPT-6 (Codex), at the user's request. This supersedes the older handover and stale queue descriptions in the original OPENCODE_CONTINUE.md handoff.
+Prepared 2026-10-10 19:20 AEDT by Claude Opus 5.5 for a fresh chat. Supersedes the 04:39 Codex handover. Read AGENTS.md first, then this file. `PLAYTEST_BACKLOG.md` rows 136–153 are this session's requests.
 
-## Ownership
+## Ground rules (unchanged, user-confirmed)
 
-Claude takes orchestration from here. Codex's `gridiron-dynasty-orchestration` heartbeat is PAUSED to prevent competing launches/merges. Existing DeepSeek implementation keeps running; do not kill, reset, duplicate or edit its worktree. Codex stops orchestration after committing this handover. Recheck processes/logs immediately because a running job can finish after this document.
+- Orchestrator plans + verifies; DeepSeek implements. Never merge unverified work.
+- **Stable 4173 HELD** at `4377982` — do not rebuild until the user says so (they were offered a rebuild from main at 19:05 and have not answered).
+- **No `git push` / Pages without explicit user ok for that push.** The 04:50 push authorization was used (`ef1c974` on origin). Main is now ahead of origin with docs + three UI merges.
+- Never commit `NEXT_PHASE.md`, `CLAUDE_RESUME.md`, `.claude/`. Leave `ORCHESTRATION_COORDINATION.md` alone. Commit trailer names your model.
+- Every user request → a PLAYTEST_BACKLOG row. Give a status table after merges.
+- Max 4 parallel DeepSeek jobs (more → transport failures).
 
-Read AGENTS.md, this handover, the latest updates at the TOP of OPENCODE_CONTINUE.md, its HANDOFF FOR CHATGPT / CODEX block, then ORCHESTRATION_HANDOVER.md. Historical instructions for lint5/rebuilding stable are superseded below.
+## Infrastructure — everything lives in `~/gridiron-work/` (NOT /private/tmp)
 
-## Current repository and running work
+A Mac reboot at ~18:35 wiped /private/tmp (old harness, logs, worktrees). The old fix5/kickoff jobs had actually died at 05:04 when the Mac slept. Their edits were recovered from OpenCode's DB (`~/.local/share/opencode/opencode.db`, table `session_message`; replay script `~/gridiron-work/replay.py`) — remember this trick if it happens again.
 
-- Repository: `/Users/aaron/Documents/deepseek-harness/untitled folder`.
-- Main before this documentation commit: `db6e220`; no realism R15–R18 or animation/save-slot feature merge accepted. Main tracked files clean; untracked `.claude/`, CLAUDE_RESUME.md, NEXT_PHASE.md, ORCHESTRATION_COORDINATION.md remain untouched. NEVER commit first three; leave coordination file alone.
-- GitHub main + Pages: `765f362`, published under user authorization already consumed. Site: https://nepussie69.github.io/gridiron-dynasty/ . Current published bundle index-BzwGXlhm.js (verified SHA). No new authorization to publish future features.
-- Stable4173 HELD `4377982`: NEVER rebuild unless user asks. Main builds for verification are fine; don't rebuild held deployment.
-- **ONLY active implementation: realism15fix5 PID40889** (`pgrep -fl ds-push-` verified), child40893 on first attempt; latest event actively advancing at handover. Runner `/private/tmp/ds-push-realism`, prompt `/private/tmp/gridiron-realism15fix5.txt`, log `/private/tmp/gridiron-realism15fix5.log`; event logs `$TMPDIR/ds-push/realism15fix5.try*.jsonl`.
-- Worker branch `wt-realism`, HEAD `1cbd4dd` plus partial uncommitted source edits. Worktree `/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/94a3f1af-f186-4767-8ce0-d8d014f62978/scratchpad/wt-realism`.
-- Worker has an unauthorized old `HANDOFF.md` modification. Preserve but EXCLUDE from snapshots/merges. Snapshot only intended source. Do not edit or reset active worker.
-- queue5 and queue6 **COMPLETED/EXITED**: queue5 finished R16→R17→R18; queue6 ran repair1 and exited. Logs `/private/tmp/gridiron-queue5.log`, `gridiron-queue6.log`. DO NOT recreate queue6 waiter based on stale heartbeat/original handoff.
-- realism15fix4 stopped after three DNS failures `getaddrinfo ENOTFOUND opencode.ai`; partial decisions.ts/playsim.ts edits preserved. User explicitly said retry; fix5 resumes them. Don't mistake transport exit for completed implementation. ds-push handles up to3 attempts; check final report before snapshot.
-
-## Non-negotiable acceptance workflow
-
-DeepSeek implements; orchestrator reviews immutable snapshots in spare rv/integration worktree. For EVERY push before merge: read source diff and targeted feature behavior; build pass; lint EXACTLY4; real Madden data calibration33333,2222,5150 ×500 games `--eq --smoke=coach:4,personnel:4`; equivalence20/20; both4-season smokes0errors/0violations; animation end spots100%; scoring22–23.2 AND other applicable NFL bands. No weaker 200-game acceptance, weakened bands, seed-specific overrides or fabricated statistical definitions. Keep failures out of main and send focused continuations in SAME worker after it exits.
-
-R16–R18 descend from rejected R15. Do not merge ancestry until repairs pass and are integrated with latest main in a spare integration checkout, independently verified there. Preserve both sides of import conflicts and reverify main after accepted merge. Update spec/backlog/FUTURES/handoff and commit with model trailer. Give user status table after every merge; report job completion/failure/required action. ONE sim-touching implementation at a time. No git push or Pages until explicit authorization for that push.
-
-Review infrastructure:
-```
-S=/private/tmp/claude-501/-Users-aaron-Documents-deepseek-harness-untitled-folder/0caa60df-7d86-49bc-9a22-8c5c5e9ef6da/scratchpad
-# rv is idle detached1cbd4dd, node_modules symlinked
-cd "$S/rv"
-git checkout --detach <immutable-source-snapshot>
-PATH=/Users/aaron/.local/node/bin:$PATH npm run build
-PATH=/Users/aaron/.local/node/bin:$PATH npm run lint
-/Users/aaron/.local/node/bin/node --import /private/tmp/gridiron-loader.mjs "$S/calib-rv.mjs" 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4
-/Users/aaron/.local/node/bin/node --import /private/tmp/gridiron-loader.mjs "$S/anim-rv.mjs" 33333 1
-```
-Calib imports real Madden/CFB + calibration BEFORE store. Animation runner's ANIM line is relevant; its trailing tiny-game SIM isn't acceptance calibration. Probe paths main `/private/tmp/gridiron-calib.mjs`, `/private/tmp/anim-main.mjs`. Do not checkout rv during active tests. Fresh snapshot after runner exits; integrate latest main separately before acceptance. Background launch needs stdin DEVNULL and persistent session; Python subprocess.Popen(start_new_session=True) worked reliably. Max>4 parallel DS causes transport failures; only one sim task now anyway.
-
-## Latest rejected snapshot and repair goal
-
-`1cbd4dd` realism15fix3 independently reviewed; actual personnel consistency repair PASSES but calibration REJECTED.
-
-| Gate | Independent result |
+| Path | What |
 |---|---|
-| Build/lint | Pass/exactly4 |
-| Points seeds33333/2222/5150 |22.2 /21.9 /22.3 (2222 fails) |
-| Other failures |33333 MT%13.5;2222 sacksTaken2.62,third36.6%,punts4.45,MT6.94;5150 sacksTaken2.18,rushAtt28.4,rushYds124.8,MT6.86 |
-| Equivalence/smokes |20/20;coach4/personnel4 errors0/violations0 |
-| Animation |213/213 end spots;maxframe5.764;syntheticSPD run1.33/pass1.53 |
-| Personnel |100games12,806plays actual11/side,zero duplicate/ineligible/resolved-out actors |
-| R16 accounting |15muffedINTs excluded from completion;10receiver fumbles retain catches;no comp mismatch |
-| R15/GP |DLrotation87%,QB100%,GPonce;final fast lines maximum5 full-timeOL |
+| `loader.mjs` | TS loader for node (rewritten; validated: main seed 2222 ×500 = 21.9 = recorded baseline) |
+| `calib.mjs` | `REPO=<tree> node --import ~/gridiron-work/loader.mjs ~/gridiron-work/calib.mjs 33333,2222,5150 500 --eq --smoke=coach:4,personnel:4` |
+| `anim.mjs` | `REPO=<tree> … anim.mjs 33333 1` → ANIM line, endSpot match/total |
+| `passid.mjs` | team pass-share spread per seed (identity check for realism) |
+| `gpprobe.mjs` | GP vs team games by position after 13 weeks |
+| `ds-wt <name> <prompt> [base]` | worktree `wt/<name>` (reuses branch `wt-<name>` if it exists, else new off base/main), launches ds-push detached; log `logs/<name>.log`, events `logs/events/<name>.tryN.jsonl` |
+| `queue-launch.sh <name> <prompt> [base]` | waits for <4 running DeepSeek jobs, launches, holds `caffeinate`, prints exit |
+| `prompts/` | every prompt sent this session |
+| `logs/` | worker verify outputs (`*-verify.out`) and my review logs (`rv-*`) |
+| `rv`, `rv-base`, `rv-ret`, `rv-stable` | detached review worktrees (fc60c43 / 1cbd4dd / 9df22cb / 4377982) — reuse or `git worktree remove` |
+| `rec/` | recovery worktrees — can be removed |
 
-Logs `/private/tmp/codex-realism15fix3-{build,lint,calib,anim,final-lines,depleted}.log`; diff `/private/tmp/codex-realism15fix3-diff.txt`. Tests `/private/tmp/codex-realism15fix2-final-lines.mjs` (imports currentrv) and `/private/tmp/codex-realism15fix3-depleted.mjs`.
+Node: `~/.local/node/bin`. Use `node --import ~/gridiron-work/loader.mjs` (plain node can't load the TS). Keep the Mac awake for long jobs: `nohup caffeinate -i -w <runner-pid> &`.
 
-Important test correction: worker depleted probe modified `world.players` copies, so injuries didn't affect actual `world.roster`. Codex corrected it to mutate roster objects and assert injury counts. LB122/OL186/RB88/WR136/DB243 actual injuries exercised; all scenarios11healthy actors and no resolved actors outside credited units. Avoid reusing original no-op injury test. Raw allocateTeamGame has duplicate internal lines by design; judge FINAL statGame/recordAllocatedStats outputs, not raw intermediate allocation.
+Browser checks: add a config to `.claude/launch.json` pointing vite at the worktree on an **isolated port** (4429–4431 used) and use a throwaway test career; never touch the user's real 4173/5173/Pages origins. Note `git -C "$MAIN" worktree add <relative path>` lands inside the repo — always pass absolute `$HOME/gridiron-work/...` paths.
 
-Currentfix5 prompt resumes fix4 partial model calibration. Goals: evidenced missing legitimate tackle opportunities/contact accounting; universal bounded rating/decision sensitivity, sacks/runpass/4thdown context, honest calibration. Never inflate miss counts or change denominators just to pass. Worker claim one global sackBase cannot satisfy extreme seeds is not proof model cannot; consider coefficients and true context while retaining quality direction. No new/removed RNG draws. Preserve user packages/QBoverrides, injuries/rotation, R16 turnover variety, R17 kicks and R18 tendencies. Fix3 selected actual11 FIRST and derives resolver ratings/participants from same group; keep it.
+## Main
 
-Earlier rejected snapshots (don't merge individually): R15 `5b8a832` (21.7seed2222,noDLrotation,bad snaps/GP/probe); R16 `ffb17c2` (2scoringfails,muffedINTcompleted); R17 `4e19b31` (2scoringfails); R18 `1325119` (scoringpasses but otherbands fail); repair1 `58bdd7f` (buildTS7053,reserveOL/probe bugs); repair2 `ca73a20` (21.7/21.7/22.1,snap-onlypadding unlike actual resolver). Progress in NEXT_PHASE_REALISM.md; detailed historical logs in OPENCODE_CONTINUE.md.
+`d4cc425` (local, not pushed). Merged this session (all verified: build, lint 4, browser):
+- `59452b7` Contract Ledger OVR + POT sortable columns (#146)
+- `0b1bb9a` Draft prospect board position filter (#148)
+- FUTURES #26–#29 added (playcalling, draft philosophy, coordinator/position-coach hiring, future prospects tab); FUTURES 1a2 Stars corrected to merged.
+- Main 3×500 points 22.5/21.9/22.3 with 5–7 band misses per seed (pre-existing; realism fixes them).
 
-## Held independent presentation/persistence work
+## Jobs and branches — status at handover
 
-### Animation f17c723
-Branchwt-animcontact, worktree `/private/tmp/gridiron-wt-animcontact`, idle. Spec NEXT_PHASE_ANIM_CONTACT.md, runner `/private/tmp/ds-push-animcontact`. No duplicate implementation needed.
-Independent build/lint4; unchanged old baseline3×50022.5/21.9/22.3,eq20/20,smokes0/0,anim217/217. Full22correct-team actors468returnplays; blockers min10KO/9punt,coverage moving.66games:172kickcatch/contact/end;296puntcatch/end291nonTDcontact;2827passcatch/end2603contact;3295/3295end;frameDelta2.562. Fumble measured holdergap0,ballstep.264yd.
-Browser inspected generated recorded KO/punt/pass fixtures, NOT live MatchView. Screenshot `/private/tmp/codex-animcontact2-pass-contact.jpg`; logs `/private/tmp/codex-animcontact2-{build,lint,calib,anim,feature}.log`; audit `/private/tmp/codex-animcontact2-probe.mjs`. Fixture source `/private/tmp/codex-animation-review/` remains; HTTP4427 stopped. Held because strict baseline calibration fails. After accepted engine integration, merge in spare and rerun full contact/identity audit with new personnel. Preserve main's MatchView jersey-number context when resolving older fork.
+| Branch / job | State | Next action |
+|---|---|---|
+| **wt-realism** `fc60c43` (realism15fix6b) | Independently PASSES every gate: 31/31 bands all seeds (pts 22.7/22.3/22.8), eq 20/20, smokes 0/0, anim 111/111; MT sack-as-tackle accounting accepted. **User chose B: hold** because OFF_PASS_RATE was compressed 75% → team pass-share SD 0.026–0.029 (was 0.05; NFL ≈0.035–0.045). | **realism15fix7 RUNNING** (runner pid 13517, prompt `prompts/realism15fix7.txt`): restore SD 0.035–0.045 on all seeds keeping 31/31. On exit: snapshot, run calib + `passid.mjs` + anim independently. Pass → integrate with latest main in a spare worktree, re-verify, merge. |
+| **wt-kickoffs** `4e67ab3` (#126) | Design accepted (real kickoffs after made FG, halftime, OT). Bug: missed-FG spot `s.yard + 8` (wrong direction, defense loses 15 yds). | **kickoffs-fix1 RUNNING** (runner pid 6638, now on try 3 — watchdog restarts; check log). On exit: verify spot = max(20, 107 − LOS), full gates. Base is main (no R15–R18) → must be integrated onto the accepted realism engine before merge; `restartAfterFieldGoal`/`stepClock`/`stepHalftime` touch playsim.ts. |
+| **wt-returners** `9df22cb` (#124) | Code review OK (store validates own-club WR/RB/CB healthy; eligibility matches `candidatePool`; RET = round(returnScore)). Independent: build, lint 4, 3×500 **byte-identical to main**, eq 20/20, smokes 0/0, anim 103/103. Worker probes 42/42. | **Only the browser check remains**: Depth Chart → Special Teams KR/PR cards + Player Profile Return ability, desktop + 375px, light/dark, test career (isolated port; `wt-ui` config in launch.json already points at `wt/returners`, port 4431 — that origin has a test career from the draft check; needs a level with depth-chart control, e.g. "Advanced: choose a starting level" → GM). Then merge to main. |
+| **wt-stcalls** `fd10d23` (FUTURES #4, spec `NEXT_PHASE_ST_CALLS.md`) | Finished, **unreviewed**. Based on realism `1cbd4dd` (R17 onside/fake code). Worker reports defaults identical to baseline 22.2/21.9/22.3, eq 20/20. 6 files +471/−27 incl. new `specialCalls.ts`, playsim hooks, GamePlanScreen, types/generate (save fields). | Review diff + probes (`logs/stcalls-*`), independent gates vs 1cbd4dd baseline, browser check (game plan Special Teams section + kickoff moment). Must be rebased/integrated onto the accepted realism snapshot before merge. |
+| **wt-animcontact** `f17c723` + animcontact3 | **RUNNING** (runner pid 17248, prompt `prompts/animcontact3.txt`): #150 carriers never freeze (old code `hold()`s the receiver at the spot when the tackler is far, ~line 1236–1252), every stop is visible contact within pace; #151 DB coverage man trail/hip-pocket + zone landmarks, every route covered, safeties move, separation at catch by result. | On exit: review, anim/probe/calib-identical gates, then **launch `prompts/animcontact4.txt` on the same branch** (#152 double-team rushers, #153 route running SRR/MRR/DRR vs MCV separation). Still held overall until integrated with the accepted engine; browser-check live MatchView plays. Preserve main's MatchView jersey-number context when merging this older fork. |
+| **wt-saveslots** `9c5adce` | All functional + real-IDB gates passed earlier; product picker UI checked this session (create/rename/switch/reload/delete-active, desktop+375, light/dark) and a 375px overflow fixed. Nits: rename field doesn't preselect; sidebar shows "Slot N · Slot N" when unnamed. | Held for integration with the accepted engine (main.tsx save-probe wrappers conflict with realism hook imports — keep both). |
+| wt-ledgerovr, wt-draftpos | Merged. | Can delete branches/worktrees. |
 
-### Save slots 9bbee4c
-Branchwt-saveslots, worktree `/private/tmp/gridiron-wt-saveslots`, idle. Spec NEXT_PHASE_SAVE_SLOTS.md, runner `/private/tmp/ds-push-saveslots`. Five independent slots with backups, atomic legacy migration, createOnly reservations, guarded switching/import/autosave/export. Firstsnapshot0a4b48e rejected seven preservation bugs; repaired snapshot source-reviewed.
-Independent build/lint4,oldbaseline22.5/21.9/22.3,eq20/20,smokes0/0,anim217/217. Worker extended shim suite59/59 independently rerun. **Independent REAL browser IndexedDB22/22** covers primary+backup preservation,titlecontinue,activeimport/autosave,rename,five/sixthrefusalruntime retention,real transaction abort blocks switch,backup-only occupancy/claim/load,futurelegacy preservation,two independently instantiated modules migrating concurrently exactlyonce/idempotent. No user storage touched; isolated DBs codex-save-audit-20261010-* on4428 origin. This was independent modules on same real DB, not literal two-browser-tabs.
-Logs `/private/tmp/codex-saveslots2-{build,lint,calib,anim,feature,real-idb}.log`;realIDBfixture `/private/tmp/codex-save-audit.html`; screenshot `/private/tmp/codex-saveslots2-real-idb.jpg`;shim `/private/tmp/gridiron-saveprobe2.mjs` acceptsrepo. Temporary4428Vite stopped and rvtestHTML removed.
-**Still required before acceptance: actual product picker UI desktop/375px and light/dark click-through.** Functional fixture doesn't prove productlayout. Use isolated origin and test careers only. Need combined latestmain/repairedengine strictgates. Main.tsx save-probe isolation wrappers conflict with realism hook imports; preserve BOTH. Do not touch user's real saves.
+Background watchers from this chat will not carry over — in the new chat, re-check with `pgrep -fl "gridiron-work/ds-push-"` and the `logs/*.log` tails.
 
-## Remaining user priorities and futures
+## Findings to remember
 
-Every new user request gets PLAYTEST_BACKLOG.md row; rows124–134 already recorded,135 thishandover. Numbers requests127/132 DONE live (fresh Pages #31Ford/#26Judkins/#34Sampson; user's old tab likely stalebundle). ExistingteamJerseys is synthetic deterministic allocator; no real NFL jersey field in data.
+- **GP (#149):** stable 4377982 double-counts RB GP (rush + receiving lines; Cook 24 GP in 12 games). Fixed on main. Main gives OL/K/P 0 GP (counts games with a stat); realism branch fixes OL via participation; **K/P still 0 everywhere → follow-up job after realism merges.**
+- In-game app shell at 375px: the sidebar takes most of the screen (pre-existing; worth a backlog item if the user plays on phone).
+- DeepSeek probes sometimes validate the code against itself (kickoff miss spot) — always check against the rule independently.
 
-After realism chain + repair passes:
-1. Post-score kickoff repair126: NEXT_PHASE_KICKOFFS.md, ready `/private/tmp/gridiron-kickoffs.txt`. Main30gameaudit120madeFG→ZERO kickoffs;106PATtries→106KO. FGnormal/twominute branches bypassKO;opening/halftime also reset. Fix actual transitions/events, clock/OT/missedFG cases, don't force everykickreturn.
-2. KR/PR depth chart selectors + visible return ability/skills124: NEXT_PHASE_RETURNERS.md, ready `/private/tmp/gridiron-returners.txt`. Reuse existingworld.returners +returnScore in PBP/fastsim,Auto/healthfallback. Ratingsspeed/accel/agility/vision/security visible. ONE sim task at a time.
-3. FUTURES inspect#4 overlap R17 (AIonsides/fakesdone;useronside/returnstrategy/scoutingmemorymissing). Then topunstarted#5,#6,#7,#8,**#11**,#15,#24. #20 dropped by user. Don't silently skip#11 absent originalhandoff.
-4. Integrate heldanimation/save candidates when strictenginebase passes and allfocused/UIgates complete; no blanket acceptance of baseline failures.
+## Queue after the above (one sim-touching job per area; UI jobs can run in parallel)
 
-User authorizations: keepDeepSeekbusy,verifyeverypush,tableaftermerges,reportcompletions. GitHub/Pages authorization for765f362 already used; **ask before another remote publication**. Stable held. Do not mix CRM repo. Commit trailer names actual orchestrator model; Codex records use `Co-Authored-By: GPT-6 (Codex) <noreply@openai.com>`.
-
-## First actions for Claude
-
-1. Read latest handoff, pgrep andfix5 log/events. Automationpaused. Do not launch whilefix5active.
-2. On completion, reviewdiff; commit SOURCEONLY immutable snapshot excludingHANDOFF.md; checkoutspareRV and independentlyrunfullgates+targeted audits. If fails, focusedcontinuation sameworktree. If providerfails again, preserve partial edits; user already requested retry but don't create parallel job.
-3. On passingcandidate, integrate latestmain in spareworktree; reviewconflicts andfullreverifybeforemainmerge. Reverifymain,updatetables/logs,givestatus. No stable rebuild or publication.
-4. Proceed through pending user priorities then FUTURES,one sim job. Browserrealproduct saveUIcan be done while worker runs using another sparecheckout; don't disturb active tests/worker.
+1. K/P GP follow-up (after realism merge).
+2. FUTURES: #5 challenges, #6 weather, #7 halftime speech, #8 primetime/rivalry, #11 FA frenzy, #15 injury decisions, #24 trick plays, #2 UI Broadcast 2.0, #26 coach playcalling, #27 draft philosophy, #28 choose coordinators/position coaches, #29 future prospects tab. #20 dropped by user.
+3. Offer the user a stable 4173 rebuild once realism + kickoffs + returners are merged (GP fix, ledger, filter all already on main).
