@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import {
   Building2,
   Car,
+  ChevronDown,
   ClipboardList,
   Coffee,
   Laptop,
@@ -26,6 +28,9 @@ import { Card } from '../ui/kit'
  * with a car, a laptop and a region map; a director gets the draft room; the
  * head coach gets the film room; the GM gets the war room. The set of objects
  * is the career, told without a number.
+ *
+ * UI redesign D1: it is now a collapsible strip so it can stay on the
+ * dashboard without pushing the week's decision below the fold.
  */
 interface DeskItem {
   Icon: LucideIcon
@@ -86,29 +91,43 @@ const OFFICES: Record<string, Office> = {
 
 export function OfficeScene({ className }: { className?: string }) {
   const career = useGame((s) => s.career)!
+  const [open, setOpen] = useState(false)
   const office = OFFICES[`${career.path}:${career.level}`]
   if (!office) return null
   return (
-    <Card className={cn('overflow-hidden', className)} pad={false}>
-      <div className="hatch flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3">
-        <div className="min-w-[220px]">
-          <div className="label">Your office · {career.path === 'coach' ? 'Coaching' : 'Personnel'}</div>
-          <div className="font-display text-lg font-700 uppercase tracking-wide text-ink">{office.title}</div>
-          <div className="text-xs text-muted">{office.blurb}</div>
+    <Card pad={false} className={cn('overflow-hidden', className)}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="motion flex min-h-11 w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-left hover:bg-surface-2"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="label block">Your office · {career.path === 'coach' ? 'Coaching' : 'Personnel'}</span>
+          <span className="block font-display text-[17px] font-800 italic uppercase leading-none text-ink">{office.title}</span>
+        </span>
+        <span className="shrink-0 font-cond text-label font-600 uppercase tracking-[0.06em] text-muted">
+          {office.items.length} items
+        </span>
+        <ChevronDown size={16} className={cn('motion shrink-0 text-muted', open && 'rotate-180')} aria-hidden />
+      </button>
+      {open && (
+        <div className="border-t border-line px-4 py-3">
+          <p className="text-small text-muted">{office.blurb}</p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            {office.items.map(({ Icon, label }) => (
+              <div
+                key={label}
+                className="flex items-center gap-1.5 rounded-[var(--r-md)] border border-line bg-surface px-2.5 py-1.5"
+                title={label}
+              >
+                <Icon size={15} className="text-[var(--team-accent)]" aria-hidden />
+                <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-ink-2">{label}</span>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {office.items.map(({ Icon, label }) => (
-            <div
-              key={label}
-              className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5"
-              title={label}
-            >
-              <Icon size={15} className="text-[var(--team)]" />
-              <span className="font-cond text-[10px] font-700 uppercase tracking-wide text-ink-2">{label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
     </Card>
   )
 }

@@ -2,7 +2,7 @@ import { ArrowRight, CheckCircle2, Circle } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { weeklyTasks } from '../game/engine/checklist'
 import { MAX_SCOUT_POINTS, useGame, useWorld, type ScreenId } from '../store/gameStore'
-import { Badge, Card } from '../ui/kit'
+import { Badge, Button, Card } from '../ui/kit'
 
 /**
  * A role-specific to-do list for the current week. Tasks are derived from the
@@ -20,40 +20,47 @@ export function WeeklyChecklist({ className }: { className?: string }) {
 
   return (
     <Card className={className}>
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="font-display text-lg font-700 uppercase tracking-wide">This Week's Checklist</h3>
-        <Badge tone={allDone ? 'win' : 'team'}>{done}/{tasks.filter((t) => !t.primary).length} done</Badge>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
+          This Week&rsquo;s Checklist
+        </h3>
+        <Badge tone={allDone ? 'win' : 'neutral'}>
+          {done}/{tasks.filter((t) => !t.primary).length} done
+        </Badge>
       </div>
       <div className="space-y-0.5">
         {tasks.map((t) => (
           <div
             key={t.id}
             className={cn(
-              'flex items-center gap-2.5 rounded-lg px-2 py-1.5',
+              'flex items-center gap-2.5 rounded-[var(--r-md)] px-2 py-1.5',
               !t.primary && t.done && 'opacity-55',
               t.primary && 'mt-1 border-t border-line pt-2',
             )}
           >
             {t.done && !t.primary ? (
-              <CheckCircle2 size={16} className="shrink-0 text-win" />
+              <CheckCircle2 size={16} className="shrink-0 text-win" aria-hidden />
             ) : (
-              <Circle size={16} className={cn('shrink-0', t.primary ? 'text-faint' : 'text-faint')} />
+              <Circle size={16} className="shrink-0 text-faint" aria-hidden />
             )}
             <div className="min-w-0 flex-1">
-              <div className={cn('text-sm font-600', t.done && !t.primary ? 'text-muted line-through' : 'text-ink')}>
+              <div className={cn('text-body font-600', t.done && !t.primary ? 'text-muted line-through' : 'text-ink')}>
                 {t.label}
               </div>
-              <div className="text-[11px] text-muted">{t.hint}</div>
+              <div className="text-label text-muted">{t.hint}</div>
             </div>
             {t.primary ? (
-              <span className="font-cond text-[10px] font-700 uppercase text-faint">top bar ▸</span>
+              <span className="shrink-0 font-cond text-label font-700 uppercase tracking-[0.07em] text-faint">Top bar ▸</span>
             ) : t.screen ? (
-              <button
+              <Button
+                size="sm"
+                variant="quiet"
+                className="shrink-0"
+                icon={<ArrowRight size={13} aria-hidden />}
                 onClick={() => setScreen(t.screen as ScreenId)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-surface px-2 py-1 font-cond text-[10px] font-700 uppercase tracking-wide text-ink-2 transition hover:bg-surface-2"
               >
-                Go <ArrowRight size={11} />
-              </button>
+                Go
+              </Button>
             ) : null}
           </div>
         ))}

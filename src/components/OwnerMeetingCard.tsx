@@ -58,23 +58,23 @@ export function OwnerMeetingCard({ className, compact = false }: { className?: s
   return (
     <Card className={cn(due.open ? 'border-[var(--team)]' : undefined, className)}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Landmark size={16} className="shrink-0 text-[var(--team)]" />
-        <h3 className="font-display text-lg font-700 uppercase tracking-wide text-ink">Owner Meeting</h3>
-        <Badge tone={profile.personality === 'win-now' ? 'loss' : profile.personality === 'patient' ? 'win' : 'gold'} className="ml-auto">
+        <Landmark size={16} className="shrink-0 text-[var(--team-accent)]" aria-hidden />
+        <h3 className="font-display text-lg font-800 italic uppercase leading-none tracking-[0.01em] text-ink">Owner Meeting</h3>
+        <Badge tone={profile.personality === 'win-now' ? 'warn' : profile.personality === 'patient' ? 'win' : 'neutral'} className="ml-auto">
           {profile.label}
         </Badge>
         <Badge tone={standings >= 60 ? 'win' : standings >= 45 ? 'warn' : 'loss'}>Standing {standings}</Badge>
       </div>
 
-      <p className="mb-3 text-xs leading-relaxed text-muted">
+      <p className="mb-3 text-small leading-relaxed text-muted">
         {ownerName(career.teamId)} reads you on results and your standing with him. Ask for one thing — he answers in his
         own way, and every grant is yours alone: it never touches the league sim.
       </p>
 
       {due.open ? (
         <>
-          <div className="mb-2 flex items-center gap-1.5 font-cond text-[11px] font-700 uppercase tracking-wide text-[var(--team)]">
-            <CalendarClock size={13} /> He wants to see you — pick your pitch
+          <div className="mb-2 flex items-center gap-1.5 font-cond text-label font-700 uppercase tracking-[0.07em] text-[var(--team-accent-text)]">
+            <CalendarClock size={13} aria-hidden /> He wants to see you — pick your pitch
           </div>
           <div className="grid gap-2 sm:grid-cols-3">
             {ASKS.map((ask) => (
@@ -82,16 +82,16 @@ export function OwnerMeetingCard({ className, compact = false }: { className?: s
                 key={ask}
                 type="button"
                 onClick={() => holdOwnerMeeting(ask)}
-                className="motion rounded-lg border border-line bg-surface-2 p-2.5 text-left transition hover:border-[var(--team)] hover:bg-[var(--team-soft)]"
+                className="motion min-h-11 rounded-[var(--r-md)] border border-line bg-surface-2 p-2.5 text-left transition hover:border-line-strong hover:bg-surface-3"
               >
-                <span className="block text-xs font-700 text-ink">{OWNER_ASK_LABEL[ask]}</span>
-                <span className="mt-0.5 block text-[11px] leading-snug text-muted">{OWNER_ASK_BLURB[ask]}</span>
+                <span className="block text-small font-700 text-ink">{OWNER_ASK_LABEL[ask]}</span>
+                <span className="mt-0.5 block text-label leading-snug text-muted">{OWNER_ASK_BLURB[ask]}</span>
               </button>
             ))}
           </div>
         </>
       ) : (
-        <p className="rounded-lg bg-surface-2 p-2.5 text-[11px] leading-snug text-muted">
+        <p className="rounded-[var(--r-md)] bg-surface-2 p-2.5 text-label leading-snug text-muted">
           {world.phase === 'regular'
             ? `No meeting due. The owner calls you in around week ${MEETING_WEEKS.join(', ')} — you have met him ${meetings.length} time${meetings.length === 1 ? '' : 's'} this season.`
             : 'The owner will call you in again once the season is under way.'}
@@ -131,11 +131,11 @@ export function OwnerMeetingCard({ className, compact = false }: { className?: s
 function GrantLine({ tone, label, body }: { tone: 'win' | 'info'; label: string; body: string }) {
   const Icon = tone === 'win' ? Check : Handshake
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5">
-      <Icon size={13} className={cn('mt-0.5 shrink-0', tone === 'win' ? 'text-win' : 'text-brand')} />
+    <div className="flex items-start gap-2 rounded-[var(--r-md)] border border-line bg-surface-2 px-2.5 py-1.5">
+      <Icon size={13} className={cn('mt-0.5 shrink-0', tone === 'win' ? 'text-win' : 'text-brand')} aria-hidden />
       <div className="min-w-0">
-        <span className="font-cond text-[11px] font-700 uppercase tracking-wide text-ink-2">{label}</span>
-        <p className="text-[11px] leading-snug text-muted">{body}</p>
+        <span className="font-cond text-label font-700 uppercase tracking-[0.07em] text-ink-2">{label}</span>
+        <p className="text-label leading-snug text-muted">{body}</p>
       </div>
     </div>
   )
@@ -144,21 +144,21 @@ function GrantLine({ tone, label, body }: { tone: 'win' | 'info'; label: string;
 function MeetingRow({ entry }: { entry: OwnerMeetingEntry }) {
   const Icon = entry.outcome === 'agreed' ? Check : entry.outcome === 'partial' ? Minus : X
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-line px-2.5 py-1.5">
+    <div className="flex items-start gap-2 rounded-[var(--r-md)] border border-line px-2.5 py-1.5">
       <Badge tone={OUTCOME_TONE[entry.outcome]}>{OUTCOME_LABEL[entry.outcome]}</Badge>
-      <Icon size={12} className="mt-1 shrink-0 text-faint" />
+      <Icon size={12} className="mt-1 shrink-0 text-faint" aria-hidden />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="font-cond text-[11px] font-700 uppercase text-muted">{OWNER_ASK_LABEL[entry.ask]}</span>
+          <span className="font-cond text-label font-700 uppercase tracking-[0.07em] text-muted">{OWNER_ASK_LABEL[entry.ask]}</span>
           {entry.grants.map((g) => (
-            <span key={g} className="rounded bg-[var(--team-soft)] px-1.5 py-0.5 text-[10px] font-600 text-[var(--team)]">
+            <span key={g} className="rounded-[var(--r-xs)] bg-surface-3 px-1.5 py-0.5 text-label font-600 text-ink-2">
               {g}
             </span>
           ))}
         </div>
-        <p className="text-[11px] leading-snug text-muted">{entry.message}</p>
+        <p className="text-label leading-snug text-muted">{entry.message}</p>
       </div>
-      <span className="shrink-0 font-cond text-[10px] font-700 uppercase text-faint">
+      <span className="shrink-0 font-cond text-label font-700 uppercase tracking-[0.07em] text-faint tnum">
         S{entry.season} W{entry.week}
       </span>
     </div>
