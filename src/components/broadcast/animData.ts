@@ -354,7 +354,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const kickWin: { t0: number; t1: number } | null = !flight
     ? null
     : fgPlay || puntPlay
-      ? { t0: kickT, t1: 1 }
+      ? { t0: kickT, t1: Math.min(1, kickT + 1.0 / D) } // swing + follow-through, then cover / watch
       : koPlay
         ? { t0: kickT, t1: Math.min(1, kickT + 0.5 / D) }
         : null
@@ -451,7 +451,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   }
 
   const stateFor = (k: string, t: number, vx: number, spd: number, hKey: string | null, nearCar: boolean): PoseState => {
-    if (kickerKey && k === kickerKey && kickWin && t >= kickWin.t0 - 1e-9) return 'kick'
+    if (kickerKey && k === kickerKey && kickWin && t >= kickWin.t0 - 1e-9 && t <= kickWin.t1 + 1e-9) return 'kick'
     if (k === fgHolderKey && t < kickT) return 'hold'
     if (qbKey && k === qbKey && throwWin && t >= throwWin.t0 && t <= throwWin.t1) return 'throw'
     if (qbKey && k === qbKey && fakeWin && t >= fakeWin.t0 && t <= fakeWin.t1) return 'fake'

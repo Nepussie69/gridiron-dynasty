@@ -60,6 +60,8 @@ import {
 
 // Broadcast 2.5D B2: field + stadium renderer preview (own chunk).
 const BroadcastFieldPreview = lazy(() => import('../components/broadcast/BroadcastFieldPreview'))
+// Broadcast 2.5D B3: real plays with code-drawn players (own chunk).
+const BroadcastPlayersPreview = lazy(() => import('../components/broadcast/BroadcastPlayersPreview'))
 
 const SAMPLE_RATINGS = [93, 85, 77, 69, 61, 57, 53, 48, 45]
 
@@ -601,6 +603,14 @@ export default function KitShowcase() {
         >
           <Suspense fallback={<div className="label">Loading broadcast field…</div>}>
             <BroadcastFieldPreview homeId={team.id} />
+          </Suspense>
+        </Section>
+        <Section
+          title="Broadcast players (2.5D, B3)"
+          note="Code-drawn figures on real plays: one game simulated on a copy of the loaded world (nothing saved), home = the club picker (colour jerseys), visitors in white. Pick a play kind and a play; play, scrub or change the camera. Players are depth-sorted with the goalposts and a placeholder ball (B4 draws the real one). The stats line splits the player layer's cost from the whole frame."
+        >
+          <Suspense fallback={<div className="label">Loading broadcast players…</div>}>
+            <BroadcastPlayersPreview homeId={team.id} />
           </Suspense>
         </Section>
       </main>
