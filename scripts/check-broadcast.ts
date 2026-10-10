@@ -10,6 +10,10 @@
 // windows and at most 2 at once (one per anchor), callout boxes never covering
 // the carrier's head, text >= 12 CSS px at DPR 1 and 2, slab / HUD contrast,
 // reduced motion (no wipes) and the sim-to-end mode (chip only).
+// B6b: telestrator replay — replayPlan deterministic, the big-play rule table,
+// telestrations only reference actors that exist, the freeze inside the play,
+// skip ends the replay at once, nothing draws in 'fast' (sim to end), reduced
+// motion cuts (no wipe, no draw-on) and every label >= 12 CSS px.
 // Run: node --experimental-strip-types scripts/check-broadcast.ts
 import assert from 'node:assert/strict'
 import { NFL_TEAMS } from '../src/game/data/nflTeams.ts'
@@ -72,6 +76,8 @@ import { ballState } from '../src/components/broadcast/ball.ts'
 import { createBallFx, withBallFx } from '../src/components/broadcast/ballFx.ts'
 import { buildFxSchedule, EVENT_FX, SHAKE_YARDS, shakeAt } from '../src/components/broadcast/fxSchedule.ts'
 import type { AnimEventKind } from '../src/components/playAnim.ts'
+import { BIG_GAIN_YDS, LONG_FG_YDS, MAX_SPAN_SEC, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan } from '../src/components/broadcast/replay.ts'
+import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
 
 let n = 0
@@ -909,6 +915,309 @@ ok("B4: the composer drives B3's layer (placeholder off, ball + effects in the d
   // Reduced motion never shakes.
   const rm = createBallFx({ anim, offenseClub: NFL0, defenseClub: NFL1, reducedMotion: true, quality: 'full' })
   assert.deepEqual(rm.shakePose(frame.camera, 0.5), frame.camera)
+})
+
+// ── B6b: telestrator replay ──────────────────────────────────────────────────
+
+/** Synthetic 3rd-down sack: double team on dl0, OL ring, dl1 gets home (5 s). */
+const SA: BroadcastAnim = {
+  duration: 5000,
+  actors: [
+    { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 34, y: 26.6 }, { t: 0.3, x: 28, y: 26.6 }, { t: 1, x: 27, y: 27 }] },
+    ...[-2.6, -1.3, 0, 1.3, 2.6].map((d, i) => ({ key: `ol${i}`, side: 'off' as const, role: 'OL', path: [{ t: 0, x: 34.4, y: 26.65 + d }, { t: 1, x: 32, y: 26.65 + d * 1.2 }] })),
+    { key: 'dl0', side: 'def', role: 'DL', path: [{ t: 0, x: 36, y: 26 }, { t: 1, x: 33, y: 26 }] },
+    { key: 'dl1', side: 'def', role: 'DL', path: [{ t: 0, x: 36, y: 31 }, { t: 0.6, x: 30, y: 30 }, { t: 0.75, x: 27.6, y: 27.4 }, { t: 1, x: 27.2, y: 27.2 }] },
+    { key: 'wr0', side: 'off', role: 'WR', path: [{ t: 0, x: 35, y: 8 }, { t: 1, x: 50, y: 10 }] },
+  ],
+  ball: [{ t: 0, x: 35, y: 26.6 }, { t: 0.3, x: 28, y: 26.6 }, { t: 1, x: 27, y: 27 }],
+  holders: [{ t: 0, key: null }, { t: 0.04, key: 'qb' }],
+  flights: [],
+  engagements: [
+    { a: 'ol1', b: 'dl0', t0: 0.06, t1: 0.6, kind: 'double' },
+    { a: 'ol2', b: 'dl0', t0: 0.08, t1: 0.55, kind: 'double' },
+  ],
+  events: [
+    { t: 0.04, kind: 'snap', keys: ['ol2', 'qb'], spot: { x: 35, y: 26.6 } },
+    { t: 0.75, kind: 'sack', keys: ['dl1', 'qb'], spot: { x: 27.6, y: 27.4 } },
+  ],
+  poses: {},
+  facing: {},
+  ballZ: [{ t: 0, z: 1 }],
+  camera: { strongSide: 'low', deep: false, focusKey: null, kind: 'scrimmage' },
+}
+const SPLAY = { ...GPLAY, type: 'pass', down: 3, distance: 6, yards: -7, result: 'Sack', concept: 'Dropback', endYard: 18 } as unknown as Play
+
+/** Synthetic 45-yd run: handoff, a broken tackle, three pursuers into the tackle (7 s). */
+const RA: BroadcastAnim = {
+  duration: 7000,
+  actors: [
+    { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26 }, { t: 0.1, x: 28, y: 26 }, { t: 1, x: 28, y: 26 }] },
+    { key: 'rb', side: 'off', role: 'RB', path: [{ t: 0, x: 25, y: 26 }, { t: 0.1, x: 28, y: 25 }, { t: 0.3, x: 36, y: 20 }, { t: 1, x: 75, y: 14 }] },
+    { key: 'lb0', side: 'def', role: 'LB', path: [{ t: 0, x: 36, y: 26 }, { t: 0.5, x: 50, y: 20 }, { t: 1, x: 73, y: 15 }] },
+    { key: 's0', side: 'def', role: 'S', path: [{ t: 0, x: 50, y: 30 }, { t: 1, x: 75.6, y: 15 }] },
+    { key: 'cb0', side: 'def', role: 'CB', path: [{ t: 0, x: 45, y: 8 }, { t: 1, x: 74, y: 12 }] },
+    { key: 'dl0', side: 'def', role: 'DL', path: [{ t: 0, x: 31, y: 26 }, { t: 1, x: 31, y: 26 }] },
+  ],
+  ball: [{ t: 0, x: 30, y: 26 }, { t: 0.1, x: 28, y: 25 }, { t: 0.3, x: 36, y: 20 }, { t: 1, x: 75, y: 14 }],
+  holders: [{ t: 0, key: null }, { t: 0.03, key: 'qb' }, { t: 0.1, key: 'rb' }],
+  flights: [],
+  engagements: [{ a: 'lb0', b: 'rb', t0: 0.4, t1: 0.42, kind: 'missedTackle' }],
+  events: [
+    { t: 0.03, kind: 'snap', keys: ['qb'], spot: { x: 30, y: 26 } },
+    { t: 0.4, kind: 'brokenTackle', keys: ['rb', 'lb0'], spot: { x: 45, y: 19 } },
+    { t: 0.98, kind: 'tackle', keys: ['s0', 'rb'], spot: { x: 75, y: 14 } },
+  ],
+  poses: {},
+  facing: {},
+  ballZ: [{ t: 0, z: 1 }],
+  camera: { strongSide: 'low', deep: false, focusKey: null, kind: 'scrimmage' },
+}
+const RPLAY = { ...GPLAY, type: 'run', down: 1, distance: 10, yards: 45, result: 'Run', concept: 'Inside Zone', endYard: 70 } as unknown as Play
+
+const REPLAY_FIXTURES: [string, BroadcastAnim, Play][] = [
+  ['pass', GA, GPLAY],
+  ['sack', SA, SPLAY],
+  ['run', RA, RPLAY],
+]
+const replaySecs = (p: ReplayPlan) => {
+  const out: number[] = []
+  for (let s = 0; s <= p.times.end + 0.2; s += 1 / 30) out.push(s)
+  return out
+}
+
+ok('B6b: replayPlan is deterministic (plan, every frame, every telestration state)', () => {
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    const a = replayPlan(play, anim, { setting: 'all' })
+    const b = replayPlan(play, anim, { setting: 'all' })
+    assert.ok(a.replay, `${name}: not replayed under 'all'`)
+    assert.deepEqual(a, b, `${name}: plan differs`)
+    for (const s of replaySecs(a)) {
+      assert.deepEqual(replayAt(a, s), replayAt(b, s))
+      for (let i = 0; i < a.tele.length; i++) assert.deepEqual(teleState(a.tele[i], s), teleState(b.tele[i], s))
+    }
+    const rm = replayPlan(play, anim, { setting: 'all', reducedMotion: true })
+    assert.equal(rm.wipeSec, 0, `${name}: reduced motion still wipes`)
+    assert.equal(rm.times.cut, 0)
+    for (const it of rm.tele) assert.equal(it.drawOn, 0, `${name}: reduced motion draw-on on ${it.id}`)
+  }
+  // The expected elements per play.
+  const kinds = (p: ReplayPlan) => p.tele.map((x) => x.kind).sort().join(',')
+  const pass = replayPlan(GPLAY, GA, { setting: 'all' })
+  for (const k of ['route', 'airYards', 'separation', 'doubleTeam', 'pocket', 'yac']) assert.ok(kinds(pass).includes(k), `pass lacks ${k}: ${kinds(pass)}`)
+  assert.equal(pass.key?.kind, 'catch')
+  assert.equal(pass.tele.find((x) => x.kind === 'airYards')?.label, '15 AIR YDS')
+  const sep = pass.tele.find((x) => x.kind === 'separation')!
+  assert.deepEqual(sep.keys, ['wr0', 'cb0'])
+  const sack = replayPlan(SPLAY, SA, { setting: 'big' })
+  assert.ok(sack.replay && sack.reasons.includes('lateDownSack'), `sack reasons ${sack.reasons}`)
+  assert.equal(sack.key?.kind, 'sack')
+  for (const k of ['pocket', 'doubleTeam', 'pursuit']) assert.ok(kinds(sack).includes(k), `sack lacks ${k}: ${kinds(sack)}`)
+  const run = replayPlan(RPLAY, RA, { setting: 'big' })
+  assert.ok(run.replay && run.reasons.includes('bigGain'))
+  assert.equal(run.key?.kind, 'brokenTackle')
+  assert.ok(run.tele.filter((x) => x.kind === 'pursuit').length >= 2, `run pursuit: ${kinds(run)}`)
+  assert.ok(!run.tele.some((x) => x.keys.includes('dl0')), 'a defender who never chased got a pursuit arrow')
+})
+
+ok('B6b: the big-play rule table (big / all / off / force / fast)', () => {
+  const base = GPLAY as unknown as Record<string, unknown>
+  const P = (o: Record<string, unknown>) => ({ ...base, ...o }) as unknown as Play
+  const ev = (kinds: AnimEventKind[]) => kinds.map((kind, i) => ({ t: 0.1 + i * 0.1, kind, keys: ['wr0'], spot: { x: 50, y: 20 } }))
+  const A = (kinds: AnimEventKind[]): BroadcastAnim => ({ ...GA, events: [{ t: 0.03, kind: 'snap', keys: ['qb'], spot: { x: 35, y: 26 } }, ...ev(kinds)] })
+  const table: [string, Play, BroadcastAnim, string[]][] = [
+    ['short completion', P({ yards: 8, endYard: 33 }), A(['throw', 'catch', 'tackle']), []],
+    [`${BIG_GAIN_YDS}-yd completion`, P({ yards: BIG_GAIN_YDS, endYard: 45 }), A(['throw', 'catch', 'tackle']), ['bigGain']],
+    ['19-yd run', P({ type: 'run', yards: 19, endYard: 44, result: 'Run' }), A(['tackle']), []],
+    ['passing TD', P({ yards: 75, endYard: 100 }), A(['throw', 'catch', 'score']), ['touchdown', 'bigGain']],
+    ['1-yd TD run', P({ type: 'run', yards: 1, startYard: 99, endYard: 100, result: 'Run' }), A(['score']), ['touchdown']],
+    ['interception', P({ yards: 0, result: 'Interception', turnover: true }), A(['throw', 'interception', 'tackle']), ['turnover']],
+    ['lost fumble', P({ type: 'run', yards: 3, result: 'Fumble', turnover: true }), A(['fumble', 'turnover']), ['turnover']],
+    ['sack on 3rd', P({ result: 'Sack', yards: -6, down: 3 }), A(['sack']), ['lateDownSack']],
+    ['sack on 4th', P({ result: 'Sack', yards: -6, down: 4 }), A(['sack']), ['lateDownSack']],
+    ['sack on 2nd', P({ result: 'Sack', yards: -6, down: 2 }), A(['sack']), []],
+    ['safety', P({ result: 'Sack', yards: -6, down: 2, safety: true }), A(['sack', 'safety']), ['safety']],
+    [`${LONG_FG_YDS}-yd FG good`, P({ type: 'fg', result: `${LONG_FG_YDS}-yd FG is good`, yards: 0 }), A(['kick', 'kickGood']), ['longFieldGoal']],
+    ['49-yd FG good', P({ type: 'fg', result: '49-yd FG is good', yards: 0 }), A(['kick', 'kickGood']), []],
+    ['55-yd FG no good', P({ type: 'fg', result: '55-yd FG is no good', yards: 0, turnover: true }), A(['kick', 'kickMiss']), []],
+    ['punt (possession change is not a turnover)', P({ type: 'punt', result: 'Punt', yards: 44, turnover: true }), A(['kick', 'tackle']), []],
+    ['punt return TD', P({ type: 'punt', result: 'Punt', yards: 44, returnTD: true, turnover: true }), A(['kick', 'score']), ['touchdown']],
+    ['muffed punt', P({ type: 'punt', result: 'Punt', returnKind: 'muff', turnover: true }), A(['kick', 'fumble', 'turnover']), ['turnover']],
+    ['PAT', P({ type: 'pat', result: 'PAT good' }), A(['kick', 'kickGood']), []],
+  ]
+  for (const [name, play, anim, want] of table) {
+    const got = replayReasons(play, anim)
+    assert.deepEqual([...got].sort(), [...want].sort(), `${name}: reasons ${got}`)
+    const big = replayPlan(play, anim, { setting: 'big' })
+    assert.equal(big.replay, want.length > 0, `${name}: big replay ${big.replay}`)
+    assert.equal(replayPlan(play, anim, { setting: 'off' }).replay, false, `${name}: replayed with replays off`)
+    assert.equal(replayPlan(play, anim, { setting: 'all', playback: 'fast' }).replay, false, `${name}: replayed in sim-to-end`)
+    assert.equal(replayPlan(play, anim, { force: true, playback: 'fast' }).replay, false, `${name}: forced replay in sim-to-end`)
+    const all = replayPlan(play, anim, { setting: 'all' })
+    assert.equal(all.replay, play.type !== 'pat', `${name}: 'all' replay ${all.replay}`)
+    assert.equal(replayPlan(play, anim, { setting: 'off', force: true }).replay, play.type !== 'pat', `${name}: forced replay`)
+  }
+  // Kneels, spikes, pre-snap fouls, the end-of-quarter marker are never replayed.
+  assert.equal(replayPlan(P({ type: 'run', concept: 'Kneel', yards: -1 }), A(['down']), { force: true }).replay, false)
+  assert.equal(replayPlan(P({ type: 'penalty' }), A([]), { setting: 'all' }).replay, false)
+  assert.equal(replayPlan(P({ yards: 30 }), { ...GA, events: [{ t: 0.1, kind: 'flag', keys: [], spot: { x: 1, y: 1 } }] }, { setting: 'all' }).replay, false)
+})
+
+ok('B6b: telestrations only reference actors that exist (fixtures + 400 fuzzed plays)', () => {
+  const checkPlan = (name: string, anim: BroadcastAnim, p: ReplayPlan) => {
+    const keys = new Set(anim.actors.map((a) => a.key))
+    const ids = new Set<string>()
+    for (const it of p.tele) {
+      assert.ok(!ids.has(it.id), `${name}: duplicate element ${it.id}`)
+      ids.add(it.id)
+      for (const k of it.keys) assert.ok(keys.has(k), `${name}: ${it.id} references missing actor ${k}`)
+      if (!it.ball) assert.ok(it.keys.length > 0, `${name}: ${it.id} references no actor`)
+      assert.ok(it.t0 <= it.t1 && it.t0 >= 0 && it.t1 <= 1, `${name}: ${it.id} window ${it.t0}..${it.t1}`)
+      assert.ok(it.showSec >= 0 && it.showSec < it.hideSec && it.hideSec <= p.times.end, `${name}: ${it.id} shows ${it.showSec}..${it.hideSec}`)
+    }
+  }
+  for (const [name, anim, play] of REPLAY_FIXTURES) checkPlan(name, anim, replayPlan(play, anim, { setting: 'all' }))
+  // Fuzz: events naming keys that are not on the field must never leak into a telestration.
+  let seed = 23
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+  const pool = ['qb', 'wr0', 'cb0', 's0', 'dl0', 'ol0', 'ol1', 'ghost', 'rb', 'lb9']
+  const kinds: AnimEventKind[] = ['throw', 'catch', 'brokenTackle', 'tackle', 'sack', 'interception', 'score', 'kick']
+  let drawn = 0
+  for (let k = 0; k < 400; k++) {
+    const base = [GA, SA, RA][k % 3]
+    const play = [GPLAY, SPLAY, RPLAY][k % 3]
+    const events = [{ t: 0.03, kind: 'snap' as AnimEventKind, keys: ['qb'], spot: { x: 30, y: 26 } }]
+    for (let i = 0; i < 2 + Math.floor(rnd() * 4); i++) events.push({ t: 0.05 + rnd() * 0.9, kind: kinds[Math.floor(rnd() * kinds.length)], keys: [pool[Math.floor(rnd() * pool.length)], pool[Math.floor(rnd() * pool.length)]], spot: { x: 40, y: 20 } })
+    events.sort((a, b) => a.t - b.t)
+    const engagements = [...(base.engagements ?? [])]
+    if (rnd() < 0.5) engagements.push({ a: pool[Math.floor(rnd() * pool.length)], b: pool[Math.floor(rnd() * pool.length)], t0: 0.1, t1: 0.6, kind: 'double' }, { a: pool[Math.floor(rnd() * pool.length)], b: 'dl0', t0: 0.1, t1: 0.6, kind: 'double' })
+    const anim = { ...base, events, engagements }
+    const p = replayPlan(play, anim, { setting: 'all' })
+    drawn += p.tele.length
+    checkPlan(`fuzz ${k}`, anim, p)
+  }
+  assert.ok(drawn > 400, `only ${drawn} fuzzed telestrations`)
+})
+
+ok('B6b: the freeze sits inside the play; frames stay in the replay window; skip ends it at once', () => {
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    const p = replayPlan(play, anim, { setting: 'all' })
+    const T = p.times
+    assert.ok(p.key, `${name}: no key moment`)
+    assert.ok(p.key!.t > p.t0 && p.key!.t <= p.t1, `${name}: key ${p.key!.t} outside ${p.t0}..${p.t1}`)
+    assert.ok(T.cut <= T.freezeStart && T.freezeStart < T.freezeEnd && T.freezeEnd <= T.playEnd && T.playEnd < T.wipeOutStart && T.wipeOutStart < T.end, `${name}: times ${JSON.stringify(T)}`)
+    assert.ok(p.rate > 0 && p.rate <= 1, `${name}: rate ${p.rate}`)
+    assert.ok((p.t1 - p.t0) * p.duration <= MAX_SPAN_SEC + 1e-9, `${name}: replays ${(p.t1 - p.t0) * p.duration} s of play`)
+    let lastT = -1
+    let froze = 0
+    for (const s of replaySecs(p)) {
+      const f = replayAt(p, s)
+      if (f.frozen) {
+        froze++
+        assert.equal(f.t, p.key!.t)
+      }
+      if (f.showReplay) {
+        assert.ok(f.t >= p.t0 - 1e-9 && f.t <= p.t1 + 1e-9, `${name}: t ${f.t} outside the window at ${s}`)
+        assert.ok(f.t >= lastT - 1e-9, `${name}: replay ran backwards at ${s}`)
+        lastT = f.t
+      }
+      if (s < T.cut) assert.ok(!f.showReplay)
+      if (s >= T.end) assert.equal(f.phase, 'done')
+    }
+    assert.ok(froze > 30, `${name}: froze for ${froze} frames`)
+    // Skip: done immediately, a 'done' frame, nothing shows.
+    const rp = new ReplayPlayer(p)
+    rp.advance(T.freezeStart + 0.2)
+    assert.ok(!rp.done && rp.frame().frozen)
+    rp.skip()
+    assert.ok(rp.done)
+    const f = rp.frame()
+    assert.equal(f.phase, 'done')
+    assert.ok(!f.showReplay && f.wipe == null)
+    assert.equal(rp.advance(1).phase, 'done')
+    // A no-replay plan is done from the start.
+    assert.ok(new ReplayPlayer(replayPlan(play, anim, { setting: 'off' })).done)
+  }
+})
+
+/** Records strokes / text (and the fonts) a telestrator paints. */
+function teleRecorder(width: number, height: number) {
+  const r = fontRecorder(width, height)
+  let calls = 0
+  const ctx = new Proxy(r.ctx as unknown as Record<string | symbol, unknown>, {
+    get: (t, k) => {
+      const v = t[k]
+      if (k === 'stroke' || k === 'fill' || k === 'fillText' || k === 'strokeText' || k === 'fillRect') return () => calls++
+      return v
+    },
+    set: (t, k, v) => {
+      t[k] = v
+      return true
+    },
+  }) as unknown as CanvasRenderingContext2D
+  return { ctx, sizes: r.sizes, calls: () => calls }
+}
+
+ok("B6b: nothing draws in 'fast' (sim to end) or 'off'; reduced motion has no wipe; labels >= 12 CSS px", () => {
+  let labels = 0
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    const p = replayPlan(play, anim, { setting: 'all' })
+    for (const dpr of [1, 2]) {
+      for (const [cw, ch] of [
+        [375, 410],
+        [1280, 720],
+        [1920, 1080],
+      ]) {
+        const W = cw * dpr
+        const H = ch * dpr
+        const cx = (anim.ball[0].x + anim.ball[anim.ball.length - 1].x) / 2
+        const pose = orbitPose({ focusX: cx, focusY: 24, back: 34, height: 22, yaw: 0, fovDeg: cw < 600 ? 55 : 43 })
+        const cam = makeCamera(pose, { width: W, height: H })
+        const info = { dpr, width: W, height: H }
+        const tele = new TelestratorLayer()
+        tele.setReplay(p, anim, NFL0, NFL1, { ol1: 77, ol2: 64, dl0: 97 })
+        tele.avoid = { lastHud: [{ x: 16 * dpr, y: 16 * dpr, w: 300 * dpr, h: 32 * dpr }], lastPlaced: [] }
+        const rec = teleRecorder(W, H)
+        const hook = composeHooks(tele.hook, null, tele.topHook)
+        const frame = { ...frameFor(1, cx), camera: pose }
+        for (const s of replaySecs(p)) {
+          tele.frame = replayAt(p, s)
+          tele.mode = 'full'
+          hook(rec.ctx, cam, frame, info)
+          labels += tele.stats.labels
+          for (const a of tele.lastLabels) for (const b of tele.lastLabels) if (a !== b) assert.ok(!rectsOverlap(a, b), `${name}: labels overlap`)
+          for (const a of tele.lastLabels) assert.ok(!rectsOverlap(a, tele.avoid.lastHud[0]), `${name}: a label covers the HUD`)
+        }
+        const min = Math.min(...rec.sizes) / dpr
+        assert.ok(min >= 12 - 1e-9, `${name} ${cw}x${ch}@${dpr}: smallest text ${min.toFixed(2)} CSS px`)
+        // Sim to end / off: no telestration, bug or wipe at any second.
+        for (const mode of ['fast', 'off'] as const) {
+          const quiet = teleRecorder(W, H)
+          for (const s of replaySecs(p)) {
+            tele.frame = replayAt(p, s)
+            tele.mode = mode
+            hook(quiet.ctx, cam, frame, info)
+            assert.equal(tele.lastDrawn.length, 0)
+          }
+          assert.equal(quiet.calls(), 0, `${name}: ${mode} drew ${quiet.calls()} calls`)
+        }
+        // The plan itself is empty in sim-to-end.
+        assert.equal(replayPlan(play, anim, { setting: 'all', playback: 'fast' }).tele.length, 0)
+      }
+    }
+    // Reduced motion: frames never carry a wipe; strokes are whole on the first frame they show.
+    const rm = replayPlan(play, anim, { setting: 'all', reducedMotion: true })
+    for (const s of replaySecs(rm)) {
+      assert.equal(replayAt(rm, s).wipe, null)
+      for (const it of rm.tele) {
+        const st = teleState(it, s)
+        if (st.alpha > 0) assert.equal(st.draw, 1)
+      }
+    }
+  }
+  assert.ok(labels > 50, `only ${labels} labels placed`)
+  // partial() keeps the start and stops at the fraction of the length.
+  const pl = partial([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], 0.75)
+  assert.deepEqual(pl[pl.length - 1], { x: 10, y: 5 })
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)
