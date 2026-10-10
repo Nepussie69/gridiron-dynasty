@@ -47,6 +47,10 @@ export interface PlayAnim {
   flag?: { t: number; x: number; y: number }
   /** Goalposts to draw, for kicks. */
   posts?: boolean
+  /** Recorded blocking / tackling engagements (B1). Times 0..1 like paths. */
+  engagements?: Engagement[]
+  /** Recorded beats of the play, in time order (B1). */
+  events?: AnimEvent[]
 }
 
 export interface AnimContext {
@@ -58,6 +62,307 @@ export interface AnimContext {
   carrierIsQB?: boolean
   /** The real player each animation key (qb, rb, wr0…, s1) stands for. */
   actors?: Map<string, Player>
+}
+
+// ── recorded engagements and events (B1) ─────────────────────────────────────
+// The builders already know every block, tackle and beat of a play. These record
+// that knowledge alongside the motion — for the Broadcast 2.5D view — without
+// changing a single waypoint, time or recorded result. Everything is derived from
+// data the builder already computes, so it stays deterministic.
+
+export type EngageKind = 'block' | 'double' | 'chip' | 'missedTackle' | 'tackle'
+
+/** a = the man acting (blocker / tackler / missed tackler), b = the man blocked or tackled. Times 0..1 like paths. */
+export interface Engagement {
+  a: string
+  b: string
+  t0: number
+  t1: number
+  kind: EngageKind
+}
+
+export type AnimEventKind =
+  | 'snap' | 'playAction' | 'scramble' | 'break' | 'throw' | 'catch' | 'incomplete' | 'interception'
+  | 'brokenTackle' | 'contact' | 'tackle' | 'sack' | 'outOfBounds' | 'down' | 'firstDown' | 'score'
+  | 'safety' | 'turnover' | 'fumble' | 'kick' | 'fairCatch' | 'touchback' | 'kickGood' | 'kickMiss' | 'flag'
+
+export interface AnimEvent {
+  t: number
+  kind: AnimEventKind
+  keys: string[]
+  spot: { x: number; y: number }
+}
+
+/** The man-and-window a builder plans, in seconds; finish() trims it to real contact. */
+interface RecEng {
+  a: string
+  b: string
+  t0: number
+  t1: number
+  kind: EngageKind
+}
+
+/** One play's recording. Filled in seconds by a builder, consumed and released by finish(). */
+let REC: { eng: RecEng[]; ev: AnimEvent[] } | null = null
+
+/** Pre-snap fouls throw no snap (false start / offside / delay of game). */
+const PRE_SNAP_PENALTY = new Set(['falseStart', 'offside', 'delay'])
+
+/** Which kinds close a play: exactly one of these ends every anim, in time order. */
+const TERMINAL_EVENT = new Set<AnimEventKind>(['tackle', 'sack', 'outOfBounds', 'down', 'score', 'incomplete', 'safety', 'kickGood', 'kickMiss', 'touchback', 'fairCatch'])
+
+/** Begin recording for one play (the first line of every builder). */
+function recStart(): void {
+  REC = { eng: [], ev: [] }
+}
+
+/** Plan an engagement in seconds; finish() trims it to the span the two men are in contact. */
+function recEng(a: string, b: string, t0: number, t1: number, kind: EngageKind): void {
+  if (REC && t1 > t0 && Number.isFinite(t0) && Number.isFinite(t1)) REC.eng.push({ a, b, t0, t1, kind })
+}
+
+/** Record one beat of the play at `t` (seconds); finish() normalises it like the paths. */
+function recEv(t: number, kind: AnimEventKind, keys: string[], spot: Pt): void {
+  if (REC && Number.isFinite(t) && Number.isFinite(spot.x) && Number.isFinite(spot.y)) {
+    REC.ev.push({ t, kind, keys: keys.slice(), spot: { x: spot.x, y: spot.y } })
+  }
+}
+
+/** The dot key a recorded player id stands for, within `pool`. */
+function keyOf(ctx: AnimContext, id: string | undefined, pool: string[]): string | undefined {
+  if (!id) return undefined
+  for (const k of pool) if (ctx.actors?.get(k)?.id === id) return k
+  return undefined
+}
+
+/** The scrimmage snap: the ball leaves the centre's spot for the quarterback. */
+function recSnap(los: number): void {
+  recEv(SNAP, 'snap', ['ol2', 'qb'], { x: los, y: MID_Y })
+}
+
+/** The first time in [from, to] one of `defKeys` is within `thr` yards of the carrier. */
+function firstContact(
+  m: Record<string, Mover>,
+  defKeys: string[],
+  carrierKey: string,
+  from: number,
+  to: number,
+  thr = 1.0,
+): { t: number; key: string } | null {
+  if (to <= from) return null
+  const steps = Math.max(1, Math.ceil((to - from) / 0.02))
+  for (let i = 0; i <= steps; i++) {
+    const t = from + ((to - from) * i) / steps
+    const cp = posAt(m[carrierKey].path, t)
+    let best = ''
+    let bd = Infinity
+    for (const k of defKeys) {
+      if (k === carrierKey || !m[k]) continue
+      const p = posAt(m[k].path, t)
+      const d = Math.hypot(p.x - cp.x, p.y - cp.y)
+      if (d < bd) {
+        bd = d
+        best = k
+      }
+    }
+    if (best && bd <= thr) return { t, key: best }
+  }
+  return null
+}
+
+/** The first time in [from, to] the mover crosses x (dir +1 rising, −1 falling). */
+function crossX(mv: Mover, x: number, from: number, to: number, dir: 1 | -1): number | null {
+  if (to <= from) return null
+  const steps = Math.max(1, Math.ceil((to - from) / 0.02))
+  let prev = posAt(mv.path, from).x
+  for (let i = 1; i <= steps; i++) {
+    const t = from + ((to - from) * i) / steps
+    const cx = posAt(mv.path, t).x
+    if (dir > 0 ? prev < x && cx >= x : prev > x && cx <= x) return t
+    prev = cx
+  }
+  return null
+}
+
+/** The first time in [from, to] the mover's y departs from `y` by more than `d`. */
+function firstDeviation(mv: Mover, y: number, d: number, from: number, to: number): number | null {
+  if (to <= from) return null
+  const steps = Math.max(1, Math.ceil((to - from) / 0.02))
+  for (let i = 0; i <= steps; i++) {
+    const t = from + ((to - from) * i) / steps
+    if (Math.abs(posAt(mv.path, t).y - y) > d) return t
+  }
+  return null
+}
+
+/** The time in [from, to] the mover is closest to `pt`. */
+function timeNearest(mv: Mover, pt: Pt, from: number, to: number): number {
+  if (to <= from) return from
+  const steps = Math.max(1, Math.ceil((to - from) / 0.02))
+  let best = from
+  let bd = Infinity
+  for (let i = 0; i <= steps; i++) {
+    const t = from + ((to - from) * i) / steps
+    const p = posAt(mv.path, t)
+    const d = Math.hypot(p.x - pt.x, p.y - pt.y)
+    if (d < bd) {
+      bd = d
+      best = t
+    }
+  }
+  return best
+}
+
+/** R5: each defender who missed a tackle is a stumble and a missedTackle engagement. */
+function recMissedTackles(
+  play: Play,
+  ctx: AnimContext,
+  carrierKey: string,
+  from: number,
+  to: number,
+  m: Record<string, Mover>,
+  pool: string[],
+): void {
+  const ids = play.missedTackleIds ?? []
+  if (!ids.length || to <= from) return
+  ids.forEach((id, i) => {
+    const dk = keyOf(ctx, id, pool)
+    if (!dk || dk === carrierKey) return
+    const t = clampN(from + (to - from) * (0.62 + i * 0.08), from, to)
+    recEv(t, 'brokenTackle', [carrierKey, dk], posAt(m[carrierKey].path, t))
+    recEng(dk, carrierKey, Math.max(0, t - 0.18), t + 0.06, 'missedTackle')
+  })
+}
+
+/**
+ * The close of a carry / return: first contact, the first-down or goal line, the
+ * tackling engagements (the recorded tackler and any gang tackle) and the single
+ * terminal event. `opts.from` is when the carrier really has the ball.
+ */
+function recClose(
+  m: Record<string, Mover>,
+  carrierKey: string,
+  tackler: string,
+  endSec: number,
+  defenders: string[],
+  opts: {
+    play?: Play
+    los?: number
+    from?: number
+    td?: boolean
+    tdX?: number
+    tdDir?: 1 | -1
+    safety?: boolean
+    outOfBounds?: boolean
+  },
+): void {
+  const carrier = m[carrierKey]
+  if (!carrier || !(endSec > 0)) return
+  const from = Math.max(0.05, Math.min(opts.from ?? 0.2, endSec))
+  const endPos = posAt(carrier.path, endSec)
+  const contact = firstContact(m, defenders, carrierKey, from, endSec, 1.0)
+  if (contact && contact.t < endSec - 0.02) recEv(contact.t, 'contact', [carrierKey, contact.key], posAt(carrier.path, contact.t))
+  const play = opts.play
+  if (play && !opts.td && !opts.safety && play.distance != null && opts.los != null && play.endYard - play.startYard >= play.distance) {
+    const tx = opts.los + play.distance
+    const t = crossX(carrier, tx, from, endSec, 1)
+    if (t != null) recEv(t, 'firstDown', [carrierKey], { x: tx, y: posAt(carrier.path, t).y })
+  }
+  recEng(tackler, carrierKey, Math.max(0, endSec - 0.5), endSec + 0.05, 'tackle')
+  for (const k of defenders) {
+    if (k === tackler || k === carrierKey || !m[k]) continue
+    const p = posAt(m[k].path, endSec)
+    if (Math.hypot(p.x - endPos.x, p.y - endPos.y) <= 1.2) recEng(k, carrierKey, Math.max(0, endSec - 0.35), endSec + 0.05, 'tackle')
+  }
+  if (opts.td && opts.tdX != null) {
+    const t = crossX(carrier, opts.tdX, from, endSec, opts.tdDir ?? 1) ?? endSec
+    recEv(t, 'score', [carrierKey], posAt(carrier.path, t))
+  } else if (opts.safety) {
+    recEv(endSec, 'safety', [tackler, carrierKey], endPos)
+  } else if (opts.outOfBounds) {
+    recEv(endSec, 'outOfBounds', [carrierKey], endPos)
+  } else {
+    recEv(endSec, 'tackle', [tackler, carrierKey], endPos)
+  }
+}
+
+/** How far apart the two men of an engagement may stand and still count as in contact. */
+const ENGAGE_LIMIT: Record<EngageKind, number> = {
+  block: 1.75, // pass-pro pairs sit 1.05-1.63 yd apart (animcontact4 probe p10-p90)
+  double: 2.0,
+  chip: 1.6,
+  missedTackle: 1.2,
+  tackle: 1.2,
+}
+
+/** Trim one planned engagement to the span where the two settled paths are in contact. */
+function trimEngagements(rec: RecEng[], movers: Record<string, Mover>, frac: (t: number) => number, maxT: number): Engagement[] {
+  const step = 0.02
+  const out: Engagement[] = []
+  for (const e of rec) {
+    const a = movers[e.a]
+    const b = movers[e.b]
+    if (!a || !b) continue
+    const thr = ENGAGE_LIMIT[e.kind]
+    const lo = Math.max(0, e.t0)
+    const hi = Math.min(e.t1, maxT)
+    if (!(hi > lo)) continue
+    const n = Math.max(1, Math.ceil((hi - lo) / step))
+    const at = (i: number) => (i >= n ? hi : lo + i * step)
+    const close: boolean[] = []
+    for (let i = 0; i <= n; i++) {
+      const t = at(i)
+      const pa = posAt(a.path, t)
+      const pb = posAt(b.path, t)
+      close.push(Math.hypot(pa.x - pb.x, pa.y - pb.y) <= thr)
+    }
+    let s = -1
+    let bestS = -1
+    let bestE = -1
+    let bestLen = 0
+    for (let i = 0; i <= n; i++) {
+      if (close[i]) {
+        if (s < 0) s = i
+        const len = at(i) - at(s)
+        if (len > bestLen) {
+          bestLen = len
+          bestS = at(s)
+          bestE = at(i)
+        }
+      } else s = -1
+    }
+    // A tackle ends on the recorded tackle: keep the contact window running into
+    // that beat (the tackler is on the carrier when the whistle goes), so the
+    // window stays a real contact rather than a fixed tail that never touches.
+    if (e.kind === 'tackle' && close[n]) {
+      let k = n
+      while (k >= 0 && close[k]) k--
+      bestS = at(k + 1)
+      bestE = hi
+      bestLen = bestE - bestS
+    }
+    if (bestS < 0 || bestLen < (e.kind === 'tackle' ? 0.02 : 0.08)) continue
+    let t0 = frac(bestS)
+    let t1 = frac(bestE)
+    if (!(t1 > t0)) {
+      t0 = clampN(t0, 0, 1 - 1e-4)
+      t1 = Math.min(1, t0 + 1e-4)
+    }
+    if (!(t1 > t0)) continue
+    out.push({ a: e.a, b: e.b, t0, t1, kind: e.kind })
+  }
+  return out
+}
+
+/** Release the recorded events: normalise by the same frac, then sort by time. */
+function takeEvents(rec: AnimEvent[], frac: (t: number) => number): AnimEvent[] {
+  const out = rec.map((e) => ({ t: frac(e.t), kind: e.kind, keys: e.keys, spot: e.spot }))
+  // The terminal event is the last beat of the play; nothing is recorded after it.
+  let termT = 0
+  for (const e of out) if (TERMINAL_EVENT.has(e.kind)) termT = Math.max(termT, e.t)
+  for (const e of out) if (!TERMINAL_EVENT.has(e.kind) && e.t > termT) e.t = termT
+  out.sort((x, y) => x.t - y.t || (TERMINAL_EVENT.has(x.kind) ? 1 : 0) - (TERMINAL_EVENT.has(y.kind) ? 1 : 0))
+  return out
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -453,6 +758,10 @@ function finish(
   }
   if (rest.ball.length) maxT = Math.max(maxT, rest.ball[rest.ball.length - 1].t)
   const frac = (t: number) => clampN(t / maxT, 0, 1)
+  const rec = REC
+  REC = null
+  const engagements = rec ? trimEngagements(rec.eng, movers, frac, maxT) : []
+  const events = rec ? takeEvents(rec.ev, frac) : []
   const actors: Actor[] = keys.map((k) => {
     const p = movers[k].path.map((w) => ({ t: frac(w.t), x: w.x, y: w.y }))
     compact(p)
@@ -468,6 +777,8 @@ function finish(
     flights: rest.flights.map((fl) => ({ t0: frac(fl.t0), t1: frac(fl.t1), height: fl.height })),
     flag: rest.flag ? { t: frac(rest.flag.t), x: rest.flag.x, y: rest.flag.y } : undefined,
     posts: rest.posts,
+    engagements,
+    events,
   }
 }
 
@@ -813,6 +1124,7 @@ function applyBlockEngagements(
     const tt = Math.min(te, total - 0.35)
     arriveAt(m[b], p, tt)
     arriveAt(m[c], p, tt)
+    recEng(b, c, 0.2, total, 'block')
     const engage = Math.min(Math.max(m[b].t, m[c].t) + 0.4, total - 0.12)
     if (m[b].t < engage) m[b].hold(engage - m[b].t)
     if (m[c].t < engage) m[c].hold(engage - m[c].t)
@@ -979,6 +1291,13 @@ function passProtect(
     usedB.add(b)
     pairs.push({ r, bs: [b] })
   }
+  // Record the protection matchups: a doubled rusher is a 'double' for each of
+  // his two blockers, everyone else a single 'block'. finish() trims each to the
+  // span the two men are actually in contact.
+  for (const pr of pairs) {
+    const kind: EngageKind = pr.bs.length >= 2 ? 'double' : 'block'
+    for (const b of pr.bs) recEng(b, pr.r, 0.2, opts.arriveSec, kind)
+  }
 
   // Lane layout. Every blocker stands on the wall at a y, spaced so the bodies
   // stay apart; a double is 2.4 yd wide so the rusher can split it.
@@ -1107,9 +1426,11 @@ function passProtect(
 }
 
 function buildRun(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   const los = 10 + play.startYard
   const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
   const m = startMovers(f, ctx)
+  recSnap(los)
   const seed = play.n * 7 + play.startYard
   const qbRun = !!ctx.carrierIsQB || /QB Draw|Scramble|Sneak/.test(play.concept)
   const wide = /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
@@ -1154,6 +1475,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     const dlKey = i < 2 ? `dl${i}` : i < 4 ? `dl${i - 1}` : 'dl3'
     const drive = lineDrive(m[`ol${i}`].player, 'RBK', m[dlKey].player, 'BSH')
     m[`ol${i}`].run([{ x: los + 0.9 + drive + (wide ? 0.3 : 0), y: f[`ol${i}`].y + side * (wide ? 1.5 : 0.4) }], { stop: false })
+    recEng(`ol${i}`, dlKey, 0.2, 1e9, 'block')
   }
   for (let i = 0; i < 4; i++) {
     const drive = lineDrive(m[`dl${i}`].player, 'BSH', m[`ol${Math.min(4, i)}`].player, 'RBK')
@@ -1201,6 +1523,10 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     const recover = nearestKey(m, DEF_KEYS, loose, popT)
     m[recover].run([{ x: loose.x, y: loose.y }, { x: clampX(spotX), y: loose.y }], { v0: seek(m[recover], popT), stop: true })
     const recT = m[recover].t
+    recEv(popT, 'fumble', [carrier, recover], { x: loose.x, y: loose.y })
+    recEv(popT + 0.02, 'turnover', [recover], { x: loose.x, y: loose.y })
+    recEv(recT, 'down', [recover], { x: clampX(spotX), y: loose.y })
+    recMissedTackles(play, ctx, carrier, holeT, popT, m, DEF_KEYS)
     pursueRun(m, DEF_KEYS.filter((k) => k !== recover), popT, { x: endX, y: endY }, popT + 0.4, seed)
     const ball: WP[] = [
       ...(qbRun ? snapBall(m, los, popT) : [...snapBall(m, los, handoffT), ...shadow(m[carrier].path, handoffT, popT).slice(1)]),
@@ -1224,6 +1550,17 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const creditedKey = credited ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === credited) : undefined
   const res = resolveCarry({ m, carrierKey: carrier, spot: { x: endX, y: endY }, tacklerKeys: DEF_KEYS, prefer: creditedKey, seed })
   capAll(m, ALL_KEYS(f), res.endSec)
+  recMissedTackles(play, ctx, carrier, holeT, res.endSec, m, DEF_KEYS)
+  recClose(m, carrier, res.tackler, res.endSec, DEF_KEYS, {
+    play,
+    los,
+    from: 0.2,
+    td: endX >= 110,
+    tdX: 110,
+    tdDir: 1,
+    safety: !!play.safety,
+    outOfBounds: !!play.outOfBounds,
+  })
   const ball: WP[] = qbRun
     ? snapBall(m, los, res.endSec)
     : [...snapBall(m, los, handoffT), ...shadow(m[carrier].path, handoffT, res.endSec).slice(1)]
@@ -1640,9 +1977,11 @@ function resolveCarry(opts: {
 }
 
 function buildPass(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   const los = 10 + play.startYard
   const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
   const m = startMovers(f, ctx)
+  recSnap(los)
   const seed = play.n * 11 + play.startYard
   const inc = play.result === 'Incomplete'
   const int = play.result.startsWith('Interception')
@@ -1677,6 +2016,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     qbPts.push({ x: f.qb.x - drop - 0.5 + (scramble ? 1.5 : 0), y: MID_Y + (rollY - MID_Y) * 0.15 }, { x: f.qb.x - drop + 1.5, y: rollY })
   }
   m.qb.run(qbPts, { stop: true })
+  if (pa || boot) recEv(0.34, 'playAction', ['qb', 'rb'], posAt(m.qb.path, 0.34))
 
   // Route tree; the target runs the route whose depth best matches the throw.
   const routeMap = conceptTree(concept, rollSide)
@@ -1718,9 +2058,11 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const dir = f.rb.y >= f[chipR].y ? 1 : -1
     m.rb.run([{ x: clampX(los - 1.6), y: clampY(f[chipR].y + dir * 1.1) }], { stop: true })
     m.rb.hold(0.1)
+    recEng('rb', chipR, 0.15, m.rb.t, 'chip')
   }
   let catchPt: Pt = { x: los, y: MID_Y }
   let catchSec = 0.4
+  const breaks: { k: string; t: number; pt: Pt }[] = []
   for (const k of receivers) {
     if (stayIn.has(k)) continue
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
@@ -1730,6 +2072,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const rr = routeRunRating(m[k].player, def.depth)
     const breakIdx = pts.length >= 3 ? pts.length - 2 : -1
     runRoute(m[k], pts, breakIdx, rr)
+    if (breakIdx > 0) breaks.push({ k, t: timeNearest(m[k], pts[breakIdx], 0, m[k].t), pt: pts[breakIdx] })
     if (k === tgt) {
       catchPt = pts[pts.length - 1]
       catchSec = m[k].t
@@ -1776,6 +2119,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const flightSec = clampN(1.1 - (thp - 70) * 0.006 + depth * 0.01 + (tup - 70) * 0.003 + (pa ? (pac - 70) * 0.002 : 0), 0.5, 1.8)
   const releaseSec = Math.max(0.15, catchSec - flightSec)
   const releasePos = posAt(m.qb.path, releaseSec)
+  recEv(releaseSec, 'throw', ['qb', tgt], releasePos)
+  if (scramble) {
+    const dev = firstDeviation(m.qb, MID_Y, 0.5, SNAP, releaseSec)
+    const st = clampN(dev ?? releaseSec - 0.05, SNAP, Math.max(SNAP, releaseSec - 0.02))
+    recEv(st, 'scramble', ['qb'], posAt(m.qb.path, st))
+  }
   const accKey = depth >= 15 ? 'DAC' : depth >= 9 ? 'MAC' : 'SAC'
   const accuracy = attrOf(qb, accKey)
 
@@ -1862,6 +2211,11 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   for (const recv of Object.keys(assign)) {
     manTrail(m[assign[recv]], recv, m[recv], { fromSec: 0.1, toSec: trailEnd, los, cov: covOf(assign[recv]), inw: inwOf(recv), tightness, seed, routeName: routeMap[recv] ?? '', zone: zoneLook, isTarget: recv === tgt, result: play.result, gain: gainYds })
   }
+  // Each route's cut, with the man defender when the look is man.
+  for (const br of breaks) {
+    const man = assign[br.k]
+    recEv(br.t, 'break', man ? [br.k, man] : [br.k], br.pt)
+  }
   // Unassigned defenders: safeties over the top, the rest rob / drop into a zone.
   for (const dk of poolAll) {
     if (isBlitzer(dk) || used.has(dk)) continue
@@ -1876,12 +2230,15 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     ball.push({ t: catchSec + 0.14, x: clampX(catchPt.x + 1.4 + skip), y: clampY(catchPt.y + (hash(seed) - 0.5) * 3) })
     const stopT = catchSec + 0.16
     for (const k of ALL_KEYS(f)) if (m[k].t < stopT) m[k].hold(stopT - m[k].t)
+    recEv(catchSec, 'incomplete', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
     return finish(f, m, { ball, holders, flights })
   }
 
   if (int) {
     const spotX = changeSpot(play, ctx.next) ?? catchPt.x - 8
     const near = nearestKey(m, DEF_KEYS, catchPt, catchSec)
+    recEv(catchSec, 'interception', [near, tgt], catchPt)
+    recEv(catchSec, 'turnover', [near], catchPt)
     const v0 = seek(m[near], Math.max(0.12, catchSec - 0.06))
     m[near].run([{ x: catchPt.x, y: catchPt.y }], { v0, stop: true })
     const rx = clampX(spotX)
@@ -1890,6 +2247,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // closes on the returner, who never freezes before the recorded stop.
     const res = resolveCarry({ m, carrierKey: near, spot: { x: rx, y: ry }, tacklerKeys: OFF_KEYS, seed, maxExtra: 2.0 })
     capAll(m, ALL_KEYS(f), res.endSec)
+    recClose(m, near, res.tackler, res.endSec, OFF_KEYS, { from: catchSec, td: !!play.defTD, tdX: 110, tdDir: 1, outOfBounds: !!play.outOfBounds })
     ball.push(...shadow(m[near].path, catchSec).slice(1))
     return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: near }], flights })
   }
@@ -1919,6 +2277,10 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const recT = m[rec].t
     chaseCarrier(m, DEF_KEYS.filter((k) => k !== rec), popT, m[tgt], popT + 0.4, seed)
     ball.push({ t: popT, x: loose.x, y: loose.y }, ...shadow(m[rec].path, popT).slice(1))
+    recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
+    recEv(popT, 'fumble', [tgt, rec], { x: loose.x, y: loose.y })
+    recEv(popT + 0.02, 'turnover', [rec], { x: loose.x, y: loose.y })
+    recEv(recT, 'down', [rec], { x: loose.x, y: loose.y })
     return finish(f, m, {
       ball,
       holders: [...holders, { t: catchSec, key: tgt }, { t: popT, key: null }, { t: recT, key: rec }],
@@ -1934,6 +2296,15 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     chaseCarrier(m, pursuers, catchSec, m[tgt], endSec, seed)
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
+    recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
+    const contact = firstContact(m, pursuers, tgt, catchSec, endSec, 1.0)
+    if (contact && contact.t < endSec - 0.02) recEv(contact.t, 'contact', [tgt, contact.key], posAt(m[tgt].path, contact.t))
+    if (isTD) {
+      const st = crossX(m[tgt], 110, catchSec, endSec, 1) ?? endSec
+      recEv(st, 'score', [tgt], posAt(m[tgt].path, st))
+    } else {
+      recEv(endSec, 'outOfBounds', [tgt], posAt(m[tgt].path, endSec))
+    }
     return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
   }
 
@@ -1943,6 +2314,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const res = resolveCarry({ m, carrierKey: tgt, spot, tacklerKeys: pursuers, prefer: creditKey, seed })
   capAll(m, ALL_KEYS(f), res.endSec)
   ball.push(...shadow(m[tgt].path, catchSec).slice(1))
+  recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
+  recMissedTackles(play, ctx, tgt, catchSec, res.endSec, m, DEF_KEYS)
+  recClose(m, tgt, res.tackler, res.endSec, pursuers, { play, los, from: catchSec })
   return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
 }
 
@@ -1956,9 +2330,11 @@ function blitzKeys(seed: number): string[] {
 }
 
 function buildSack(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   const los = 10 + play.startYard
   const f = formation(los)
   const m = startMovers(f, ctx)
+  recSnap(los)
   const seed = play.n * 17 + play.startYard
   const endX = clampX(10 + play.endYard)
   const dodge = hash(seed + 1) < 0.5 ? -1 : 1
@@ -1999,15 +2375,20 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   const blitzers = blitzK.includes(rusherKey) ? blitzK : [...blitzK, rusherKey]
   ;['cb0', 'cb1', 's0', 's1', 'lb0', 'lb1', 'lb2'].filter((k) => !blitzers.includes(k)).forEach((k) => m[k].run([{ x: f[k].x + 3, y: f[k].y }], { stop: true }))
   const ball = snapBall(m, los, sackT)
+  recEv(sackT, 'sack', [rusherKey, 'qb'], qbEnd)
+  if (play.stripSack || play.turnover) recEv(sackT - 0.03, 'fumble', [rusherKey, 'qb'], qbEnd)
+  if (play.turnover) recEv(sackT - 0.015, 'turnover', [rusherKey], qbEnd)
   return finish(f, m, { ball, holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }], flights: [] })
 }
 
 function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   const los = 10 + play.startYard
   const f = formation(los)
   f.qb = { ...f.qb, x: los - 13, role: 'P' }
   f.s0 = { ...f.s0, x: los + 40, y: MID_Y - 4, role: 'PR' }
   const m = startMovers(f, ctx)
+  recSnap(los)
   const seed = play.n * 19 + play.startYard
   const kind = play.returnKind
   const touchback = kind === 'touchback' || play.result.includes('touchback')
@@ -2049,11 +2430,13 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   const trackT = m.s0.t
   const landT = Math.max(kickT + flight, trackT + 0.15)
   if (m.s0.t < landT) m.s0.hold(landT - m.s0.t)
+  recEv(kickT, 'kick', ['qb'], posAt(m.qb.path, kickT))
 
   if (touchback) {
     cov.forEach((k, i) => m[k].run([{ x: clampX(los + 20 + i), y: clampY(f[k].y) }], { stop: true }))
     blk.forEach((k, i) => m[k].run([{ x: clampX(30 + i * 3), y: clampY(4 + i * 4.5) }], { stop: true }))
     const ball: WP[] = [...snapBall(m, los, kickT), { t: landT, x: 116, y: MID_Y }]
+    recEv(landT, 'touchback', ['s0'], { x: 116, y: MID_Y })
     return finish(f, m, { ball, holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: kickT, key: null }], flights: [{ t0: kickT, t1: landT, height: 1 }] })
   }
 
@@ -2068,6 +2451,17 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
     if (kind === 'muff') {
       const loose = { x: clampX(landPt.x + (hash(seed + 4) - 0.5) * 6), y: clampY(landPt.y + (hash(seed + 5) - 0.5) * 6) }
       ball.push({ t: landT + 0.25, x: loose.x, y: loose.y }, { t: landT + 0.45, x: loose.x, y: loose.y })
+    }
+    if (kind === 'fairCatch') recEv(landT, 'fairCatch', ['s0'], landPt)
+    else if (kind === 'muff') {
+      recEv(landT, 'fumble', ['s0'], landPt)
+      if (play.turnover) recEv(landT + 0.02, 'turnover', [downKey], landPt)
+      recEv(landT + 0.45, 'down', ['s0'], landPt)
+    } else if (kind === 'blocked') {
+      if (play.turnover) recEv(kickT + 0.05, 'turnover', [downKey], landPt)
+      recEv(landT, 'down', [downKey], landPt)
+    } else {
+      recEv(landT, 'down', [downKey], landPt)
     }
     return finish(f, m, {
       ball,
@@ -2105,6 +2499,8 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   for (const k of blk) capAt(m[k], end)
 
   const ball: WP[] = [...snapBall(m, los, kickT), { t: landT, x: landPt.x, y: landPt.y }, ...shadow(m.s0.path, landT).slice(1)]
+  recEv(landT, 'catch', ['s0', tackler], landPt)
+  recClose(m, 's0', tackler, end, cov, { td, tdX: 10, tdDir: -1, outOfBounds: !!play.outOfBounds })
   return finish(f, m, {
     ball,
     holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: kickT, key: null }, { t: landT, key: 's0' }],
@@ -2113,11 +2509,13 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
 }
 
 function buildKick(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   const los = 10 + snapYard(play)
   const f = formation(los)
   f.qb = { ...f.qb, x: los - 7, role: 'H' }
   f.rb = { ...f.rb, x: los - 9.5, y: MID_Y - 2, role: 'K' }
   const m = startMovers(f, ctx)
+  recSnap(los)
   const good = /good/.test(play.result) && !/no good|MISSED/i.test(play.result)
   const seed = play.n * 23 + play.startYard
   const missY = MID_Y + (hash(seed) < 0.5 ? -1 : 1) * (4 + hash(seed + 1) * 3)
@@ -2129,6 +2527,9 @@ function buildKick(play: Play, ctx: AnimContext): PlayAnim {
   m.rb.run([{ x: los - 7.2, y: MID_Y - 0.5 }], { stop: true })
   for (let i = 0; i < 4; i++) m[`dl${i}`].run([{ x: los, y: f[`dl${i}`].y }], { stop: true })
   const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: SNAP, x: los - 7, y: MID_Y }, { t: kickT, x: los - 7, y: MID_Y }, { t: landT, x: 116, y: good ? MID_Y : missY }]
+  recEv(kickT, 'kick', ['rb'], posAt(m.rb.path, kickT))
+  if (play.turnover) recEv(kickT + 0.04, 'turnover', ['dl0'], posAt(m.dl0.path, kickT + 0.04))
+  recEv(landT, good ? 'kickGood' : 'kickMiss', ['rb'], { x: 116, y: good ? MID_Y : missY })
   return finish(f, m, {
     ball,
     holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: kickT, key: null }],
@@ -2138,6 +2539,7 @@ function buildKick(play: Play, ctx: AnimContext): PlayAnim {
 }
 
 function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   // The receiving club is the offense; the kick comes from their own end back.
   const f = formation(10 + play.startYard)
   const m = startMovers(f, ctx)
@@ -2173,6 +2575,7 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   const trackT = m.rb.t
   let catchT = Math.max(minFlight, trackT + 0.15)
   if (m.rb.t < catchT) m.rb.hold(catchT - m.rb.t)
+  recEv(0, 'kick', ['s1'], { x: kickX, y: MID_Y })
 
   if (touchback) {
     // No return: the coverage converges downfield and the returner kneels. No
@@ -2180,6 +2583,7 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
     covKeys.forEach((k, i) => m[k].run([{ x: clampX(kickX - 16 - i * 1.5), y: clampY(4 + i * 4.6) }], { stop: true }))
     blkKeys.forEach((k, i) => m[k].run([{ x: clampX(30 + i * 3), y: clampY(4 + i * 4.6) }], { stop: true }))
     const ball: WP[] = [{ t: 0, x: kickX, y: MID_Y }, { t: catchT, x: clampX(106), y: MID_Y }]
+    recEv(catchT, 'touchback', ['rb'], { x: 106, y: MID_Y })
     return finish(f, m, { ball, holders: [{ t: 0, key: null }], flights: [{ t0: 0, t1: catchT, height: 1 }] })
   }
 
@@ -2243,6 +2647,10 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
       { t: Math.max(recT, popT + 0.2), x: loose.x, y: loose.y },
       ...shadow(m[rec].path, recT).slice(1),
     )
+    recEv(catchT, 'catch', ['rb', rec], catchPt)
+    recEv(popT, 'fumble', ['rb', rec], { x: loose.x, y: loose.y })
+    recEv(popT + 0.02, 'turnover', [rec], { x: loose.x, y: loose.y })
+    recEv(recT, 'down', [rec], { x: loose.x, y: loose.y })
     return finish(f, m, {
       ball,
       holders: [{ t: 0, key: null }, { t: catchT, key: 'rb' }, { t: popT, key: null }, { t: recT, key: rec }],
@@ -2250,6 +2658,8 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
     })
   }
   ball.push(...shadow(m.rb.path, catchT).slice(1))
+  recEv(catchT, 'catch', ['rb', tackler], catchPt)
+  recClose(m, 'rb', tackler, end, DEF_KEYS, { td, tdX: 110, tdDir: 1, outOfBounds: !!play.outOfBounds, from: catchT })
   return finish(f, m, {
     ball,
     holders: [{ t: 0, key: null }, { t: catchT, key: 'rb' }],
@@ -2258,12 +2668,19 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
 }
 
 function buildPenalty(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   const los = 10 + play.startYard
   const f = formation(los)
   const m = startMovers(f, ctx)
   for (const k of OFF_KEYS) m[k].run([{ x: f[k].x + 0.6, y: f[k].y }], { stop: true })
   for (const k of DEF_KEYS) m[k].run([{ x: f[k].x - 0.4, y: f[k].y }], { stop: true })
   const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: 0.4, x: los, y: MID_Y }, { t: 1.2, x: 10 + play.endYard, y: MID_Y }]
+  const flagX = los + (play.yards > 0 ? 2 : -2)
+  const flagY = MID_Y + 3
+  const flagKey = keyOf(ctx, play.penaltyPlayerId, ALL_KEYS(f)) ?? nearestKey(m, ALL_KEYS(f), { x: flagX, y: flagY }, 0.3)
+  recEv(0.3, 'flag', [flagKey], { x: flagX, y: flagY })
+  if (!PRE_SNAP_PENALTY.has(play.penaltyKind ?? '')) recSnap(los)
+  recEv(1.2, 'down', [flagKey], { x: 10 + play.endYard, y: MID_Y })
   return finish(f, m, {
     ball,
     holders: [{ t: 0, key: null }],
@@ -2273,12 +2690,14 @@ function buildPenalty(play: Play, ctx: AnimContext): PlayAnim {
 }
 
 function buildStatic(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
   const los = 10 + play.startYard
   const f = formation(los)
   const m = startMovers(f, ctx)
   for (const k of OFF_KEYS) m[k].hold(0.3)
   for (const k of DEF_KEYS) m[k].hold(0.3)
   const ball: WP[] = [{ t: 0, x: los, y: MID_Y }]
+  recEv(0.3, 'down', [], { x: los, y: MID_Y })
   return finish(f, m, { ball, holders: [{ t: 0, key: null }], flights: [] })
 }
 
