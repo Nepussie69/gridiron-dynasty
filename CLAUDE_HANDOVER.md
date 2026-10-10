@@ -1,6 +1,13 @@
 # Claude handover — Gridiron Dynasty
 
-Prepared 2026-10-10 19:20 AEDT by Claude Opus 5.5 for a fresh chat. Supersedes the 04:39 Codex handover. Read AGENTS.md first, then this file. `PLAYTEST_BACKLOG.md` rows 136–153 are this session's requests.
+Prepared 2026-10-10 19:20 AEDT, refreshed 19:25, by Claude Opus 5.5 for a fresh chat. Supersedes the 04:39 Codex handover. Read AGENTS.md first, then this file. `PLAYTEST_BACKLOG.md` rows 136–155 are this session's requests.
+
+## First 5 minutes in the new chat
+
+1. `pgrep -fl "gridiron-work/ds-push-"` — at 19:25 three runners were alive: realism (pid 13517, realism15fix7), kickoffs (6638, kickoffs-fix1 try 3), animcontact (17248, animcontact3). Tail `~/gridiron-work/logs/{realism,kickoffs,animcontact}.log` and read the worker report at the end of the newest `logs/events/<name>.tryN.jsonl`.
+2. Re-arm a watcher per live runner (`while kill -0 <pid>; do sleep 30; done`) and keep `caffeinate -i -w <pid>` on each.
+3. Do the returners browser check and merge (only gate left), then review stcalls `fd10d23`.
+4. For each runner that has exited: snapshot source-only, run the independent gates in a review worktree, follow the table below.
 
 ## Ground rules (unchanged, user-confirmed)
 
