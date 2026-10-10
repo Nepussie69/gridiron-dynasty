@@ -23,7 +23,10 @@ import { BroadcastRenderer, FrameWindow, type BroadcastFrame, type FrameStats, t
 import { ActorLayer, type ActorPlay } from './actors'
 import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from './graphics'
-import { createDirector, type Director, type DirectorProfile } from './director'
+import { type Director, type DirectorProfile } from './director'
+import { createBroadcastDirector } from './directorRules'
+import { ReplayPlayer, type ReplayFrame, type ReplayPhase, type ReplayPlan } from './replay'
+import { TelestratorLayer, attachTelestrator } from './telestrator'
 import { useViewSettings, usePhone, deviceKey, type ViewSettings, type AutoQState, type QualitySetting } from './viewSettings'
 
 // ── B4 hook: the real ball + effects (merged into main after this branch) ────
@@ -256,6 +259,8 @@ export interface LiveBroadcastOptions {
   /** Starting level for Auto (the stored result for this device, else 'full'). */
   qualityStart?: QualityLevel
   reducedMotion?: boolean
+  /** CSS px the HUD (lower third / toast) keeps clear at the bottom (DOM controls). */
+  hudBottomInset?: number
   /** The resolved live view, echoed into the DEV stats hook. */
   live?: 'broadcast' | 'topdown'
   onQuality?: (q: QualityLevel, auto: AutoQualityState | null) => void
@@ -269,6 +274,9 @@ function mirrorPose(p: CameraPose, dir: Direction): CameraPose {
   const b = offenseToWorld(p.target[0], p.target[1], dir)
   return { pos: [a.x, a.y, p.pos[2]], target: [b.x, b.y, p.target[2]], fovDeg: p.fovDeg }
 }
+
+/** A replay's phase as Game Day sees it: 'lead' is the beat before the wipe. */
+export type LiveReplayPhase = ReplayPhase | 'lead'
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 
@@ -298,6 +306,21 @@ export class LiveBroadcast {
   private destroyed = false
   private ballFx: BallFxLike | null = null
   private ballFxKey = ''
+  // B8: the telestrator replay (B6b) on this canvas.
+  readonly tele: TelestratorLayer
+  private rp: ReplayPlayer | null = null
+  private rpDirector: Director | null = null
+  private rpPhase: LiveReplayPhase | null = null
+  /** Seconds the live end frame (and its result toast) holds before the wipe. */
+  private rpLead = 0
+  /** Seconds the live play has sat on its last frame: the result toast's hold (B6a 'post'). */
+  private endHold = 0
+  private endHoldAt = 0
+  private rpLastNow = 0
+  private rpPaused = false
+  private rpSpeed = 1
+  /** Called when the replay phase changes (null = no replay on screen). */
+  onReplay: ((phase: LiveReplayPhase | null) => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, opts: LiveBroadcastOptions) {
     this.opts = opts
@@ -308,9 +331,15 @@ export class LiveBroadcast {
     this.renderer = new BroadcastRenderer(canvas, { goalposts: false, vignette: false })
     this.layer = new ActorLayer()
     this.gfx = new GraphicsLayer(this.layer, readGfxTokens(canvas))
-    this.gfx.vignette = QUALITY[this.quality].vignette
+    this.gfx.bottomInset = opts.hudBottomInset ?? 0
     this.renderer.hooks.actors = this.layer.hook
     this.renderer.hooks.overlay = this.gfx.hook
+    // B8: telestrations under the HUD, the REPLAY bug + wipe over it. The
+    // telestrator owns the vignette (so it stays under the strokes).
+    this.tele = new TelestratorLayer(readGfxTokens(canvas), this.layer)
+    this.gfx.vignette = false
+    attachTelestrator(this.renderer, this.tele, this.gfx)
+    this.tele.vignette = QUALITY[this.quality].vignette
     this.renderer.onFrame = (s) => this.onFrame(s)
     this.renderer.setDprCap(QUALITY[this.quality].dprCap)
     this.renderer.setQuality(this.quality)
@@ -318,21 +347,117 @@ export class LiveBroadcast {
     this.raf = requestAnimationFrame(this.loop)
   }
 
-  private directorProfile(): DirectorProfile {
-    return this.opts.profile === 'phone' ? 'phone' : this.opts.phase === 'replay' ? 'replay' : 'live'
+  private directorProfile(phase: 'live' | 'replay' = this.opts.phase): DirectorProfile {
+    return this.opts.profile === 'phone' ? 'phone' : phase === 'replay' ? 'replay' : 'live'
+  }
+
+  private viewport(): { w: number; h: number } {
+    const cv = this.renderer.canvas
+    return { w: Math.max(1, cv.clientWidth), h: Math.max(1, cv.clientHeight) }
+  }
+
+  // ── B8: the telestrator replay ────────────────────────────────────────────
+
+  /**
+   * Start the replay of the loaded play (the plan comes from replayPlan with
+   * the user's Replays setting, or force for the Replay button). Returns false
+   * (and draws nothing new) when the plan has no replay.
+   */
+  startReplay(plan: ReplayPlan, leadSec = 0): boolean {
+    const lp = this.play
+    if (!lp || !plan.replay) return false
+    this.rp = new ReplayPlayer(plan)
+    // The replay director: the higher replay rig (the phone rig + the phone
+    // lens's replay variant on a phone), with B5b's special-teams rules.
+    this.rpDirector = createBroadcastDirector({ profile: this.directorProfile('replay'), viewport: this.viewport() })
+    this.rpDirector.reset(lp.play, lp.anim)
+    this.tele.setReplay(plan, lp.anim, lp.actorPlay.offClub, lp.actorPlay.defClub, lp.actorPlay.numbers)
+    this.rpLead = Math.max(0, leadSec)
+    this.tele.frame = this.rpLead > 0 ? null : this.rp.frame()
+    this.rpLastNow = 0
+    this.applier.reset()
+    this.lastSig = ''
+    this.setReplayPhase(this.tele.frame ? this.tele.frame.phase : 'lead')
+    return true
+  }
+
+  /** End the replay at once (the Skip control, Space / Escape). */
+  skipReplay(): void {
+    if (!this.rp) return
+    this.rp.skip()
+    this.endReplay()
+  }
+
+  /** Hold the replay (the game is paused) and its playback speed. */
+  setReplayClock(paused: boolean, speed: number): void {
+    this.rpPaused = paused
+    this.rpSpeed = Math.max(0.25, Math.min(4, speed || 1))
+  }
+
+  get replaying(): boolean {
+    return !!this.rp
+  }
+
+  /** The replay's current frame (probes / debugging). */
+  get replayFrame(): ReplayFrame | null {
+    return this.rp ? this.tele.frame : null
+  }
+
+  private endReplay(): void {
+    if (!this.rp && !this.rpPhase) return
+    this.rp = null
+    this.rpDirector = null
+    this.rpLead = 0
+    this.tele.frame = null
+    this.tele.setReplay(null, null)
+    this.applier.reset()
+    this.lastSig = ''
+    this.setReplayPhase(null)
+  }
+
+  private setReplayPhase(p: LiveReplayPhase | null): void {
+    const v = p === 'done' ? null : p
+    if (v === this.rpPhase) return
+    this.rpPhase = v
+    this.onReplay?.(v)
+  }
+
+  /** Advance the replay clock (real time × the game speed; held while paused). */
+  private tickReplay(now: number): void {
+    const rp = this.rp
+    if (!rp) return
+    const dt = this.rpLastNow > 0 ? Math.min(0.1, Math.max(0, (now - this.rpLastNow) / 1000)) : 0
+    this.rpLastNow = now
+    const step = this.rpPaused ? 0 : dt * this.rpSpeed
+    if (this.rpLead > 0) {
+      // The live end frame + result toast hold a beat before the wipe.
+      this.rpLead -= step
+      if (this.rpLead > 0) return
+    }
+    const f = rp.advance(step)
+    if (f.phase === 'done') {
+      this.endReplay()
+      return
+    }
+    this.tele.frame = f
+    this.setReplayPhase(f.phase)
   }
 
   /** Load one recorded play. */
   setPlay(lp: LivePlay): void {
+    // A new play always ends a replay of the previous one (never blocks the game).
+    if (this.rp) this.endReplay()
     this.play = lp
     this.layer.setPlay(lp.actorPlay)
     this.gfx.setTimeline(lp.tl)
-    const cv = this.renderer.canvas
-    this.director = createDirector({ profile: this.directorProfile(), viewport: { w: Math.max(1, cv.clientWidth), h: Math.max(1, cv.clientHeight) } })
+    // B5 director with B5b's special-teams rules (kicks, returns, FG/PAT).
+    this.director = createBroadcastDirector({ profile: this.directorProfile(), viewport: this.viewport() })
     this.director.reset(lp.play, lp.anim)
     this.applier.reset()
     this.pacer.reset()
     this.lastSig = ''
+    this.endHold = 0
+    this.endHoldAt = 0
     this.gfx.sec = 0
     // B4: (re)compose the ball + effects for this recorded play (no-op until the
     // main merge supplies ballFx.ts).
@@ -365,7 +490,7 @@ export class LiveBroadcast {
     this.quality = q
     this.renderer.setQuality(q)
     this.renderer.setDprCap(QUALITY[q].dprCap)
-    this.gfx.vignette = QUALITY[q].vignette
+    this.tele.vignette = QUALITY[q].vignette
     this.pacer = new FramePacer(QUALITY[q].fps)
     this.opts.onQuality?.(q, this.auto?.snapshot() ?? null)
     // Re-compose B4's effects at the new level (pure function of the anim).
@@ -384,29 +509,43 @@ export class LiveBroadcast {
     const cv = this.renderer.canvas
     const cssW = Math.max(1, cv.clientWidth || 320)
     const cssH = Math.max(1, cv.clientHeight || 180)
-    const t = this.t
+    // B8: while a replay shows, it owns the clock and the camera; before its
+    // cut and after the wipe-out midpoint the live frame shows (under the wipe).
+    const rf = this.rp ? this.tele.frame : null
+    const inReplay = !!(rf && rf.showReplay && this.rpDirector)
+    const t = inReplay && rf ? rf.t : this.t
+    const phase: 'live' | 'replay' = inReplay ? 'replay' : this.opts.phase
     this.layer.t = t
-    this.gfx.sec = lp ? t * Math.max(0.05, lp.anim.duration / 1000) : 0
-    this.gfx.mode = 'full'
+    // Live: once the play ends, the graphics clock runs on into the result
+    // toast's hold (the toast enters at the whistle and holds `post` seconds).
+    this.gfx.sec = lp ? t * Math.max(0.05, lp.anim.duration / 1000) + (inReplay ? 0 : this.endHold) : 0
+    // The replay: chip only (no live callouts / toast over the telestrations).
+    this.gfx.mode = inReplay ? 'fast' : 'full'
     this.gfx.reducedMotion = !!this.opts.reducedMotion
+    this.tele.mode = 'full'
+    this.tele.reducedMotion = !!this.opts.reducedMotion
     let camera: CameraPose
-    if (lp && this.director) {
-      camera = this.director.toCamera(this.director.shotAt(t))
+    const dirn = inReplay && this.rpDirector ? this.rpDirector : this.director
+    if (lp && dirn) {
+      camera = dirn.toCamera(dirn.shotAt(t))
       camera = mirrorPose(camera, dir)
       if (this.opts.profile === 'phone') {
         const holder = this.layer.holderAt(t)
         const carrier = holder ? this.layer.worldOf(holder, t, dir) : null
         const ball = this.layer.ballAt(t, dir)
         const ctx: ProfileCtx = {
-          strongSideY: lp.strongSideY,
+          // B8: a phone replay leans toward the action (the carrier, else the
+          // ball), not the formation's strong side: the portrait frame is only
+          // ~20 yd wide, and a sideline catch otherwise sits on the frame edge.
+          strongSideY: inReplay ? (carrier?.y ?? ball.y) : lp.strongSideY,
           carrier,
           ball,
           losX: offenseXToWorld(lp.los ?? 60, dir),
           direction: dir,
-          phase: this.opts.phase,
+          phase,
           viewport: { w: cssW, h: cssH },
         }
-        camera = this.applier.apply(camera, ctx, `${lp.play.n}`)
+        camera = this.applier.apply(camera, ctx, `${lp.play.n}:${inReplay ? 'r' : 'l'}`)
       }
     } else {
       camera = { pos: [60, -30, 20], target: [60, MID_WIDTH, 0], fovDeg: 43 }
@@ -428,7 +567,9 @@ export class LiveBroadcast {
     return this.renderer.draw(frame)
   }
 
+  private lastMs = 0
   private onFrame(s: FrameStats): void {
+    this.lastMs = s.ms
     this.win.push(s.ms)
     const a = this.auto
     if (a && !a.decided) {
@@ -459,8 +600,10 @@ export class LiveBroadcast {
   private publish(): void {
     if (!import.meta.env.DEV || typeof window === 'undefined') return
     const avg = this.iv.avg
+    ;(window as unknown as Record<string, unknown>)[this.opts.live === 'topdown' ? '__gdReplayView' : '__gdLive'] = this
     ;(window as unknown as Record<string, unknown>).__gdBroadcast = {
       frames: this.win.count,
+      avgMs: Math.round(this.win.avg * 100) / 100,
       p95: Math.round(this.win.p95 * 100) / 100,
       worst: Math.round(this.win.worst * 100) / 100,
       quality: this.quality,
@@ -471,6 +614,11 @@ export class LiveBroadcast {
       draws: this.drawStamps.length,
       drawTotal: this.drawTotal,
       autoResult: this.auto?.snapshot() ?? null,
+      replay: this.rpPhase,
+      replaySec: this.rp ? Math.round(this.rp.sec * 100) / 100 : null,
+      teleMs: Math.round(this.tele.stats.ms * 1000) / 1000,
+      teleLabels: this.tele.stats.labels,
+      lastMs: Math.round((this.win.count ? this.lastMs : 0) * 1000) / 1000,
       intervals: this.drawStamps.slice(-300),
     }
   }
@@ -479,8 +627,18 @@ export class LiveBroadcast {
     if (this.destroyed) return
     this.raf = requestAnimationFrame(this.loop)
     if (typeof document !== 'undefined' && document.hidden) return
+    this.tickReplay(now)
+    // The result toast's hold after the last frame (real time; capped at the timeline's post).
+    const post = this.play?.tl?.post ?? 0
+    if (this.t >= 1 && post > 0) {
+      if (this.endHoldAt > 0) this.endHold = Math.min(post, this.endHold + Math.min(0.1, (now - this.endHoldAt) / 1000))
+      this.endHoldAt = now
+    } else {
+      this.endHold = 0
+      this.endHoldAt = 0
+    }
     const lp = this.play
-    const sig = `${lp?.play.n ?? -1}|${this.t}|${this.quality}|${this.opts.phase}|${this.renderer.canvas.clientWidth}x${this.renderer.canvas.clientHeight}`
+    const sig = `${lp?.play.n ?? -1}|${this.t}|${this.endHold}|${this.rp && this.tele.frame ? this.rp.sec : -1}|${this.quality}|${this.opts.phase}|${this.renderer.canvas.clientWidth}x${this.renderer.canvas.clientHeight}`
     const dirty = sig !== this.lastSig
     if (!dirty) return
     if (!this.pacer.shouldDraw(now)) return
@@ -503,6 +661,8 @@ export class LiveBroadcast {
   }
 
   destroy(): void {
+    this.onReplay = null
+    this.rp = null
     this.destroyed = true
     cancelAnimationFrame(this.raf)
     this.renderer.destroy()

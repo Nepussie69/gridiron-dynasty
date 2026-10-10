@@ -36,6 +36,9 @@
 import { ballZAt, facingAt, type BroadcastAnim, type PoseState, type PoseWindow } from './animData.ts'
 import { FIELD_LENGTH, MID_WIDTH, offenseToWorld, project, type Camera, type Direction } from './camera.ts'
 import { drawGoalposts } from './field.ts'
+
+/** Goalposts closer than this (yd, ground distance to the camera) are not drawn. */
+const POST_NEAR_YD = 22
 import {
   blendPose,
   clubKit,
@@ -518,6 +521,10 @@ export class ActorLayer {
     ] as const) {
       const p = project(cam, gx, MID_WIDTH, 0)
       if (!p) continue
+      // B8: a camera right behind an end line (a play backed up to its own goal
+      // line, the replay rig) would put the posts across the whole frame: drop
+      // posts this close to the lens.
+      if (Math.hypot(cam.px - gx, cam.py - MID_WIDTH) < POST_NEAR_YD) continue
       items.push({ kind: 'post', key: end, depth: p.depth, order: order++, draw: (g) => drawGoalposts(g, cam, end) })
     }
     const play = this.play

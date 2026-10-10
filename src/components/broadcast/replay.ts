@@ -655,3 +655,44 @@ export function teleState(item: Telestration, sec: number): { draw: number; alph
   const alpha = sec <= item.hideSec ? 1 : 1 - (sec - item.hideSec) / FADE_OUT
   return { draw, alpha: clamp(alpha, 0, 1), label: !!item.label && sec >= item.labelSec && draw >= 0.6 }
 }
+
+// ── B8: Game Day's replay rules (pure; MatchView + liveView play the result) ──
+
+/** Seconds an automatic replay holds the live end frame + result toast before its wipe. */
+export const GAME_DAY_LEAD_SEC = 0.9
+
+export interface GameDayReplayCtx {
+  /** The user's Replays setting (B7: localStorage gd.view.replays). */
+  setting: ReplaySetting
+  /** The Replay button on the replay pill: replay the play on screen now. */
+  force?: boolean
+  reducedMotion?: boolean
+  /** Sim to end was pressed: automatic replays never run ('fast' playback). */
+  simming?: boolean
+  /** The game is playing on (not paused / browsing plays). */
+  playing?: boolean
+  /** Space / Pause froze the animation. */
+  frozen?: boolean
+  /** A decision (moment card) is waiting: plays run straight to it, no replays. */
+  decisionPending?: boolean
+}
+
+/**
+ * Whether Game Day replays this play, and the beat before its wipe. Automatic
+ * replays only run while the game plays on with no decision waiting and never
+ * after Sim to end; the Replay button replays any replayable play at once
+ * (even with the setting off, or after Sim to end). Never blocks: the caller
+ * ends a replay on Skip, a new play, new plays or a decision coming up.
+ */
+export function gameDayReplay(play: Play, anim: BroadcastAnim, ctx: GameDayReplayCtx): { plan: ReplayPlan; lead: number } {
+  const force = !!ctx.force
+  const D = Math.max(0.05, (anim.duration || 0) / 1000)
+  if (!force && (!ctx.playing || ctx.frozen || ctx.decisionPending)) return { plan: EMPTY([], D), lead: 0 }
+  const plan = replayPlan(play, anim, {
+    setting: ctx.setting,
+    force,
+    reducedMotion: ctx.reducedMotion,
+    playback: !force && ctx.simming ? 'fast' : 'live',
+  })
+  return { plan, lead: force || !plan.replay ? 0 : GAME_DAY_LEAD_SEC }
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, PanelBottom, Play, Settings, Shield, SkipForward, Target, Timer, Wind, Zap } from 'lucide-react'
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, PanelBottom, Play, RotateCcw, Settings, Shield, SkipForward, Target, Timer, Wind, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, penaltyTotals, PENALTY_INFO, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
@@ -29,6 +29,9 @@ import BroadcastBoundary from './broadcast/BroadcastBoundary'
 import { buildLivePlay, createLiveBroadcast, latchLiveView, reportFallback, useLiveView, type LiveBroadcast } from './broadcast/liveView'
 import { autoStartLevel } from './broadcast/quality'
 import { deviceKey, setAutoQState, useViewSettings } from './broadcast/viewSettings'
+import { gameDayReplay, replayable, type ReplayPlan } from './broadcast/replay'
+import type { BroadcastAnim } from './broadcast/animData'
+import type { LivePlay, LiveReplayPhase } from './broadcast/liveView'
 
 const CENTER_Y = 26.65
 const W = 120
@@ -153,6 +156,9 @@ function playToast(play: PlayEvent, next?: PlayEvent): { text: string; tone: Toa
 }
 
 
+/** B8: CSS px the 2.5D HUD keeps clear for the floating replay pill (bottom-3 + its height). */
+const PILL_CLEAR_PX = { main: 48, phone: 68 } as const
+
 export function MatchView() {
   const world = useWorld()
   const match = useGame((s) => s.match)
@@ -172,6 +178,12 @@ export function MatchView() {
   // Space / Pause freezes the animation exactly where it is; Play resumes from there.
   const [frozen, setFrozen] = useState(false)
   const tRef = useRef<{ i: number; t: number }>({ i: -1, t: 0 })
+  // B7/B8: the 2.5D live view, and the 2.5D replay canvas over a top-down live view.
+  const liveCtlRef = useRef<LiveBroadcast | null>(null)
+  const overlayCtlRef = useRef<LiveBroadcast | null>(null)
+  // B8: a 2.5D telestrator replay is on screen (holds the auto-advance).
+  const [replayPhase, setReplayPhase] = useState<LiveReplayPhase | null>(null)
+  const replayOn = replayPhase != null
   const [speed, setSpeed] = useState(1)
   // Animation clock for the play on screen: t runs 0..1 after a short pre-snap beat.
   const [clock, setClock] = useState<{ i: number; t: number }>({ i: -1, t: 0 })
@@ -200,6 +212,10 @@ export function MatchView() {
   const fieldRef = useRef<HTMLDivElement | null>(null)
   const ballRef = useRef({ x: W / 2, y: CENTER_Y })
   const frozenRef = useRef(false)
+  // B8: Sim to end was pressed for this game (replays never run: 'fast' playback).
+  const simmingRef = useRef(false)
+  // B8: the auto-replay check, called by the play clock when a play finishes.
+  const autoReplayRef = useRef<((i: number) => void) | null>(null)
   const hasMatch = !!match
 
   // A ~45-yard window shaped like the field box, but never cropping the field
@@ -258,6 +274,7 @@ export function MatchView() {
     setIdx(0)
     setPlaying(true)
     setSpeed(1)
+    simmingRef.current = false
   }, [matchSeq])
 
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
@@ -315,6 +332,7 @@ export function MatchView() {
       tRef.current = { i: idx, t }
       setClock({ i: idx, t })
       if (t < 1) raf = requestAnimationFrame(tick)
+      else autoReplayRef.current?.(idx)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
@@ -330,10 +348,21 @@ export function MatchView() {
   // Space plays / pauses (not while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && (liveCtlRef.current?.replaying || overlayCtlRef.current?.replaying)) {
+        liveCtlRef.current?.skipReplay()
+        overlayCtlRef.current?.skipReplay()
+        return
+      }
       if (e.code !== 'Space' && e.key !== ' ') return
       const el = e.target as HTMLElement | null
       if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return
       e.preventDefault()
+      // B8: Space skips a 2.5D replay on screen (Escape too, below).
+      if (liveCtlRef.current?.replaying || overlayCtlRef.current?.replaying) {
+        liveCtlRef.current?.skipReplay()
+        overlayCtlRef.current?.skipReplay()
+        return
+      }
       document.querySelector<HTMLButtonElement>('[data-play-toggle]')?.click()
     }
     window.addEventListener('keydown', onKey)
@@ -354,7 +383,6 @@ export function MatchView() {
   const homeId = match?.homeId
   const awayId = match?.awayId
   const liveCanvasRef = useRef<HTMLCanvasElement>(null)
-  const liveCtlRef = useRef<LiveBroadcast | null>(null)
   const autoQRef = useRef(vsettings.autoQ)
   const [liveChip, setLiveChip] = useState(false)
   useEffect(() => {
@@ -382,11 +410,15 @@ export function MatchView() {
       qualityStart: autoStartLevel(autoQRef.current, deviceKey()),
       reducedMotion: reduced,
       live: view.live,
+      // The replay pill floats over the bottom of the canvas (bottom-3).
+      hudBottomInset: PILL_CLEAR_PX[view.cameraProfile],
       onFallback: (f) => reportFallback(f),
       onAutoQ: (a) => setAutoQState(a),
     })
     liveCtlRef.current = ctl
+    if (ctl) ctl.onReplay = (ph) => setReplayPhase(ph)
     return () => {
+      ctl?.skipReplay()
       ctl?.destroy()
       if (liveCtlRef.current === ctl) liveCtlRef.current = null
     }
@@ -407,9 +439,129 @@ export function MatchView() {
     liveCtlRef.current?.setTime(clock.i === idx ? clock.t : 0)
   }, [clock, idx])
 
+  // ── B8: telestrator replays (B6b) ───────────────────────────────────────────
+  // After a live play the Replays setting (big plays by default) may replay it
+  // in 2.5D: on the live canvas, or (top-down live, the phone default) on a 2.5D
+  // canvas laid over the field for the replay only. Replays never block the
+  // game: none while a decision card is due or after Sim to end, a new play /
+  // new plays / a jump end one at once, and Skip (Space / Escape) ends it.
+  const [overlayKey, setOverlayKey] = useState<string | null>(null)
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
+  const pendingReplayRef = useRef<{ plan: ReplayPlan; lead: number; lp: LivePlay } | null>(null)
+  const replayCheckedRef = useRef('')
+  const skipBroadcastReplay = () => {
+    liveCtlRef.current?.skipReplay()
+    overlayCtlRef.current?.skipReplay()
+  }
+  const momentPending = !!gameDay?.moment
+  const startBroadcastReplay = (force: boolean): boolean => {
+    if (!play || !anim || !homeId || !awayId) return false
+    replayCheckedRef.current = `${matchSeq}:${idx}`
+    // The rules (replay.ts gameDayReplay): automatic replays only while the game
+    // plays on, no decision waiting, never after Sim to end; Replay forces one.
+    const { plan, lead } = gameDayReplay(play, anim as BroadcastAnim, {
+      setting: vsettings.replays,
+      force,
+      reducedMotion: reduced,
+      simming: simmingRef.current,
+      playing,
+      frozen,
+      decisionPending: momentPending,
+    })
+    if (!plan.replay) return false
+    if (broadcastLive) return liveCtlRef.current?.startReplay(plan, lead) ?? false
+    if (overlayCtlRef.current?.replaying) return false
+    pendingReplayRef.current = { plan, lead, lp: buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }) }
+    setOverlayKey(`${matchSeq}:${idx}:${Date.now()}`)
+    return true
+  }
+  // The play clock calls this when a play finishes (once per play visit).
+  useEffect(() => {
+    autoReplayRef.current = (i: number) => {
+      if (i !== idx) return
+      const key = `${matchSeq}:${i}`
+      if (replayCheckedRef.current === key) return
+      replayCheckedRef.current = key
+      startBroadcastReplay(false)
+    }
+  })
+  // A replay holds while the game is frozen and follows the playback speed.
+  useEffect(() => {
+    liveCtlRef.current?.setReplayClock(frozen, speed)
+    overlayCtlRef.current?.setReplayClock(frozen, speed)
+  }, [frozen, speed, overlayKey, replayOn])
+  // A jump, a new game or newly appended plays (Next play / an answered call /
+  // Sim to end) end a replay at once.
+  const playsLen = match?.plays.length ?? 0
+  useEffect(() => {
+    overlayCtlRef.current?.skipReplay()
+  }, [idx, matchSeq, playsLen])
+  const skipBroadcastReplayRef = useRef(skipBroadcastReplay)
+  useEffect(() => {
+    skipBroadcastReplayRef.current = skipBroadcastReplay
+  })
+  // A decision that comes up ends a replay (never make the user wait).
+  useEffect(() => {
+    if (momentPending) skipBroadcastReplayRef.current()
+  }, [momentPending])
+  // The 2.5D replay canvas over a top-down live view (mounted for one replay).
+  useEffect(() => {
+    if (!overlayKey) return
+    const cv = overlayCanvasRef.current
+    const pending = pendingReplayRef.current
+    pendingReplayRef.current = null
+    const close = () => {
+      setReplayPhase(null)
+      setOverlayKey((k) => (k === overlayKey ? null : k))
+    }
+    if (!cv || !pending || !homeId || !awayId) {
+      queueMicrotask(close)
+      return
+    }
+    const ctl = createLiveBroadcast(cv, {
+      homeTeamId: homeId,
+      awayTeamId: awayId,
+      profile: view.cameraProfile,
+      phase: 'replay',
+      qualitySetting: view.quality,
+      reducedMotion: reduced,
+      live: 'topdown',
+      hudBottomInset: PILL_CLEAR_PX[view.cameraProfile],
+      onFallback: (f) => reportFallback(f),
+    })
+    if (!ctl) {
+      queueMicrotask(close)
+      return
+    }
+    ctl.onReplay = (ph) => {
+      if (ph == null) close()
+      else setReplayPhase(ph)
+    }
+    ctl.setPlay(pending.lp)
+    ctl.setTime(1)
+    overlayCtlRef.current = ctl
+    if (!ctl.startReplay(pending.plan, pending.lead)) queueMicrotask(close)
+    return () => {
+      ctl.skipReplay()
+      ctl.destroy()
+      if (overlayCtlRef.current === ctl) overlayCtlRef.current = null
+    }
+  }, [overlayKey, homeId, awayId, view.cameraProfile, view.quality, reduced])
+  // DEV-only probe hooks (B8 browser review): jump to a play.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as Record<string, unknown>).__gdJump = (i: number) => {
+      tRef.current = { i: -1, t: 0 }
+      setFrozen(false)
+      setIdx(i)
+      setPlaying(false)
+    }
+  }, [])
+  const canReplay = !!play && !!anim && replayable(play, (anim as BroadcastAnim).events ?? [])
+
   // auto-advance
   useEffect(() => {
-    if (!match || !playing || frozen || !play) return
+    if (!match || !playing || frozen || !play || replayOn) return
     // Only the part of this play still to animate (it may resume mid-play).
     const done = tRef.current.i === idx ? tRef.current.t : 0
     // Already finished (e.g. the next plays were just appended): move on at once.
@@ -426,7 +578,7 @@ export function MatchView() {
     return () => {
       if (timer.current) window.clearTimeout(timer.current)
     }
-  }, [idx, playing, frozen, speed, match, play, anim])
+  }, [idx, playing, frozen, speed, match, play, anim, replayOn])
 
   if (!match || !play) return null
 
@@ -556,6 +708,8 @@ export function MatchView() {
   }
 
   const simToEnd = () => {
+    simmingRef.current = true
+    skipBroadcastReplay()
     setPlaying(false)
     void simGameDayToEnd()
   }
@@ -830,7 +984,8 @@ export function MatchView() {
             </svg>
             )}
 
-            {/* glass down & distance chip (top-left) */}
+            {/* glass down & distance chip (top-left; the 2.5D view draws its own chip) */}
+            {!broadcastLive && (
             <div className="pointer-events-none absolute left-4 top-3 z-10 flex flex-wrap items-center gap-2">
               <span className="rounded-md border border-line-strong bg-canvas/60 px-2.5 py-1 font-cond text-label font-700 uppercase tracking-wide text-ink shadow-lg backdrop-blur-sm">
                 {play.down ? (
@@ -844,8 +999,10 @@ export function MatchView() {
                 )}
               </span>
             </div>
+            )}
 
-            {/* full-field / follow-camera toggle (top-right) */}
+            {/* full-field / follow-camera toggle (top-right; top-down view only — the 2.5D director frames every play) */}
+            {!broadcastLive && (
             <button
               type="button"
               onClick={toggleFullField}
@@ -853,6 +1010,7 @@ export function MatchView() {
             >
               {fullField ? 'Follow' : 'Full field'}
             </button>
+            )}
 
             {/* B7: a quiet, dismissible note when the 2.5D view fell back. */}
             {view.fallback && !liveChip && (
@@ -869,8 +1027,24 @@ export function MatchView() {
               </div>
             )}
 
-            {/* play-result toast */}
-            {toast && (
+            {/* B8: the 2.5D replay over a top-down live view (phone default), for the replay only */}
+            {overlayKey && !broadcastLive && (
+              <div className={cn('absolute inset-x-3 bottom-0 top-3 z-[15]', (replayPhase == null || replayPhase === 'lead') && 'invisible')}>
+                <canvas ref={overlayCanvasRef} className="absolute inset-0 block h-full w-full" role="img" aria-label="Broadcast 2.5D replay" />
+              </div>
+            )}
+
+            {/* B8: skip the replay (Space / Escape) — never waits on the user */}
+            {replayOn && (
+              <div className="absolute bottom-[4.5rem] right-5 z-20 lg:bottom-14">
+                <Button size="sm" variant="secondary" onClick={skipBroadcastReplay} aria-label="Skip replay (Space or Escape)">
+                  <SkipForward size={14} /> Skip replay
+                </Button>
+              </div>
+            )}
+
+            {/* play-result toast (top-down; the 2.5D view draws its own after the whistle) */}
+            {toast && !broadcastLive && (
               <div key={idx} className="gd-toast pointer-events-none absolute inset-x-0 bottom-16 z-10 flex justify-center">
                 <span className={cn('rounded-md border px-3 py-1 font-cond text-sm font-700 uppercase tracking-wide shadow-lg backdrop-blur-sm', TOAST_TONE[toast.tone])}>
                   {toast.text}
@@ -885,6 +1059,7 @@ export function MatchView() {
                 <IconBtn playToggle title={showPause ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{showPause ? <Pause size={15} /> : <Play size={15} />}</IconBtn>
                 <IconBtn title="Next play" onClick={() => jump(Math.min(match.plays.length - 1, idx + 1))}><ChevronRight size={15} /></IconBtn>
                 <IconBtn title="Jump to the latest play" onClick={() => jump(match.plays.length - 1)}><SkipForward size={15} /></IconBtn>
+                <IconBtn title="Replay this play (2.5D)" disabled={!canReplay || replayOn} onClick={() => startBroadcastReplay(true)}><RotateCcw size={15} /></IconBtn>
                 <span className="mx-0.5 h-4 w-px bg-surface-3 sm:mx-1" />
                 {phone ? (
                   <button
@@ -1157,9 +1332,9 @@ function DockButton({ icon, label, onClick, disabled, title }: {
   )
 }
 
-function IconBtn({ title, onClick, children, playToggle }: { title: string; onClick: () => void; children: React.ReactNode; playToggle?: boolean }) {
+function IconBtn({ title, onClick, children, playToggle, disabled }: { title: string; onClick: () => void; children: React.ReactNode; playToggle?: boolean; disabled?: boolean }) {
   return (
-    <button title={title} aria-label={title} onClick={onClick} data-play-toggle={playToggle || undefined} className="grid h-11 w-10 place-items-center rounded text-ink-2 hover:bg-surface-3 hover:text-ink lg:h-7 lg:w-7">
+    <button title={title} aria-label={title} onClick={onClick} disabled={disabled} data-play-toggle={playToggle || undefined} className="grid h-11 w-10 place-items-center rounded text-ink-2 hover:bg-surface-3 hover:text-ink disabled:pointer-events-none disabled:opacity-40 lg:h-7 lg:w-7">
       {children}
     </button>
   )

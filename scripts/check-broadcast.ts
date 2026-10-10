@@ -76,7 +76,7 @@ import { ballState } from '../src/components/broadcast/ball.ts'
 import { createBallFx, withBallFx } from '../src/components/broadcast/ballFx.ts'
 import { buildFxSchedule, EVENT_FX, SHAKE_YARDS, shakeAt } from '../src/components/broadcast/fxSchedule.ts'
 import type { AnimEventKind } from '../src/components/playAnim.ts'
-import { BIG_GAIN_YDS, LONG_FG_YDS, MAX_SPAN_SEC, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan } from '../src/components/broadcast/replay.ts'
+import { BIG_GAIN_YDS, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan } from '../src/components/broadcast/replay.ts'
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
 
@@ -1218,6 +1218,79 @@ ok("B6b: nothing draws in 'fast' (sim to end) or 'off'; reduced motion has no wi
   // partial() keeps the start and stops at the fraction of the length.
   const pl = partial([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], 0.75)
   assert.deepEqual(pl[pl.length - 1], { x: 10, y: 5 })
+})
+
+// ── B8: Game Day's replay rules (gameDayReplay) ─────────────────────────────
+ok('B8: Game Day replays never block (paused / decision waiting / sim to end), Replay forces one', () => {
+  const base = GPLAY as unknown as Record<string, unknown>
+  const P = (o: Record<string, unknown>) => ({ ...base, ...o }) as unknown as Play
+  const A = (kinds: AnimEventKind[]): BroadcastAnim => ({
+    ...GA,
+    events: [{ t: 0.03, kind: 'snap', keys: ['qb'], spot: { x: 35, y: 26 } }, ...kinds.map((kind, i) => ({ t: 0.1 + i * 0.1, kind, keys: ['wr0'], spot: { x: 50, y: 20 } }))],
+  })
+  const td = P({ yards: 75, endYard: 100 })
+  const tdA = A(['throw', 'catch', 'score'])
+  const short = P({ yards: 8, endYard: 33 })
+  const shortA = A(['throw', 'catch', 'tackle'])
+  const live = { setting: 'big' as const, playing: true }
+  // Automatic: a big play while the game plays on → replay after the lead beat.
+  const auto = gameDayReplay(td, tdA, live)
+  assert.equal(auto.plan.replay, true)
+  assert.equal(auto.lead, GAME_DAY_LEAD_SEC)
+  assert.ok(GAME_DAY_LEAD_SEC > 0 && GAME_DAY_LEAD_SEC <= 1.5)
+  // Never while paused, frozen, a decision is waiting, after Sim to end, or with replays off.
+  for (const [name, ctx] of [
+    ['paused', { ...live, playing: false }],
+    ['frozen', { ...live, frozen: true }],
+    ['decision waiting', { ...live, decisionPending: true }],
+    ['sim to end', { ...live, simming: true }],
+    ['replays off', { ...live, setting: 'off' as const }],
+  ] as const) {
+    const r = gameDayReplay(td, tdA, ctx)
+    assert.equal(r.plan.replay, false, `auto replay while ${name}`)
+    assert.equal(r.plan.tele.length, 0)
+    assert.equal(r.lead, 0)
+    // The Replay button replays it anyway, at once (no lead).
+    const f = gameDayReplay(td, tdA, { ...ctx, force: true })
+    assert.equal(f.plan.replay, true, `forced replay while ${name}`)
+    assert.equal(f.lead, 0)
+  }
+  // 'big' skips a short completion, 'all' replays it; Replay forces it.
+  assert.equal(gameDayReplay(short, shortA, live).plan.replay, false)
+  assert.equal(gameDayReplay(short, shortA, { ...live, setting: 'all' }).plan.replay, true)
+  assert.equal(gameDayReplay(short, shortA, { ...live, force: true }).plan.replay, true)
+  // Never replayable, even forced: PAT, kneel, pre-snap penalty.
+  assert.equal(gameDayReplay(P({ type: 'pat', result: 'PAT good' }), A(['kick', 'kickGood']), { ...live, force: true }).plan.replay, false)
+  assert.equal(gameDayReplay(P({ type: 'run', concept: 'Kneel', yards: -1 }), A(['down']), { ...live, force: true }).plan.replay, false)
+  assert.equal(gameDayReplay(P({ type: 'penalty' }), A([]), { ...live, setting: 'all', force: true }).plan.replay, false)
+  // Deterministic, and the plan equals B6b's replayPlan for the same inputs.
+  assert.deepEqual(gameDayReplay(td, tdA, live).plan, replayPlan(td, tdA, { setting: 'big' }))
+  // Skip ends a replay at once (the Skip control / Space / Escape).
+  const rp = new ReplayPlayer(auto.plan)
+  rp.advance(1.0)
+  rp.skip()
+  assert.equal(rp.done, true)
+  assert.equal(rp.frame().phase, 'done')
+})
+
+ok('B8: goalposts right by the lens are not drawn (a camera behind its own end line)', () => {
+  const posts = (focusX: number) => {
+    const layer = new ActorLayer()
+    const W = 1280
+    const H = 720
+    const rec = teleRecorder(W, H)
+    const frame = frameFor(1, focusX)
+    const cam = makeCamera(frame.camera, { width: W, height: H })
+    layer.hook(rec.ctx as unknown as CanvasRenderingContext2D, cam, frame, { dpr: 1, width: W, height: H })
+    const items = (layer as unknown as { items: { kind: string; key: string }[] }).items
+    return { cam, keys: items.filter((it) => it.kind === 'post').map((it) => it.key) }
+  }
+  // Backed up at the own 2: the camera sits behind the left end line → no left posts.
+  const near = posts(12)
+  assert.ok(near.cam.px < 10, `camera x ${near.cam.px}`)
+  assert.ok(!near.keys.includes('left'), `left posts drawn at ${near.cam.px.toFixed(1)}`)
+  // Midfield: the far posts still join the depth sort.
+  assert.ok(posts(60).keys.includes('right'))
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)

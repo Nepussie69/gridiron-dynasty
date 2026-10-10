@@ -219,6 +219,8 @@ export class GraphicsLayer {
   reducedMotion = false
   /** Paint the renderer's vignette first (renderer built with vignette: false). */
   vignette = false
+  /** CSS px kept clear at the bottom for DOM controls over the canvas (B8: Game Day's replay pill). */
+  bottomInset = 0
   tokens: GfxTokens
   stats: GraphicsStats = { ms: 0, callouts: 0 }
   /** Last frame's graphics state and placed callouts (B6b / checks). */
@@ -508,7 +510,7 @@ export class GraphicsLayer {
     const k = h * SKEW
     const pad = 12 * S * dpr
     const x = m
-    const y = ctx.canvas.height - m - h
+    const y = ctx.canvas.height - m - h - this.bottomInset * dpr
     const fNum = F.disp(GFX_SIZE.lowerNum)
     const fName = F.disp(GFX_SIZE.lowerName)
     const fStat = F.cond(GFX_SIZE.lowerStat)
@@ -546,7 +548,7 @@ export class GraphicsLayer {
     const k = h * SKEW
     const pad = 14 * S * dpr
     const x = m
-    const y = info.height - m - h
+    const y = info.height - m - h - this.bottomInset * dpr
     const fBig = F.disp(GFX_SIZE.toastBig)
     const fHead = F.disp(GFX_SIZE.toastHead)
     const fBadge = F.disp(GFX_SIZE.toastBadge)
