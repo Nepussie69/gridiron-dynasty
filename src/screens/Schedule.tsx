@@ -5,6 +5,7 @@ import { recordOf, recordStr, scheduleFor } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { BoxScore } from '../components/MatchView'
 import { TeamHoverCard } from '../components/TeamHoverCard'
+import { SLOT_LABEL, stakesFor, stakesText } from '../game/engine/primetime'
 import type { Team } from '../game/types'
 import {
   Badge,
@@ -25,6 +26,7 @@ import { canCoach as canCoachNow } from '../ui/nav'
 function scoreTeam(t: Team): ScoreTeam {
   return { abbr: t.abbr || t.name.slice(0, 3), primary: t.primary, name: t.name, city: t.city }
 }
+
 
 export function Schedule() {
   const league = useWorld()
@@ -116,6 +118,9 @@ export function Schedule() {
           {games.map((g) => {
             const opp = league.byId[g.opponentId]
             const raw = league.schedule.find((x) => x.id === g.id)
+            const slot = raw?.slot
+            const stakes = raw && career ? stakesFor(league, career, raw) : null
+            const stakesLine = raw && career ? stakesText(league, career, raw) : ''
             if (g.played) {
               if ((g.teamScore ?? 0) > (g.oppScore ?? 0)) w++
               else if ((g.teamScore ?? 0) < (g.oppScore ?? 0)) l++
@@ -152,10 +157,20 @@ export function Schedule() {
                       <span className="block truncate text-label text-muted">
                         {g.home ? 'Home' : 'Away'} · {recordStr(recordOf(league, opp.id))}
                       </span>
+                      {isNext && stakesLine && (
+                        <span className="mt-0.5 block truncate text-label font-600 text-ink-2">{stakesLine}</span>
+                      )}
                     </span>
                     {isNext && <Badge tone="neutral">Up next</Badge>}
                   </button>
                 </TeamHoverCard>
+
+                {(slot || stakes?.rivalry) && (
+                  <div className="flex shrink-0 flex-wrap items-center gap-1">
+                    {slot && <Badge tone="gold">{SLOT_LABEL[slot]}</Badge>}
+                    {stakes?.rivalry && <Badge tone="info">Rivalry</Badge>}
+                  </div>
+                )}
 
                 {g.played ? (
                   <div className="flex flex-wrap items-center justify-end gap-2">
@@ -196,6 +211,11 @@ export function Schedule() {
               </div>
             )
           })}
+        </div>
+        <div className="border-t border-line px-4 py-2.5 text-label leading-relaxed text-muted">
+          <span className="font-600 text-ink-2">Night games:</span> one Thursday, Sunday and Monday night game each
+          week (no Thursday game in Week 18). From Week 11, the Sunday Night game can be flexed two weeks out to the
+          best matchup by record — and primetime or rivalry games swing reputation, job security and morale harder.
         </div>
         <div className="border-t border-line px-4 py-2 text-label text-muted">
           Replays re-simulate the game from its seed, so a replay can differ from the recorded final. Box scores are the

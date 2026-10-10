@@ -325,3 +325,20 @@ export function stakesNote(
   }
   return { headline, body: lines.join(' ') }
 }
+
+/**
+ * FUTURES #8: "Sunday Night · rival coach Vance" — the stakes on one game.
+ * Generic night names only; no network or league branding.
+ */
+export function stakesText(world: World, career: CareerState, game: Game): string {
+  const s = stakesFor(world, career, game)
+  const parts: string[] = []
+  if (s.slot) parts.push(SLOT_LABEL[s.slot])
+  const oppId = game.homeId === career.teamId ? game.awayId : game.homeId
+  const oppName = world.byId[oppId]?.name ?? 'opponent'
+  const coach = s.rivalry === 'coach' || s.rivalry === 'both' ? rivalFor(world, oppId)?.name : undefined
+  if (s.rivalry === 'division') parts.push(`division rival ${oppName}`)
+  else if (s.rivalry === 'coach') parts.push(coach ? `rival coach ${coach}` : `rival ${oppName}`)
+  else if (s.rivalry === 'both') parts.push(coach ? `rival coach ${coach}` : `rival ${oppName}`, 'division')
+  return parts.join(' · ')
+}
