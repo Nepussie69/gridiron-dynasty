@@ -13,6 +13,7 @@ import {
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecovery } from '../game/engine/sim'
 import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, getStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
+import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills } from '../game/engine/coaching'
 import {
@@ -402,6 +403,27 @@ function updateUserBook(world: World, sim: GameSim, teamId: string) {
     else if (p.defId === teamId && p.defCall) book.def[bucket][p.defCall] = (book.def[bucket][p.defCall] ?? 0) + 1
   }
 }
+
+/**
+ * FUTURES #4: fold a completed user game's special-teams surprises (fakes, onside
+ * kicks and surprise onsides) into the season's scouting memory, so opponents can
+ * be alert to a club that has shown its tricks. Called only for the user's game —
+ * the harness/calibration and the pure sim never touch it.
+ */
+export function recordSpecialAttempts(world: World, sim: GameSim) {
+  const attempts = sim.plays.filter((p) => p.stAttempt)
+  if (!attempts.length) return
+  if (!world.stMemory || world.stMemory.season !== world.season) {
+    world.stMemory = { season: world.season, teams: {} }
+  }
+  for (const p of attempts) {
+    const a = p.stAttempt!
+    const rec = (world.stMemory.teams[a.club] ??= emptySTRecord())
+    if (a.kind === 'fake') rec.fake += 1
+    else if (a.kind === 'onside') rec.onside += 1
+    else rec.surprise += 1
+  }
+}
 // Teach the stats layer to stamp each season with the scheme played.
 setSchemeLookup((teamId, level) => (level === 'NFL' || level === 'CFB' ? schemeFor(teamId, 'off') : ''))
 
@@ -513,6 +535,8 @@ interface GameStore {
   setDefaultPlan: (side: 'off' | 'def', plan: GamePlan) => void
   /** L10 G4: the user's 4th-down / 2-point / timeout call sheet. */
   setCallSheet: (sheet: CallSheet) => void
+  /** FUTURES #4: the user's special-teams kick + return strategies. */
+  setSpecialTeams: (plan: SpecialTeamsPlan) => void
   /** L10 G10: the user's opening script (ordered concept names, max 8). */
   setScript: (concepts: string[]) => void
   /** L10 G11: pre-game matchup assignments for your club. */
@@ -1273,6 +1297,8 @@ export const useGame = create<GameStore>((set, get) => ({
       growPlaybookFromGame(world, sim, practiceMasteryMult(career, world) * byeMasteryMult(career, world), career.teamId)
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
+      // FUTURES #4: record the game's special-teams surprises for opponent scouting.
+      recordSpecialAttempts(world, sim)
       // L10 G5: grade the user's fourth-down and two-point calls; keep the film
       // on the game (one season, cleared with the box).
       const film = gradeGame(world, sim, career.teamId)
@@ -1646,6 +1672,13 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     set({ career: { ...career, callSheet: sheet }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  setSpecialTeams: (plan) => {
+    const career = get().career
+    if (!career) return
+    set({ career: withFlag({ ...career, specialTeams: normalizeSpecial(plan) }, 'gameplan'), tick: get().tick + 1 })
     get().save()
   },
 
@@ -3798,12 +3831,13 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const matchups = career.matchups
   const usage = career.usage
   const personnel = career.personnel
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel }
+  const special = career.specialTeams
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special,
   }
 }
 
@@ -4059,7 +4093,7 @@ function relinkPlayers(w: World): void {
 }
 
 /** Bring a legacy save up to the current world shape (new fields + pick ownership). */
-function migrateWorld(w: World): World {
+export function migrateWorld(w: World): World {
   relinkPlayers(w)
   // L12.7: rookies drafted under the old college-scale rule get the NFL rookie scale, once.
   rescaleLegacyRookies(w)
@@ -4108,6 +4142,9 @@ function migrateWorld(w: World): World {
   w.era ??= { id: 'modern', label: 'Modern Spread Era', positionBias: {}, capSpike: 1 }
   // L10 G8: a tendency book from a past season is stale — drop it.
   if (w.userBook && w.userBook.season !== w.season) w.userBook = undefined
+  // FUTURES #4: the special-teams scouting memory is per-season too. Optional, so
+  // an old save without it is valid.
+  if (w.stMemory && w.stMemory.season !== w.season) w.stMemory = undefined
   // The college universe is gone: drop any CFB/FCS teams and their data so a
   // legacy save opens as a clean 32-club NFL world.
   const nflTeams = w.teams.filter((t) => t.tier === 'NFL')

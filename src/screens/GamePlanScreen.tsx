@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronRight, ClipboardList, Repeat, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
+import { DEFAULT_ST, stRecordText, alertness } from '../game/engine/specialCalls'
 import { coachTendency, DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
 import { capabilities } from '../game/engine/capabilities'
 import { coordinatorAdvice } from '../game/engine/advice'
@@ -57,6 +58,8 @@ export function GamePlanScreen() {
       : coachLabels(league, opp.id).ocScheme
     : undefined
   const oppTend = opp ? coachTendency(league, opp.id) : null
+  // FUTURES #4: the opponent's special-teams tendencies this season (if any).
+  const oppSt = opp && league.stMemory?.season === league.season ? stRecordText(league.stMemory.teams[opp.id]) : ''
 
   return (
     <div>
@@ -116,6 +119,7 @@ export function GamePlanScreen() {
           <MatchupCard />
           <UsageCard />
           <CallSheetCard />
+          <SpecialTeamsCard />
           <SelfScoutCard />
           <CulturePanel teamId={team.id} />
         </div>
@@ -185,6 +189,7 @@ export function GamePlanScreen() {
                     {oppTend.tempo >= 0.25 ? 'up-tempo' : oppTend.tempo <= -0.15 ? 'deliberate' : 'normal tempo'}
                   </div>
                 )}
+                {oppSt && <div className="mt-0.5">Special teams: <strong className="text-ink-2">{oppSt}</strong></div>}
               </div>
             </Card>
           )}
@@ -380,6 +385,73 @@ function CallSheetRow<T extends string>({
         ))}
       </div>
     </div>
+  )
+}
+
+/** FUTURES #4: kickoff/punt strategy and kick/punt-return strategy, with hints. */
+function SpecialTeamsCard() {
+  const league = useWorld()
+  const career = useGame((s) => s.career)!
+  const setSpecialTeams = useGame((s) => s.setSpecialTeams)
+  const scope = capabilities(career).planScope
+  if (scope === 'none') return null
+  const st = career.specialTeams ?? DEFAULT_ST
+  const own = league.stMemory?.season === league.season ? league.stMemory.teams[career.teamId] : undefined
+  const readable = stRecordText(own)
+  const predictable = alertness(own) >= 0.34
+  return (
+    <Card>
+      <div className="mb-3 flex items-center gap-2">
+        <ClipboardList size={16} className="text-muted" />
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Special Teams</h3>
+        {predictable && <Badge tone="warn" className="ml-auto">Predictable</Badge>}
+      </div>
+      <div className="space-y-3">
+        <CallSheetRow
+          label="Kickoff"
+          value={st.kickoff}
+          onChange={(kickoff) => setSpecialTeams({ ...st, kickoff })}
+          options={[
+            { id: 'default', label: 'Touchback', hint: 'Kick it deep — the safe, default call.' },
+            { id: 'directional', label: 'Directional', hint: 'Pooch it: fewer touchbacks, shorter returns.' },
+          ]}
+        />
+        <CallSheetRow
+          label="Punt"
+          value={st.punt}
+          onChange={(punt) => setSpecialTeams({ ...st, punt })}
+          options={[
+            { id: 'default', label: 'Default', hint: 'A normal punt.' },
+            { id: 'directional', label: 'Directional', hint: 'Aim it: fewer returns, slightly shorter net.' },
+          ]}
+        />
+        <CallSheetRow
+          label="Kick returns"
+          value={st.kr}
+          onChange={(kr) => setSpecialTeams({ ...st, kr })}
+          options={[
+            { id: 'safe', label: 'Take touchbacks', hint: 'Kneel / fair catch: fewer returns, fewer fumbles.' },
+            { id: 'default', label: 'Default', hint: 'Return it when it is worth it.' },
+            { id: 'aggressive', label: 'Aggressive', hint: 'Bring it out: longer returns, more variance and fumbles.' },
+          ]}
+        />
+        <CallSheetRow
+          label="Punt returns"
+          value={st.pr}
+          onChange={(pr) => setSpecialTeams({ ...st, pr })}
+          options={[
+            { id: 'safe', label: 'Fair catch', hint: 'Take the fair catch: fewer chances to muff it.' },
+            { id: 'default', label: 'Default', hint: 'Return it when it is worth it.' },
+            { id: 'aggressive', label: 'Aggressive', hint: 'Field every punt: longer returns, more fumbles.' },
+          ]}
+        />
+      </div>
+      <p className="mt-3 text-[11px] leading-snug text-muted">
+        {readable
+          ? <>Opponents have scouted you: <strong className="text-ink-2">{readable}</strong> — switch it up.</>
+          : 'AI clubs play the default. Fakes and onsides you show are remembered — and scouted.'}
+      </p>
+    </Card>
   )
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, Play, Shield, SkipForward, Target, Timer, Wind, X, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { coachLabels, penaltyTotals, PENALTY_INFO, type GameState, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
+import { coachLabels, penaltyTotals, PENALTY_INFO, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
@@ -14,6 +14,7 @@ import { fourthAdvice } from '../game/engine/analytics'
 import { PlanEditor } from './PlanEditor'
 import { PersonnelCard } from './PersonnelCard'
 import { KeysCard } from './KeysCard'
+import { momentFieldPos } from './fieldPos'
 import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
 import { buildPlayAnim, holderAt, liftAt, posAt, snapYard, targetKey, actorWhy } from './playAnim'
@@ -800,7 +801,7 @@ export function MatchView() {
                 <div className="gd-slide-up">
                   <MomentCard
                     moment={moment}
-                    fieldPos={gameDayFieldPos(world, gameDay.state, moment.yard)}
+                    fieldPos={momentFieldPos(world, gameDay.state, moment)}
                     onAnswer={answer}
                     quick={(lean) => quickOffCall(world, moment.teamId === match.homeId ? match.awayId : match.homeId, moment, lean)}
                     fourthNote={analyticsFourthNote(world, moment)}
@@ -1624,11 +1625,3 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
   )
 }
 
-/** L11.5 Q1: where the ball is, tagged with the possessing club ("BUF 32", "NE 45"). */
-function gameDayFieldPos(world: World, state: GameState, yard: number): string {
-  const defId = state.offId === state.homeId ? state.awayId : state.homeId
-  const offAbbr = world.byId[state.offId]?.abbr ?? ''
-  const defAbbr = world.byId[defId]?.abbr ?? ''
-  if (yard === 50) return '50'
-  return yard < 50 ? `${offAbbr} ${yard}` : `${defAbbr} ${100 - yard}`
-}
