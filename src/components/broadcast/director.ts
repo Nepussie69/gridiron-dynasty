@@ -46,11 +46,28 @@ export const MAX_PAN_YD_PER_FRAME = 1.0
 export const MAX_SPAN_RATIO_PER_FRAME = 0.03
 /** Max pan-velocity change per frame (yards/frame²). */
 export const MAX_PAN_ACCEL_YD = 0.12
+// B5b: the director may now emit a rule-provided camera height, aim (pitch) and
+// heading (yaw); each is eased and rate-limited like the pan, so no rule can
+// make the camera jump.
+/** Max camera-height change per frame (yards). */
+export const MAX_CAM_Z_YD_PER_FRAME = 0.5
+/** Max pitch (aim elevation) change per frame (radians). */
+export const MAX_PITCH_RAD_PER_FRAME = 0.02
+/** Max yaw change per frame (radians). */
+export const MAX_YAW_RAD_PER_FRAME = 0.0175 // 1°/frame
+/** Absolute yaw clamp — a slight re-angle only, never an orbit (≤ 8°). */
+export const MAX_YAW_RAD = 0.1396 // 8°
+/** Absolute pitch clamp (radians): ≤ ~35° up, ~40° down. */
+export const MAX_PITCH_RAD = 0.61
+export const MIN_PITCH_RAD = -0.7
 
 const FRAME_SEC = 1 / 60
 const SNAP_FALLBACK_SEC = 0.14
+/** A player's head above the turf (yards) — used as a must-hold framing point. */
+const HEAD_Z = 2.0
 const OMEGA_CENTER = 5 // rad/s, the centre spring
 const OMEGA_SPAN = 2.5 // rad/s, the slower span spring
+const OMEGA_CAM = 8 // rad/s-equivalent, the height / aim / heading springs
 const SAFE_INSET = 0.06 // 6% each side, incl. the top for the ball's height
 
 export type PlayKind =
@@ -88,6 +105,8 @@ export interface ShotContext {
   actors: Map<string, { x: number; y: number }>
   /** B1 events up to `t` (seconds are `event.t × duration`). */
   events: AnimEvent[]
+  /** Projection viewport in pixels (rules use it for safe-frame margins). */
+  viewport: { width: number; height: number }
   project(p: { x: number; y: number; z?: number }, shot: Shot): { sx: number; sy: number; depth: number; inFrame: boolean }
 }
 
@@ -98,6 +117,13 @@ export interface DirectorRule {
   shape(ctx: ShotContext, target: Shot): Shot
   /** Extra points rule 5 must also keep in the safe frame. */
   mustSee?(ctx: ShotContext): { x: number; y: number; z?: number }[]
+  /**
+   * B5b hook: shape the frozen pre-snap framing. Evaluated ONCE per reset (at
+   * t = 0) so the pre-snap shot stays settled; the returned fields override the
+   * fitted shot. Special teams use it to frame the kicking play instead of the
+   * 22-man formation (which cannot fit the safe frame at the span cap).
+   */
+  preSnap?(ctx: ShotContext, shot: Shot): Shot | void
 }
 
 export type DirectorProfile = 'live' | 'replay' | 'phone'
@@ -284,20 +310,35 @@ export function createDirector(opts: DirectorOptions = {}): Director {
     ? { width: Math.max(1, opts.viewport.w), height: Math.max(1, opts.viewport.h) }
     : { ...VIEWS[profile] }
   const rules = opts.rules ?? []
+  // B5b: absolute clamps for a rule-provided camera height.
+  const MIN_CAM_Z = Math.max(4, rig.height * 0.5)
+  // Height cap reverted from +24 back to +18 (exactly keepCarrier's +18 raise).
+  // The extra +6 headroom let the eased height spring overshoot past the pile's
+  // best height, which stacked near figures back over the carrier: occlusion
+  // 0.656 -> 0.677. Capping at the raise keeps the ratio at the designed optimum.
+  const MAX_CAM_Z = rig.height + 18
 
-  /** B2's pose for a shot: rig + the span → vertical-FOV mapping. */
+  /**
+   * B2's pose for a shot: rig + the span → vertical-FOV mapping. B5b: `shot.z`
+   * raises the camera and `shot.pitch` tilts the aim (radians above horizontal;
+   * negative looks down). The aim is realised by raising the look-at point, so
+   * B2 needs no new parameter: focusZ = height + back·tan(pitch). With no pitch
+   * the focusZ is exactly 0 (B5a's framing), regardless of height.
+   */
   const poseFor = (shot: Shot): CameraPose => {
     const height = shot.z ?? rig.height
+    const pitch = shot.pitch
+    const focusZ = pitch == null ? 0 : height + rig.back * Math.tan(clamp(pitch, MIN_PITCH_RAD, MAX_PITCH_RAD))
     const d = Math.hypot(rig.back, height)
     const hFov = 2 * Math.atan(shot.span / (2 * d))
     const vFovDeg = (2 * Math.atan(Math.tan(hFov / 2) * (viewport.height / viewport.width)) * 180) / Math.PI
     return orbitPose({
       focusX: shot.cx,
       focusY: shot.cy,
-      focusZ: 0,
+      focusZ,
       back: rig.back,
       height,
-      yaw: shot.yaw ?? 0,
+      yaw: clamp(shot.yaw ?? 0, -MAX_YAW_RAD, MAX_YAW_RAD),
       fovDeg: clamp(vFovDeg, 1, 170),
     })
   }
@@ -459,22 +500,74 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       z: rig.height,
       yaw: 0,
     }
-    const preContain: ContainOpts<Shot> = { ...commonContain, spanMin: 34, spanMax: 55, iterations: 16 }
+    const preContain: ContainOpts<Shot> = { ...commonContain, maxShift: 20, spanMin: 34, spanMax: 55, iterations: 10 }
     const preFit = containShot(pre, preWatch, preContain).shot
     const preSnap: Shot = { cx: clamp(preFit.cx, 2, 118), cy: clamp(preFit.cy, 2, FIELD_H - 2), span: clamp(preFit.span, 34, 55), z: rig.height, yaw: 0 }
 
+    // ── B5b pre-snap hook: a rule may reframe the frozen pre-snap shot ───────
+    // Evaluated once (t = 0) so the shot stays settled through the whole pre-snap
+    // window. Special teams use it: the 22-man formation fit above cannot hold
+    // both kick units inside the span cap, so it collapses to a clamp corner.
+    let preSnapShot: Shot = preSnap
+    if (rules.length) {
+      const preActors = new Map<string, { x: number; y: number }>()
+      for (const key of actorKeys) {
+        const s = ax.get(key)
+        if (s) preActors.set(key, { x: s.x[0], y: s.y[0] })
+      }
+      const h0 = holders[0]
+      const c0 = h0 && preActors.has(h0) ? { key: h0, ...preActors.get(h0)! } : null
+      const t0 = targetKey && preActors.has(targetKey) ? { key: targetKey, ...preActors.get(targetKey)! } : null
+      const preCtx: ShotContext = {
+        play: p,
+        anim: a,
+        kind,
+        t: 0,
+        sec: 0,
+        los,
+        strongSide,
+        ball: { x: ball.x[0], y: ball.y[0], z: ballZ[0] },
+        carrier: c0,
+        target: t0,
+        actors: preActors,
+        events: [],
+        viewport: { width: viewport.width, height: viewport.height },
+        project: (pt, shot) => projectShot(pt, shot),
+      }
+      for (const r of rules) {
+        if (!r.preSnap || !r.applies(preCtx)) continue
+        const s = r.preSnap(preCtx, preSnapShot)
+        if (s) preSnapShot = { ...preSnapShot, ...s }
+      }
+    }
+    const preSnapOut: Shot = {
+      cx: clamp(preSnapShot.cx, 2, 118),
+      cy: clamp(preSnapShot.cy, 2, FIELD_H - 2),
+      span: clamp(preSnapShot.span, 20, 55),
+      z: clamp(preSnapShot.z ?? rig.height, MIN_CAM_Z, MAX_CAM_Z),
+      yaw: clamp(preSnapShot.yaw ?? 0, -MAX_YAW_RAD, MAX_YAW_RAD),
+      pitch: preSnapShot.pitch,
+    }
+
     // ── integrate ─────────────────────────────────────────────────────────────
-    const shotContain: ContainOpts<Shot> = { ...commonContain, spanMin: 20, spanMax: 55, iterations: 8 }
+    const shotContain: ContainOpts<Shot> = { ...commonContain, maxShift: 24, spanMin: 20, spanMax: 55, iterations: 6 }
+    const hardContain: ContainOpts<Shot> = { ...commonContain, maxShift: 8, spanMin: 20, spanMax: 55, iterations: 4 }
     const hasRules = rules.length > 0
     const out: ShotFrame[] = new Array(nFrames + 1)
-    let cx = preSnap.cx
-    let cy = preSnap.cy
-    let span = preSnap.span
+    let cx = preSnapOut.cx
+    let cy = preSnapOut.cy
+    let span = preSnapOut.span
+    let cz = preSnapOut.z ?? rig.height
+    let cyaw = preSnapOut.yaw ?? 0
+    let cpitch = preSnapOut.pitch ?? Math.atan2(0 - cz, rig.back)
     let prevStepX = 0
     let prevStepY = 0
     let vx = 0
     let vy = 0
     let vs = 0
+    let vz = 0
+    let vyaw = 0
+    let vpitch = 0
     let evIdx = 0
     const evSeen: AnimEvent[] = []
     // Reused per frame to keep the track build allocation-light.
@@ -497,10 +590,10 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       const t = times[k]
       const sec = t * duration
       if (sec < snapSec - 1e-9) {
-        out[k] = { cx: preSnap.cx, cy: preSnap.cy, span: preSnap.span, z: rig.height, yaw: 0, kind: 'presnap', clamped: false }
-        cx = preSnap.cx
-        cy = preSnap.cy
-        span = preSnap.span
+        out[k] = { cx: preSnapOut.cx, cy: preSnapOut.cy, span: preSnapOut.span, z: cz, yaw: cyaw, pitch: cpitch, kind: 'presnap', clamped: false }
+        cx = preSnapOut.cx
+        cy = preSnapOut.cy
+        span = preSnapOut.span
         prevStepX = 0
         prevStepY = 0
         continue
@@ -529,8 +622,8 @@ export function createDirector(opts: DirectorOptions = {}): Director {
           oy += (cv.y / sp) * 2 * ramp
         }
       }
-      let wantX = lerp(preSnap.cx, led.x, ramp) + offX
-      let wantY = lerp(preSnap.cy, led.y, ramp) + ox + oy
+      let wantX = lerp(preSnapOut.cx, led.x, ramp) + offX
+      let wantY = lerp(preSnapOut.cy, led.y, ramp) + ox + oy
 
       // Rule 3 span: keep the holder (or the target in flight) and the two
       // nearest defenders in frame; rule 4 tightens on contact.
@@ -541,13 +634,13 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       if (hKey) {
         const s = ax.get(hKey)
         if (s) {
-          watch.push({ x: s.x[k], y: s.y[k], z: 0 })
+          watch.push({ x: s.x[k], y: s.y[k], z: 0 }, { x: s.x[k], y: s.y[k], z: HEAD_Z })
           spanPts.push({ x: s.x[k], y: s.y[k] })
         }
       } else if (flightActive[k] && targetKey) {
         const s = ax.get(targetKey)
         if (s) {
-          watch.push({ x: s.x[k], y: s.y[k], z: 0 })
+          watch.push({ x: s.x[k], y: s.y[k], z: 0 }, { x: s.x[k], y: s.y[k], z: HEAD_Z })
           spanPts.push({ x: s.x[k], y: s.y[k] })
         }
       }
@@ -596,6 +689,7 @@ export function createDirector(opts: DirectorOptions = {}): Director {
           target: tgt,
           actors,
           events: evSeen,
+          viewport: { width: viewport.width, height: viewport.height },
           project: (pt, shot) => projectShot(pt, shot),
         }
         for (const r of rules) {
@@ -615,19 +709,33 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       const sxp = smoothDamp(cx, desired.cx, vx, OMEGA_CENTER, dt)
       const syp = smoothDamp(cy, desired.cy, vy, OMEGA_CENTER, dt)
       const ssp = smoothDamp(span, desired.span, vs, OMEGA_SPAN, dt)
+      // B5b: ease the rule-provided height / aim / heading, rate-limited like the
+      // pan. A rule's `pitch` is the aim elevation (radians, negative looks down);
+      // with none we look at the ground focus (B5a's framing) at the eased height.
+      const desZ = clamp(desired.z ?? rig.height, MIN_CAM_Z, MAX_CAM_Z)
+      const szp = smoothDamp(cz, desZ, vz, OMEGA_CAM, dt)
+      const desPitch = clamp(desired.pitch ?? Math.atan2(0 - desZ, rig.back), MIN_PITCH_RAD, MAX_PITCH_RAD)
+      const spp = smoothDamp(cpitch, desPitch, vpitch, OMEGA_CAM, dt)
+      const desYaw = clamp(desired.yaw ?? 0, -MAX_YAW_RAD, MAX_YAW_RAD)
+      const sypaw = smoothDamp(cyaw, desYaw, vyaw, OMEGA_CAM, dt)
       let stepX = clamp(limitAccel(prevStepX, sxp.x - cx, MAX_PAN_ACCEL_YD), -MAX_PAN_YD_PER_FRAME, MAX_PAN_YD_PER_FRAME)
       let stepY = clamp(limitAccel(prevStepY, syp.x - cy, MAX_PAN_ACCEL_YD), -MAX_PAN_YD_PER_FRAME, MAX_PAN_YD_PER_FRAME)
       let nextSpan = limitRatio(span, ssp.x, MAX_SPAN_RATIO_PER_FRAME)
       let nx = cx + stepX
       let ny = cy + stepY
+      const nextZ = clamp(cz + clamp(szp.x - cz, -MAX_CAM_Z_YD_PER_FRAME, MAX_CAM_Z_YD_PER_FRAME), MIN_CAM_Z, MAX_CAM_Z)
+      const nextPitch = clamp(cpitch + clamp(spp.x - cpitch, -MAX_PITCH_RAD_PER_FRAME, MAX_PITCH_RAD_PER_FRAME), MIN_PITCH_RAD, MAX_PITCH_RAD)
+      const nextYaw = clamp(cyaw + clamp(sypaw.x - cyaw, -MAX_YAW_RAD_PER_FRAME, MAX_YAW_RAD_PER_FRAME), -MAX_YAW_RAD, MAX_YAW_RAD)
 
       // ── hard containment (safety net): obey the same per-frame limits ────
       let clamped = false
-      const cand: Shot = { cx: nx, cy: ny, span: nextSpan, z: rig.height, yaw: 0 }
-      const hard = containShot(cand, watch, shotContain)
+      const cand: Shot = { cx: nx, cy: ny, span: nextSpan, z: nextZ, yaw: nextYaw, pitch: nextPitch }
+      const hard = containShot(cand, watch, hardContain)
       if (hard.shifted || hard.widened) {
-        const hx = clamp(limitAccel(prevStepX, hard.shot.cx - cx, MAX_PAN_ACCEL_YD), -MAX_PAN_YD_PER_FRAME, MAX_PAN_YD_PER_FRAME)
-        const hy = clamp(limitAccel(prevStepY, hard.shot.cy - cy, MAX_PAN_ACCEL_YD), -MAX_PAN_YD_PER_FRAME, MAX_PAN_YD_PER_FRAME)
+        const tx = clamp(hard.shot.cx, 1, 119)
+        const ty = clamp(hard.shot.cy, 1, FIELD_H - 1)
+        const hx = clamp(limitAccel(prevStepX, tx - cx, MAX_PAN_ACCEL_YD), -MAX_PAN_YD_PER_FRAME, MAX_PAN_YD_PER_FRAME)
+        const hy = clamp(limitAccel(prevStepY, ty - cy, MAX_PAN_ACCEL_YD), -MAX_PAN_YD_PER_FRAME, MAX_PAN_YD_PER_FRAME)
         stepX = hx
         stepY = hy
         nx = cx + hx
@@ -636,15 +744,26 @@ export function createDirector(opts: DirectorOptions = {}): Director {
         clamped = true
       }
       const prevSpan = span
+      // Do NOT hard-clamp the position to the field edge here: a position clamp
+      // truncates the already accel-limited step and breaks the per-frame accel
+      // limit (a visible jump when the spring reaches a sideline at speed). The
+      // focus is kept inside [1,119]x[1,FIELD_H-1] by `desired` and by the hard
+      // containment pass above, both of which clamp before the step is booked.
       cx = nx
       cy = ny
       span = nextSpan
+      cz = nextZ
+      cpitch = nextPitch
+      cyaw = nextYaw
       vx = stepX / dt
       vy = stepY / dt
       vs = (span - prevSpan) / dt
+      vz = szp.v
+      vpitch = spp.v
+      vyaw = sypaw.v
       prevStepX = stepX
       prevStepY = stepY
-      out[k] = { cx, cy, span, z: rig.height, yaw: 0, kind: kindName, rule: ruleId, clamped }
+      out[k] = { cx, cy, span, z: cz, yaw: cyaw, pitch: cpitch, kind: kindName, rule: ruleId, clamped }
     }
 
     track = out
@@ -654,7 +773,7 @@ export function createDirector(opts: DirectorOptions = {}): Director {
   function shotAt(t: number): ShotFrame {
     const n = track.length
     const tn = clamp01(t)
-    if (n === 0) return { cx: los, cy: MID_Y, span: 40, z: rig.height, yaw: 0, kind: 'other', clamped: false }
+    if (n === 0) return { cx: los, cy: MID_Y, span: 40, z: rig.height, yaw: 0, pitch: Math.atan2(0 - rig.height, rig.back), kind: 'other', clamped: false }
     let lo = 0
     let hi = n - 1
     while (lo < hi) {
@@ -674,6 +793,7 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       span: lerp(a.span, b.span, f),
       z: lerp(a.z ?? rig.height, b.z ?? rig.height, f),
       yaw: lerp(a.yaw ?? 0, b.yaw ?? 0, f),
+      pitch: lerp(a.pitch ?? Math.atan2(0 - (a.z ?? rig.height), rig.back), b.pitch ?? Math.atan2(0 - (b.z ?? rig.height), rig.back), f),
       kind: a.kind,
       rule: a.rule,
       clamped: a.clamped,

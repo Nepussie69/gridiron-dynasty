@@ -49,9 +49,9 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 | B1 | ✅ b1a 0e2845f + b1b 9f470fc on main (engagements, events, poses, facing, ball height, camera hints; calibration identical) |
 | B3 | ✅ 81f5923 on main (60 fps, players 0.5–0.7 ms) |
 | B5a | ✅ 878b9c7 on main |
-| B5b | 🔨 DeepSeek building (special rules: kickoff/punt/returns, reset cost cap) |
-| B4 | 🔨 DeepSeek building |
+| B5b | ✅ on main (carrier 100%, ball ≥98% all kinds, 0 jumps) |
+| B4 | ✅ on main (ball arc + effects from real events) |
 | B7 | ⏳ DeepSeek, next free slot (2-job cap) |
 | B6a graphics | ✅ on main (B8 note: renderer vignette off; FG kicker mapping verified OK on real plays) |
-| B6b telestrator replay | ⏳ Claude, after B4 (ball/effects) |
+| B6b telestrator replay | 🔨 Claude building |
 | B8 | ⏳ Claude, after B4–B7 |
