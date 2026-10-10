@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
-import { cn } from '../lib/cn'
+import { Search, SlidersHorizontal } from 'lucide-react'
 import { groupPositions } from '../game/data/ratingInfo'
 import type { World } from '../game/engine/generate'
 import type { Player } from '../game/types'
@@ -8,7 +7,8 @@ import { useGame, useWorld } from '../store/gameStore'
 import { PlayerCard } from '../components/PlayerCard'
 import { RatingsTable } from '../components/RatingsTable'
 import { StatsTable } from '../components/StatsTable'
-import { Badge, Button, Card, PageHeader } from '../ui/kit'
+import { Badge, Button, Card, FilterChip, PageHeader, SegmentedControl, Sheet } from '../ui/kit'
+import { usePhone } from '../ui/hooks'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Find a Player — every NFL player in the league (all clubs + free agents,
@@ -78,11 +78,15 @@ function mergeRows(world: World): Row[] {
   return [...map.values()]
 }
 
+const FIELD_CLASS =
+  'rounded-[var(--r-md)] border border-line-strong bg-surface px-2 py-1.5 font-cond text-small font-700 uppercase text-ink outline-none max-sm:h-11 max-sm:text-[16px]'
+
 export function FindPlayer() {
   const world = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const tick = useGame((s) => s.tick)
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const phone = usePhone()
 
   const [view, setView] = useState<View>('ratings')
   const [group, setGroup] = useState<PosChip>('ALL')
@@ -91,6 +95,7 @@ export function FindPlayer() {
   const [ageBand, setAgeBand] = useState<AgeBand>('any')
   const [minOvr, setMinOvr] = useState(0)
   const [limit, setLimit] = useState(PAGE)
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   // `tick` (from useGame) bumps on every store write; world arrays are mutated
   // in place, so rebuilding per tick keeps this list current.
@@ -138,6 +143,77 @@ export function FindPlayer() {
   }
   const statDefaultKey = `col:${STAT_DEFAULT[group] ?? 'main'}` as `col:${string}`
 
+  const activeFilters = (group !== 'ALL' ? 1 : 0) + (team !== 'ALL' ? 1 : 0) + (q ? 1 : 0) + (ageBand !== 'any' ? 1 : 0) + (minOvr > 0 ? 1 : 0)
+  const resetFilters = () => {
+    setGroup('ALL')
+    setTeam('ALL')
+    setQ('')
+    setAgeBand('any')
+    setMinOvr(0)
+    setLimit(PAGE)
+  }
+
+  const filters = (
+    <div className="space-y-3">
+      <div>
+        <div className="label mb-1.5">Position</div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Position">
+          {POS_CHIPS.map((c) => (
+            <FilterChip key={c} pressed={group === c} onChange={() => apply(setGroup)(c)}>
+              {c === 'ALL' ? 'All' : c}
+            </FilterChip>
+          ))}
+        </div>
+      </div>
+      <div className={phone ? 'space-y-3' : 'flex flex-wrap items-center gap-x-4 gap-y-3'}>
+        <label className="flex items-center gap-2">
+          <span className="label shrink-0">Club</span>
+          <select value={team} onChange={(e) => apply(setTeam)(e.target.value)} className={FIELD_CLASS}>
+            <option value="ALL">All clubs</option>
+            {teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.city} {t.name}
+              </option>
+            ))}
+            <option value="FA">Free agents</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="label shrink-0">Age</span>
+          <select value={ageBand} onChange={(e) => apply(setAgeBand)(e.target.value as AgeBand)} className={FIELD_CLASS}>
+            {AGE_BANDS.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="label shrink-0">Min OVR</span>
+          <select value={minOvr} onChange={(e) => apply(setMinOvr)(Number(e.target.value))} className={FIELD_CLASS}>
+            {MIN_OVR.map((v) => (
+              <option key={v} value={v}>
+                {v === 0 ? 'Any' : `${v}+`}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label className="block">
+        <span className="label mb-1.5 block">Search</span>
+        <span className="flex items-center gap-2 rounded-[var(--r-md)] border border-line-strong bg-surface px-2 py-1.5">
+          <Search size={16} className="shrink-0 text-faint" />
+          <input
+            value={q}
+            onChange={(e) => apply(setQ)(e.target.value)}
+            placeholder="Search players…"
+            className="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-faint max-sm:h-11 max-sm:text-[16px] sm:text-small"
+          />
+        </span>
+      </label>
+    </div>
+  )
+
   return (
     <div>
       <PageHeader
@@ -147,95 +223,56 @@ export function FindPlayer() {
           view === 'ratings' ? 'ratings & attributes' : view === 'cards' ? 'card view' : `${world.season} season stats`
         }`}
         right={
-          <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
-            <Search size={16} className="text-faint" />
-            <input
-              value={q}
-              onChange={(e) => {
-                setQ(e.target.value)
-                setLimit(PAGE)
-              }}
-              placeholder="Search players…"
-              className="w-44 bg-transparent text-sm outline-none placeholder:text-faint"
-            />
-          </div>
+          <SegmentedControl
+            label="Find a Player view"
+            value={view}
+            onChange={(v) => apply(setView)(v)}
+            options={VIEWS.map((v) => ({ id: v.id, label: v.label }))}
+          />
         }
       />
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex rounded-lg bg-surface-2 p-0.5">
-          {VIEWS.map((v) => (
-            <button
-              key={v.id}
-              onClick={() => apply(setView)(v.id)}
-              className={cn(
-                'rounded-md px-3 py-1.5 font-cond text-xs font-700 uppercase tracking-wide transition',
-                view === v.id ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink-2',
-              )}
-            >
-              {v.label}
-            </button>
-          ))}
+      {phone ? (
+        <div className="mb-3 flex items-center gap-2">
+          <Button variant="secondary" icon={<SlidersHorizontal size={16} aria-hidden />} onClick={() => setFiltersOpen(true)}>
+            Filters{activeFilters ? ` (${activeFilters})` : ''}
+          </Button>
+          <span className="min-w-0 flex-1 text-small text-muted">{filtered.length} players</span>
         </div>
+      ) : (
+        <Card className="mb-3 bg-surface-2">
+          {filters}
+          <div className="mt-3 flex items-center gap-3 text-small text-muted">
+            <span>{filtered.length} of {rows.length} players</span>
+            {activeFilters > 0 && (
+              <Button variant="quiet" size="sm" onClick={resetFilters}>
+                Clear filters
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
 
-        <div className="flex flex-wrap items-center gap-1">
-          {POS_CHIPS.map((c) => (
-            <button
-              key={c}
-              onClick={() => apply(setGroup)(c)}
-              className={cn(
-                'rounded-md px-2.5 py-1 font-cond text-xs font-700 uppercase transition',
-                group === c ? 'text-[var(--team-ink)]' : 'bg-surface text-muted hover:bg-surface-2',
-              )}
-              style={group === c ? { background: 'var(--team)' } : undefined}
-            >
-              {c === 'ALL' ? 'All' : c}
-            </button>
-          ))}
-        </div>
-
-        <select
-          value={team}
-          onChange={(e) => apply(setTeam)(e.target.value)}
-          className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
-        >
-          <option value="ALL">All clubs</option>
-          {teams.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.city} {t.name}
-            </option>
-          ))}
-          <option value="FA">Free agents</option>
-        </select>
-
-        <select
-          value={ageBand}
-          onChange={(e) => apply(setAgeBand)(e.target.value as AgeBand)}
-          className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
-        >
-          {AGE_BANDS.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={minOvr}
-          onChange={(e) => apply(setMinOvr)(Number(e.target.value))}
-          className="rounded-md border border-line bg-surface-2 px-2 py-1 font-cond text-xs font-600 uppercase outline-none"
-        >
-          {MIN_OVR.map((v) => (
-            <option key={v} value={v}>
-              {v === 0 ? 'Any OVR' : `${v}+ OVR`}
-            </option>
-          ))}
-        </select>
-
-        <div className="ml-auto">
-          <Badge tone="neutral">{filtered.length} players</Badge>
-        </div>
-      </div>
+      <Sheet
+        open={phone && filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        eyebrow="Find a Player"
+        title={`Filters${activeFilters ? ` (${activeFilters})` : ''}`}
+        footer={
+          <>
+            <Button variant="primary" size="lg" onClick={() => setFiltersOpen(false)}>
+              Show {filtered.length} players
+            </Button>
+            {activeFilters > 0 && (
+              <Button variant="quiet" onClick={resetFilters}>
+                Clear filters
+              </Button>
+            )}
+          </>
+        }
+      >
+        {filters}
+      </Sheet>
 
       {view === 'cards' ? (
         <>
@@ -248,14 +285,14 @@ export function FindPlayer() {
                 tag={tagFor(player)}
                 onClick={() => selectPlayer(player.id)}
                 footer={
-                  <span className="font-cond text-[10px] font-700 uppercase tracking-wide tnum text-muted">
+                  <span className="font-cond text-label font-700 uppercase tracking-wide tnum text-muted">
                     {teamId ? `$${(player.contract.capHit / 1_000_000).toFixed(1)}M · ${world.byId[teamId]?.abbr ?? ''}` : 'Free agent'}
                   </span>
                 }
               />
             ))}
           </div>
-          {!filtered.length && <p className="py-8 text-center text-sm text-muted">No players match these filters.</p>}
+          {!filtered.length && <p className="py-8 text-center text-small text-muted">No players match these filters.</p>}
           {filtered.length > limit && (
             <div className="mt-4 flex justify-center">
               <Button onClick={() => setLimit((n) => n + PAGE)}>Show more · {filtered.length - limit} left</Button>
@@ -271,6 +308,7 @@ export function FindPlayer() {
               showTeam
               showCap
               showFit={false}
+              ovrFirst
               tagFor={tagFor}
               mineTeamId={activeTeamId}
               limit={limit}
@@ -295,6 +333,10 @@ export function FindPlayer() {
           )}
         </Card>
       )}
+
+      <div className="mt-3 flex justify-end">
+        <Badge tone="neutral">{filtered.length} players</Badge>
+      </div>
     </div>
   )
 }

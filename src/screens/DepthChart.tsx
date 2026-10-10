@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronUp, RotateCcw } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { capabilities, isGM } from '../game/engine/capabilities'
@@ -8,8 +8,23 @@ import { clubReturners, isReturnEligible, RETURN_INFO, returnerStatus, returnInp
 import type { World } from '../game/engine/generate'
 import type { Player, Position } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card, OvrBadge, PageHeader } from '../ui/kit'
+import {
+  AccessBanner,
+  Badge,
+  Button,
+  Card,
+  Delta,
+  IconButton,
+  OvrBadge,
+  OverflowMenu,
+  PageHeader,
+  SectionTitle,
+  Tabs,
+  type MenuItem,
+} from '../ui/kit'
+import { usePhone } from '../ui/hooks'
 import { PlayerName } from '../components/PlayerHoverCard'
+import { InjuryChip } from '../components/PlayerTable'
 
 // One card per position, so `depthAt` drives each card directly.
 type CardDef = { label: string; pos: Position }
@@ -35,6 +50,8 @@ const ST_CARDS: CardDef[] = [
   { label: 'Punter', pos: 'P' },
 ]
 
+type UnitId = 'OFF' | 'DEF' | 'ST'
+
 export function DepthChart() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
@@ -45,7 +62,8 @@ export function DepthChart() {
   const resetDepthChart = useGame((s) => s.resetDepthChart)
   const pitchStarter = useGame((s) => s.pitchStarter)
   const setReturner = useGame((s) => s.setReturner)
-  const staff = league.staff[activeTeamId] ?? []
+  const phone = usePhone()
+  const [unitTab, setUnitTab] = useState<UnitId>('OFF')
 
   const editable =
     !!career &&
@@ -56,6 +74,41 @@ export function DepthChart() {
   const pitching = !!career && activeTeamId === career.teamId && canPitch(career)
   const pitchPositions = pitching && career ? pitchSide(career) : []
   const pitchUsed = !!career?.weekFlags?.pitch
+
+  const unitProps = {
+    world: league,
+    teamId: activeTeamId,
+    editable,
+    onSelect: selectPlayer,
+    onMove: moveDepth,
+    onStart: setStarter,
+    pitchPositions,
+    pitchUsed,
+    onPitch: pitchStarter,
+  }
+
+  const offense = <Unit key="off" title="Offense" cards={OFF_CARDS} {...unitProps} />
+  const defense = <Unit key="def" title="Defense" cards={DEF_CARDS} {...unitProps} />
+  const special = (
+    <Unit key="st" title="Special Teams" cards={ST_CARDS} {...unitProps}>
+      <ReturnerCard
+        role="kr"
+        world={league}
+        teamId={activeTeamId}
+        editable={editable}
+        onPick={(r, id) => setReturner(r, id)}
+        onAuto={(r) => setReturner(r, null)}
+      />
+      <ReturnerCard
+        role="pr"
+        world={league}
+        teamId={activeTeamId}
+        editable={editable}
+        onPick={(r, id) => setReturner(r, id)}
+        onAuto={(r) => setReturner(r, null)}
+      />
+    </Unit>
+  )
 
   return (
     <div>
@@ -69,91 +122,57 @@ export function DepthChart() {
         }
         right={
           <div className="flex items-center gap-2">
-            <Badge tone="team">OFF: {staff.find((s) => s.role === 'Offensive Coordinator')?.scheme ?? 'Balanced'}</Badge>
-            <Badge tone="info">DEF: {staff.find((s) => s.role === 'Defensive Coordinator')?.scheme ?? 'Multiple'}</Badge>
             {editable && (
-              <Button variant="default" size="sm" onClick={resetDepthChart} title="Drop your order and fall back to ratings">
-                <RotateCcw size={13} /> Reset to ratings
+              <Button variant="secondary" size="md" onClick={resetDepthChart} title="Drop your order and fall back to ratings">
+                <RotateCcw size={14} aria-hidden /> Reset to ratings
               </Button>
             )}
           </div>
         }
       />
 
-      {!editable && (
-        <div className="mb-4 rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs text-muted">
-          The head coach sets the depth chart.
+      <AccessBanner
+        area="roster"
+        className="mb-4"
+        message={
+          !editable ? (
+            <>
+              <b className="font-600 text-ink">The head coach sets the depth chart.</b> You can read every unit and
+              click a player for his profile.
+            </>
+          ) : undefined
+        }
+      />
+
+      {phone ? (
+        <>
+          <Tabs
+            label="Unit"
+            value={unitTab}
+            onChange={setUnitTab}
+            stretch
+            className="mb-4"
+            tabs={[
+              { id: 'OFF', label: 'Offense' },
+              { id: 'DEF', label: 'Defense' },
+              { id: 'ST', label: 'Special' },
+            ]}
+          />
+          {unitTab === 'OFF' ? offense : unitTab === 'DEF' ? defense : special}
+        </>
+      ) : (
+        <div className="space-y-5">
+          {offense}
+          {defense}
+          {special}
         </div>
       )}
-
-      <div className="space-y-5">
-        <Unit
-          title="Offense"
-          accent="var(--team)"
-          cards={OFF_CARDS}
-          world={league}
-          teamId={activeTeamId}
-          editable={editable}
-          onSelect={selectPlayer}
-          onMove={moveDepth}
-          onStart={setStarter}
-          pitchPositions={pitchPositions}
-          pitchUsed={pitchUsed}
-          onPitch={pitchStarter}
-        />
-        <Unit
-          title="Defense"
-          accent="#0b62ff"
-          cards={DEF_CARDS}
-          world={league}
-          teamId={activeTeamId}
-          editable={editable}
-          onSelect={selectPlayer}
-          onMove={moveDepth}
-          onStart={setStarter}
-          pitchPositions={pitchPositions}
-          pitchUsed={pitchUsed}
-          onPitch={pitchStarter}
-        />
-        <Unit
-          title="Special Teams"
-          accent="#c99a2e"
-          cards={ST_CARDS}
-          world={league}
-          teamId={activeTeamId}
-          editable={editable}
-          onSelect={selectPlayer}
-          onMove={moveDepth}
-          onStart={setStarter}
-          pitchPositions={pitchPositions}
-          pitchUsed={pitchUsed}
-          onPitch={pitchStarter}
-        >
-          <ReturnerCard
-            role="kr"
-            world={league}
-            teamId={activeTeamId}
-            editable={editable}
-            onPick={(r, id) => setReturner(r, id)}
-            onAuto={(r) => setReturner(r, null)}
-          />
-          <ReturnerCard
-            role="pr"
-            world={league}
-            teamId={activeTeamId}
-            editable={editable}
-            onPick={(r, id) => setReturner(r, id)}
-            onAuto={(r) => setReturner(r, null)}
-          />
-        </Unit>
-      </div>
     </div>
   )
 }
 
 function Unit({
   title,
-  accent,
   cards,
   world,
   teamId,
@@ -167,7 +186,6 @@ function Unit({
   children,
 }: {
   title: string
-  accent: string
   cards: CardDef[]
   world: World
   teamId: string
@@ -183,10 +201,7 @@ function Unit({
 }) {
   return (
     <div>
-      <div className="mb-2 flex items-center gap-3">
-        <span className="h-4 w-1.5 rounded-full" style={{ background: accent }} />
-        <h3 className="font-display text-xl font-700 uppercase tracking-wide">{title}</h3>
-      </div>
+      <SectionTitle className="mb-2">{title}</SectionTitle>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((c) => {
           const players = depthAt(world, teamId, c.pos)
@@ -196,69 +211,74 @@ function Unit({
               <div className="border-b border-line bg-surface-2 px-3 py-1.5">
                 <span className="label">{c.label}</span>
               </div>
-              <div className="divide-y divide-line/60">
+              <div>
                 {players.map((p, i) => {
                   const starter = i < starters
+                  const gap = i > 0 ? players[0].ovr - p.ovr : 0
+                  const startItem: MenuItem = {
+                    id: 'start',
+                    label: `Start ${p.name.split(' ').slice(-1)[0]}`,
+                    description: starter ? 'Already the starter' : `Make him the ${c.label.toLowerCase()} starter`,
+                    disabled: starter,
+                    onSelect: () => onStart(c.pos, p.id),
+                  }
                   return (
                     <Fragment key={p.id}>
-                      {i === starters && (
-                        <div className="flex items-center gap-2 bg-surface-2 px-3 py-1">
-                          <span className="h-px flex-1 bg-line" />
-                          <span className="font-cond text-[9px] font-700 uppercase tracking-wider text-muted">Bench</span>
-                          <span className="h-px flex-1 bg-line" />
-                        </div>
-                      )}
-                      <div className="flex w-full items-center gap-2 px-3 py-2 transition hover:bg-[var(--team-soft)]">
+                      {i === 0 && starters > 0 && <Band>Starter{starters > 1 ? 's' : ''}</Band>}
+                      {i === starters && starters > 0 && <Band>Backups</Band>}
+                      <div
+                        className={cn(
+                          'flex flex-wrap items-center gap-2 px-3 py-2 transition hover:bg-[var(--team-tint)]',
+                          starter && 'shadow-[inset_3px_0_0_var(--team-accent)]',
+                        )}
+                      >
                         <button
                           type="button"
                           onClick={() => onSelect(p.id)}
-                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                          className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 text-left lg:min-h-0"
                         >
                           <span
-                            className="grid h-5 w-5 shrink-0 place-items-center rounded font-cond text-[10px] font-700"
-                            style={{
-                              background: starter ? accent : 'var(--color-surface-3)',
-                              color: starter ? '#fff' : 'var(--color-muted)',
-                            }}
+                            className={cn(
+                              'grid h-6 w-6 shrink-0 place-items-center rounded-[var(--r-xs)] font-cond text-label font-700 tnum',
+                              starter
+                                ? 'bg-[var(--team-fill)] text-[var(--team-on)] shadow-[var(--team-slab-ring)]'
+                                : 'bg-surface-3 text-muted',
+                            )}
                           >
                             {i + 1}
                           </span>
-                          <OvrBadge value={p.ovr} pot={p.pot} size={26} />
-                          <span className="w-8 font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
-                          <span className="min-w-0 flex-1 truncate"><PlayerName player={p} className="text-sm font-600 text-ink" /></span>
-                          {p.injured && <Badge tone="loss">OUT</Badge>}
+                          <OvrBadge value={p.ovr} pot={p.pot} size={28} />
+                          <span className="w-8 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            <PlayerName player={p} className="text-small font-600 text-ink" />
+                          </span>
+                          {gap > 0 && <Delta value={-gap} suffix="OVR" />}
+                          <InjuryChip player={p} />
                         </button>
                         {editable && (
                           <div className="flex shrink-0 items-center gap-1">
-                            {!starter && (
-                              <Button
-                                variant="team"
-                                size="sm"
-                                title="Make starter"
-                                onClick={() => onStart(c.pos, p.id)}
-                              >
-                                Start
-                              </Button>
-                            )}
-                            <IconBtn
-                              title="Move up"
+                            <IconButton
+                              label="Move up"
+                              size="md"
                               disabled={i === 0}
                               onClick={() => onMove(c.pos, p.id, -1)}
                             >
-                              <ChevronUp size={14} />
-                            </IconBtn>
-                            <IconBtn
-                              title="Move down"
+                              <ChevronUp size={16} />
+                            </IconButton>
+                            <IconButton
+                              label="Move down"
+                              size="md"
                               disabled={i === players.length - 1}
                               onClick={() => onMove(c.pos, p.id, 1)}
                             >
-                              <ChevronDown size={14} />
-                            </IconBtn>
+                              <ChevronDown size={16} />
+                            </IconButton>
+                            {!starter && <OverflowMenu items={[startItem, { id: 'up', label: 'Move up', description: 'One spot up the chart', onSelect: () => onMove(c.pos, p.id, -1) }]} label={`Actions for ${p.name}`} size="sm" />}
                           </div>
                         )}
                         {pitchPositions.includes(c.pos) && i > 0 && (
                           <Button
-                            variant="default"
+                            variant="secondary"
                             size="sm"
                             disabled={pitchUsed}
                             title={pitchUsed ? 'Already pitched a starter this week' : 'Pitch him to the coordinator'}
@@ -271,7 +291,7 @@ function Unit({
                     </Fragment>
                   )
                 })}
-                {!players.length && <div className="px-3 py-3 text-xs text-muted">No players</div>}
+                {!players.length && <div className="px-3 py-3 text-small text-muted">No players</div>}
               </div>
             </Card>
           )
@@ -282,30 +302,14 @@ function Unit({
   )
 }
 
-function IconBtn({
-  children,
-  title,
-  disabled,
-  onClick,
-}: {
-  children: ReactNode
-  title: string
-  disabled?: boolean
-  onClick: () => void
-}) {
+/** A slim divider band marking the starter/backup split. */
+function Band({ children }: { children: ReactNode }) {
   return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'grid h-6 w-6 place-items-center rounded-md border border-line bg-surface text-ink-2 transition',
-        'hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30',
-      )}
-    >
-      {children}
-    </button>
+    <div className="flex items-center gap-2 bg-surface-2 px-3 py-1">
+      <span className="h-px flex-1 bg-line" />
+      <span className="font-cond text-micro font-700 uppercase tracking-wider text-muted">{children}</span>
+      <span className="h-px flex-1 bg-line" />
+    </div>
   )
 }
 
@@ -362,7 +366,7 @@ function ReturnerCard({
     <Card pad={false} className="overflow-hidden">
       <div className="flex items-center justify-between gap-2 border-b border-line bg-surface-2 px-3 py-1.5">
         <span className="label">{title}</span>
-        {status.manual ? <Badge tone="team">Set</Badge> : <Badge tone="neutral">Auto</Badge>}
+        {status.manual ? <Badge tone="neutral">Set</Badge> : <Badge tone="neutral">Auto</Badge>}
       </div>
 
       <div className="flex items-center gap-2.5 px-3 py-2">
@@ -370,11 +374,11 @@ function ReturnerCard({
           <>
             <span className="flex shrink-0 flex-col items-center gap-0.5">
               <ReturnBadge player={eff} size={30} />
-              <span className="font-cond text-[9px] font-700 uppercase tracking-wide text-muted">RET</span>
+              <span className="font-cond text-micro font-700 uppercase tracking-wide text-muted">RET</span>
             </span>
             <div className="min-w-0 flex-1">
-              <PlayerName player={eff} className="text-sm font-600 text-ink" />
-              <div className="truncate text-[11px] text-muted">
+              <PlayerName player={eff} className="text-small font-600 text-ink" />
+              <div className="truncate text-label text-muted">
                 {status.manual ? 'Selected' : 'Automatic pick'} · {eff.pos}
               </div>
             </div>
@@ -390,12 +394,12 @@ function ReturnerCard({
             )}
           </>
         ) : (
-          <div className="text-xs text-muted">No eligible returner on the roster.</div>
+          <div className="text-small text-muted">No eligible returner on the roster.</div>
         )}
       </div>
 
       {status.requested && !status.manual && (
-        <div className="mx-3 mb-2 rounded-md border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] text-warn">
+        <div className="mx-3 mb-2 rounded-[var(--r-md)] border border-warn/40 bg-warn-soft px-2 py-1 text-label text-warn">
           {eff ? `Your pick is unavailable — ${eff.name} returns instead.` : 'Your pick is unavailable — no replacement on the roster.'}
         </div>
       )}
@@ -416,28 +420,28 @@ function ReturnerCard({
                 title={out ? `${p.name} is out — unavailable` : `Make ${p.name} the ${role === 'kr' ? 'kick' : 'punt'} returner`}
                 className={cn(
                   'flex w-full items-start gap-2 px-3 py-1.5 text-left transition',
-                  selected ? 'bg-[var(--team-soft)]' : 'hover:bg-surface-2',
+                  selected ? 'bg-[var(--team-tint)]' : 'hover:bg-surface-2',
                   out ? 'cursor-not-allowed opacity-50' : '',
                 )}
               >
                 <ReturnBadge player={p} size={24} className="mt-0.5" />
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center gap-1">
-                    <PlayerName player={p} className="truncate text-sm font-600 text-ink" />
-                    <span className="font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
-                    {isKr && <Badge tone="team">KR</Badge>}
+                    <PlayerName player={p} className="truncate text-small font-600 text-ink" />
+                    <span className="font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
+                    {isKr && <Badge tone="neutral">KR</Badge>}
                     {isPr && <Badge tone="info">PR</Badge>}
-                    {out && <Badge tone="loss">OUT</Badge>}
+                    {out && <Badge tone="loss">OUT {p.injured?.games}W</Badge>}
                   </span>
-                  <span className="mt-0.5 block truncate font-cond text-[10px] tnum text-muted" title={RETURN_INFO}>
+                  <span className="mt-0.5 block truncate font-cond text-micro tnum text-muted" title={RETURN_INFO}>
                     {returnStrip(p)}
                   </span>
                 </span>
-                {selected && <span className="shrink-0 text-xs font-700 text-win">✓</span>}
+                {selected && <span className="shrink-0 text-small font-700 text-win">✓</span>}
               </button>
             )
           })}
-          {!candidates.length && <div className="px-3 py-3 text-xs text-muted">No eligible players.</div>}
+          {!candidates.length && <div className="px-3 py-3 text-small text-muted">No eligible players.</div>}
         </div>
       )}
     </Card>

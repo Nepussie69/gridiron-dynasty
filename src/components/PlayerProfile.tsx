@@ -1,8 +1,9 @@
+import { useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { gradeColor, money } from '../lib/format'
 import { attributesFor, playerAttrs, ATTRIBUTE_SCHEMA } from '../game/data/ratings'
 import { COMPOSITES, RATING_INFO, groupForPosition, ratingTitle } from '../game/data/ratingInfo'
-import { fitLabel, schemeFit } from '../game/engine/style'
+import { fitLabel } from '../game/engine/style'
 import { careerTotals, coverageGrade, seasonLine } from '../game/engine/stats'
 import { isReturnEligible, returnInputs, returnRating, RETURN_INFO, RETURN_WEIGHTS, returnScore } from '../game/engine/returns'
 import { experienceLabel } from '../game/engine/progress'
@@ -11,7 +12,20 @@ import { gmTargetNeed, monthKeyOf } from '../game/engine/gmDesk'
 import { useGame, useWorld } from '../store/gameStore'
 import { ContractExplainer } from './ContractExplainer'
 import { PlayerSilhouette } from './PlayerCard'
-import { Badge, Button, DevBadge, MiniBars, OvrBadge, RadarChart, RatingBar, Sparkline, TeamCrest } from '../ui/kit'
+import { InjuryChip, MORALE } from './PlayerTable'
+import {
+  Badge,
+  Button,
+  ConfirmSheet,
+  DevBadge,
+  MiniBars,
+  OverflowMenu,
+  OvrBadge,
+  RadarChart,
+  RatingBar,
+  Sparkline,
+  TeamCrest,
+} from '../ui/kit'
 import type { Contract, Player, Team } from '../game/types'
 
 export function PlayerProfile() {
@@ -72,7 +86,6 @@ export function PlayerProfile() {
       )?.scheme
     : undefined
   const fit = schemeLabel ? fitLabel(player, schemeLabel, player.side === 'DEF' ? 'DEF' : 'OFF') : null
-  void schemeFit
 
   // D3 (L12.7): young players show where their ceiling is and how they grew.
   const g = player.lastGrowth
@@ -86,8 +99,10 @@ export function PlayerProfile() {
   // not store a full rating history, so this is the honest last-step trend.
   const ovrTrend = g ? [g.from, g.to] : []
 
+  const morale = MORALE.band(player.morale)
+
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/40 backdrop-blur-[1px]" onClick={close}>
+    <div className="fixed inset-0 z-40 flex justify-end bg-[rgb(3_6_12/0.62)] backdrop-blur-[1px]" onClick={close}>
       <div
         className="h-full w-full max-w-[520px] overflow-y-auto bg-canvas shadow-2xl"
         onClick={(e) => e.stopPropagation()}
@@ -98,40 +113,46 @@ export function PlayerProfile() {
           style={{
             background: team
               ? `linear-gradient(120deg, ${team.primary}, ${team.secondary})`
-              : 'linear-gradient(120deg, #0a1626, #26374b)',
+              : 'linear-gradient(120deg, var(--color-slab), var(--color-surface-3))',
           }}
         >
           <div className="pointer-events-none absolute -bottom-6 right-2 h-44 w-44 opacity-[0.13]" aria-hidden>
-            <PlayerSilhouette className="h-full w-full" fill="#ffffff" />
+            <PlayerSilhouette className="h-full w-full" fill="var(--team-on)" />
           </div>
           <button
             onClick={close}
-            className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-lg bg-black/25 text-white hover:bg-black/40"
+            title="Close profile"
+            className="absolute right-3 top-3 z-10 grid h-9 w-9 place-items-center rounded-[var(--r-md)] text-[var(--team-on)] transition hover:opacity-80"
+            style={{ background: 'color-mix(in srgb, var(--team-on) 22%, transparent)' }}
           >
-            <X size={16} />
+            <X size={18} />
           </button>
           <div className="relative flex items-start gap-4">
             <OvrBadge value={player.ovr} pot={player.pot} size={76} />
-            <div className="min-w-0 text-white">
-              <div className="label !text-white/70">
+            <div className="min-w-0 text-[var(--team-on)]">
+              <div className="label opacity-70">
                 {player.pos} · {player.side} · {player.height} · {player.weight} lbs
               </div>
-              <h2 className="font-display text-3xl font-700 uppercase leading-tight">{player.name}</h2>
+              <h2 className="font-display text-[30px] font-800 italic uppercase leading-none">{player.name}</h2>
               <div className="mt-1 flex items-center gap-2">
                 {team && <TeamCrest team={team} size={22} />}
-                <span className="font-cond text-sm font-600">
+                <span className="font-cond text-small font-600">
                   {team ? (team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name) : 'Free Agent'}
                 </span>
-                <span className="text-white/50">·</span>
-                <span className="font-cond text-sm">Age {player.age}</span>
+                <span className="opacity-50">·</span>
+                <span className="font-cond text-small">Age {player.age}</span>
               </div>
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-1.5">
             <DevBadge dev={player.dev} />
-            {player.injured && <Badge tone="loss">OUT {player.injured.games}W · {player.injured.note}</Badge>}
+            <InjuryChip player={player} />
             {player.traits.map((t) => (
-              <span key={t} className="rounded-full bg-black/25 px-2 py-0.5 text-[11px] font-500 text-white">
+              <span
+                key={t}
+                className="rounded-full px-2 py-0.5 text-label font-500"
+                style={{ background: 'color-mix(in srgb, var(--team-on) 18%, transparent)', color: 'var(--team-on)' }}
+              >
                 {t}
               </span>
             ))}
@@ -139,158 +160,8 @@ export function PlayerProfile() {
         </div>
 
         <div className="space-y-4 p-5">
-          {player.college && (
-            <div>
-              <div className="label mb-1">College</div>
-              <div className="font-cond font-600 text-ink">{player.college}</div>
-            </div>
-          )}
-
-          <div className="rounded-xl border border-line bg-surface p-4">
-            <div className="label mb-3">Attributes</div>
-            <MiniBars items={posGroups} segments={10} />
-          </div>
-
-          {composites.length > 0 && (
-            <div className="rounded-xl border border-line bg-surface p-4">
-              <div className="label mb-3">Position composites</div>
-              <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                {radarItems.length >= 3 && <RadarChart items={radarItems} size={208} className="shrink-0" />}
-                <div className="w-full flex-1 space-y-3">
-                  {compositeItems.map((c) => (
-                    <div key={c.id} title={c.title}>
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="font-cond text-xs font-700 uppercase tracking-wide text-ink-2">{c.label}</span>
-                        <span className="font-cond text-xs font-700 tnum text-ink">{Math.round(c.value)}</span>
-                      </div>
-                      <RatingBar value={c.value} segments={10} height={8} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {retEligible && (
-            <div className="rounded-xl border border-line bg-surface p-4">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="label !mb-0">Return ability</div>
-                <span title={RETURN_INFO} className="cursor-help">
-                  <OvrBadge value={returnRating(player)} size={34} />
-                </span>
-              </div>
-              <RatingBar value={returnScore(player)} height={8} />
-              <div className="mt-3 space-y-2">
-                {RETURN_WEIGHTS.map((w, i) => (
-                  <div key={w.key} title={`${w.label} — ${Math.round(w.weight * 100)}% of the Return rating`}>
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="font-cond text-xs font-700 uppercase tracking-wide text-ink-2">
-                        {w.label} <span className="text-faint">{w.key}</span> · {Math.round(w.weight * 100)}%
-                      </span>
-                      <span className="font-cond text-xs font-700 tnum text-ink">{retInputs[i]}</span>
-                    </div>
-                    <RatingBar value={retInputs[i]} segments={10} height={6} />
-                  </div>
-                ))}
-              </div>
-              <p className="mt-3 text-xs leading-relaxed text-muted">
-                Kick and punt returner. The Return rating is the sim's return ability, built from the five athletics
-                above with the weights shown.
-              </p>
-            </div>
-          )}
-
-          {(player.age <= 26 || ovrTrend.length) && (
-            <div className="rounded-xl border border-line bg-surface p-4">
-              <div className="label mb-1">Development</div>
-              <div className="font-cond text-sm font-600 text-ink">{devLine}</div>
-              {ovrTrend.length >= 2 && (
-                <div className="mt-3 flex items-center gap-4 border-t border-line pt-3">
-                  <Sparkline data={ovrTrend} width={150} height={44} color={gradeColor(player.ovr)} />
-                  <div>
-                    <div className="label !text-[9px]">OVR history</div>
-                    <div className="font-display text-lg font-700 tnum leading-none text-ink">
-                      {ovrTrend[0]} <span className="text-faint">→</span> {ovrTrend[ovrTrend.length - 1]}
-                    </div>
-                    <div
-                      className={
-                        ovrTrend[ovrTrend.length - 1] >= ovrTrend[0]
-                          ? 'text-[11px] font-600 text-win'
-                          : 'text-[11px] font-600 text-loss'
-                      }
-                    >
-                      {ovrTrend[ovrTrend.length - 1] - ovrTrend[0] >= 0 ? '+' : ''}
-                      {ovrTrend[ovrTrend.length - 1] - ovrTrend[0]} last season
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-line bg-surface p-4">
-              <div className="label mb-3">Overall / Potential</div>
-              <div className="flex items-end gap-4">
-                <div>
-                  <div className="font-display text-3xl font-700 tnum text-ink">{player.ovr}</div>
-                  <div className="label">Current</div>
-                </div>
-                <div>
-                  <div className="font-display text-3xl font-700 tnum text-brand">{player.pot}</div>
-                  <div className="label">Ceiling</div>
-                </div>
-              </div>
-              <div className="mt-3">
-                <RatingBar value={player.pot} />
-              </div>
-            </div>
-            <div className="rounded-xl border border-line bg-surface p-4">
-              <div className="label mb-3">Morale</div>
-              <div className="font-display text-3xl font-700 tnum text-ink">{player.morale}</div>
-              <div className="mt-3">
-                <RatingBar
-                  value={player.morale}
-                  color={player.morale > 75 ? '#05914f' : player.morale > 55 ? '#d98207' : '#dc2937'}
-                />
-              </div>
-              <div className="mt-2 text-xs text-muted">
-                {player.morale > 80 ? 'Thriving in the locker room' : player.morale > 60 ? 'Stable' : 'Unhappy'}
-              </div>
-            </div>
-          </div>
-
-          {schemeLabel && fit && (
-            <div className="rounded-xl border border-line bg-surface p-4">
-              <div className="label mb-2">Scheme Fit</div>
-              <div className="flex items-center justify-between">
-                <span className="font-cond text-sm font-600 text-ink-2">{schemeLabel}</span>
-                <Badge tone={fit === 'Ideal' ? 'win' : fit === 'Good' ? 'info' : 'loss'}>{fit}</Badge>
-              </div>
-              <div className="mt-3 mb-1 flex items-center justify-between">
-                <span className="label">Playbook Mastery</span>
-                <span className="font-cond text-xs font-700 tnum text-ink">{player.playbook?.pct ?? 0}%</span>
-              </div>
-              <RatingBar value={player.playbook?.pct ?? 0} color="#c99a2e" height={8} />
-              <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted">
-                <span>
-                  {player.playbook?.reps ?? 0} game reps · {player.playbook?.teamYears ?? 0} yr
-                  {(player.playbook?.teamYears ?? 0) === 1 ? '' : 's'} with the team
-                </span>
-              </div>
-              <p className="mt-2 text-xs text-muted">
-                {(player.playbook?.pct ?? 0) >= 75
-                  ? 'Knows the system cold — he is playing faster than his raw rating.'
-                  : (player.playbook?.pct ?? 0) >= 45
-                    ? 'Getting comfortable. More reps and time will raise his production.'
-                    : 'New to the system. Expect a learning curve before he hits full speed.'}
-              </p>
-            </div>
-          )}
-
-          <CareerStats player={player} />
-
-          <div className="rounded-xl border border-line bg-surface p-4">
+          {/* 1 · Contract */}
+          <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
             <div className="label mb-3">Contract</div>
             {(player.holdout?.status === 'open' ||
               player.tag?.season === league.season ||
@@ -300,7 +171,7 @@ export function PlayerProfile() {
                   <Badge tone="loss">Holdout · asks {money(player.holdout.demand)}</Badge>
                 )}
                 {player.tag?.season === league.season && (
-                  <Badge tone="team">
+                  <Badge tone="neutral">
                     {player.tag.kind === 'franchise' ? 'Franchise tag' : 'Transition tag'}
                   </Badge>
                 )}
@@ -325,11 +196,158 @@ export function PlayerProfile() {
             <ContractTimeline contract={player.contract} team={team} />
           </div>
 
-          <GmRequestPanel player={player} />
+          {/* 2 · Fit */}
+          {schemeLabel && fit && (
+            <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+              <div className="label mb-2">Scheme Fit</div>
+              <div className="flex items-center justify-between">
+                <span className="font-cond text-small font-600 text-ink-2">{schemeLabel}</span>
+                <Badge tone={fit === 'Ideal' ? 'win' : fit === 'Good' ? 'info' : 'warn'}>{fit}</Badge>
+              </div>
+              <div className="mt-3 mb-1 flex items-center justify-between">
+                <span className="label">Playbook Mastery</span>
+                <span className="font-cond text-small font-700 tnum text-ink">{player.playbook?.pct ?? 0}%</span>
+              </div>
+              <RatingBar value={player.playbook?.pct ?? 0} tone="tier" height={8} />
+              <div className="mt-1.5 flex items-center justify-between text-label text-muted">
+                <span>
+                  {player.playbook?.reps ?? 0} game reps · {player.playbook?.teamYears ?? 0} yr
+                  {(player.playbook?.teamYears ?? 0) === 1 ? '' : 's'} with the team
+                </span>
+              </div>
+              <p className="mt-2 text-label text-muted">
+                {(player.playbook?.pct ?? 0) >= 75
+                  ? 'Knows the system cold — he is playing faster than his raw rating.'
+                  : (player.playbook?.pct ?? 0) >= 45
+                    ? 'Getting comfortable. More reps and time will raise his production.'
+                    : 'New to the system. Expect a learning curve before he hits full speed.'}
+              </p>
+            </div>
+          )}
 
-          <div className="flex gap-2">
-            <Button className="flex-1">Trade Block</Button>
+          {/* 3 · Composites */}
+          <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+            <div className="label mb-3">Attributes</div>
+            <MiniBars items={posGroups} segments={10} />
           </div>
+
+          {composites.length > 0 && (
+            <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+              <div className="label mb-3">Position composites</div>
+              <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+                {radarItems.length >= 3 && <RadarChart items={radarItems} size={208} className="shrink-0" />}
+                <div className="w-full flex-1 space-y-3">
+                  {compositeItems.map((c) => (
+                    <div key={c.id} title={c.title}>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="font-cond text-label font-700 uppercase tracking-wide text-ink-2">{c.label}</span>
+                        <span className="font-cond text-label font-700 tnum text-ink">{Math.round(c.value)}</span>
+                      </div>
+                      <RatingBar value={c.value} segments={10} height={8} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {retEligible && (
+            <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="label !mb-0">Return ability</div>
+                <span title={RETURN_INFO} className="cursor-help">
+                  <OvrBadge value={returnRating(player)} size={34} />
+                </span>
+              </div>
+              <RatingBar value={returnScore(player)} segments={10} height={8} />
+              <div className="mt-3 space-y-2">
+                {RETURN_WEIGHTS.map((w, i) => (
+                  <div key={w.key} title={`${w.label} — ${Math.round(w.weight * 100)}% of the Return rating`}>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="font-cond text-label font-700 uppercase tracking-wide text-ink-2">
+                        {w.label} <span className="text-faint">{w.key}</span> · {Math.round(w.weight * 100)}%
+                      </span>
+                      <span className="font-cond text-label font-700 tnum text-ink">{retInputs[i]}</span>
+                    </div>
+                    <RatingBar value={retInputs[i]} segments={10} height={6} />
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-label leading-relaxed text-muted">
+                Kick and punt returner. The Return rating is the sim's return ability, built from the five athletics
+                above with the weights shown.
+              </p>
+            </div>
+          )}
+
+          {/* 4 · Development */}
+          {(player.age <= 26 || ovrTrend.length) && (
+            <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+              <div className="label mb-1">Development</div>
+              <div className="font-cond text-small font-600 text-ink">{devLine}</div>
+              {ovrTrend.length >= 2 && (
+                <div className="mt-3 flex items-center gap-4 border-t border-line pt-3">
+                  <Sparkline data={ovrTrend} width={150} height={44} color={gradeColor(player.ovr)} />
+                  <div>
+                    <div className="label">OVR history</div>
+                    <div className="font-display text-[20px] font-700 tnum leading-none text-ink">
+                      {ovrTrend[0]} <span className="text-faint">→</span> {ovrTrend[ovrTrend.length - 1]}
+                    </div>
+                    <div
+                      className={
+                        ovrTrend[ovrTrend.length - 1] >= ovrTrend[0]
+                          ? 'text-label font-600 text-win'
+                          : 'text-label font-600 text-loss'
+                      }
+                    >
+                      {ovrTrend[ovrTrend.length - 1] - ovrTrend[0] >= 0 ? '+' : ''}
+                      {ovrTrend[ovrTrend.length - 1] - ovrTrend[0]} last season
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+              <div className="label mb-3">Overall / Potential</div>
+              <div className="flex items-end gap-4">
+                <div>
+                  <div className="font-display text-[30px] font-700 tnum text-ink">{player.ovr}</div>
+                  <div className="label">Current</div>
+                </div>
+                <div>
+                  <div className="font-display text-[30px] font-700 tnum text-ink">{player.pot}</div>
+                  <div className="label">Ceiling</div>
+                </div>
+              </div>
+              <div className="mt-3">
+                <RatingBar value={player.pot} tone="tier" />
+              </div>
+            </div>
+            <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+              <div className="label mb-3">Morale</div>
+              <div className="font-display text-[30px] font-700 tnum text-ink">{player.morale}</div>
+              <div className="mt-3">
+                <RatingBar value={player.morale} color={MORALE.color[morale]} />
+              </div>
+              <div className="mt-2 text-label text-muted">{MORALE.label[morale]}</div>
+            </div>
+          </div>
+
+          {/* 5 · Stats */}
+          <CareerStats player={player} />
+
+          {/* 6 · College */}
+          {player.college && (
+            <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
+              <div className="label mb-1">College</div>
+              <div className="font-cond font-600 text-ink">{player.college}</div>
+            </div>
+          )}
+
+          <GmRequestPanel player={player} />
         </div>
       </div>
     </div>
@@ -351,6 +369,7 @@ function GmRequestPanel({ player }: { player: Player }) {
   const requestGmRelease = useGame((s) => s.requestGmRelease)
   const requestGmRestructure = useGame((s) => s.requestGmRestructure)
   const toggleGmUntouchable = useGame((s) => s.toggleGmUntouchable)
+  const [releaseOpen, setReleaseOpen] = useState(false)
 
   if (!canAskGm(career)) return null
 
@@ -363,23 +382,23 @@ function GmRequestPanel({ player }: { player: Player }) {
   const eligibleExt = mine && player.contract.years <= 2
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-4">
+    <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
       <div className="label mb-2">Ask the GM</div>
       {!covers ? (
-        <p className="text-xs leading-relaxed text-muted">Coordinators only get a say on their side of the ball.</p>
+        <p className="text-label leading-relaxed text-muted">Coordinators only get a say on their side of the ball.</p>
       ) : (
         <>
-          <p className="mb-3 text-xs leading-relaxed text-muted">
+          <p className="mb-3 text-label leading-relaxed text-muted">
             {mine
               ? 'Send the front office a recommendation. The GM decides from value, the room the deal leaves, your standing and the owner\u2019s mandate.'
               : freeAgent
                 ? 'The GM bids at market when the space after the bid clears his reserve.'
                 : 'The GM shops a package, protecting your untouchables and your side\u2019s starters.'}
           </p>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {mine && (
               <Button
-                variant="team"
+                variant="secondary"
                 size="sm"
                 disabled={asked || !eligibleExt}
                 title={eligibleExt ? undefined : `${player.contract.years} years left — the GM only extends players with two or fewer.`}
@@ -389,13 +408,8 @@ function GmRequestPanel({ player }: { player: Player }) {
               </Button>
             )}
             {mine && (
-              <Button variant="danger" size="sm" disabled={asked} onClick={() => requestGmRelease(player.id)}>
-                Release
-              </Button>
-            )}
-            {mine && (
               <Button
-                variant={untouchable ? 'primary' : 'ghost'}
+                variant={untouchable ? 'primary' : 'secondary'}
                 size="sm"
                 disabled={!untouchable && untouchables.length >= 3}
                 title={untouchable ? 'Remove trade protection' : 'Never offer him in a trade (max 3)'}
@@ -405,18 +419,18 @@ function GmRequestPanel({ player }: { player: Player }) {
               </Button>
             )}
             {!mine && !freeAgent && (
-              <Button variant="team" size="sm" disabled={asked} onClick={() => requestGmTrade(player.id)}>
+              <Button variant="secondary" size="sm" disabled={asked} onClick={() => requestGmTrade(player.id)}>
                 Go get him
               </Button>
             )}
             {freeAgent && (
-              <Button variant="team" size="sm" disabled={asked} onClick={() => requestGmSignFreeAgent(player.id)}>
+              <Button variant="primary" size="sm" disabled={asked} onClick={() => requestGmSignFreeAgent(player.id)}>
                 Sign him
               </Button>
             )}
             {!mine && (gmTargetNeed(league, career, player.id) ?? 0) > 0 && (
               <Button
-                variant="ghost"
+                variant="secondary"
                 size="sm"
                 title="Ask the GM to restructure to clear room for him"
                 onClick={() => requestGmRestructure(player.id)}
@@ -424,11 +438,46 @@ function GmRequestPanel({ player }: { player: Player }) {
                 Clear cap for him
               </Button>
             )}
+            {mine && (
+              <OverflowMenu
+                size="sm"
+                label="More roster requests"
+                items={[
+                  {
+                    id: 'release',
+                    label: 'Ask the GM to release…',
+                    description: 'Opens a review of the cap consequences',
+                    danger: true,
+                    onSelect: () => setReleaseOpen(true),
+                  },
+                ]}
+              />
+            )}
           </div>
-          {asked && <p className="mt-2 text-[11px] text-faint">Already asked the GM about him this month.</p>}
+          {asked && <p className="mt-2 text-label text-faint">Already asked the GM about him this month.</p>}
         </>
       )}
       <ContractExplainer player={player} className="mt-3 border-t border-line pt-3" />
+
+      <ConfirmSheet
+        open={releaseOpen}
+        onClose={() => setReleaseOpen(false)}
+        eyebrow="Ask the GM"
+        title={`Release ${player.name}?`}
+        subtitle={`${player.pos} · rated ${player.ovr} · ${player.contract.years} yr left`}
+        destructive={false}
+        consequences={[
+          { label: 'Cap hit', value: money(player.contract.capHit) },
+          { label: 'Guaranteed left', value: money(player.contract.guaranteed) },
+          { label: 'Who decides', value: 'The GM — you advise', tone: 'warn' },
+        ]}
+        confirmLabel="Send release request"
+        accessNote="Sent to the GM as a recommendation"
+        onConfirm={() => {
+          requestGmRelease(player.id)
+          setReleaseOpen(false)
+        }}
+      />
     </div>
   )
 }
@@ -437,9 +486,9 @@ function CareerStats({ player }: { player: Player }) {
   const seasons = player.stats ?? []
   if (!seasons.length) {
     return (
-      <div className="rounded-xl border border-line bg-surface p-4">
+      <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
         <div className="label mb-1">Career Stats</div>
-        <p className="text-xs text-muted">No games recorded yet. Stats accumulate as the season is played.</p>
+        <p className="text-label text-muted">No games recorded yet. Stats accumulate as the season is played.</p>
       </div>
     )
   }
@@ -450,7 +499,7 @@ function CareerStats({ player }: { player: Player }) {
     { level: 'NFL' as const, label: 'Pro' },
   ]
   return (
-    <div className="rounded-xl border border-line bg-surface p-4">
+    <div className="rounded-[var(--r-lg)] border border-line bg-surface p-4">
       <div className="label mb-2">Career Stats</div>
       <div className="mb-3 grid grid-cols-4 gap-2 text-center">
         <MiniStat label="Games" value={t.games} />
@@ -486,8 +535,8 @@ function CareerStats({ player }: { player: Player }) {
           if (!rows.length) return null
           return (
             <div key={level}>
-              <div className="label !text-[9px]">{label}</div>
-              <table className="w-full text-[11px] tnum">
+              <div className="label">{label}</div>
+              <table className="w-full text-label tnum">
                 <thead>
                   <tr className="text-muted">
                     <th className="text-left font-500">Yr</th>
@@ -540,13 +589,13 @@ function ContractTimeline({ contract, team }: { contract: Contract; team?: Team 
     cum += r.base
     return cum <= contract.guaranteed + 1
   })
-  const color = team?.primary ?? 'var(--team)'
+  const color = team?.primary ?? 'var(--team-accent)'
 
   return (
     <div className="mt-4 border-t border-line pt-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="label !mb-0">Contract timeline</span>
-        <span className="font-cond text-[10px] text-muted">cap hit per remaining season</span>
+        <span className="font-cond text-micro text-muted">cap hit per remaining season</span>
       </div>
       <div className="flex items-end gap-1.5">
         {rows.map((r, i) => {
@@ -558,14 +607,13 @@ function ContractTimeline({ contract, team }: { contract: Contract; team?: Team 
               className="flex min-w-0 flex-1 flex-col items-center gap-1"
               title={`${r.year}: ${money(r.cap)} cap hit (${money(r.base)} base + ${money(contract.proration)} prorated bonus)`}
             >
-              <span className="font-cond text-[9px] tnum text-muted">{money(r.cap)}</span>
+              <span className="font-cond text-micro tnum text-muted">{money(r.cap)}</span>
               <span className="relative flex w-full items-end justify-center rounded-sm bg-surface-2" style={{ height: 62 }}>
                 <span
                   className="w-full rounded-sm"
                   style={{
                     height: h,
                     background: guaranteedRows[i] ? color : 'var(--color-line-strong)',
-                    boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.06)',
                   }}
                 />
                 {contract.proration > 0 && (
@@ -575,12 +623,12 @@ function ContractTimeline({ contract, team }: { contract: Contract; team?: Team 
                   />
                 )}
               </span>
-              <span className="font-cond text-[10px] font-700 tnum text-ink-2">{r.year}</span>
+              <span className="font-cond text-micro font-700 tnum text-ink-2">{r.year}</span>
             </div>
           )
         })}
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-muted">
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-micro text-muted">
         <span className="inline-flex items-center gap-1">
           <span className="h-2 w-2 rounded-sm" style={{ background: color }} /> guaranteed
         </span>
@@ -595,20 +643,20 @@ function ContractTimeline({ contract, team }: { contract: Contract; team?: Team 
   )
 }
 
-function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+function Stat({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <div className="label">{label}</div>
-      <div className="font-cond text-base font-700 tnum text-ink">{value}</div>
+      <div className="font-cond text-[15px] font-700 tnum text-ink">{value}</div>
     </div>
   )
 }
 
 function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg border border-line py-1.5">
-      <div className="label !text-[9px]">{label}</div>
-      <div className="font-display text-base font-700 tnum text-ink">{value}</div>
+    <div className="rounded-[var(--r-md)] border border-line py-1.5">
+      <div className="label">{label}</div>
+      <div className="font-display text-[15px] font-700 tnum text-ink">{value}</div>
     </div>
   )
 }

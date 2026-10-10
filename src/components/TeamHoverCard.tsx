@@ -42,18 +42,18 @@ export function TeamHoverCard({
 
 function rankClass(rank: number): string {
   if (rank <= 5) return 'text-win'
-  if (rank >= 28) return 'text-loss'
+  if (rank >= 28) return 'text-warn'
   return 'text-muted'
 }
 
 /** One rate line: value per game with its league rank (#1 = best). */
 function RateCell({ label, value, rank, title }: { label: string; value: number | null; rank: number; title?: string }) {
   return (
-    <div title={title} className="flex items-baseline justify-between gap-1 rounded border border-line/50 px-1 py-0.5">
-      <span className="font-cond text-[9px] font-700 uppercase leading-tight text-muted">{label}</span>
-      <span className="font-display text-xs font-700 leading-tight tnum text-ink">
+    <div title={title} className="flex items-baseline justify-between gap-1 rounded-[var(--r-xs)] border border-line/50 px-1 py-0.5">
+      <span className="font-cond text-label font-700 uppercase leading-tight text-muted">{label}</span>
+      <span className="font-display text-small font-700 leading-tight tnum text-ink">
         {value == null ? '—' : value.toFixed(1)}
-        {value != null && rank > 0 && <span className={cn('ml-0.5 font-cond text-[9px]', rankClass(rank))}>#{rank}</span>}
+        {value != null && rank > 0 && <span className={cn('ml-0.5 font-cond text-label', rankClass(rank))}>#{rank}</span>}
       </span>
     </div>
   )
@@ -61,11 +61,11 @@ function RateCell({ label, value, rank, title }: { label: string; value: number 
 
 function UnitCell({ label, value, rank }: { label: string; value: number; rank: number }) {
   return (
-    <div className="rounded border border-line/50 px-1 py-0.5 text-center">
-      <div className="font-cond text-[8px] font-700 uppercase leading-tight text-muted">{label}</div>
-      <div className="font-display text-sm font-700 leading-tight tnum text-ink">
+    <div className="rounded-[var(--r-xs)] border border-line/50 px-1 py-0.5 text-center">
+      <div className="font-cond text-label font-700 uppercase leading-tight text-muted">{label}</div>
+      <div className="font-display text-small font-700 leading-tight tnum text-ink">
         {Math.round(value)}
-        {rank > 0 && <span className={cn('ml-0.5 font-cond text-[9px]', rankClass(rank))}>#{rank}</span>}
+        {rank > 0 && <span className={cn('ml-0.5 font-cond text-label', rankClass(rank))}>#{rank}</span>}
       </div>
     </div>
   )
@@ -84,7 +84,7 @@ function TeamCardBody({ team }: { team: Team }) {
         <TeamCrest team={team} size={28} />
         <div className="min-w-0">
           <div className="truncate font-display text-sm font-700 uppercase leading-none text-ink">{name}</div>
-          <div className="mt-0.5 text-[10px] tnum text-muted">
+          <div className="mt-0.5 text-label tnum text-muted">
             {recordStr(rec)} · {team.conference}
             {team.division ? ` ${team.division}` : ''} · {team.tier}
           </div>
@@ -100,8 +100,8 @@ function TeamCardBody({ team }: { team: Team }) {
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="label !text-[9px]">Per game</span>
-            <span className="font-cond text-[9px] uppercase text-faint">value · rank</span>
+            <span className="label">Per game</span>
+            <span className="font-cond text-label uppercase text-faint">value · rank</span>
           </div>
           <div className="grid grid-cols-2 gap-x-1.5 gap-y-0.5">
             <RateCell label="PF/G" value={rate.pf} rank={rate.ranks.pf} title="Points scored per game" />
@@ -112,11 +112,11 @@ function TeamCardBody({ team }: { team: Team }) {
             <RateCell label="RushA/G" value={rate.rushYdsAllowed} rank={rate.ranks.rushYdsAllowed} title="Rush yards allowed per game" />
           </div>
           {rate.games === 0 && (
-            <p className="text-[10px] leading-snug text-muted">Season stats appear after the first week.</p>
+            <p className="text-label leading-snug text-muted">Season stats appear after the first week.</p>
           )}
         </>
       ) : (
-        <p className="text-[10px] leading-snug text-muted">Season ranks are tracked for NFL clubs.</p>
+        <p className="text-label leading-snug text-muted">Season ranks are tracked for NFL clubs.</p>
       )}
     </div>
   )

@@ -66,10 +66,10 @@ export function TopPlayers({
               onClick={() => selectPlayer(p.id)}
               className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-surface px-1.5 py-1 text-xs transition hover:border-line-strong hover:bg-surface-2"
             >
-              <OvrBadge value={p.ovr} size={20} />
-              <span className="font-cond text-[10px] font-700 uppercase text-muted">{p.pos}</span>
+              <OvrBadge value={p.ovr} size={22} />
+              <span className="font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
               <span className="max-w-[8.5rem] truncate font-600 text-ink">{p.name}</span>
-              {stat && <span className="font-cond text-[10px] tnum text-muted">{stat}</span>}
+              {stat && <span className="font-cond text-label tnum text-muted">{stat}</span>}
             </span>
           </PlayerHoverCard>
         )
