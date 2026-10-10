@@ -530,9 +530,10 @@ function straightTime(pace: Pace, d: number, v0 = 0): number {
 function bowPts(a: Pt, b: Pt, amp: number): Pt[] {
   const dx = b.x - a.x
   const dy = b.y - a.y
-  const L = Math.hypot(dx, dy) || 1
-  const nx = -dy / L
-  const ny = dx / L
+  const L = Math.hypot(dx, dy)
+  // Coincident ends: bow along y so the mover still takes a real step/loop.
+  const nx = L > 1e-6 ? -dy / L : 0
+  const ny = L > 1e-6 ? dx / L : 1
   const out: Pt[] = []
   const N = 16
   for (let i = 1; i <= N; i++) {
@@ -561,13 +562,12 @@ function bowTime(a: Pt, b: Pt, pace: Pace, v0: number, amp: number): number {
  */
 function routeByTime(a: Pt, b: Pt, pace: Pace, v0: number, target: number, minBow = 0): Pt[] {
   const d = Math.hypot(b.x - a.x, b.y - a.y)
-  if (d < 1) return [{ x: b.x, y: b.y }]
   const straight = straightTime(pace, d, v0)
-  if (straight >= target - 0.02) {
+  if (straight >= target - 0.02 && d > 1e-6) {
     return minBow > 0.2 ? bowPts(a, b, minBow) : [b]
   }
   let hi = Math.max(0.5, minBow)
-  while (bowTime(a, b, pace, v0, hi) < target && hi < 60) hi *= 1.7
+  while (bowTime(a, b, pace, v0, hi) < target && hi < 16) hi *= 1.7
   if (bowTime(a, b, pace, v0, hi) < target) return bowPts(a, b, hi)
   let lo = 0
   let best = bowPts(a, b, hi)
@@ -692,9 +692,30 @@ function arriveAt(mv: Mover, to: Pt, arriveSec: number, minBow = 0) {
   if (mv.t < arriveSec) mv.hold(arriveSec - mv.t)
 }
 
-/** Truncate a mover's timeline so no actor's path runs past the recorded play. */
+/**
+ * End a mover's timeline at `t`: settle a still-moving dot and wait, or
+ * truncate one that would run past the recorded play. Leaves no settle tail in
+ * `finish`, so the play (and every dot) really ends at `t`.
+ */
 function capAt(mv: Mover, t: number) {
-  if (mv.t > t) seek(mv, t)
+  if (!mv.lastStop) settle(mv)
+  if (mv.t > t + 1e-4) {
+    const p = posAt(mv.path, t)
+    mv.path = mv.path.filter((w) => w.t < t)
+    mv.path.push({ t, x: p.x, y: p.y })
+    mv.t = t
+    mv.x = p.x
+    mv.y = p.y
+    mv.lastStop = true
+    mv.inHeading = undefined
+    return
+  }
+  if (mv.t < t) {
+    mv.t = t
+    mv.path.push({ t, x: mv.x, y: mv.y })
+  }
+  mv.lastStop = true
+  mv.inHeading = undefined
 }
 
 interface BlockPlan {
@@ -774,8 +795,7 @@ function applyBlockEngagements(
       follow.push({ x: clampX(rp.x + off * 0.6), y: clampY(rp.y + off * 0.9) })
     }
     m[c].run(follow, { v0: carrySpeed(m[c]), stop: true })
-    if (m[c].t > total) seek(m[c], total)
-    else if (m[c].t < total) m[c].hold(total - m[c].t)
+    capAt(m[c], total)
   }
 }
 
@@ -883,7 +903,9 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   }
   const holeT = m[carrier].t
   const holeSpeed = m[carrier].pace.top * 0.7
-  m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: true })
+  // Run the main curve up to just before the recorded stop; the contact itself
+  // is resolved below so the carrier keeps moving into the tackle (backlog 150).
+  m[carrier].run(curve.slice(1, curve.length - 1), { v0: holeSpeed, stop: false })
   const endSec = m[carrier].t
 
   // Linebackers fill, safeties come down, corners squeeze; then everyone pursues.
@@ -917,10 +939,13 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     })
   }
 
-  pursueRun(m, DEF_KEYS, holeT, { x: endX + 0.8, y: endY }, endSec, seed, { x: endX - holeX, y: endY - holeY })
+  const credited = play.tackleIds?.[0]
+  const creditedKey = credited ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === credited) : undefined
+  const res = resolveCarry({ m, carrierKey: carrier, spot: { x: endX, y: endY }, tacklerKeys: DEF_KEYS, prefer: creditedKey, seed })
+  capAll(m, ALL_KEYS(f), res.endSec)
   const ball: WP[] = qbRun
-    ? snapBall(m, los, endSec)
-    : [...snapBall(m, los, handoffT), ...shadow(m[carrier].path, handoffT, endSec).slice(1)]
+    ? snapBall(m, los, res.endSec)
+    : [...snapBall(m, los, handoffT), ...shadow(m[carrier].path, handoffT, res.endSec).slice(1)]
   return finish(f, m, {
     ball,
     holders: [
@@ -976,18 +1001,206 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number) {
   mv.run(pts.slice(breakIdx + 1), { v0: 0, stop: true })
 }
 
-/** A defender trailing a receiver: the shape of the route, run at his own pace. */
-function trailTo(def: Mover, recv: WP[], offX: number, offY: number, fromSec: number, toSec: number, cov: number) {
-  const lag = clampN(0.16 - (cov - 60) * 0.004, 0.02, 0.28)
-  const steps = 10
+// ── coverage look (backlog 151) ───────────────────────────────────────────────
+// Every eligible receiver who runs a route has a visible defender or a zone
+// responsibility: corners/slot cover the wideouts, backers take the tight end
+// and back, safeties stay over the top — man in the hip pocket or zone drops
+// with elbows on the QB. The scheme is the play's recorded call when it has one,
+// otherwise a deterministic look per play. Presentation only.
+
+/** Total length of an actor path (yd). */
+function pathLen(path: WP[]): number {
+  let s = 0
+  for (let i = 1; i < path.length; i++) s += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y)
+  return s
+}
+
+/** The defensive look: the recorded call, else a stable pick per play. */
+function coverageScheme(play: Play, seed: number): 'man' | 'zone' | 'blitz' | 'twoHigh' | 'stack' {
+  if (play.defCall) return play.defCall
+  if (play.blitz) return 'blitz'
+  const h = hash(seed + 71)
+  if (h < 0.42) return 'man'
+  if (h < 0.74) return 'zone'
+  if (h < 0.87) return 'twoHigh'
+  return 'blitz'
+}
+
+interface RouteInfo { depth: number; vert: boolean; inBreak: boolean }
+
+/** Rough classification of a route from its tree entry. */
+function routeInfo(name: string): RouteInfo {
+  const depth = ROUTES[name]?.depth ?? 8
+  const vert = depth >= 15
+  const inBreak = /slant|dig|cross|drag|mesh|in\b|post|angle|choice/i.test(name)
+  return { depth, vert, inBreak }
+}
+
+/**
+ * A man defender running with a receiver: he aligns 1–7 yd off (press for a
+ * good corner, off for a poor one), then mirrors the route with a short
+ * reaction lag — in the hip pocket trailing behind on in-breaking routes, over
+ * the top on verticals. `tightness` loosens the trail for a recorded big gain.
+ */
+function manTrail(
+  def: Mover,
+  recvKey: string,
+  recv: Mover,
+  opts: { fromSec: number; toSec: number; los: number; cov: number; inw: number; tightness: number; seed: number; routeName: string; zone?: boolean },
+) {
+  const { fromSec, toSec, los, cov, inw, tightness, seed } = opts
+  const ri = routeInfo(opts.routeName)
+  const lag = clampN(0.24 - (cov - 60) * 0.005, 0.05, 0.26) * (1 + tightness * 1.6)
+  const cushBase = opts.zone ? 1.5 : 1
+  const cushion = clampN(7 - (cov - 60) * 0.09, 1.5, 7) * cushBase * (0.5 + hash(seed + 5) * 0.5)
+  const rs = posAt(recv.path, fromSec)
+  def.reset(clampX(los + cushion), clampY(rs.y + inw * (0.6 + hash(seed + 1) * 0.6)))
+  const steps = 26
+  const shape: Pt[] = []
+  for (let i = 0; i <= steps; i++) {
+    const u = i / steps
+    const t = fromSec + (toSec - fromSec) * u
+    const tp = ri.vert ? t + lag : Math.max(0, t - lag)
+    const rp = posAt(recv.path, tp)
+    const perp = ri.vert ? 0 : ri.inBreak ? inw * 0.8 : -inw * 0.3
+    // The cushion shrinks from alignment to the hip pocket over the route.
+    shape.push({ x: clampX(rp.x + cushion * (1 - u)), y: clampY(rp.y + perp) })
+  }
+  def.run(shape, { v0: 0, stop: false })
+  void recvKey
+}
+
+/**
+ * A safety: backpedals to his deep responsibility, rotates with the deepest
+ * threat, and drives on the throw — he never stands still before the catch.
+ */
+function safetyRoam(
+  def: Mover,
+  opts: { fromSec: number; toSec: number; releaseSec: number; los: number; deep: Mover | null; depth: number; catchPt: Pt; side: number; start: Pt },
+) {
+  const { fromSec, toSec, releaseSec, los, deep, depth, catchPt, side, start } = opts
+  const back = los + Math.max(15, depth + 5)
+  const half = side * 7
+  const steps = 20
   const shape: Pt[] = []
   for (let i = 1; i <= steps; i++) {
     const t = fromSec + (toSec - fromSec) * (i / steps)
-    const rp = posAt(recv, Math.max(0, t - lag))
-    shape.push({ x: clampX(rp.x + offX), y: clampY(rp.y + offY) })
+    const u = i / steps
+    const deepP = deep ? posAt(deep.path, t) : { x: back, y: MID_Y + half }
+    const tx = start.x + (back - start.x) * clampN(u * 1.7, 0, 1)
+    const ty = start.y + (deepP.y + half - start.y) * (0.3 + 0.5 * u)
+    const drive = t > releaseSec ? clampN((t - releaseSec) / Math.max(0.15, toSec - releaseSec), 0, 1) : 0
+    shape.push({
+      x: clampX(tx + (catchPt.x - tx) * drive * 0.6),
+      y: clampY(ty + (catchPt.y - ty) * drive * 0.6),
+    })
   }
-  def.reset()
-  def.run(shape, { v0: 0, stop: true })
+  def.run(shape, { v0: 0, stop: false })
+}
+
+/**
+ * A zone defender: drops to a sensible landmark with a ZCV-set depth, keeps
+ * his eyes on the nearest threat, closes as a receiver enters the zone and
+ * breaks on the ball after the release.
+ */
+function zoneDrop(
+  def: Mover,
+  opts: { fromSec: number; toSec: number; releaseSec: number; landmark: Pt; zcv: number; threat: Mover | null; catchPt: Pt },
+) {
+  const { fromSec, toSec, releaseSec, landmark, zcv, threat, catchPt } = opts
+  const sx = def.x
+  const sy = def.y
+  const sink = clampN((zcv - 60) * 0.05, -0.3, 1.6)
+  const steps = 20
+  const shape: Pt[] = []
+  for (let i = 1; i <= steps; i++) {
+    const t = fromSec + (toSec - fromSec) * (i / steps)
+    const u = i / steps
+    const bx = landmark.x + sink
+    let tx = sx + (bx - sx) * clampN(u * 1.8, 0, 1)
+    let ty = sy + (landmark.y - sy) * clampN(u * 1.8, 0, 1)
+    if (threat) {
+      const tp = posAt(threat.path, t)
+      const w = clampN(1 - Math.hypot(tp.x - bx, tp.y - landmark.y) / 16, 0, 0.55)
+      tx += (tp.x - tx) * w * u
+      ty += (tp.y - ty) * w * u
+    }
+    if (t > releaseSec && threat) {
+      const tp = posAt(threat.path, t)
+      const near = clampN(1 - Math.hypot(tp.x - catchPt.x, tp.y - catchPt.y) / 11, 0, 1)
+      const drive = clampN((t - releaseSec) / Math.max(0.15, toSec - releaseSec), 0, 1)
+      tx += (catchPt.x - tx) * drive * (0.25 + 0.45 * near)
+      ty += (catchPt.y - ty) * drive * (0.25 + 0.45 * near)
+    }
+    shape.push({ x: clampX(tx), y: clampY(ty) })
+  }
+  def.run(shape, { v0: 0, stop: false })
+}
+
+/** Cap every actor's timeline at the play's end so no dot stands after the ball. */
+function capAll(m: Record<string, Mover>, keys: string[], t: number) {
+  for (const k of keys) if (m[k]) capAt(m[k], t)
+}
+
+/**
+ * Backlog 150: bring a carry to a visible close. From where the carrier is now
+ * he keeps moving at his ratings' pace (a cut/curl, never a freeze) and reaches
+ * `spot` exactly when the chosen tackler does — the tackler arriving within his
+ * own pace. The sim's credited tackler is used when he can plausibly get there,
+ * otherwise the defender who can actually arrive first. Every other defender
+ * keeps converging, and the play ends at the contact, so the ball carrier is
+ * never left standing in the open while a defender jogs in.
+ */
+function resolveCarry(opts: {
+  m: Record<string, Mover>
+  carrierKey: string
+  spot: Pt
+  tacklerKeys: string[]
+  prefer?: string
+  seed: number
+  maxExtra?: number
+}): { tackler: string; endSec: number } {
+  const { m, carrierKey, spot, tacklerKeys, prefer, seed } = opts
+  const carrier = m[carrierKey]
+  const fromSec = carrier.t
+  const cPos = { x: carrier.x, y: carrier.y }
+  const cV0 = carrySpeed(carrier)
+  const cNat = straightTime(carrier.pace, Math.hypot(spot.x - cPos.x, spot.y - cPos.y), cV0)
+  const cap = cNat + (opts.maxExtra ?? 1.6)
+  const cand = tacklerKeys
+    .map((k) => {
+      const v0 = seek(m[k], fromSec)
+      const p = posAt(m[k].path, fromSec)
+      return { k, v0, nat: straightTime(m[k].pace, Math.hypot(spot.x - p.x, spot.y - p.y), v0) }
+    })
+    .sort((a, b) => a.nat - b.nat)
+  let chosen = cand[0]
+  if (prefer) {
+    const pk = cand.find((c) => c.k === prefer)
+    if (pk && pk.nat <= cap) chosen = pk
+  }
+  const target = Math.max(cNat, chosen.nat)
+  carrier.run(routeByTime(cPos, spot, carrier.pace, cV0, Math.max(0.2, target), 0.8), { v0: cV0, stop: true })
+  let endSec = Math.max(carrier.t, fromSec + target)
+  // A bow that under-filled (a short carry, or a capped loop): keep him moving
+  // with a small curl into the spot rather than letting him stand.
+  if (carrier.t < endSec - 0.05) {
+    const rem = endSec - carrier.t
+    carrier.run(routeByTime({ x: carrier.x, y: carrier.y }, spot, carrier.pace, carrySpeed(carrier), rem, 1.6), { v0: carrySpeed(carrier), stop: true })
+    endSec = Math.max(carrier.t, endSec)
+  }
+  const tk = m[chosen.k]
+  tk.run(routeByTime({ x: tk.x, y: tk.y }, spot, tk.pace, chosen.v0, Math.max(0.06, endSec - fromSec), 0.5), { v0: chosen.v0, stop: true })
+  if (tk.t > endSec + 0.02) {
+    // The tackler's own plant added a beat: let the carrier carry on to meet him.
+    const rem = tk.t - carrier.t
+    if (rem > 0.03) carrier.run(routeByTime({ x: carrier.x, y: carrier.y }, spot, carrier.pace, carrySpeed(carrier), rem, 1.6), { v0: carrySpeed(carrier), stop: true })
+    endSec = Math.max(endSec, tk.t, carrier.t)
+  }
+  endSec = Math.max(endSec, tk.t, carrier.t)
+  if (tk.t < endSec) tk.hold(endSec - tk.t)
+  chaseCarrier(m, tacklerKeys.filter((k) => k !== chosen.k), fromSec, carrier, endSec, seed)
+  return { tackler: chosen.k, endSec }
 }
 
 function buildPass(play: Play, ctx: AnimContext): PlayAnim {
@@ -1133,37 +1346,59 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const flights = [{ t0: releaseSec, t1: catchSec, height: Math.min(1, 0.35 + depth / 40) }]
   const holders: PlayAnim['holders'] = [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: releaseSec, key: null }]
 
-  // Coverage: corners trail the outside receivers, backers drop / jump crossers,
-  // a cushion set by the coverage rating; safeties drift with the deepest route.
-  const trailEnd = Math.max(0.3, catchSec - 0.1)
+  // ── coverage (backlog 151) ─────────────────────────────────────────────────
+  // Every receiver who runs a route gets a defender or a zone responsibility.
+  // The look is the play's recorded call when the sim gives one, else a
+  // deterministic pick. Man defenders sit in the hip pocket (a short MCV-lag
+  // mirror), zone defenders drop to ZCV-set landmarks and break on the ball.
+  const trailEnd = catchSec
   const covOf = (k: string) => Math.max(attrOf(m[k].player, 'MCV'), attrOf(m[k].player, 'ZCV'))
-  trailTo(m.cb0, m.wr0.path, -1.6, inwOf('wr0') * 1.0, 0.1, trailEnd, covOf('cb0'))
-  trailTo(m.cb1, m.wr1.path, -1.6, inwOf('wr1') * 1.0, 0.1, trailEnd, covOf('cb1'))
-  const crossers = ['wr2', 'te', 'rb'].filter((k) => /meshIn|cross|drag/.test(routeMap[k]))
-  for (let i = 0; i < 3; i++) {
-    const k = crossers[i]
-    if (k) trailTo(m[`lb${i}`], m[k].path, 0.6, -inwOf(k), 0.15, trailEnd, covOf(`lb${i}`))
-    else m[`lb${i}`].run([{ x: los + 6 + i, y: clampY(MID_Y + (i - 1) * 6) }], { stop: true })
-  }
-  const deepKey = receivers.reduce((a, k) => ((ROUTES[routeMap[k]]?.depth ?? 0) > (ROUTES[routeMap[a]]?.depth ?? 0) ? k : a), receivers[0])
-  const deepPos = posAt(m[deepKey].path, catchSec)
-  const sX = los + Math.max(15, (ROUTES[routeMap[deepKey]]?.depth ?? 10) + 4)
-  m.s0.run([{ x: clampX(sX), y: clampY(15 + (deepPos.y - 15) * 0.35) }], { stop: true })
-  m.s1.run([{ x: clampX(sX), y: clampY(38 + (deepPos.y - 38) * 0.35) }], { stop: true })
-  // A credited tackler (backlog 128–129) must be in on the stop: line him up
-  // across from the target (a legal pre-snap spot) and send him on the target's
-  // route, so he can physically reach the recorded spot instead of being
-  // stranded on another assignment when the YAC ends.
   const creditId = play.tackleIds?.[0] ?? play.fumbleId
   const creditKey = creditId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === creditId) : undefined
-  if (creditKey) {
-    const start = m[tgt].path[0]
-    const side = start.y < MID_Y ? -1 : 1
-    m[creditKey].reset(clampX(start.x + 4), clampY(start.y + side * 5))
-    trailTo(m[creditKey], m[tgt].path, 0.7, 0.7, 0.15, trailEnd, covOf(creditKey))
+  const coverId = play.coverId
+  const coverKey = coverId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === coverId) : undefined
+  const scheme = coverageScheme(play, seed)
+  // Blitz first, so the extra rushers are excluded from the coverage pool (151).
+  const blitzers = play.blitz ? blitzRush(m, f, los, seed, posAt(m.qb.path, releaseSec), releaseSec) : []
+  const isBlitzer = (k: string) => blitzers.includes(k)
+  const runners = receivers.filter((k) => pathLen(m[k].path) > 3.5)
+  // Separation should match the recorded result: hip-pocket tight on short and
+  // contested plays, looser on a recorded big gain (a blown coverage).
+  const bigGain = gainYds >= 20
+  const tightness = int ? 0 : inc ? 0 : bigGain ? (hash(seed + 17) < 0.55 ? 1.0 : 0.55) : 0.15
+  const deepKey = receivers.reduce((a, k) => ((ROUTES[routeMap[k]]?.depth ?? 0) > (ROUTES[routeMap[a]]?.depth ?? 0) ? k : a), receivers[0])
+  const deepInfo = routeInfo(routeMap[deepKey] ?? '')
+  const manPos: Record<string, string> = { wr0: 'cb0', wr1: 'cb1', wr2: 's1', te: 'lb0', rb: 'lb1', fb: 'lb2' }
+  const zoneLook = scheme === 'zone' || scheme === 'twoHigh' || scheme === 'stack'
+  const poolAll = ['cb0', 'cb1', 's1', 'lb0', 'lb1', 'lb2', 's0']
+  // The sim's recorded coverage defender on the target (else the credited
+  // tackler when he is a coverage player) carries him in man.
+  const tgtManRaw = coverKey ?? (creditKey && /^(cb|lb|s)/.test(creditKey) ? creditKey : undefined)
+  const tgtMan = tgtManRaw && !isBlitzer(tgtManRaw) ? tgtManRaw : undefined
+  // Man-up: every route runner gets a defender who trails in his hip pocket
+  // (over the top on verticals). A zone look just aligns them further off with
+  // their eyes on the ball; the underneath/safety defenders not on a man run
+  // the zone drops (backlog 151).
+  const assign: Record<string, string> = {}
+  const used = new Set<string>()
+  const pool = poolAll.filter((k) => !isBlitzer(k))
+  const take = (recv: string, prefer?: string) => {
+    let d = prefer && !used.has(prefer) ? prefer : manPos[recv]
+    if (!d || used.has(d) || isBlitzer(d)) d = pool.find((x) => !used.has(x)) ?? d
+    used.add(d)
+    assign[recv] = d
   }
-  // Blitz: extra rushers attack the QB, arriving by the release.
-  if (play.blitz) blitzRush(m, f, los, seed, posAt(m.qb.path, releaseSec), releaseSec)
+  if (runners.includes(tgt)) take(tgt, tgtMan)
+  for (const k of runners) if (!assign[k]) take(k)
+  for (const recv of Object.keys(assign)) {
+    manTrail(m[assign[recv]], recv, m[recv], { fromSec: 0.1, toSec: trailEnd, los, cov: covOf(assign[recv]), inw: inwOf(recv), tightness, seed, routeName: routeMap[recv] ?? '', zone: zoneLook })
+  }
+  // Unassigned defenders: safeties over the top, the rest rob / drop into a zone.
+  for (const dk of poolAll) {
+    if (isBlitzer(dk) || used.has(dk)) continue
+    if (dk.startsWith('s')) safetyRoam(m[dk], { fromSec: 0.1, toSec: trailEnd, releaseSec, los, deep: m[deepKey], depth: deepInfo.depth, catchPt, side: dk === 's0' ? -1 : 1, start: { x: m[dk].x, y: m[dk].y } })
+    else zoneDrop(m[dk], { fromSec: 0.1, toSec: trailEnd, releaseSec, landmark: { x: los + 8, y: dk === 'cb0' ? 8 : dk === 'cb1' ? FIELD_H - 8 : MID_Y + (dk === 'lb0' ? -8 : dk === 'lb2' ? 8 : 0) }, zcv: attrOf(m[dk].player, 'ZCV'), threat: m[deepKey], catchPt })
+  }
 
   if (inc) {
     // A drop or a bang-bang miss: the ball skips off the receiver's hands.
@@ -1182,9 +1417,10 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     m[near].run([{ x: catchPt.x, y: catchPt.y }], { v0, stop: true })
     const rx = clampX(spotX)
     const ry = clampY(catchPt.y + (MID_Y - catchPt.y) * 0.4)
-    m[near].run([{ x: rx, y: ry }], { v0: 0, stop: true })
-    const endSec = m[near].t
-    pursueRun(m, DEF_KEYS.filter((k) => k !== near), catchSec, { x: rx, y: ry }, endSec, seed)
+    // After the pick the offense is the defense: the nearest offensive player
+    // closes on the returner, who never freezes before the recorded stop.
+    const res = resolveCarry({ m, carrierKey: near, spot: { x: rx, y: ry }, tacklerKeys: OFF_KEYS, seed, maxExtra: 2.0 })
+    capAll(m, ALL_KEYS(f), res.endSec)
     ball.push(...shadow(m[near].path, catchSec).slice(1))
     return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: near }], flights })
   }
@@ -1201,10 +1437,6 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     ? (catchPt.y < MID_Y ? 1.6 : FIELD_H - 1.6)
     : clampY(catchPt.y + (MID_Y - catchPt.y) * (yac > 8 ? 0.35 : 0.12) + (hash(seed + 8) - 0.5) * 4)
   const spot: Pt = { x: endX, y: endY }
-
-  // The credited tackler, mapped through the actor dots, so an unrelated or
-  // missed defender never makes the finish when the sim named one.
-  const yacNatural = timedLine([{ x: catchPt.x, y: catchPt.y }, spot], m[tgt].pace, { v0: catchV0, stop: true }).slice(-1)[0]?.t ?? 0
 
   if (play.turnover) {
     // A catch fumble: the ball pops loose and the defense recovers. Possession
@@ -1229,25 +1461,18 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // A score or a step out of bounds: he keeps the ball to the spot and the
     // coverage chases, but nothing forces a tackle.
     m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: true })
-    chaseCarrier(m, DEF_KEYS, catchSec, m[tgt], Math.max(catchSec + yacNatural, m[tgt].t), seed)
+    const endSec = m[tgt].t
+    chaseCarrier(m, DEF_KEYS, catchSec, m[tgt], endSec, seed)
+    capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
     return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
   }
 
-  // In bounds and short of the goal line: the credited / nearest tackler meets
-  // the receiver at the recorded stop, and the rest fan in behind the catch.
-  const tk = creditKey ?? closestKey(m, DEF_KEYS, spot, catchSec)
-  const tkv = seek(m[tk], catchSec)
-  const tkPos = posAt(m[tk].path, catchSec)
-  const tkNatural = straightTime(m[tk].pace, Math.hypot(spot.x - tkPos.x, spot.y - tkPos.y), tkv)
-  // Hold the contact open at most ~0.9 s of extra lane — the receiver keeps
-  // moving at his ratings' pace rather than standing frozen waiting.
-  const avail = Math.max(yacNatural, Math.min(tkNatural, yacNatural + 1.5))
-  m[tgt].run(routeByTime(catchPt, spot, m[tgt].pace, catchV0, avail, 0.5), { v0: catchV0, stop: true })
-  if (m[tgt].t < catchSec + avail) m[tgt].hold(catchSec + avail - m[tgt].t)
-  m[tk].run(routeByTime(tkPos, spot, m[tk].pace, tkv, avail), { v0: tkv, stop: true })
-  if (m[tk].t < catchSec + avail) m[tk].hold(catchSec + avail - m[tk].t)
-  chaseCarrier(m, DEF_KEYS.filter((k) => k !== tk), catchSec, m[tgt], catchSec + avail, seed)
+  // In bounds and short of the goal line: the credited tackler (when the sim
+  // named one) — else the defender who can actually arrive first — meets the
+  // receiver at the recorded stop while he keeps running at his ratings' pace.
+  const res = resolveCarry({ m, carrierKey: tgt, spot, tacklerKeys: DEF_KEYS, prefer: creditKey, seed })
+  capAll(m, ALL_KEYS(f), res.endSec)
   ball.push(...shadow(m[tgt].path, catchSec).slice(1))
   return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
 }
@@ -1382,27 +1607,31 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
 
   // A real return: the coverage runs downfield during the hang, the ten
   // blockers meet it in the return lane, and the closest coverage man reaches
-  // the recorded stop as the moving returner arrives.
+  // the recorded stop as the moving returner arrives. Any slack becomes a
+  // lateral cut, never a freeze (backlog 150).
   loftCoverage(m, cov, 0, landT, landPt, seed)
   const tackler = closestKey(m, cov, spot, landT)
   const tkv = seek(m[tackler], landT)
   const tkPos = posAt(m[tackler].path, landT)
-  const tkNatural = straightTime(m[tackler].pace, Math.hypot(spot.x - tkPos.x, spot.y - tkPos.y), 0)
+  const tkNatural = straightTime(m[tackler].pace, Math.hypot(spot.x - tkPos.x, spot.y - tkPos.y), tkv)
   const retNatural = timedLine([landPt, spot], m.s0.pace, { v0: 0, stop: true }).slice(-1)[0]?.t ?? 0
-  // Plan the ten blocker/coverage engagements, then make sure the play runs long
-  // enough for them and the tackle to resolve.
   const plan = planBlocks(m, blk, cov.filter((k) => k !== tackler), landT, seed)
   const maxTe = plan.reduce((mx, pl) => Math.max(mx, pl.te), 0)
-  const total = landT + Math.max(tkNatural, retNatural, Math.max(0, maxTe - landT) + 1.2)
-  m.s0.run(routeByTime(landPt, spot, m.s0.pace, 0, total - landT, 2.5), { v0: 0, stop: true })
-  if (m.s0.t < total) m.s0.hold(total - m.s0.t)
-
-  applyBlockEngagements(m, plan, m.s0, total, seed)
-
-  m[tackler].run(routeByTime(tkPos, spot, m[tackler].pace, tkv, total - landT), { v0: tkv, stop: true })
-  if (m[tackler].t < total) m[tackler].hold(total - m[tackler].t)
-  for (const k of cov) if (k !== tackler) capAt(m[k], total)
-  for (const k of blk) capAt(m[k], total)
+  let end = landT + Math.max(tkNatural, retNatural, Math.max(0, maxTe - landT) + 0.3, 0.3)
+  const fillReturner = (to: number) => {
+    if (m.s0.t < to - 0.06) {
+      m.s0.run(routeByTime({ x: m.s0.x, y: m.s0.y }, spot, m.s0.pace, carrySpeed(m.s0), to - m.s0.t, 2.0), { v0: carrySpeed(m.s0), stop: true })
+    }
+    return Math.max(to, m.s0.t)
+  }
+  m.s0.run(routeByTime(landPt, spot, m.s0.pace, 0, end - landT, 2.5), { v0: 0, stop: true })
+  end = fillReturner(end)
+  m[tackler].run(routeByTime(tkPos, spot, m[tackler].pace, tkv, Math.max(0.1, end - landT)), { v0: tkv, stop: true })
+  end = fillReturner(Math.max(end, m[tackler].t))
+  applyBlockEngagements(m, plan, m.s0, end, seed)
+  if (m[tackler].t < end) m[tackler].hold(end - m[tackler].t)
+  for (const k of cov) if (k !== tackler) capAt(m[k], end)
+  for (const k of blk) capAt(m[k], end)
 
   const ball: WP[] = [...snapBall(m, los, kickT), { t: landT, x: landPt.x, y: landPt.y }, ...shadow(m.s0.path, landT).slice(1)]
   return finish(f, m, {
@@ -1499,22 +1728,27 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   // for them to resolve before the returner reaches the recorded stop.
   const plan = planBlocks(m, blkKeys, covKeys.filter((k) => k !== tackler), catchT, seed)
   const maxTe = plan.reduce((mx, pl) => Math.max(mx, pl.te), 0)
-  const total = Math.max(tkNatural, catchT + retNatural, maxTe + 1.2)
-
-  m.rb.run(routeByTime(catchPt, spot, m.rb.pace, 0, total - catchT, 2.5), { v0: 0, stop: true })
-  if (m.rb.t < total) m.rb.hold(total - m.rb.t)
-
-  // The ten blockers meet the ten field cover defenders in the return lane; the
-  // released coverage converges on the returner's line.
-  applyBlockEngagements(m, plan, m.rb, total, seed)
+  let end = Math.max(tkNatural, catchT + retNatural, maxTe + 0.3)
+  const fillReturner = (to: number) => {
+    if (m.rb.t < to - 0.06) {
+      m.rb.run(routeByTime({ x: m.rb.x, y: m.rb.y }, spot, m.rb.pace, carrySpeed(m.rb), to - m.rb.t, 2.0), { v0: carrySpeed(m.rb), stop: true })
+    }
+    return Math.max(to, m.rb.t)
+  }
+  m.rb.run(routeByTime(catchPt, spot, m.rb.pace, 0, end - catchT, 2.5), { v0: 0, stop: true })
+  end = fillReturner(end)
 
   // The tackler chases the moving carrier and meets him at the recorded stop (a
   // return score is chased but never forced).
-  const tkFrom = posAt(m[tackler].path, m[tackler].t)
-  m[tackler].run(routeByTime(tkFrom, spot, m[tackler].pace, 0, Math.max(0.1, total - m[tackler].t), td ? 1.5 : 0), { v0: 0, stop: true })
-  if (m[tackler].t < total) m[tackler].hold(total - m[tackler].t)
-  for (const k of covKeys) if (k !== tackler) capAt(m[k], total)
-  for (const k of blkKeys) capAt(m[k], total)
+  const tkFrom = { x: m[tackler].x, y: m[tackler].y }
+  m[tackler].run(routeByTime(tkFrom, spot, m[tackler].pace, 0, Math.max(0.1, end - m[tackler].t), td ? 1.5 : 0), { v0: 0, stop: true })
+  end = fillReturner(Math.max(end, m[tackler].t))
+
+  // The ten blockers meet the ten field cover defenders in the return lane.
+  applyBlockEngagements(m, plan, m.rb, end, seed)
+  if (m[tackler].t < end) m[tackler].hold(end - m[tackler].t)
+  for (const k of covKeys) if (k !== tackler) capAt(m[k], end)
+  for (const k of blkKeys) capAt(m[k], end)
 
   const ball: WP[] = [{ t: 0, x: kickX, y: MID_Y }, { t: catchT, x: catchPt.x, y: catchPt.y }]
   if (fumble) {
@@ -1522,7 +1756,7 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
     // recovers it: the ball leaves the carrier's hands at his own spot, rolls
     // to the loose point, and only then does the recovery actor carry it on —
     // no jump to a distant point before anyone arrives.
-    const popT = Math.max(catchT + 0.2, catchT + (total - catchT) * 0.72)
+    const popT = Math.max(catchT + 0.2, catchT + (end - catchT) * 0.72)
     const rbPos = posAt(m.rb.path, popT)
     const loose = { x: clampX(rbPos.x + 1.2 + (hash(seed + 6) - 0.5) * 3), y: clampY(rbPos.y + (hash(seed + 6) - 0.5) * 4) }
     const rec = closestKey(m, DEF_KEYS, loose, popT)
