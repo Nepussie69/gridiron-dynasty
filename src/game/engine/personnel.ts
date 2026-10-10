@@ -190,6 +190,12 @@ export function defenseCounts(p: DefPackage): { dl: number; lb: number; cb: numb
   return def ? { dl: def.dl, lb: def.lb, cb: def.cb, s: def.s } : { dl: 4, lb: 3, cb: 3, s: 2 }
 }
 
+/** The offensive skill-position quota for a package (mirrors `defenseCounts`). */
+export function offenseCounts(p: OffPersonnel): { wr: number; te: number; rb: number; fb: boolean } {
+  const def = offDef(p)
+  return def ? { wr: def.wr, te: def.te, rb: def.rb, fb: def.fb } : { wr: 3, te: 1, rb: 1, fb: false }
+}
+
 /** A readable "who's on the field" list for the Game Plan card. */
 export function onField(world: World, teamId: string, side: 'off' | 'def', value: OffPersonnel | DefPackage): { pos: string; name: string; ovr: number }[] {
   const rows: { pos: string; name: string; ovr: number }[] = []

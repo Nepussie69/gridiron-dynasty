@@ -11,7 +11,7 @@ import {
   type World,
 } from '../game/engine/generate'
 import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecovery } from '../game/engine/sim'
-import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
+import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, getStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills } from '../game/engine/coaching'
@@ -7225,7 +7225,7 @@ export function statAudit(games = 150) {
       if (p.qbId && /^Sack/.test(p.result)) plSk++
       if (p.coverId && p.targetId) {
         plTgt++
-        const comp = p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || !!p.fumbleId
+        const comp = p.reception ?? (!p.intId && (p.result === 'Complete' || p.result === 'Explosive play!' || p.result === 'TOUCHDOWN!' || !!p.fumbleId || !!p.muffedCatch))
         if (comp) { plComp++; plYds += Math.max(0, p.yards) }
       }
     }
@@ -7377,6 +7377,10 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
       if (p.type === 'run' || p.type === 'pass') {
         mtAttempts += p.missedTackleIds?.length ?? 0
         if (p.result !== 'TOUCHDOWN!') mtAttempts += p.tackleIds?.length ?? 0
+        // R5 accounting: a sack is a tackle the defence actually made — it is
+        // credited to the sacker via `sackId`, not `tackleIds`, so without this
+        // the sacker's stop is the one real tackle missing from the denominator.
+        if (p.type === 'pass' && isSack(p)) mtAttempts += 1
       }
       if (inRZ) {
         if (p.result === 'TOUCHDOWN!') { rzTD += 1; inRZ = false }
@@ -7541,6 +7545,132 @@ export function penaltyProbe(games = 300) {
     falseStartHomePerGame: per(fsHome),
     falseStartAwayPerGame: per(fsAway),
     homeWinPct: +((homeWins / games) * 100).toFixed(1),
+  }
+}
+
+/**
+ * Dev-only probe (R15): in-game stamina, rotation and snap counts. Reports the
+ * league snap counts and snap shares, how often a tiring DL is spelled, the
+ * fatigue reached, and an A/B of the full sim with the stamina effect toggled off
+ * on identical seeds — so both the feature's numbers and its calibration impact
+ * are visible.
+ */
+export function staminaProbe(games = 150) {
+  const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  const rng = makeRng(world.seed + 7654321)
+  const pmap = new Map(world.players.map((p) => [p.id, p]))
+  let made = 0
+  let offSnaps = 0
+  let defSnaps = 0
+  let offPlayers = 0
+  let defPlayers = 0
+  let rotateTeams = 0
+  let maxFat = 0
+  let endFat = 0, endFatN = 0
+  // Snap shares are accumulated per player-team-game, then averaged once — no
+  // double division by games. Each bucket is [sum of %, count].
+  const buckets: Record<string, [number, number]> = {
+    qb: [0, 0], rb1: [0, 0], rb2: [0, 0], wr1: [0, 0], dlStarter: [0, 0], rotationalDl: [0, 0],
+  }
+  const add = (b: [number, number], v: number) => { b[0] += v; b[1] += 1 }
+  // A/B (stamina on vs off on identical seeds). Points/sacks/yards are per game
+  // (both clubs); the completion delta is the difference of the two rates.
+  let ePoints = 0, bPoints = 0
+  let eSacks = 0, bSacks = 0
+  let ePass = 0, bPass = 0
+  let eComp = 0, eAtt = 0, bComp = 0, bAtt = 0
+  while (made < games) {
+    const h = nfl[Math.floor(rng() * nfl.length)]
+    const a = nfl[Math.floor(rng() * nfl.length)]
+    if (!h || !a || h.id === a.id) continue
+    const seed = world.seed + made * 7919 + 101
+    const sim = simulatePlayByPlay(world, h.id, a.id, seed)
+    const side = sim.snapSide ?? {}
+    const snaps = sim.snaps ?? {}
+    for (const t of [h.id, a.id]) {
+      const off = side[t]?.off ?? 0
+      const def = side[t]?.def ?? 0
+      offSnaps += off
+      defSnaps += def
+      const top4 = new Set(depthGroup(world, t, ['DE', 'DT'], 4).map((p) => p.id))
+      const rbPool = depthGroup(world, t, ['RB'], 2)
+      const rb1 = rbPool[0]
+      const rb2 = rbPool[1]
+      const wr1 = depthGroup(world, t, ['WR'], 1)[0]
+      let rotated = false
+      for (const [id, n] of Object.entries(snaps)) {
+        const p = pmap.get(id)
+        if (!p || p.teamId !== t || !n) continue
+        if (p.side === 'OFF') offPlayers += n
+        else if (p.side === 'DEF') defPlayers += n
+        if (p.pos === 'QB' && off) add(buckets.qb, (n / off) * 100)
+        else if (rb1 && p.id === rb1.id && off) add(buckets.rb1, (n / off) * 100)
+        else if (rb2 && p.id === rb2.id && off) add(buckets.rb2, (n / off) * 100)
+        else if (wr1 && p.id === wr1.id && off) add(buckets.wr1, (n / off) * 100)
+        if ((p.pos === 'DE' || p.pos === 'DT') && def) {
+          if (top4.has(id)) add(buckets.dlStarter, (n / def) * 100)
+          else { add(buckets.rotationalDl, (n / def) * 100); rotated = true }
+        }
+        maxFat = Math.max(maxFat, sim.fatigue?.[id] ?? 0)
+      }
+      if (rotated) rotateTeams++
+    }
+    for (const f of Object.values(sim.fatigue ?? {})) { endFat += f; endFatN++ }
+    // A/B: identical seed with the stamina effect off. Restore the exact prior
+    // toggle (not a hard-coded true) in a finally so an exception cannot leave it
+    // flipped and any caller's setting survives.
+    const priorStamina = getStamina()
+    try {
+      setStamina(false)
+      const base = simulatePlayByPlay(world, h.id, a.id, seed)
+      bPoints += base.homeScore + base.awayScore
+      bSacks += base.stats.home.sacksTaken + base.stats.away.sacksTaken
+      bPass += base.stats.home.passYds + base.stats.away.passYds
+      bComp += base.stats.home.passComp + base.stats.away.passComp
+      bAtt += base.stats.home.passAtt + base.stats.away.passAtt - base.stats.home.sacksTaken - base.stats.away.sacksTaken
+    } finally {
+      setStamina(priorStamina)
+    }
+    ePoints += sim.homeScore + sim.awayScore
+    eSacks += sim.stats.home.sacksTaken + sim.stats.away.sacksTaken
+    ePass += sim.stats.home.passYds + sim.stats.away.passYds
+    eComp += sim.stats.home.passComp + sim.stats.away.passComp
+    eAtt += sim.stats.home.passAtt + sim.stats.away.passAtt - sim.stats.home.sacksTaken - sim.stats.away.sacksTaken
+    made++
+  }
+  const perTeamGame = (x: number) => +(x / (2 * (made || 1))).toFixed(2)
+  const pct = (k: string) => +(buckets[k][0] / (buckets[k][1] || 1)).toFixed(1)
+  const eRate = eComp / (eAtt || 1)
+  const bRate = bComp / (bAtt || 1)
+  return {
+    games: made,
+    snapsPerTeamGame: { off: perTeamGame(offSnaps), def: perTeamGame(defSnaps) },
+    playersPerSnap: {
+      off: +(offPlayers / (offSnaps || 1)).toFixed(2),
+      def: +(defPlayers / (defSnaps || 1)).toFixed(2),
+    },
+    snapPct: {
+      qb: pct('qb'),
+      rb1: pct('rb1'),
+      rb2: pct('rb2'),
+      wr1: pct('wr1'),
+      dlStarter: pct('dlStarter'),
+      rotationalDl: pct('rotationalDl'),
+    },
+    rotationRatePct: +((rotateTeams / (made * 2 || 1)) * 100).toFixed(1),
+    fatigue: { max: +maxFat.toFixed(3), meanEnd: +(endFat / (endFatN || 1)).toFixed(3) },
+    ab: {
+      // Per-game totals for both clubs; divide by two for a team-game figure.
+      pointsPerGame: perTeamGame(ePoints - bPoints),
+      sacksPerGame: perTeamGame(eSacks - bSacks),
+      passYdsPerGame: perTeamGame(ePass - bPass),
+      pointsPerTeamGame: perTeamGame(ePoints - bPoints),
+      sacksPerTeamGame: perTeamGame(eSacks - bSacks),
+      passYdsPerTeamGame: perTeamGame(ePass - bPass),
+      compPctEnabled: +(eRate * 100).toFixed(2),
+      compPctBaseline: +(bRate * 100).toFixed(2),
+      compPctDelta: +((eRate - bRate) * 100).toFixed(2),
+    },
   }
 }
 

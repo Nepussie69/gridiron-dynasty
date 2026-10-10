@@ -8,12 +8,13 @@
 
 import type { World } from './generate'
 import type { GamePlan } from './gameplan'
+import { clamp, hash32 } from './rng'
 
 export type FourthStyle = 'conservative' | 'standard' | 'aggressive'
 
 export interface CallSheet {
   fourth: FourthStyle
-  twoPoint: 'chart' | 'kick'
+  twoPoint: 'chart' | 'kick' | 'go'
   timeouts: 'save' | 'aggressive'
 }
 
@@ -57,16 +58,31 @@ export function fgProb(yard: number, kickPower: number): number {
   return Math.max(0.45, Math.min(0.99, make))
 }
 
+/** R17: the minimum own-yard line a club will consider a field goal from (a
+ *  higher value = a shorter kick). Scales with the kicker's power — a big leg
+ *  (KPW 95) attempts from ~3 yards deeper than a weak one (KPW 78) — using the
+ *  same KPW/KAC blend the make model uses. */
+export function fgRangeYard(kickPower: number): number {
+  return 57 - (kickPower - 88) * 0.22
+}
+
 /** EV of each 4th-down option for the offense. `fg` is null outside FG range. */
 export function fourthDownEV(s: Situation, kickPower: number): { go: number; fg: number | null; punt: number } {
   const p = convertProb(s.distance)
   const q = fgProb(s.yard, kickPower)
-  const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard)
-  const fg = s.yard < 55 ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
+  // Modern fourth-down analytics value possession a touch higher than the raw
+  // expected-points curve implies; the flat bonus keeps the CALIBRATED go-rate
+  // near the 2015–2024 NFL norm across every field zone instead of only in plus
+  // territory. It is a decision-model knob, not a play-outcome change.
+  const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard) + GO_BONUS
+  const fg = s.yard < fgRangeYard(kickPower) ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
   // A 40-yard net punt, touchback at the 20.
   const punt = -epAt(100 - Math.min(80, s.yard + 40))
   return { go, fg, punt }
 }
+
+/** R2: flat 4th-down possession bonus (see fourthDownEV). */
+export const GO_BONUS = 0.8
 
 export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: number): 'go' | 'fg' | 'punt' {
   const ev = fourthDownEV(s, kickPower)
@@ -89,24 +105,102 @@ export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: nu
     if (s.distance <= 6 && ev.go >= val(best) - 0.4) return 'go'
     return best === 'go' ? (inRange ? 'fg' : 'punt') : best
   }
-  // standard: the best EV, but go only when distance <= 5 (modern NFL is more
-  // aggressive on 4th & medium than the old <= 4 threshold).
-  if (best === 'go' && s.distance > 5) return inRange ? 'fg' : 'punt'
+  // standard: the best EV, but go whenever it wins on 4th & short/medium (the
+  // modern NFL is more aggressive than the old <= 4 threshold).
+  if (best === 'go' && s.distance > 7) return inRange ? 'fg' : 'punt'
   return best
 }
 
-export function twoPointChoice(rule: 'chart' | 'kick', marginAfterTD: number, qtr: number): 'kick' | 'go2' {
+export function twoPointChoice(rule: 'chart' | 'kick' | 'go', marginAfterTD: number, qtr: number): 'kick' | 'go2' {
   if (rule === 'kick') return 'kick'
   const chartGo = qtr === 4 && [-2, -5, -9, -10, 1, 5].includes(marginAfterTD)
+  // R18: an aggressive head coach also chases the deficit on two in the fourth
+  // quarter instead of waiting for the exact chart margins.
+  if (rule === 'go') return chartGo || (qtr === 4 && marginAfterTD <= 0 && marginAfterTD >= -8) ? 'go2' : 'kick'
   return chartGo ? 'go2' : 'kick'
 }
 
-/** An AI club's call sheet, scaled by its head-coach rating. */
+// ── R18: coaching tendencies ──────────────────────────────────────────────────
+// Each club's head coach (and offensive coordinator) gets a deterministic
+// personality: how aggressive he is on 4th down, whether he chases two points,
+// his run/pass identity, how he uses timeouts, and his tempo. Derived from the
+// staff's ratings, scheme and specialty plus a stable per-coach hash — never an
+// rng() draw, so the seed stream and coached/sim equivalence are untouched.
+
+/** Offensive pass-rate identity per OC scheme (the single source offStyle reads).
+ *  R2 variance fix: each seed draws a different mix of the 32 OC schemes, and the
+ *  old 0.47–0.62 spread swung a league's average pass rate by ~3.5 points between
+ *  seeds — enough to move sacks, rush volume and scoring in and out of band on
+ *  roster-identical leagues. The identities are compressed 75% toward the league
+ *  mean (0.534), so the direction is unchanged (Air Raid still passes most, RPO
+ *  Heavy still runs most) but the per-seed variance is bounded and football-sized;
+ *  this keeps the run-heaviest league's rush volume and the pass-heaviest league's
+ *  scoring from straddling the band edges together. */
+export const OFF_PASS_RATE: Record<string, number> = {
+  'Air Raid': 0.5684,
+  'Pro Style': 0.5204,
+  Spread: 0.5404,
+  'West Coast': 0.5324,
+  'RPO Heavy': 0.5084,
+}
+
+export interface CoachTendency {
+  /** 4th-down aggressiveness. */
+  fourth: FourthStyle
+  /** Two-point appetite: follow the chart, always kick, or chase it. */
+  twoPoint: 'chart' | 'kick' | 'go'
+  /** Run/pass identity: pass share outside obvious passing downs (0–1). */
+  passRate: number
+  /** Timeout usage. */
+  timeouts: 'save' | 'aggressive'
+  /** Tempo: −1 deliberate … +1 up-tempo. */
+  tempo: number
+}
+
+/** Head-coach specialty nudges to the aggression score (league mean ≈ 0). */
+const HC_AGGRO: Record<string, number> = {
+  'Play Calling': 0.55,
+  'Red Zone': 0.35,
+  'QB Development': 0.1,
+  'Pass Rush': 0.05,
+  Secondary: -0.05,
+  'Talent Evaluation': -0.1,
+  'College Scouting': -0.1,
+  'Pro Personnel': -0.05,
+  'O-Line Play': -0.2,
+  'Culture Builder': -0.55,
+}
+
+/** Coordinator scheme pace (Air Raid up-tempo … RPO Heavy deliberate). */
+const OC_TEMPO: Record<string, number> = {
+  'Air Raid': 0.5,
+  Spread: 0.3,
+  'West Coast': 0,
+  'Pro Style': -0.15,
+  'RPO Heavy': -0.35,
+}
+
+export function coachTendency(world: World, teamId: string): CoachTendency {
+  const staff = world.staff[teamId] ?? []
+  const hc = staff.find((s) => s.role === 'Head Coach')
+  const oc = staff.find((s) => s.role === 'Offensive Coordinator')
+  const hcRating = hc?.rating ?? 74
+  const ocRating = oc?.rating ?? 74
+  // Per-coach personality from a stable hash, centered on zero (−0.3..+0.3).
+  const jitter = (hash32(hc?.id ?? teamId, 41) / 4294967296 - 0.5) * 0.6
+  const aggro = (hcRating - 74) / 10 + (HC_AGGRO[hc?.specialty ?? ''] ?? 0) + jitter
+  const fourth: FourthStyle = aggro >= 0.8 ? 'aggressive' : aggro <= -0.8 ? 'conservative' : 'standard'
+  const twoPoint: CoachTendency['twoPoint'] = aggro >= 0.7 ? 'go' : 'chart'
+  const timeouts: CoachTendency['timeouts'] = hcRating >= 75 || hc?.specialty === 'Play Calling' ? 'aggressive' : 'save'
+  const passRate = OFF_PASS_RATE[oc?.scheme ?? ''] ?? OFF_PASS_RATE['Pro Style']
+  const tempo = clamp((OC_TEMPO[oc?.scheme ?? ''] ?? 0) + (ocRating - 74) / 120, -1, 1)
+  return { fourth, twoPoint, passRate, timeouts, tempo }
+}
+
+/** An AI club's call sheet, derived from its coaching tendencies (R18). */
 export function aiCallSheet(world: World, teamId: string): CallSheet {
-  const hc = (world.staff[teamId] ?? []).find((s) => s.role === 'Head Coach')
-  const rating = hc?.rating ?? 74
-  const fourth: FourthStyle = rating >= 82 ? 'aggressive' : rating <= 66 ? 'conservative' : 'standard'
-  return { fourth, twoPoint: 'chart', timeouts: rating >= 75 ? 'aggressive' : 'save' }
+  const t = coachTendency(world, teamId)
+  return { fourth: t.fourth, twoPoint: t.twoPoint, timeouts: t.timeouts }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

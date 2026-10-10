@@ -111,19 +111,23 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       continue
     }
 
-    const isComp = play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId
+    // R16: a reception is a caught pass (including a catch that later came loose).
+    // A deflected/muffed INTERCEPTION keeps `reception` unset, so it is never
+    // credited as a completion; metadata alone distinguishes the two. The result
+    // text is only a legacy fallback for play logs without the flag.
+    const isComp = play.reception ?? (!play.intId && (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId || !!play.muffedCatch))
     if (play.type === 'pass') {
       const qb = play.qbId
       if (qb) {
-        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result === 'Interception!' || play.result === 'TOUCHDOWN!' || play.fumbleId) {
+        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result.startsWith('Interception') || play.result === 'TOUCHDOWN!' || play.fumbleId || play.muffedCatch) {
           add(qb, off, 'passAtt', 1)
         }
         if (isComp) {
           add(qb, off, 'passComp', 1)
           add(qb, off, 'passYds', play.yards)
-          if (play.result === 'TOUCHDOWN!') add(qb, off, 'passTD', 1)
+          if (play.result === 'TOUCHDOWN!' && !play.defTD) add(qb, off, 'passTD', 1)
         }
-        if (play.result === 'Interception!') add(qb, off, 'ints', 1)
+        if (play.intId || play.result.startsWith('Interception')) add(qb, off, 'ints', 1)
         // R8: sacks taken by the QB (SK) and sack yards lost (SKY). A sack is not
         // a pass attempt and its yards are not subtracted from passing yards.
         if (/^Sack/.test(play.result)) {
@@ -155,7 +159,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       if (play.carrierId && isComp && play.targetId === play.carrierId) {
         add(play.carrierId, off, 'rec', 1)
         add(play.carrierId, off, 'recYds', play.yards)
-        if (play.result === 'TOUCHDOWN!') add(play.carrierId, off, 'recTD', 1)
+        if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'recTD', 1)
       }
       // L12 S3: a completion is stopped by one defender (no credit on a score —
       // the resolver already withholds tackleIds there).
@@ -170,17 +174,17 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         if (isComp) {
           add(play.coverId, def, 'defComp', 1)
           add(play.coverId, def, 'defYdsAllowed', Math.max(0, play.yards))
-          // R4b: a pass TD caught on this defender.
-          if (play.result === 'TOUCHDOWN!') add(play.coverId, def, 'defTDAllowed', 1)
+          // R4b: a pass TD caught on this defender (not a takeaway return TD).
+          if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.coverId, def, 'defTDAllowed', 1)
         }
         // R4b: INTs credited to the coverage defender (distinct from the ball hawk).
-        if (play.result === 'Interception!') add(play.coverId, def, 'defIntsCov', 1)
+        if (play.intId || play.result.startsWith('Interception')) add(play.coverId, def, 'defIntsCov', 1)
       }
     } else if (play.type === 'run') {
       if (play.carrierId) {
         add(play.carrierId, off, 'rushAtt', 1)
         add(play.carrierId, off, 'rushYds', Math.max(0, play.yards))
-        if (play.result === 'TOUCHDOWN!') add(play.carrierId, off, 'rushTD', 1)
+        if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'rushTD', 1)
       }
       // One tackler per run — the defense shares stops across the front seven.
       const t = play.tackleIds ?? []
@@ -193,6 +197,34 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       // R5: charge the miss to the defender and credit the back who broke it.
       if (play.missedTackleIds?.length) for (const id of play.missedTackleIds) add(id, def, 'missedTackles', 1)
       if (play.forcedMissedIds?.length && play.carrierId) add(play.carrierId, off, 'forcedMissed', 1)
+    }
+  }
+
+  // R15: attach in-game snap counts and snap share. Players who saw the field but
+  // recorded no other stat (linemen, rotational defenders) still get a line, so the
+  // season snap % is complete.
+  if (sim.snaps && sim.snapSide) {
+    const pmap = new Map(world.players.map((p) => [p.id, p]))
+    const share = (id: string, teamId: string): { pct: number; side: number } | undefined => {
+      const p = pmap.get(id)
+      const side = p?.side
+      if (side !== 'OFF' && side !== 'DEF') return undefined
+      const counts = sim.snapSide![teamId]
+      const base = side === 'OFF' ? counts?.off : counts?.def
+      return base ? { pct: Math.round(((sim.snaps![id] ?? 0) / base) * 1000) / 10, side: base } : undefined
+    }
+    for (const [id, n] of Object.entries(sim.snaps)) {
+      if (!n) continue
+      const p = pmap.get(id)
+      if (!p) continue
+      const teamId = p.teamId ?? meta[id]?.teamId ?? ''
+      const s = share(id, teamId)
+      if (!s) continue
+      const line = ensure(id, teamId)
+      if (!line) continue
+      line.snaps = n
+      line.snapPct = s.pct
+      line.snapSide = s.side
     }
   }
 
@@ -249,6 +281,11 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.sk = (season.sk ?? 0) + (line.sk ?? 0)
   season.sky = (season.sky ?? 0) + (line.sky ?? 0)
   season.pressured = (season.pressured ?? 0) + (line.pressured ?? 0)
+  // R15: snaps are kept as a numerator/denominator pair so a season with some
+  // unmeasured games is never biased toward zero (absent != no participation).
+  season.snaps = (season.snaps ?? 0) + (line.snaps ?? 0)
+  season.snapSide = (season.snapSide ?? 0) + (line.snapSide ?? 0)
+  if (line.snapSide) season.snapPct = Math.round(((season.snaps ?? 0) / season.snapSide) * 1000) / 10
 }
 
 /** Get or create this season's stat line for a player at a level. */
@@ -348,7 +385,10 @@ export function careerTotals(p: Player) {
     t.sk = (t.sk ?? 0) + (s.sk ?? 0)
     t.sky = (t.sky ?? 0) + (s.sky ?? 0)
     t.pressured = (t.pressured ?? 0) + (s.pressured ?? 0)
+    t.snaps = (t.snaps ?? 0) + (s.snaps ?? 0)
+    t.snapSide = (t.snapSide ?? 0) + (s.snapSide ?? 0)
   }
+  if (t.snapSide) t.snapPct = Math.round(((t.snaps ?? 0) / t.snapSide) * 1000) / 10
   return t
 }
 

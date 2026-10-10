@@ -139,6 +139,12 @@ export interface SeasonStats {
   pressured?: number
   sk?: number
   sky?: number
+  /** R15: scrimmage snaps played and the share of the club's snaps (0–100). */
+  snaps?: number
+  snapPct?: number
+  /** R15: the side snap total this player's share is measured against (numerator/
+   *  denominator). Optional, so an unmeasured game/season never implies 0%. */
+  snapSide?: number
   // honors
   awards?: string[]
 }
@@ -206,6 +212,11 @@ export interface GameStatLine {
   pressured?: number
   sk?: number
   sky?: number
+  /** R15: scrimmage snaps played and the share of the club's snaps (0–100). */
+  snaps?: number
+  snapPct?: number
+  /** R15: side snap total for the numerator/denominator share (optional). */
+  snapSide?: number
 }
 
 export interface Player {

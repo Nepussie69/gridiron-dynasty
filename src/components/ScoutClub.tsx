@@ -1,6 +1,7 @@
 import { Eye, Search } from 'lucide-react'
 import { coordinatorAdvice } from '../game/engine/advice'
 import {
+  coachTendency,
   DEF_CALL_LABEL,
   DEF_CALLS,
   OFF_CLASS_LABEL,
@@ -76,6 +77,14 @@ export function ScoutClubCard({ teamId, className }: { teamId: string; className
     .sort((a, b) => (b.s.defSacks ?? 0) - (a.s.defSacks ?? 0))[0]
   const advice = career ? coordinatorAdvice(league, career, teamId) : []
   const beat = (advice.find((a) => a.side === 'off') ?? advice[0])?.reason
+  // R18: the head coach's tendencies, derived from his staff profile.
+  const tend = coachTendency(league, teamId)
+  const hc = (league.staff[teamId] ?? []).find((m) => m.role === 'Head Coach')
+  const fourthLabel = tend.fourth === 'aggressive' ? 'Aggressive' : tend.fourth === 'conservative' ? 'Conservative' : 'By the book'
+  const twoLabel = tend.twoPoint === 'go' ? 'Chases two' : tend.twoPoint === 'kick' ? 'Always kicks' : 'Kicks by the chart'
+  const timeoutLabel = tend.timeouts === 'aggressive' ? 'Uses them early' : 'Saves them'
+  const tempoLabel = tend.tempo >= 0.25 ? 'Up-tempo' : tend.tempo <= -0.15 ? 'Deliberate' : 'Balanced'
+  const identityLabel = tend.passRate >= 0.58 ? 'Pass-heavy' : tend.passRate <= 0.5 ? 'Run-leaning' : 'Balanced'
 
   return (
     <Card className={className}>
@@ -103,6 +112,28 @@ export function ScoutClubCard({ teamId, className }: { teamId: string; className
             <div className="mt-1 text-ink-2">
               Defense: {tendencyLine(league, teamId, '1st', 'def')} on 1st down ·{' '}
               {tendencyLine(league, teamId, '3rd-long', 'def')} on 3rd &amp; long.
+            </div>
+          </div>
+
+          {/* R18: the head coach's game-management identity. */}
+          <div className="rounded-lg bg-surface-2 p-3">
+            <div className="label mb-1.5">Coaching tendencies{hc ? ` — ${hc.name}` : ''}</div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-ink-2">
+              <span>
+                4th down: <span className="font-600 text-ink">{fourthLabel}</span>
+              </span>
+              <span>
+                2-point: <span className="font-600 text-ink">{twoLabel}</span>
+              </span>
+              <span>
+                Timeouts: <span className="font-600 text-ink">{timeoutLabel}</span>
+              </span>
+              <span>
+                Tempo: <span className="font-600 text-ink">{tempoLabel}</span>
+              </span>
+              <span>
+                Identity: <span className="font-600 text-ink">{identityLabel}</span>
+              </span>
             </div>
           </div>
 
