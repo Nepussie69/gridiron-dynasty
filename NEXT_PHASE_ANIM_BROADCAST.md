@@ -51,7 +51,7 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 | B5a | ✅ 878b9c7 on main |
 | B5b | ✅ on main (carrier 100%, ball ≥98% all kinds, 0 jumps) |
 | B4 | ✅ on main (ball arc + effects from real events) |
-| B7 | ⏳ DeepSeek, next free slot (2-job cap) |
+| B7 | ✅ on main (live 2.5D in Game Day, phone top-down default, quality modes, settings) |
 | B6a graphics | ✅ on main (B8 note: renderer vignette off; FG kicker mapping verified OK on real plays) |
 | B6b telestrator replay | 🔨 Claude building |
 | B8 | ⏳ Claude, after B4–B7 |
