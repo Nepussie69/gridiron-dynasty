@@ -129,6 +129,9 @@ export interface World {
   offseasonStage?: import('./draft').OffseasonStage
   /** L12.6 C1: the offseason stages already run this cycle, so a fast path can't double-run them. */
   offseasonDone?: { fa?: boolean; draft?: boolean; trades?: boolean }
+  /** FUTURES #11: the March free-agency frenzy (competing priced offers with
+   *  deadlines). Optional — an old save without it plays March as before. */
+  faFrenzy?: import('./faFrenzy').FrenzyState
 }
 
 // Backwards-compatible alias used by screen/selector imports.
