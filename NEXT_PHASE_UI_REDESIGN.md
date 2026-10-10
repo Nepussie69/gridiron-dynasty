@@ -602,7 +602,7 @@ Acceptance:
 | F1 Tokens, team colour, formatting helpers | ✅ f25f84f on ui-redesign (contrast 342/342 pass, 32 clubs × 2 themes) |
 | F2 Kit primitives | ✅ d629294 on ui-redesign (live-checked /kit: menu, ConfirmSheet, focus trap, Esc, phone card rows) |
 | F3 AppShell, navigation, phone shell | ✅ 851bc3d on ui-redesign |
-| F4 Staff pilot (reference screen) | ⏳ |
+| F4 Staff pilot (reference screen) | ✅ 1e69dc4 on ui-redesign (+ src/screens/README-pattern.md) |
 | D1 Home and career screens | ⏳ |
 | D2 Roster, depth, development, player profile | ⏳ |
 | D3 Draft and scouting | ⏳ |
