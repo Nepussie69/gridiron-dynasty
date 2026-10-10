@@ -299,8 +299,9 @@ export interface TenureWorld {
  *
  * `staffTenureRef` remembers the id+scheme the last tick saw. Migration-safe: an
  * old save has no ref entry, so the current coordinator is treated as unchanged
- * (no spurious reset) and simply recorded. A vacancy records a blank sentinel so
- * that whoever is hired next resets the count rather than inheriting it.
+ * (no spurious reset) and simply recorded. A vacancy DELETES the ref (rather than
+ * writing a blank sentinel): a missing ref already means "record, don't reset",
+ * so the man hired into an empty seat is not charged a second reset a year later.
  */
 export function advanceStaffTenure(world: TenureWorld): void {
   const refs = (world.staffTenureRef ??= {})
@@ -310,14 +311,43 @@ export function advanceStaffTenure(world: TenureWorld): void {
     const coach = (world.staff[teamId] ?? []).find((s) => s.role === role)
     if (!coach) {
       world.staffTenure[key] = 1
-      refs[key] = { id: '', scheme: '' }
+      delete refs[key]
       continue
     }
     const prev = refs[key]
-    const changed = !!prev && (prev.id !== coach.id || prev.scheme !== coach.scheme)
+    // A blank sentinel from an older save must never charge a reset either.
+    const changed = !!prev && prev.id !== '' && (prev.id !== coach.id || prev.scheme !== coach.scheme)
     world.staffTenure[key] = changed ? 1 : (world.staffTenure[key] ?? 1) + 1
     refs[key] = { id: coach.id, scheme: coach.scheme }
   }
+}
+
+/**
+ * Backlog 185 (fix): record a coordinator change the moment it happens instead
+ * of waiting for the season-end tick, which only runs at the end of the regular
+ * season while most hires happen in the offseason. Sets that side's continuity
+ * back to year 1 and stores the new id+scheme, so the next season runs on a fresh
+ * staff and the season tick simply increments. Called from applyHire (OC/DC) and
+ * poachAssistant. A vacant seat clears the ref instead.
+ */
+export function noteCoordinatorChange(world: TenureWorld, teamId: string, side: 'off' | 'def'): void {
+  const key = `${teamId}:${side}`
+  world.staffTenure[key] = 1
+  noteCoordinatorRef(world, teamId, side)
+}
+
+/**
+ * Record the id+scheme presently in a coordinator seat WITHOUT resetting tenure.
+ * Used to keep the coaching-tree backfill result-neutral: the promoted assistant
+ * keeps the continuity of the man he replaces, so the season tick sees no change.
+ */
+export function noteCoordinatorRef(world: TenureWorld, teamId: string, side: 'off' | 'def'): void {
+  const refs = (world.staffTenureRef ??= {})
+  const key = `${teamId}:${side}`
+  const role = side === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
+  const coach = (world.staff[teamId] ?? []).find((s) => s.role === role)
+  if (coach) refs[key] = { id: coach.id, scheme: coach.scheme }
+  else delete refs[key]
 }
 
 /**

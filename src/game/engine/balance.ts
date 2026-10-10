@@ -28,6 +28,7 @@ import {
 } from './generate'
 import { refreshProspectClass, developPlayers, evaluateScouting, runAIFreeAgency, runAIResign, runAITrades, enforceCapCompliance, tickAllContracts } from './progress'
 import { gainSeasonTraining, refreshCohesion, teamCohesion, advanceStaffTenure } from './playbook'
+import { backfillAICoordinators } from './coachingTree'
 import { awardCompensatoryPicks, initDraft, runUDFAs, simulateRestOfDraft } from './draft'
 import { readRookieRanges } from './evaluation'
 import { ensureDraftWindow } from './picks'
@@ -286,7 +287,10 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
       history: [...career.history, { season: career.season, team: career.teamId, role: tierFor(career.path, career.level).title, record: `${rec?.wins ?? 0}-${rec?.losses ?? 0}`, outcome: wonTitle ? 'Won a championship' : madePlayoffs ? 'Made the playoffs' : `${scout.graded} recommends` }],
     }
     if (demotedNow) {
+      const before = career.teamId
       career = demote(world, career)
+      // Backlog 193/185: the club left behind must not keep a vacant chair.
+      if (career.teamId !== before) backfillAICoordinators(world, career.teamId)
       demotions++
       jobSecurity = career.jobSecurity
     }
@@ -298,7 +302,10 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
       for (const offer of offers) {
         const invite = makeInterview(offer, world, career)
         if (resolveInterview(invite, rng)) {
+          const before = career.teamId
           career = promote(career, offer)
+          // Backlog 193/185: the club left behind must not keep a vacant chair.
+          if (career.teamId !== before) backfillAICoordinators(world, career.teamId)
           promotedNow = true
           promotions++
           break

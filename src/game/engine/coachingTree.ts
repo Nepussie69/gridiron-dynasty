@@ -20,6 +20,7 @@ import type { World } from './generate'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { FIRST, LAST } from './names'
 import { OFF_SCHEMES, DEF_SCHEMES } from './hiring'
+import { noteCoordinatorChange, noteCoordinatorRef } from './playbook'
 import { clamp, hash32 } from './rng'
 
 /** One line of coaching-tree news for the inbox. */
@@ -95,6 +96,43 @@ function makeCoach(
     status: 'Hired',
     notes: 'Promoted from within',
   }
+}
+
+/** The two coordinator chairs that carry a continuity edge, and their side. */
+const COORD_SIDES: { role: StaffRole; side: 'off' | 'def' }[] = [
+  { role: 'Offensive Coordinator', side: 'off' },
+  { role: 'Defensive Coordinator', side: 'def' },
+]
+
+/**
+ * Backlog 193/185: never leave a NON-user club with a vacant OC/DC chair.
+ *
+ * Backlog 193 made an empty coordinator seat cost the −4.5 floor. The AI only
+ * seeds staffs once (generate.ts), and every other AI path fills head-coach jobs,
+ * so if the user fires a coordinator and then leaves the club (promote, demote,
+ * the Wilderness), that club would play every future season at a permanent −4.5.
+ * When the user's club changes and at each season rollover, fill any empty seat on
+ * a club the user does not own with a deterministic makeCoach hire — the same
+ * stable-hash coach generator the rest of the tree uses, so NO rng() draw happens
+ * and the calibrated sim is untouched. The new coach's ref is recorded (tenure
+ * starts at year 1) so the season tick simply increments next year. The user's own
+ * club is skipped so they remain free to hire. Returns the clubs that were filled.
+ */
+export function backfillAICoordinators(world: World, userTeamId: string | null | undefined): string[] {
+  const filled: string[] = []
+  for (const teamId of Object.keys(world.staff)) {
+    if (teamId === userTeamId) continue
+    const staff = world.staff[teamId]
+    for (const { role, side } of COORD_SIDES) {
+      if (staff.some((m) => m.role === role)) continue
+      const land = world.byId[teamId]
+      const rating = Math.round((land?.prestige ?? 80) * 0.9)
+      staff.push(makeCoach(role, teamId, rating, schemeFor(role, `${teamId}|vacfill|${world.season}`), `${teamId}|vacfill|${world.season}`))
+      noteCoordinatorChange(world, teamId, side)
+      filled.push(teamId)
+    }
+  }
+  return filled
 }
 
 /** The first club that needs a head coach, deterministically. */
@@ -187,8 +225,13 @@ export function advanceCoachingTree(world: World, career: CareerState, champion:
         const i = staff.findIndex((m) => m.id === who.id)
         if (i >= 0) staff.splice(i, 1)
         displaceHeadCoach(world, dest, moved)
-        // Result-neutral backfill: identical rating and scheme, new name.
+        // Result-neutral backfill: identical rating and scheme, new name. Backlog
+        // 185: also record the promoted man's id as the seat's ref (without
+        // resetting tenure), so his continuity carries over and the season tick
+        // sees no change — the staff stays whole on and off the field.
         staff.push(makeCoach(fromRole, career.teamId, who.rating, who.scheme, `${who.id}|backfill|${world.season}`))
+        const backfillSide = fromRole === 'Offensive Coordinator' ? 'off' : fromRole === 'Defensive Coordinator' ? 'def' : null
+        if (backfillSide) noteCoordinatorRef(world, career.teamId, backfillSide)
         tree.push({
           name: who.name,
           role: 'Head Coach',
@@ -263,6 +306,9 @@ export function poachAssistant(world: World, career: CareerState, name: string, 
   }
   const scheme = entry.scheme ?? schemeFor(role, `${entry.name}|${entry.season}`)
   staff.push(makeCoach(role, career.teamId, entry.rating ?? 75, scheme, `${entry.id ?? entry.name}|poach|${career.season}`, entry.name))
+  // Backlog 185 (fix): bringing a coordinator back in resets continuity at once.
+  const poachSide = role === 'Offensive Coordinator' ? 'off' : role === 'Defensive Coordinator' ? 'def' : null
+  if (poachSide) noteCoordinatorChange(world, career.teamId, poachSide)
 
   return {
     career: { ...career, tree: tree.filter((e) => e !== entry) },
