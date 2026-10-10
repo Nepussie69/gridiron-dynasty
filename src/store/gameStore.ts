@@ -23,6 +23,7 @@ import {
   initPlaybook,
   masteryGroup,
   refreshCohesion,
+  advanceStaffTenure,
   seedWorldMastery,
   snapShare,
   teamCohesion,
@@ -3811,6 +3812,9 @@ function applyUserCoaching(career: CareerState | null) {
     def: b.def + clamp(extra.def, -0.6, 1.5),
     development: b.development,
     situational: b.situational,
+    // Backlog 193: only a coordinator rung (FBS level 2, NFL level 6) sits in an
+    // OC/DC chair. A head coach's own skill doesn't fill a vacant coordinator seat.
+    seat: career.path === 'coach' && (career.level === 2 || career.level === 6) ? b.seat : undefined,
   })
 }
 
@@ -4124,6 +4128,9 @@ export function migrateWorld(w: World): World {
     w.fbMigrated = true
   }
   w.staffTenure ??= {}
+  // Backlog 185: legacy saves have no coordinator ref; the first tenure tick
+  // records each current coordinator without resetting him.
+  w.staffTenureRef ??= {}
   // FUTURES 19: legacy saves get the deterministic analyst market (no rng draw).
   w.analyticsPool ??= generateAnalyticsPool(w.seed)
   w.draft ??= []
@@ -4515,16 +4522,9 @@ function runEndOfRegularSeason(
 
   // Coaching continuity: a settled staff ages up; a churned side resets to year 1.
   // Tenure lives entirely in world.staffTenure, keyed `${teamId}:off|def`.
-  for (const key of Object.keys(world.staffTenure)) {
-    const [teamId, side] = key.split(':')
-    const role = side === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
-    const coach = (world.staff[teamId] ?? []).find((s) => s.role === role)
-    if (!coach || coach.scheme !== coach.scheme) {
-      world.staffTenure[key] = 1
-    } else {
-      world.staffTenure[key] = (world.staffTenure[key] ?? 1) + 1
-    }
-  }
+  // Backlog 185: also reset when the coordinator is a NEW person or the same man
+  // changes scheme (world.staffTenureRef remembers the last id+scheme seen).
+  advanceStaffTenure(world)
 
   // Playbook mastery grows between seasons (training, OTAs, camp). FUTURES 12: a
   // player holding out skips camp, so he earns no between-season mastery gain

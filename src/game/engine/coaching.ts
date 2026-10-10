@@ -43,6 +43,22 @@ function unitRating(world: World, teamId: string, roles: string[]): number | nul
 
 /** League-average staff rating, so effects are measured relative to the norm. */
 const BASELINE = 74
+/** Play-calling edge clamp: the best and worst a coordinator seat can give you. */
+const EDGE_MAX = 4.5
+const EDGE_MIN = -4.5
+
+/**
+ * Backlog 193: play-calling edge for a coordinator rating, clamped to ±4.5.
+ * A NULL rating means a VACANT seat, which costs the floor — not league average —
+ * so firing a below-floor coordinator can never improve that side. The only
+ * exception is a seat the user personally holds (`heldByUser`), which is not a
+ * vacancy and returns 0 (their own skill bonus is added separately).
+ * Exported so the UI's staff readouts can share one definition.
+ */
+export function coordinatorEdge(rating: number | null, heldByUser = false): number {
+  if (rating == null) return heldByUser ? 0 : EDGE_MIN
+  return Math.max(EDGE_MIN, Math.min(EDGE_MAX, (rating - BASELINE) * 0.2))
+}
 
 /**
  * The user's own coaching skill folds in when they hold a coaching role on that
@@ -53,6 +69,12 @@ export interface UserCoachingBonus {
   def: number // added to defEdge
   development: number // extra development multiplier
   situational: number
+  /**
+   * Backlog 193: which coordinator seat the user personally holds. A seat they
+   * occupy is never "vacant", so it does not take the vacancy floor — their skill
+   * bonus is the only term there.
+   */
+  seat?: 'off' | 'def' | 'both'
 }
 
 export const NO_USER_BONUS: UserCoachingBonus = { off: 0, def: 0, development: 1, situational: 0 }
@@ -70,10 +92,12 @@ export function coachEffect(world: World, teamId: string, user: UserCoachingBonu
   const cohesionFactor = coh.avg
 
   // Convert a rating (say 55..96) into a small edge relative to baseline.
-  const edge = (r: number | null) => {
-    if (r == null) return 0
-    return Math.max(-4.5, Math.min(4.5, (r - BASELINE) * 0.2))
-  }
+  // Backlog 193: an EMPTY coordinator seat is not league-average — see
+  // coordinatorEdge() above. The one exception is a seat the USER holds
+  // personally (career 'coach' rung 2): it is not a vacancy.
+  const edge = coordinatorEdge
+  const userHoldsOff = user.seat === 'off' || user.seat === 'both'
+  const userHoldsDef = user.seat === 'def' || user.seat === 'both'
 
   const development = 1 + ((positionCoaches - BASELINE) / 100) * 0.6 + (user.development - 1)
   const discipline =
@@ -86,8 +110,8 @@ export function coachEffect(world: World, teamId: string, user: UserCoachingBonu
     cohesionSituational(cohesionFactor) * 2
 
   return {
-    offEdge: edge(oc) + user.off,
-    defEdge: edge(dc) + user.def,
+    offEdge: edge(oc, userHoldsOff) + user.off,
+    defEdge: edge(dc, userHoldsDef) + user.def,
     development: Math.max(0.8, Math.min(1.35, development)),
     discipline: Math.max(0.7, Math.min(1.3, discipline)),
     situational: Math.max(-3, Math.min(3, situational)),
@@ -110,6 +134,7 @@ export function userBonusFromSkills(
     def: focus === 'off' ? leadEdge * 0.4 : schemeEdge + leadEdge * 0.3,
     development: 1 + leadEdge / 40,
     situational: leadEdge * 0.4,
+    seat: focus,
   }
 }
 
