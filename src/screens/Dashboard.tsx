@@ -1,6 +1,6 @@
 import { ArrowRight, ChevronRight } from 'lucide-react'
-import { useMemo } from 'react'
-import { ordinal, signed } from '../lib/format'
+import { useMemo, useState } from 'react'
+import { mult, ordinal, signed } from '../lib/format'
 import { depthGroup } from '../game/engine/depth'
 import { type World } from '../game/engine/generate'
 import { winProjection } from '../game/engine/analytics'
@@ -21,6 +21,7 @@ import { overallRep } from '../game/engine/career'
 import { rivalTitle } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerPersonalityLabel, ownerProfile } from '../game/engine/owner'
 import { rivalFor } from '../game/engine/rivalry'
+import { stakesFor, stakesText } from '../game/engine/primetime'
 import { hasRoom } from '../game/engine/room'
 import { advanceLabel, canCoach as canCoachNow, stageOf } from '../ui/nav'
 import {
@@ -50,6 +51,7 @@ import { WeeklyDecision } from '../components/WeeklyDecision'
 import { CulturePanel } from '../components/CulturePanel'
 import { TopPlayers } from '../components/TopPlayers'
 import { TeamHoverCard } from '../components/TeamHoverCard'
+import { StakesChip, StakesSheet } from '../components/StakesSheet'
 import { liveSchemes } from '../components/staffEffects'
 
 export function Dashboard() {
@@ -63,6 +65,7 @@ export function Dashboard() {
   const advanceWeek = useGame((s) => s.advanceWeek)
   const advanceStage = useGame((s) => s.advanceStage)
   const startGameDay = useGame((s) => s.startGameDay)
+  const [stakesOpen, setStakesOpen] = useState(false)
 
   const team = league.byId[activeTeamId]
   const roster = rosterOf(league, activeTeamId)
@@ -84,6 +87,10 @@ export function Dashboard() {
   const next = schedule.find((g) => g.week >= career.week)
   const opp = next ? league.byId[next.opponentId] : null
   const rival = opp ? rivalFor(league, opp.id) : undefined
+  // FUTURES #8: primetime / rivalry stakes on the next game (read-only).
+  const nextRaw = next ? league.schedule.find((g) => g.id === next.id) : undefined
+  const stakes = nextRaw ? stakesFor(league, career, nextRaw) : null
+  const stakesLabel = nextRaw ? stakesText(league, career, nextRaw) : ''
 
   // U4: a broadcast-style win probability for the hero card. Reads the same
   // strength model the ghost-GM projection uses (home field worth ~0.5).
@@ -185,6 +192,15 @@ export function Dashboard() {
               <div className="label">Up Next · Week {next.week}</div>
               <div className="label">{next.home ? `Home · ${team.stadium}` : `Away · ${opp.stadium}`}</div>
             </div>
+
+            {stakesLabel && (
+              <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface-2 px-4 py-2">
+                <StakesChip label={stakesLabel} onOpen={() => setStakesOpen(true)} title="See what the national stage is worth" />
+                <span className="ml-auto font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">
+                  Swing {mult(stakes?.mult ?? 1, 1)}
+                </span>
+              </div>
+            )}
 
             <div className="grid items-center gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
               <TeamHoverCard team={team} info>
@@ -445,9 +461,22 @@ export function Dashboard() {
           </Card>
         </div>
       </div>
+
+      {stakes && nextRaw && (
+        <StakesSheet
+          open={stakesOpen}
+          onClose={() => setStakesOpen(false)}
+          world={league}
+          career={career}
+          title={stakesLabel}
+          stakes={stakes}
+        />
+      )}
     </div>
   )
 }
+
+
 
 /** One unit grade: a rating tile, the scheme that drives it, and its readout. */
 function UnitTile({

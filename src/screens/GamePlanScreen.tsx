@@ -22,9 +22,11 @@ import { FORMATIONS, PLAYBOOK } from '../game/data/playbookData'
 import { RouteDiagram } from '../components/RouteDiagram'
 import { recordOf, scheduleFor } from '../game/selectors'
 import { teamRates, type TeamRateEntry } from '../game/teamRates'
+import { stakesFor, stakesText } from '../game/engine/primetime'
 import { useGame, useWorld } from '../store/gameStore'
 import { TopPlayers } from '../components/TopPlayers'
 import { TeamHoverCard } from '../components/TeamHoverCard'
+import { StakesChip, StakesSheet } from '../components/StakesSheet'
 import { ScoutButton } from '../components/ScoutClub'
 import { AnalyticsCard } from '../components/AnalyticsCard'
 import {
@@ -56,12 +58,17 @@ export function GamePlanScreen() {
   // At 'view' (the GM rung) the plan reads, it is not edited — no dead control.
   const readOnly = level !== 'decide'
   const [side, setSide] = useState<'off' | 'def'>('off')
+  const [stakesOpen, setStakesOpen] = useState(false)
 
   const team = league.byId[career.teamId]
   const coaches = coachLabels(league, career.teamId)
   const { out: schedule } = scheduleFor(league, career.teamId)
   const next = schedule.find((g) => !g.played)
   const opp = next ? league.byId[next.opponentId] : null
+  // FUTURES #8: primetime / rivalry stakes on the game you are preparing for.
+  const nextRaw = next ? league.schedule.find((g) => g.id === next.id) : undefined
+  const stakes = nextRaw ? stakesFor(league, career, nextRaw) : null
+  const stakesLabel = nextRaw ? stakesText(league, career, nextRaw) : ''
 
   const myRatings = teamRatings(league, career.teamId)
   const oppRatings = opp ? teamRatings(league, opp.id) : null
@@ -92,7 +99,10 @@ export function GamePlanScreen() {
         title="Game Plan"
         subtitle="Set how you want to play before kickoff. Your plan is applied to every game until you change it — fast sim plays it out with your standing orders."
         right={
-          <div className="flex flex-col items-start gap-1 sm:items-end">
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            {stakesLabel && (
+              <StakesChip label={stakesLabel} onOpen={() => setStakesOpen(true)} title="See what this game is worth" />
+            )}
             <span className="label">Plan side</span>
             <SegmentedControl
               label="Plan side: offense or defense"
@@ -282,9 +292,22 @@ export function GamePlanScreen() {
           </span>
         </div>
       </Card>
+
+      {stakes && nextRaw && (
+        <StakesSheet
+          open={stakesOpen}
+          onClose={() => setStakesOpen(false)}
+          world={league}
+          career={career}
+          title={stakesLabel}
+          stakes={stakes}
+        />
+      )}
     </div>
   )
 }
+
+
 
 /** L12.9 H1: opponent film moved here from the removed weekly hours card. */
 function StudyOpponentCard({ oppId }: { oppId?: string }) {
