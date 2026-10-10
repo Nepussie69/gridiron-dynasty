@@ -47,10 +47,11 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 | Spec | ✅ 2026-10-10 |
 | B2 | ✅ merged into ui-redesign (Claude) |
 | B1 | ✅ b1a 0e2845f + b1b 9f470fc on main (engagements, events, poses, facing, ball height, camera hints; calibration identical) |
-| B3 | 🔨 Claude workflow building (wt/b3) |
+| B3 | ✅ 81f5923 on main (60 fps, players 0.5–0.7 ms) |
 | B5a | ✅ 878b9c7 on main |
 | B5b | 🔨 DeepSeek building (special rules: kickoff/punt/returns, reset cost cap) |
-| B4, B7 | ⏳ DeepSeek, launch the moment B3 merges (priority over other queued jobs) |
-| B6a graphics | ⏳ Claude, starts right after B3 merges (lower third, down & distance, play clock, result toast, player callouts) |
+| B4 | 🔨 DeepSeek building |
+| B7 | ⏳ DeepSeek, next free slot (2-job cap) |
+| B6a graphics | 🔨 Claude building (wt/b6a) |
 | B6b telestrator replay | ⏳ Claude, after B4 (ball/effects) |
 | B8 | ⏳ Claude, after B4–B7 |
