@@ -604,10 +604,10 @@ Acceptance:
 | F3 AppShell, navigation, phone shell | ✅ 851bc3d on ui-redesign |
 | F4 Staff pilot (reference screen) | ✅ 1e69dc4 on ui-redesign (+ src/screens/README-pattern.md) |
 | D1 Home and career screens | ✅ d0a9bd7 (+ phone grid fix by orchestrator) |
-| D2 Roster, depth, development, player profile | 🔨 building |
+| D2 Roster, depth, development, player profile | ✅ merged (+ phone grid/tap fixes by orchestrator) |
 | D3 Draft and scouting | ✅ 7c266a3 (+ phone grid fix by orchestrator) |
 | D4 Money and transactions | 🔨 building |
-| D5 Game day | ⏳ |
+| D5 Game day | 🔨 building (off 929b9a1, includes animcontact4) |
 | D6 Game plan | 🔨 building |
 | D7 League information | ⏳ |
 | V1 Integration and cleanup | ⏳ |
