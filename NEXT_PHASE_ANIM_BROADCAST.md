@@ -53,5 +53,15 @@ About 12–16 jobs, ≈ 360–540 minutes of wall-clock at the 2026-10-10 pace, 
 | B4 | ✅ on main (ball arc + effects from real events) |
 | B7 | ✅ on main (live 2.5D in Game Day, phone top-down default, quality modes, settings) |
 | B6a graphics | ✅ on main (B8 note: renderer vignette off; FG kicker mapping verified OK on real plays) |
-| B6b telestrator replay | ✅ on main (replays not yet wired into Game Day — B8) |
-| B8 | 🔨 Claude agent: wire replays into Game Day + full review (wt/b8) |
+| B6b telestrator replay | ✅ on main (wired into Game Day by B8) |
+| B8 | ✅ 2026-10-11 merged: replays in Game Day (big/all/off, Skip/Space/Escape, Replay button, none during decisions or after Sim to end, phone 2.5D overlay), live camera = B5 director + B4 shake, 7 review fixes; check-broadcast 43; review matrix 3 clubs × 1440/375 × light/dark, 0 console errors. Orchestrator browser check passed (CLE@LAC desktop TD replay, KC phone overlay replay). Polish pass with the user still open (see below). |
+
+## Polish list (from B8, for the user)
+
+- Replay length/pace: ~8–12 s at 1× (WIPE 0.7, FREEZE 1.7, HOLD 0.8, RATE 0.6 in replay.ts) + 0.9 s lead; 'all' replays every snap.
+- Decision due: auto replays are skipped; could queue until after the answer.
+- Two-point tries are never replayable (B6b PAT rule); a good 2-pt try may deserve one.
+- Top-down → 2.5D overlay switches at the wipe midpoint; a cross-fade would be smoother.
+- Some live end-of-play shots are wide/tilted (B5 tuning).
+- Short punt returns draw no telestration.
+- After Sim to end, the finished game re-opens at play 1 (pre-existing finishGameDay behaviour) — jump to the final whistle instead?
