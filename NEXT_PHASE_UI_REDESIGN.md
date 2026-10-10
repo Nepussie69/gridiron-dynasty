@@ -603,11 +603,11 @@ Acceptance:
 | F2 Kit primitives | ✅ d629294 on ui-redesign (live-checked /kit: menu, ConfirmSheet, focus trap, Esc, phone card rows) |
 | F3 AppShell, navigation, phone shell | ✅ 851bc3d on ui-redesign |
 | F4 Staff pilot (reference screen) | ✅ 1e69dc4 on ui-redesign (+ src/screens/README-pattern.md) |
-| D1 Home and career screens | ⏳ |
-| D2 Roster, depth, development, player profile | ⏳ |
-| D3 Draft and scouting | ⏳ |
-| D4 Money and transactions | ⏳ |
+| D1 Home and career screens | ✅ d0a9bd7 (+ phone grid fix by orchestrator) |
+| D2 Roster, depth, development, player profile | 🔨 building |
+| D3 Draft and scouting | ✅ 7c266a3 (+ phone grid fix by orchestrator) |
+| D4 Money and transactions | 🔨 building |
 | D5 Game day | ⏳ |
-| D6 Game plan | ⏳ |
+| D6 Game plan | 🔨 building |
 | D7 League information | ⏳ |
 | V1 Integration and cleanup | ⏳ |
