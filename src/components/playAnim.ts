@@ -284,6 +284,16 @@ class Mover {
     let v0 = Math.max(0, opts.v0 ?? 0)
     const inH = this.inHeading
     this.inHeading = undefined
+    // Drop leading samples coincident with the mover (e.g. a curve whose first
+    // knot sits on the start): a zero-length leg would otherwise read as a
+    // sharp corner and spike the speed from full pace to a standstill.
+    let skip = 0
+    while (skip < pts.length && Math.hypot(pts[skip].x - this.x, pts[skip].y - this.y) < 0.05) skip++
+    if (skip) pts = pts.slice(skip)
+    if (!pts.length) {
+      this.lastStop = !!opts.stop
+      return this.t
+    }
     // A sharp change of direction across two separate moves is a plant: the
     // player decelerates in his current heading, then re-accelerates. Without
     // it a reversal would traverse the corner at full speed (a speed spike).
@@ -680,6 +690,14 @@ function carrySpeed(mv: Mover): number {
   return dt > 1e-6 ? clampN(Math.hypot(b.x - a.x, b.y - a.y) / dt, 0, mv.pace.top) : 0
 }
 
+/** Speed (yd/s) along a path just before time t. */
+function speedAtTime(path: WP[], t: number): number {
+  const dt = 0.03
+  const a = posAt(path, Math.max(0, t - dt))
+  const b = posAt(path, t)
+  return Math.hypot(b.x - a.x, b.y - a.y) / Math.max(1e-6, t - Math.max(0, t - dt))
+}
+
 /** Run `mv` to `to` so he arrives exactly at `arriveSec`, then wait there. */
 function arriveAt(mv: Mover, to: Pt, arriveSec: number, minBow = 0) {
   const dur = Math.max(0.06, arriveSec - mv.t)
@@ -698,7 +716,26 @@ function arriveAt(mv: Mover, to: Pt, arriveSec: number, minBow = 0) {
  * `finish`, so the play (and every dot) really ends at `t`.
  */
 function capAt(mv: Mover, t: number) {
+  mv.inHeading = undefined
   if (!mv.lastStop) settle(mv)
+  if (mv.t > t + 1e-4) {
+    // Cut before the path naturally ends: decelerate into `t` so a defender
+    // never pops from full speed straight to a frozen stop.
+    const v = speedAtTime(mv.path, t)
+    const brake = v > 0.8 ? v / Math.max(0.5, mv.pace.acc) : 0
+    if (brake > 0.03) {
+      const tStart = Math.max(mv.path[0].t, t - brake)
+      const vStart = speedAtTime(mv.path, tStart)
+      const pStart = posAt(mv.path, tStart)
+      const pEnd = posAt(mv.path, t)
+      mv.path = mv.path.filter((w) => w.t <= tStart)
+      mv.t = tStart
+      mv.x = pStart.x
+      mv.y = pStart.y
+      mv.lastStop = false
+      mv.run([{ x: pEnd.x, y: pEnd.y }], { v0: vStart, stop: true })
+    }
+  }
   if (mv.t > t + 1e-4) {
     const p = posAt(mv.path, t)
     mv.path = mv.path.filter((w) => w.t < t)
@@ -706,13 +743,8 @@ function capAt(mv: Mover, t: number) {
     mv.t = t
     mv.x = p.x
     mv.y = p.y
-    mv.lastStop = true
-    mv.inHeading = undefined
-    return
-  }
-  if (mv.t < t) {
-    mv.t = t
-    mv.path.push({ t, x: mv.x, y: mv.y })
+  } else if (mv.t < t) {
+    mv.hold(t - mv.t)
   }
   mv.lastStop = true
   mv.inHeading = undefined
@@ -905,7 +937,9 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const holeSpeed = m[carrier].pace.top * 0.7
   // Run the main curve up to just before the recorded stop; the contact itself
   // is resolved below so the carrier keeps moving into the tackle (backlog 150).
-  m[carrier].run(curve.slice(1, curve.length - 1), { v0: holeSpeed, stop: false })
+  // A fumble is a loose ball at the recorded spot, so there the carrier runs the
+  // full curve and truly reaches that spot before the ball comes out.
+  m[carrier].run(fumble ? curve.slice(1) : curve.slice(1, curve.length - 1), { v0: holeSpeed, stop: fumble })
   const endSec = m[carrier].t
 
   // Linebackers fill, safeties come down, corners squeeze; then everyone pursues.
@@ -918,7 +952,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     const spotX = changeSpot(play, ctx.next) ?? endX + 1
     const loose = { x: clampX(endX + 2), y: clampY(endY + (hash(seed + 5) - 0.5) * 6) }
     const recover = nearestKey(m, DEF_KEYS, loose, popT)
-    m[recover].run([{ x: loose.x, y: loose.y }, { x: clampX(spotX), y: loose.y }], { v0: 1, stop: true })
+    m[recover].run([{ x: loose.x, y: loose.y }, { x: clampX(spotX), y: loose.y }], { v0: seek(m[recover], popT), stop: true })
     const recT = m[recover].t
     pursueRun(m, DEF_KEYS.filter((k) => k !== recover), popT, { x: endX, y: endY }, popT + 0.4, seed)
     const ball: WP[] = [
@@ -1037,6 +1071,66 @@ function routeInfo(name: string): RouteInfo {
 }
 
 /**
+ * Run a coverage shape so it lasts until `toSec`. A defender faster than the
+ * receiver is slowed onto the receiver's own schedule, so he stays in phase and
+ * keeps moving through the catch instead of arriving early and standing still.
+ * A defender slower than the shape keeps his full pace (he trails — a genuine
+ * blown coverage, matching a recorded big gain).
+ */
+function runTimed(mv: Mover, pts: Pt[], fromSec: number, toSec: number) {
+  if (!pts.length) return
+  const all = [{ x: mv.x, y: mv.y }, ...pts]
+  const T = Math.max(0.05, toSec - fromSec)
+  const saved = mv.pace
+  let D = 0
+  for (let i = 1; i < all.length; i++) D += Math.hypot(all[i].x - all[i - 1].x, all[i].y - all[i - 1].y)
+  // Scale the pace so the move spans exactly the window: with v0=0 and both
+  // speed and accel scaled by f, t(f) ≈ (v/acc)/2 + D/(v·f).
+  const ta = saved.acc > 1e-6 ? saved.top / saved.acc : 0
+  const f = clampN(D / Math.max(1e-6, saved.top * Math.max(0.05, T - ta / 2)), 0.03, 1)
+  if (f < 1) mv.pace = { top: saved.top * f, acc: Math.max(0.05, saved.acc * f) }
+  mv.run(pts, { v0: 0, stop: false })
+  mv.pace = saved
+  // Last resort: if he still came up short, keep a live drift to the catch so
+  // capAt does not freeze him mid-window (v0 carried so there is no speed cliff).
+  for (let g = 0; g < 2 && toSec - mv.t > 0.04; g++) {
+    const a = mv.path[mv.path.length - 2]
+    const b = mv.path[mv.path.length - 1]
+    if (!a) break
+    const d = Math.hypot(b.x - a.x, b.y - a.y)
+    if (d < 1e-4) break
+    const rem = toSec - mv.t
+    const v0 = carrySpeed(mv)
+    const speed = Math.max(0.9, v0 * 0.4)
+    mv.pace = { top: speed, acc: Math.max(1, speed / Math.max(0.08, rem)) }
+    mv.run([{ x: clampX(mv.x + ((b.x - a.x) / d) * speed * rem), y: clampY(mv.y + ((b.y - a.y) / d) * speed * rem) }], { v0, stop: false })
+    mv.pace = saved
+  }
+  void fromSec
+}
+
+/**
+ * Keep a coverage defender's feet moving through the whole window: a small
+ * shuffle (zero at both ends, so alignment and the catch point are unchanged)
+ * so he never reads as frozen when his man has run out of route or a zone
+ * landmark is reached. Presentation only.
+ */
+function keepLive(shape: Pt[], fromSec: number, toSec: number) {
+  if (shape.length < 3) return
+  const T = Math.max(0.1, toSec - fromSec)
+  // A constant-rate zigzag (zero at both ends) so the shuffle's own speed is a
+  // steady ~0.9 yd/s and cannot itself spike: 4*amp/T.
+  const amp = clampN(0.22 * T, 0.15, 0.9)
+  const n = shape.length - 1
+  for (let i = 1; i < n; i++) {
+    const u = i / n
+    const tri = u <= 0.25 ? u / 0.25 : u <= 0.75 ? 1 - ((u - 0.25) / 0.5) * 2 : (u - 0.75) / 0.25 - 1
+    const s = tri * amp
+    shape[i] = { x: clampX(shape[i].x + s * 0.25), y: clampY(shape[i].y + s) }
+  }
+}
+
+/**
  * A man defender running with a receiver: he aligns 1–7 yd off (press for a
  * good corner, off for a poor one), then mirrors the route with a short
  * reaction lag — in the hip pocket trailing behind on in-breaking routes, over
@@ -1052,22 +1146,31 @@ function manTrail(
   const ri = routeInfo(opts.routeName)
   const lag = clampN(0.24 - (cov - 60) * 0.005, 0.05, 0.26) * (1 + tightness * 1.6)
   const cushBase = opts.zone ? 1.5 : 1
-  const cushion = clampN(7 - (cov - 60) * 0.09, 1.5, 7) * cushBase * (0.5 + hash(seed + 5) * 0.5)
-  const rs = posAt(recv.path, fromSec)
-  def.reset(clampX(los + cushion), clampY(rs.y + inw * (0.6 + hash(seed + 1) * 0.6)))
+  // Underneath/quick routes are covered tight (press or off); only vertical
+  // routes get a deep cushion. This keeps the defender close from the snap.
+  const base = clampN(7 - (cov - 60) * 0.09, 1.5, 7) * cushBase * (0.55 + hash(seed + 5) * 0.45)
+  const cushion = clampN(base * (ri.vert ? 1 : 0.55), 1, 7)
   const steps = 26
   const shape: Pt[] = []
   for (let i = 0; i <= steps; i++) {
     const u = i / steps
     const t = fromSec + (toSec - fromSec) * u
-    const tp = ri.vert ? t + lag : Math.max(0, t - lag)
+    // The reaction lag closes over the route so the defender arrives at the
+    // catch point with the ball, not trailing the receiver's last step.
+    const tp = ri.vert ? t + lag * (1 - u) : Math.max(0, t - lag * (1 - u))
     const rp = posAt(recv.path, tp)
     const perp = ri.vert ? 0 : ri.inBreak ? inw * 0.8 : -inw * 0.3
     // The cushion shrinks from alignment to the hip pocket over the route.
     shape.push({ x: clampX(rp.x + cushion * (1 - u)), y: clampY(rp.y + perp) })
   }
-  def.run(shape, { v0: 0, stop: false })
+  // Align on the receiver he is covering (a cushion off him), not on the line:
+  // a back or tight end who lines up behind the line would otherwise be left
+  // "open" while his man starts ten yards downfield.
+  keepLive(shape, fromSec, toSec)
+  def.reset(shape[0].x, shape[0].y)
+  runTimed(def, shape, fromSec, toSec)
   void recvKey
+  void los
 }
 
 /**
@@ -1095,7 +1198,8 @@ function safetyRoam(
       y: clampY(ty + (catchPt.y - ty) * drive * 0.6),
     })
   }
-  def.run(shape, { v0: 0, stop: false })
+  keepLive(shape, fromSec, toSec)
+  runTimed(def, shape, fromSec, toSec)
 }
 
 /**
@@ -1134,7 +1238,8 @@ function zoneDrop(
     }
     shape.push({ x: clampX(tx), y: clampY(ty) })
   }
-  def.run(shape, { v0: 0, stop: false })
+  keepLive(shape, fromSec, toSec)
+  runTimed(def, shape, fromSec, toSec)
 }
 
 /** Cap every actor's timeline at the play's end so no dot stands after the ball. */
@@ -1383,8 +1488,11 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const used = new Set<string>()
   const pool = poolAll.filter((k) => !isBlitzer(k))
   const take = (recv: string, prefer?: string) => {
-    let d = prefer && !used.has(prefer) ? prefer : manPos[recv]
+    let d = prefer && !used.has(prefer) && !isBlitzer(prefer) ? prefer : manPos[recv]
     if (!d || used.has(d) || isBlitzer(d)) d = pool.find((x) => !used.has(x)) ?? d
+    // Never hand a receiver to a rusher (that would erase the blitz) or double
+    // up a defender that is already in coverage: leave him to the zone help.
+    if (!d || used.has(d) || isBlitzer(d)) return
     used.add(d)
     assign[recv] = d
   }
