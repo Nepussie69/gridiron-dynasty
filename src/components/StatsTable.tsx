@@ -131,7 +131,7 @@ function Th({
     >
       <span className="inline-flex items-center gap-0.5">
         {children}
-        {active && <span className="text-[9px] leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
+        {active && <span className="text-micro leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
       </span>
     </th>
   )
@@ -157,6 +157,8 @@ interface Props {
   defaultDir?: Dir
   /** L12.8 V1: optional per-row action cell (the club page's "Trade for…"). */
   right?: (p: Player) => ReactNode
+  /** A rank column (the current sort order). Default on. */
+  showRank?: boolean
 }
 
 export function StatsTable({
@@ -173,6 +175,7 @@ export function StatsTable({
   defaultSortKey = 'ovr',
   defaultDir = 'desc',
   right,
+  showRank = true,
 }: Props) {
   const world = useWorld()
   const selectPlayer = useGame((s) => s.selectPlayer)
@@ -223,7 +226,7 @@ export function StatsTable({
   return (
     <div>
       <div className="flex items-center justify-between gap-3 border-b border-line px-1 py-2">
-        <span className="text-[11px] text-muted">
+        <span className="text-label text-muted">
           {season} season · click a column to sort · missing or zero-attempt rows sort last
         </span>
         <DensityToggle />
@@ -237,24 +240,29 @@ export function StatsTable({
             <table data-density={density} className={cn('min-w-full border-collapse tnum', fontSize)}>
             <thead>
               <tr className="text-left">
+                {showRank && (
+                  <th scope="col" className={cn('label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 font-700', headPad)} title="Rank in the current sort">
+                    #
+                  </th>
+                )}
                 <Th {...hdr('name')} title="Player name" solid className="sticky left-0 top-0 z-30">Name</Th>
                 {showTeam && <Th className="sticky top-0 z-20">Team</Th>}
                 <Th {...hdr('pos')} className="sticky top-0 z-20">Pos</Th>
                 <Th {...hdr('age')} className="sticky top-0 z-20">Age</Th>
-                <th className={cn('label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 font-700', headPad)}>
+                <th className={cn('label sticky top-0 z-20 whitespace-nowrap border-b border-line glass-2 px-2 font-700', headPad, (sortKey === 'ovr' || sortKey === 'pot') && 'text-ink')}>
                   <span className="inline-flex items-center gap-1">
                     {([['ovr', 'OVR', 'Sort by overall'], ['pot', 'POT', 'Sort by potential']] as const).map(([k, label, tip], i) => (
                       <span key={k} className="inline-flex items-center gap-1">
-                        {i > 0 && <span className="text-faint">/</span>}
+                        {i > 0 && <span className="text-muted">/</span>}
                         <button type="button" title={`${tip} (click again to flip)`} onClick={() => toggle(k)} className={cn('inline-flex cursor-pointer select-none items-center gap-0.5 hover:text-ink-2', sortKey === k && 'text-ink')}>
                           {label}
-                          {sortKey === k && <span className="text-[9px] leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
+                          {sortKey === k && <span className="text-micro leading-none">{dir === 'asc' ? '▲' : '▼'}</span>}
                         </button>
                       </span>
                     ))}
                   </span>
                 </th>
-                {showCap && <Th className="sticky top-0 z-20 text-right">Cap Hit</Th>}
+                {showCap && <Th className="sticky top-0 z-20 text-right">Cap hit</Th>}
                 {cols.map((c) => (
                   <Th key={c.id} {...hdr(`col:${c.id}`)} title={c.title} className="sticky top-0 z-20 text-center">
                     {c.label}
@@ -264,7 +272,7 @@ export function StatsTable({
               </tr>
             </thead>
             <tbody>
-              {shown.map((p) => {
+              {shown.map((p, idx) => {
                 const line = lines.get(p.id)
                 const team = showTeam && p.teamId ? world.byId[p.teamId] : null
                 const tag = tagFor?.(p) ?? null
@@ -278,6 +286,9 @@ export function StatsTable({
                       mine && 'bg-[var(--team-soft)]',
                     )}
                   >
+                    {showRank && (
+                      <td className={cn('px-2 font-cond text-label tnum text-muted', rowPad)}>{idx + 1}</td>
+                    )}
                     <td
                       className={cn(
                         'sticky left-0 z-10 whitespace-nowrap px-2',
@@ -286,7 +297,7 @@ export function StatsTable({
                       )}
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        <span className="font-600 text-ink">{p.name}</span>
+                        <span className={cn('text-ink', sortKey === 'name' ? 'font-700' : 'font-600')}>{p.name}</span>
                         {tag && <Badge tone="info">{tag}</Badge>}
                       </span>
                     </td>
@@ -295,18 +306,18 @@ export function StatsTable({
                         {team ? (
                           <span className="inline-flex items-center gap-1.5 text-ink-2">
                             <TeamCrest team={team} size={18} />
-                            <span className="font-cond text-[11px] font-700 uppercase">{team.abbr}</span>
+                            <span className="font-cond text-label font-700 uppercase">{team.abbr}</span>
                           </span>
                         ) : (
-                          <span className="font-cond text-[11px] font-700 uppercase text-faint">FA</span>
+                          <span className="font-cond text-label font-700 uppercase text-muted">FA</span>
                         )}
                       </td>
                     )}
-                    <td className="whitespace-nowrap px-2 py-1.5">
-                      <span className="font-cond text-[11px] font-700 uppercase text-muted">{p.pos}</span>
+                    <td className={cn('whitespace-nowrap px-2 py-1.5', sortKey === 'pos' && 'font-600')}>
+                      <span className={cn('font-cond text-label font-700 uppercase', sortKey === 'pos' ? 'text-ink' : 'text-muted')}>{p.pos}</span>
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-ink-2">{p.age}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5">
+                    <td className={cn('whitespace-nowrap px-2 py-1.5 text-ink-2', sortKey === 'age' && 'font-600 text-ink')}>{p.age}</td>
+                    <td className={cn('whitespace-nowrap px-2 py-1.5', (sortKey === 'ovr' || sortKey === 'pot') && 'bg-surface-2')}>
                       <OvrBadge value={p.ovr} pot={p.pot} size={28} />
                     </td>
                     {showCap && (
@@ -314,11 +325,14 @@ export function StatsTable({
                         {p.teamId ? money(p.contract.capHit) : '—'}
                       </td>
                     )}
-                    {cols.map((c) => (
-                      <td key={c.id} className="whitespace-nowrap px-2 py-1.5 text-center text-ink-2">
-                        {c.fmt(line, p)}
-                      </td>
-                    ))}
+                    {cols.map((c) => {
+                      const on = sortKey === `col:${c.id}`
+                      return (
+                        <td key={c.id} className={cn('whitespace-nowrap px-2 py-1.5 text-center', on ? 'bg-surface-2 font-600 text-ink' : 'text-ink-2')}>
+                          {c.fmt(line, p)}
+                        </td>
+                      )
+                    })}
                     {right && (
                       <td className="whitespace-nowrap px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
                         {right(p)}
