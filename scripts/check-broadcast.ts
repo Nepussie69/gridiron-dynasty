@@ -5,10 +5,15 @@
 // depth-sort stability, and the actor layer (run-cycle phase by distance,
 // stride vs speed, dir −1 mirroring, continuous pose blends, head point on a
 // lying body, painter's order with the ball just in front of its carrier).
+// B6a: graphics — every B1 event / engagement kind mapped (callout or an
+// intentional ignore), the timeline deterministic, callouts only inside their
+// windows and at most 2 at once (one per anchor), callout boxes never covering
+// the carrier's head, text >= 12 CSS px at DPR 1 and 2, slab / HUD contrast,
+// reduced motion (no wipes) and the sim-to-end mode (chip only).
 // Run: node --experimental-strip-types scripts/check-broadcast.ts
 import assert from 'node:assert/strict'
 import { NFL_TEAMS } from '../src/game/data/nflTeams.ts'
-import { contrast } from '../src/lib/teamColor.ts'
+import { bestInk, contrast, INK_DARK } from '../src/lib/teamColor.ts'
 import {
   applyAffine,
   clipPolygon,
@@ -44,6 +49,26 @@ import { ActorLayer } from '../src/components/broadcast/actors.ts'
 import type { BroadcastAnim } from '../src/components/broadcast/animData.ts'
 import type { BroadcastFrame } from '../src/components/broadcast/renderer.ts'
 import { readFileSync } from 'node:fs'
+import type { ActorScreen } from '../src/components/broadcast/actors.ts'
+import {
+  buildGraphicsTimeline,
+  CALLOUT_PRIORITY,
+  ENGAGEMENT_GRAPHICS,
+  EVENT_GRAPHICS,
+  graphicsAt,
+  layoutCallouts,
+  MAX_CALLOUTS,
+  MIN_CALLOUT,
+  rectHitsCircle,
+  rectsOverlap,
+  resolveCallouts,
+  type CalloutKind,
+  type GraphicRole,
+  type GraphicsTimeline,
+} from '../src/components/broadcast/graphics.ts'
+import { BROADCAST_TOKENS, clubSlab, GraphicsLayer, MIN_TEXT_PX, SLAB_INK_MIN, SLAB_LIFT_BELOW } from '../src/components/broadcast/graphicsDraw.ts'
+import { ART } from '../src/components/broadcast/palette.ts'
+import type { Play } from '../src/game/engine/playsim.ts'
 
 let n = 0
 const ok = (name: string, fn: () => void) => {
@@ -457,6 +482,279 @@ ok('depth sort: far → near, stable regardless of input order', () => {
     }
     assert.deepEqual(depthSort(sh).map((x) => `${x.depth}:${x.order}`), ref)
   }
+})
+
+// ── B6a: graphics ────────────────────────────────────────────────────────────
+
+const playAnimSrc = readFileSync(new URL('../src/components/playAnim.ts', import.meta.url), 'utf8')
+function unionOf(name: string): string[] {
+  const m = new RegExp(`export type ${name} =([^;]*?)(?:\\n\\n|\\nexport|\\ninterface)`).exec(playAnimSrc)
+  assert.ok(m, `${name} union not found in playAnim.ts`)
+  return [...m[1].matchAll(/'([A-Za-z]+)'/g)].map((x) => x[1])
+}
+
+ok('graphics: every B1 event kind and engagement kind maps to a graphic or an intentional ignore', () => {
+  for (const [name, table] of [
+    ['AnimEventKind', EVENT_GRAPHICS],
+    ['EngageKind', ENGAGEMENT_GRAPHICS],
+  ] as const) {
+    const kinds = unionOf(name)
+    assert.ok(kinds.length >= 5, `${name}: parsed only ${kinds.length}`)
+    const keys = Object.keys(table)
+    for (const k of kinds) assert.ok(keys.includes(k), `${name} '${k}' has no graphics mapping`)
+    for (const k of keys) assert.ok(kinds.includes(k), `mapping for '${k}', which is not a ${name}`)
+    for (const [k, role] of Object.entries(table) as [string, GraphicRole][]) {
+      if (role.use === 'callout') assert.ok(role.callout in CALLOUT_PRIORITY, `${k}: unknown callout ${role.callout}`)
+      else assert.ok(role.why.length > 8, `${k}: '${role.use}' needs a reason`)
+    }
+  }
+  // Each callout kind is driven by something.
+  const used = new Set([...Object.values(EVENT_GRAPHICS), ...Object.values(ENGAGEMENT_GRAPHICS)].flatMap((r) => (r.use === 'callout' ? [r.callout] : [])))
+  for (const k of Object.keys(CALLOUT_PRIORITY)) assert.ok(used.has(k as CalloutKind), `callout ${k} is mapped from no event / engagement`)
+})
+
+const css = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
+ok('graphics: BROADCAST_TOKENS mirror the dark .broadcast tokens in index.css', () => {
+  const at = css.indexOf('@variant theme-dark {')
+  assert.ok(at > 0)
+  const block = css.slice(at, css.indexOf('}', at))
+  const v = (name: string) => new RegExp(`--color-${name}:\\s*(#[0-9A-Fa-f]{6})`).exec(block)?.[1]?.toUpperCase()
+  const map: [keyof typeof BROADCAST_TOKENS, string][] = [
+    ['canvas', 'canvas'],
+    ['surface', 'surface'],
+    ['lineStrong', 'line-strong'],
+    ['ink', 'ink'],
+    ['ink2', 'ink-2'],
+    ['muted', 'muted'],
+    ['gold', 'gold'],
+    ['win', 'win'],
+    ['loss', 'loss'],
+  ]
+  for (const [k, name] of map) assert.equal(BROADCAST_TOKENS[k].toUpperCase(), v(name), `${k} vs --color-${name}`)
+})
+
+ok(`graphics: all ${NFL_TEAMS.length} club slabs carry ink >= ${SLAB_INK_MIN}:1; HUD text pairs >= 4.5:1 on the dark plate`, () => {
+  const T = BROADCAST_TOKENS
+  for (const t of NFL_TEAMS) {
+    const sl = clubSlab(t)
+    assert.ok(contrast(sl.ink, sl.fill) >= SLAB_INK_MIN, `${t.abbr}: ink ${sl.ink} on ${sl.fill} ${contrast(sl.ink, sl.fill).toFixed(2)}:1`)
+    assert.ok(contrast(sl.accent, T.surface) >= 3, `${t.abbr}: accent ${sl.accent} on surface`)
+    assert.ok(sl.lift === contrast(sl.fill, T.canvas) < SLAB_LIFT_BELOW)
+  }
+  for (const k of ['ink', 'ink2', 'muted', 'gold', 'loss'] as const) assert.ok(contrast(T[k], T.canvas) >= 4.5, `${k} on canvas`)
+  assert.ok(contrast(INK_DARK, ART.turfGraphicBar) >= 4.5, 'down & distance ink on first-down yellow')
+  for (const f of [T.win, T.loss, ART.turfGraphicBar]) assert.ok(contrast(bestInk(f), f) >= 4.5, `badge ink on ${f}`)
+})
+
+/** Synthetic pass: double team, throw, catch, two broken tackles, tackle (6 s). */
+const GA: BroadcastAnim = {
+  duration: 6000,
+  actors: [
+    { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26 }, { t: 0.2, x: 25, y: 26 }, { t: 1, x: 25, y: 26 }] },
+    { key: 'ol0', side: 'off', role: 'OL', path: [{ t: 0, x: 34, y: 23 }, { t: 1, x: 33, y: 23 }] },
+    { key: 'ol1', side: 'off', role: 'OL', path: [{ t: 0, x: 34, y: 25 }, { t: 1, x: 33, y: 24 }] },
+    { key: 'dl0', side: 'def', role: 'DL', path: [{ t: 0, x: 36, y: 24 }, { t: 1, x: 34, y: 24 }] },
+    { key: 'wr0', side: 'off', role: 'WR', path: [{ t: 0, x: 35, y: 10 }, { t: 0.45, x: 50, y: 18 }, { t: 1, x: 62, y: 24 }] },
+    { key: 'cb0', side: 'def', role: 'CB', path: [{ t: 0, x: 42, y: 10 }, { t: 0.45, x: 48, y: 16 }, { t: 1, x: 61, y: 24 }] },
+    { key: 's0', side: 'def', role: 'S', path: [{ t: 0, x: 55, y: 30 }, { t: 1, x: 62, y: 25 }] },
+  ],
+  ball: [{ t: 0, x: 35, y: 26 }, { t: 1, x: 62, y: 24 }],
+  holders: [{ t: 0, key: null }, { t: 0.03, key: 'qb' }, { t: 0.3, key: null }, { t: 0.45, key: 'wr0' }],
+  flights: [{ t0: 0.3, t1: 0.45, height: 3 }],
+  engagements: [
+    { a: 'ol0', b: 'dl0', t0: 0.05, t1: 0.5, kind: 'double' },
+    { a: 'ol1', b: 'dl0', t0: 0.08, t1: 0.5, kind: 'double' },
+    { a: 'cb0', b: 'wr0', t0: 0.55, t1: 0.57, kind: 'missedTackle' },
+  ],
+  events: [
+    { t: 0.03, kind: 'snap', keys: ['ol2', 'qb'], spot: { x: 35, y: 26 } },
+    { t: 0.3, kind: 'throw', keys: ['qb', 'wr0'], spot: { x: 25, y: 26 } },
+    { t: 0.45, kind: 'catch', keys: ['wr0', 'cb0'], spot: { x: 50, y: 18 } },
+    { t: 0.5, kind: 'firstDown', keys: ['wr0'], spot: { x: 52, y: 19 } },
+    { t: 0.55, kind: 'brokenTackle', keys: ['wr0', 'cb0'], spot: { x: 54, y: 20 } },
+    { t: 0.62, kind: 'brokenTackle', keys: ['wr0', 's0'], spot: { x: 56, y: 21 } },
+    { t: 1, kind: 'tackle', keys: ['s0', 'wr0'], spot: { x: 62, y: 24 } },
+  ],
+  poses: {},
+  facing: {},
+  ballZ: [{ t: 0, z: 1 }],
+  camera: { strongSide: 'low', deep: false, focusKey: null, kind: 'scrimmage' },
+}
+const GPLAY = {
+  n: 41, qtr: 2, clock: '7:42', down: 3, distance: 6, startYard: 25, endYard: 52, offId: NFL0.id, defId: NFL1.id, type: 'pass',
+  concept: 'PA Deep Cross', yards: 27, result: 'Complete', homeScore: 7, awayScore: 10, passDepth: 15, pressure: false,
+} as unknown as Play
+const GIN = () => ({
+  anim: GA,
+  play: GPLAY,
+  offense: NFL0,
+  defense: NFL1,
+  people: { wr0: { name: 'Darius Holloway', number: 1, pos: 'WR' }, cb0: { name: 'Cam Reed', number: 24, pos: 'CB' }, ol0: { name: 'A B', number: 77, pos: 'LT' }, ol1: { name: 'C D', number: 64, pos: 'LG' }, dl0: { name: 'E F', number: 97, pos: 'DE' } },
+})
+const secsOf = (tl: GraphicsTimeline) => {
+  const out: number[] = []
+  for (let s = tl.start - 0.2; s <= tl.end + 0.2; s += 1 / 30) out.push(s)
+  return out
+}
+
+ok('graphics: the timeline and every frame of it are deterministic', () => {
+  const a = buildGraphicsTimeline(GIN())
+  const b = buildGraphicsTimeline(GIN())
+  assert.deepEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)))
+  for (const s of secsOf(a)) assert.deepEqual(graphicsAt(a, s), graphicsAt(b, s))
+  // The expected beats are there.
+  const kinds = a.callouts.map((c) => c.kind)
+  for (const k of ['doubleTeam', 'timeToThrow', 'separation', 'brokenTackle']) assert.ok(kinds.includes(k as CalloutKind), `missing ${k}: ${kinds}`)
+  const tt = a.callouts.find((c) => c.kind === 'timeToThrow')!
+  assert.ok(near(tt.value!, 1.6, 1e-9), `time to throw ${tt.value}`)
+  const sep = a.callouts.find((c) => c.kind === 'separation')!
+  assert.ok(near(sep.value!, Math.round(Math.hypot(2, 2) * 10) / 10, 1e-9) && sep.anchor === 'wr0', `separation ${sep.value}`)
+  assert.equal(a.toast.badge?.kind, 'firstDown')
+  assert.equal(a.toast.big, '+27')
+  assert.equal(a.lower?.key, 'wr0')
+  assert.ok(a.clock && a.clock.t1 === a.snapSec)
+})
+
+ok('graphics: callouts only inside their windows, at most 2 at once, one per anchor', () => {
+  const tl = buildGraphicsTimeline(GIN())
+  let peak = 0
+  for (const s of secsOf(tl)) {
+    const g = graphicsAt(tl, s)
+    peak = Math.max(peak, g.callouts.length)
+    assert.ok(g.callouts.length <= MAX_CALLOUTS, `${g.callouts.length} callouts at ${s.toFixed(2)}`)
+    const anchors = g.callouts.map((c) => c.item.anchor)
+    assert.equal(new Set(anchors).size, anchors.length, `two callouts on one anchor at ${s.toFixed(2)}`)
+    for (const c of g.callouts) assert.ok(s >= c.item.t0 && s <= c.item.t1, `${c.item.id} outside its window at ${s}`)
+    assert.ok(!(g.lower && g.toast), 'lower third and toast together')
+  }
+  assert.equal(peak, MAX_CALLOUTS)
+  // The second broken tackle cuts the first; both are on wr0 so they never overlap.
+  const bts = tl.callouts.filter((c) => c.kind === 'brokenTackle')
+  for (let i = 1; i < bts.length; i++) assert.ok(bts[i].t0 >= bts[i - 1].t1 - 1e-9)
+  // Fuzz the resolver: random overlapping candidates.
+  let seed = 11
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+  const kinds: CalloutKind[] = ['brokenTackle', 'separation', 'timeToThrow', 'doubleTeam']
+  for (let k = 0; k < 300; k++) {
+    const cands = Array.from({ length: 2 + Math.floor(rnd() * 6) }, (_, i) => {
+      const kind = kinds[Math.floor(rnd() * 4)]
+      const t0 = rnd() * 4
+      return { id: `${kind}:${i}`, kind, anchor: ['a', 'b', 'c'][Math.floor(rnd() * 3)], t0, t1: t0 + 0.4 + rnd() * 2, priority: CALLOUT_PRIORITY[kind], title: '', sub: '', accent: 'off' as const, others: [] }
+    })
+    const r1 = resolveCallouts(cands)
+    assert.deepEqual(resolveCallouts(cands.slice().reverse()), r1, 'order-independent')
+    for (const c of r1.kept) {
+      assert.ok(c.t1 - c.t0 >= MIN_CALLOUT - 1e-9)
+      const src = cands.find((x) => x.id === c.id)!
+      assert.ok(c.t0 >= src.t0 && c.t1 <= src.t1, 'kept window inside the requested one')
+    }
+    assert.equal(r1.kept.length + r1.dropped.length, cands.length)
+    for (let s = 0; s < 7; s += 0.05) {
+      const live = r1.kept.filter((c) => c.t0 <= s && s < c.t1)
+      assert.ok(live.length <= MAX_CALLOUTS)
+      assert.equal(new Set(live.map((c) => c.anchor)).size, live.length)
+    }
+  }
+})
+
+ok('graphics: reduced motion has no wipes; sim-to-end shows the chip only; off shows nothing', () => {
+  const tl = buildGraphicsTimeline(GIN())
+  for (const s of secsOf(tl)) {
+    const g = graphicsAt(tl, s, { reducedMotion: true })
+    for (const x of [g.chip, g.lower, g.toast, ...g.callouts]) if (x) assert.equal(x.enter, 1)
+    assert.ok(!g.chip || g.chip.flash === 0)
+    const f = graphicsAt(tl, s, { mode: 'fast' })
+    assert.ok(!f.clock && !f.lower && !f.toast && f.callouts.length === 0)
+    const o = graphicsAt(tl, s, { mode: 'off' })
+    assert.ok(!o.chip && !o.clock && !o.lower && !o.toast && o.callouts.length === 0)
+  }
+})
+
+ok('graphics: callout boxes never cover the carrier head (or each other); fuzzed layouts', () => {
+  let seed = 5
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+  let placedN = 0
+  for (let k = 0; k < 2000; k++) {
+    const W = rnd() < 0.3 ? 750 : 2560
+    const H = W === 750 ? 820 : 1440
+    const carrier = { x: rnd() * W, y: rnd() * H, r: 20 + rnd() * 30 }
+    const reqs = [0, 1].map((i) => ({
+      id: `c${i}`,
+      ax: i === 0 && rnd() < 0.5 ? carrier.x : rnd() * W,
+      ay: i === 0 && rnd() < 0.5 ? carrier.y - carrier.r : rnd() * H,
+      w: 180 + rnd() * 200,
+      h: 60 + rnd() * 30,
+    }))
+    const placed = layoutCallouts(reqs, { width: W, height: H, margin: 8, lead: 30 + rnd() * 20, avoid: [carrier], reserved: [{ x: 20, y: 20, w: 400, h: 50 }] })
+    placedN += placed.length
+    for (const p of placed) assert.ok(!rectHitsCircle(p.box, carrier), `box ${JSON.stringify(p.box)} covers the carrier head ${JSON.stringify(carrier)}`)
+    if (placed.length === 2) assert.ok(!rectsOverlap(placed[0].box, placed[1].box), 'callout boxes overlap')
+  }
+  assert.ok(placedN > 3000, `only ${placedN} of 4000 callouts placed`)
+})
+
+/** A canvas context that records every font it is given (and measures text by its size). */
+function fontRecorder(width: number, height: number): { ctx: CanvasRenderingContext2D; sizes: number[] } {
+  const sizes: number[] = []
+  let font = '10px sans-serif'
+  const noop = () => {}
+  const target: Record<string | symbol, unknown> = {
+    canvas: { width, height },
+    measureText: (s: string) => ({ width: s.length * (Number(/([\d.]+)px/.exec(font)?.[1]) || 10) * 0.5 }),
+    createRadialGradient: () => ({ addColorStop: noop }),
+    createLinearGradient: () => ({ addColorStop: noop }),
+  }
+  const ctx = new Proxy(target, {
+    get: (t, k) => (k === 'font' ? font : k in t ? t[k] : noop),
+    set: (t, k, v) => {
+      if (k === 'font') {
+        font = String(v)
+        const px = Number(/([\d.]+)px/.exec(font)?.[1])
+        assert.ok(Number.isFinite(px), `unparsed font ${font}`)
+        sizes.push(px)
+      } else t[k] = v
+      return true
+    },
+  })
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, sizes }
+}
+
+ok(`graphics: every drawn text is >= ${MIN_TEXT_PX} CSS px at DPR 1 and 2 (phone, 16:9, full window)`, () => {
+  const tl = buildGraphicsTimeline(GIN())
+  // Actors spread over the screen; the carrier is wr0 from the catch on.
+  const source = (W: number, H: number) => ({
+    screenOf: (key: string): ActorScreen | undefined => {
+      const i = GA.actors.findIndex((a) => a.key === key)
+      if (i < 0) return undefined
+      const x = W * (0.25 + 0.08 * i)
+      const y = H * (0.45 + 0.04 * (i % 3))
+      return { key, side: 'off', role: 'X', x, y, headX: x, headY: y - 30, top: y - 36, depth: 30, scale: 60, pose: 'run', holder: key === 'wr0' }
+    },
+    holderAt: (t: number) => (t >= 0.45 ? 'wr0' : t >= 0.03 && t < 0.3 ? 'qb' : null),
+  })
+  let drawn = 0
+  for (const dpr of [1, 2]) {
+    for (const [cw, ch] of [
+      [375, 410],
+      [1280, 720],
+      [1920, 1080],
+    ]) {
+      const W = cw * dpr
+      const H = ch * dpr
+      const { ctx, sizes } = fontRecorder(W, H)
+      const gfx = new GraphicsLayer(source(W, H))
+      gfx.setTimeline(tl)
+      for (const s of secsOf(tl)) {
+        gfx.sec = s
+        gfx.draw(ctx, { dpr, width: W, height: H })
+        drawn += gfx.lastPlaced.length
+      }
+      assert.ok(sizes.length > 100, `${cw}x${ch}@${dpr}: only ${sizes.length} fonts set`)
+      const min = Math.min(...sizes) / dpr
+      assert.ok(min >= MIN_TEXT_PX - 1e-9, `${cw}x${ch}@${dpr}: smallest text ${min.toFixed(2)} CSS px`)
+    }
+  }
+  assert.ok(drawn > 0, 'no callout was ever placed')
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)
