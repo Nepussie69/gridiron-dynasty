@@ -255,9 +255,9 @@ export function drawPylons(ctx: Ctx, c: Camera): void {
 /**
  * Goalposts on both end lines: gooseneck 2 yd behind, crossbar 10 ft up,
  * uprights 18'6" apart reaching 30 ft above the bar. Exported so B3 can draw
- * them in depth order with players if needed.
+ * them in depth order with players (`end` picks one end line).
  */
-export function drawGoalposts(ctx: Ctx, c: Camera): void {
+export function drawGoalposts(ctx: Ctx, c: Camera, end: 'both' | 'left' | 'right' = 'both'): void {
   ctx.save()
   ctx.strokeStyle = ART.goalpost
   ctx.lineCap = 'round'
@@ -267,6 +267,8 @@ export function drawGoalposts(ctx: Ctx, c: Camera): void {
     [FL, 1],
     [0, -1],
   ] as const) {
+    // B3 depth-sorts each end's posts separately (left = x 0, right = x 120).
+    if (end !== 'both' && (end === 'left') !== (gx === 0)) continue
     strokeWorld(ctx, c, [gx + s * 2, MY, 0], [gx + s * 2, MY, bar - 0.33], 0.2)
     strokeWorld(ctx, c, [gx + s * 2, MY, bar - 0.33], [gx, MY, bar], 0.18)
     strokeWorld(ctx, c, [gx, MY - HASH_HALF, bar], [gx, MY + HASH_HALF, bar], 0.15)
