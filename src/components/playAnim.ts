@@ -19,6 +19,7 @@ import type { Play } from '../game/engine/playsim'
 import type { Player } from '../game/types'
 import { ROUTES, type RouteDef, type WP } from '../game/data/routes'
 import { formationForConcept, formationHasFullback, playbookPlay, treeFor } from '../game/data/playbookData'
+import { presentAnim, type BroadcastAnim } from './broadcast/animData'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
@@ -832,24 +833,27 @@ function applyBlockEngagements(
 }
 
 // ── plays ────────────────────────────────────────────────────────────────────
-export function buildPlayAnim(play: Play, ctx: AnimContext = {}): PlayAnim {
-  switch (play.type) {
-    case 'run':
-      return buildRun(play, ctx)
-    case 'pass':
-      return play.result.startsWith('Sack') ? buildSack(play, ctx) : buildPass(play, ctx)
-    case 'punt':
-      return buildPunt(play, ctx)
-    case 'fg':
-    case 'pat':
-      return play.concept === 'Two-point try' ? buildRun(play, ctx) : buildKick(play, ctx)
-    case 'kickoff':
-      return buildKickoff(play, ctx)
-    case 'penalty':
-      return buildPenalty(play, ctx)
-    default:
-      return buildStatic(play, ctx)
+export function buildPlayAnim(play: Play, ctx: AnimContext = {}): BroadcastAnim {
+  const buildRaw = (): PlayAnim => {
+    switch (play.type) {
+      case 'run':
+        return buildRun(play, ctx)
+      case 'pass':
+        return play.result.startsWith('Sack') ? buildSack(play, ctx) : buildPass(play, ctx)
+      case 'punt':
+        return buildPunt(play, ctx)
+      case 'fg':
+      case 'pat':
+        return play.concept === 'Two-point try' ? buildRun(play, ctx) : buildKick(play, ctx)
+      case 'kickoff':
+        return buildKickoff(play, ctx)
+      case 'penalty':
+        return buildPenalty(play, ctx)
+      default:
+        return buildStatic(play, ctx)
+    }
   }
+  return presentAnim(buildRaw(), play, ctx)
 }
 
 /** Who wins at the line: line rating vs the defender in front of him. */
