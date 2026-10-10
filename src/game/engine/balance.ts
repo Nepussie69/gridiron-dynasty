@@ -21,6 +21,7 @@ import { summarizeCap } from './cap'
 import { NFL_TEAMS } from '../data/nflTeams'
 import {
   buildWorld,
+  captureDivisionFinish,
   regenerateSchedule,
   teamStrength,
   zeroRecord,
@@ -187,6 +188,8 @@ function refreshAllCohesion(world: World) {
 }
 
 function resetSeason(world: World) {
+  // Backlog 227: remember the finished division order before zeroing it.
+  captureDivisionFinish(world)
   for (const id of Object.keys(world.standings)) world.standings[id] = zeroRecord(id)
   for (const id of Object.keys(world.deadMoney)) world.deadMoney[id] = 0
   world.awards = {}

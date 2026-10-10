@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   buildWorld,
+  captureDivisionFinish,
   fitToCap,
   indexPlayers,
   regenerateSchedule,
@@ -1846,6 +1847,8 @@ export const useGame = create<GameStore>((set, get) => ({
     world.draftPicks = world.draftPicks.filter((p) => p.season > world.season)
     ensureDraftWindow(world, world.season + 1)
     world.draftRounds = []
+    // Backlog 227: snapshot the finished division order before the new season.
+    captureDivisionFinish(world)
     for (const id of Object.keys(world.standings)) world.standings[id] = zeroRecord(id)
     for (const id of Object.keys(world.deadMoney)) world.deadMoney[id] = 0
     regenerateSchedule(world)
@@ -4173,6 +4176,10 @@ export function migrateWorld(w: World): World {
   // unplayed regular-season game (played games keep no slot). Idempotent.
   ensureSlots(w)
   w.waivers ??= []
+  // Backlog 227: an old save has no division finish. An empty map is the
+  // documented "unknown" default; the schedule then seeds same-finish games
+  // from prestige order. The next season reset fills it from real standings.
+  w.divisionFinish ??= {}
   // L12.6 C1: a legacy offseason save lands on the right stage — the draft if
   // the class is unfinished, otherwise camp.
   if (w.phase === 'offseason' && !w.offseasonStage) {
@@ -7147,6 +7154,7 @@ export function masteryProbe(seasons = 3, seed = 20261004) {
     w.season += 1
     w.week = 1
     w.phase = 'regular'
+    captureDivisionFinish(w)
     regenerateSchedule(w)
   }
   let sStart = 0, sEnd = 0, sN = 0, bStart = 0, bEnd = 0, bN = 0
