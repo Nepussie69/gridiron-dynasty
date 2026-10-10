@@ -5,7 +5,7 @@
 // those lines into each player's career stats (one SeasonStats per pro season).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { GameStatLine, Player, Position, SeasonStats, StatLevel } from '../types'
+import type { GameStatLine, Player, SeasonStats, StatLevel } from '../types'
 import { emptySeason } from '../types'
 import type { GameSim } from './playsim'
 import type { Play } from './playsim'
@@ -232,8 +232,18 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
   // Backlog 149: a club's active kicker and punter take the field every game
   // (kickoffs, punts, FG/PAT), so each is credited exactly one game even though
   // this box score tracks no kicking stats. One line each, no snaps, no rng.
+  // Backlog 149 follow-up: credit the specialists the sim actually used (stamped
+  // at kickoff) rather than re-querying the depth chart here — `healPlayers` runs
+  // between a coached game and its box score, so a depth lookup could hand the
+  // game to a backup who never played. Fall back to the chart for fast-sim games,
+  // old saves and replays, which carry no specialists field.
   for (const teamId of [sim.homeId, sim.awayId]) {
-    for (const pos of ['K', 'P'] as Position[]) {
+    for (const pos of ['K', 'P'] as const) {
+      const used = sim.specialists?.[teamId]?.[pos]
+      if (used) {
+        ensure(used, teamId)
+        continue
+      }
       const sp = depthGroup(world, teamId, [pos], 1)[0]
       if (sp) ensure(sp.id, teamId)
     }

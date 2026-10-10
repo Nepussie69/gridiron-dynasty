@@ -149,6 +149,12 @@ export function protectedPlayers(world: World, career: CareerState): Set<string>
 export function poorProduction(world: World, p: Player): boolean {
   const line = seasonLine(p, world.season, 'NFL')
   if (!line || line.games < 4) return false
+  // Backlog 149 follow-up: K/P now carry a GP-only line with no scrimmage
+  // production, so `FULL` benches them (P) or OVR alone decides (K). OVR is not
+  // a production signal for a specialist — keep the GM's starter/win-now/low-trust
+  // protections. This restores the pre-149 punter behaviour (he had no line, so
+  // the GM declined with 'he is our starting P').
+  if (p.pos === 'K' || p.pos === 'P') return false
   const value = mainStatValue(p, line)
   if (value == null) return false
   // A rough per-position benchmark for a 17-game starter, scaled to his snaps.
