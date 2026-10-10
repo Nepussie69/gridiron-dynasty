@@ -8,6 +8,7 @@
 // Nothing here touches the sim, rng or saves: it reads the recorded PlayAnim /
 // Play, and view settings live in localStorage (viewSettings.ts).
 // ─────────────────────────────────────────────────────────────────────────────
+import { createBallFx, withBallFx } from './ballFx'
 import { useMemo, useSyncExternalStore } from 'react'
 import type { Play } from '../../game/engine/playsim'
 import type { Player } from '../../game/types'
@@ -35,8 +36,6 @@ import { useViewSettings, usePhone, deviceKey, type ViewSettings, type AutoQStat
 // This worktree branched before main merged B4, so the import is deferred and
 // typed structurally; after the orchestrator merges main it resolves to the real
 // module and live games get the recorded ball arc and the effect beats.
-// TODO(B4-merge): replace loadBallFx() with a static
-//   `import { createBallFx, withBallFx } from './ballFx'` once main is the base.
 interface BallFxLike {
   shakePose(pose: CameraPose, t: number): CameraPose
 }
@@ -54,19 +53,8 @@ interface BallFxModule {
 }
 
 async function loadBallFx(): Promise<BallFxModule | null> {
-  try {
-    // Vite rewrites import.meta.glob() at build time; the node loader leaves it
-    // undefined, so this function simply yields null there (it is only called
-    // once the live view mounts).
-    const glob = (import.meta as unknown as { glob: (p: string) => Record<string, () => Promise<unknown>> }).glob
-    if (typeof glob !== 'function') return null
-    const mods = glob('./ballFx.ts')
-    const importer = mods['./ballFx.ts']
-    if (!importer) return null
-    return (await importer()) as BallFxModule
-  } catch {
-    return null
-  }
+  // B4 is on main now: a static import (kept async so callers stay unchanged).
+  return { createBallFx: createBallFx as unknown as BallFxModule['createBallFx'], withBallFx: withBallFx as unknown as BallFxModule['withBallFx'] }
 }
 
 // ── resolution ───────────────────────────────────────────────────────────────
