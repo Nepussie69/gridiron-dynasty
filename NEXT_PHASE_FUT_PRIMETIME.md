@@ -89,8 +89,8 @@ Slots use no rng and the swing is career-only, so they have zero sim impact. Clu
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| P1 prime-eng | ⏳ |
+| P1 prime-eng | ✅ merged (slots/flex/stakes/caps; calibration identical) |
 | P2 clutch-eng | ⏳ |
 | P3 clutch-season | ⏳ |
-| P4 prime-ui | ⏳ |
+| P4 prime-ui | ✅ 2026-10-11 merged (Schedule badges + next-game line, Dashboard/Game Plan stakes chip + shared StakesSheet; CareerHub not needed) |
 | P5 clutch-ui | ⏳ |
