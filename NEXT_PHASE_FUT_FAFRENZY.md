@@ -82,6 +82,6 @@ FA1 can start now in parallel with any job that does not touch those three files
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| FA1 engine | ⏳ |
+| FA1 engine | 🔨 DeepSeek (wt/fafrenzy1) |
 | FA2 store + probe | ⏳ |
 | FA3 UI (redesign) | ⏳ |

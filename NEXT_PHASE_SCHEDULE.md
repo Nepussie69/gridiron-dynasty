@@ -68,5 +68,5 @@ Expected shifts are small. Division games are closer to even, so watch the compe
 | Phase | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| S1 nfl-schedule | ⏳ queued |
+| S1 nfl-schedule | ✅ 2026-10-11 merged (probe 8/8, 1200-case stress 0 failures, calibration unchanged — harness pairs its own games; random-slate fallback added by orchestrator) |
 | S2 schedule-ui | ⏳ |
