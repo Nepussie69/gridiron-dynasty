@@ -6,6 +6,7 @@ import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, 
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay } from './game/engine/playsim'
 import { animProbe } from './game/engine/animProbe'
+import { weatherProbe } from './game/engine/weather'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -66,4 +67,6 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__simOne = (homeId = 'BUF', awayId = 'MIA') =>
     simulatePlayByPlay(getWorld(), homeId, awayId, 12345)
   ;(window as unknown as Record<string, unknown>).__animProbe = (games = 2) => animProbe(getWorld(), games)
+  ;(window as unknown as Record<string, unknown>).__weatherProbe = (opts?: { seasons?: number; weeks?: number }) =>
+    weatherProbe(getWorld(), opts)
 }
