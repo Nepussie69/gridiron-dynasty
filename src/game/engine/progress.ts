@@ -506,10 +506,19 @@ export function freeAgentContract(
   }
 }
 
+/**
+ * The position-need table the AI free-agency market fills toward. Shared with
+ * the March frenzy (FUTURES #11) so the two markets use one definition of a
+ * roster hole. Like the original table it has no FB entry, so the AI
+ * market's iteration order — and therefore its behaviour — is unchanged.
+ * Read-only: both markets share this one object.
+ */
+export const FA_NEEDS: Readonly<Record<string, number>> = { QB: 3, RB: 3, WR: 6, TE: 3, OT: 4, OG: 4, C: 2, DE: 4, DT: 4, LB: 6, CB: 6, S: 4, K: 1, P: 1 }
+
 export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDatabase) {
   trimNflRosters(world)
   const rng = makeRng(world.seed + world.season * 90001)
-  const needed: Record<string, number> = { QB: 3, RB: 3, WR: 6, TE: 3, OT: 4, OG: 4, C: 2, DE: 4, DT: 4, LB: 6, CB: 6, S: 4, K: 1, P: 1 }
+  const needed = FA_NEEDS
   const freeCopy = [...world.freeAgents].sort((a, b) => b.ovr - a.ovr)
   const taken = new Set<string>()
   const capLimit = capForSeason(world.season)
