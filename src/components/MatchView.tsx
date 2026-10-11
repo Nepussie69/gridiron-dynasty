@@ -1445,7 +1445,6 @@ function IconBtn({ title, onClick, children, playToggle, disabled }: { title: st
 
 interface Drive { offId: string; start: number; end: number }
 
-/** Plays grouped into drives (a drive = consecutive plays by one offense). */
 /** J7: the coverage note appended to a pass in the play log. */
 function coverNote(p: PlayEvent, jersey: (t: string, id: string) => number | undefined, players: Map<string, import('../game/types').Player>): string {
   const tgtId = p.targetId
@@ -1464,6 +1463,7 @@ function coverNote(p: PlayEvent, jersey: (t: string, id: string) => number | und
   return `open — ${cov} trailing`
 }
 
+/** Plays grouped into drives (a drive = consecutive plays by one offense). */
 function drivesOf(plays: PlayEvent[]): Drive[] {
   const out: Drive[] = []
   plays.forEach((p, i) => {
