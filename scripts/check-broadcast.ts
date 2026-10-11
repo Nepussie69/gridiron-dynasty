@@ -57,6 +57,7 @@ import {
 import { ActorLayer } from '../src/components/broadcast/actors.ts'
 import { ballZAt, kickFlight, presentAnim, THROW_STATE, THROW_TIMING, throwHand, type BroadcastAnim, type ThrowStyle } from '../src/components/broadcast/animData.ts'
 import { LiveField, livePos, pursue, PAIR_GAP, type LiveMover } from '../src/components/playLive.ts'
+import { runReturnField } from '../src/components/playReturn.ts'
 import type { BroadcastFrame } from '../src/components/broadcast/renderer.ts'
 import { readFileSync } from 'node:fs'
 import type { ActorScreen } from '../src/components/broadcast/actors.ts'
@@ -1630,5 +1631,167 @@ ok('animflow r4: a field goal / PAT carries through the uprights and past the en
   const zc = ballZAt(pa, fr(kf.resT))
   assert.ok(zc > 10 / 3 + 0.5 && Math.abs(zc - zAtK(kf.kz, kf.resT)) < 0.05, `drawn over the crossbar at the posts: ${zc}`)
 })
+
+ok('animflow r5: kick / punt returns move all 21 others (lanes, wall, gunners vs jammers, converge)', () => {
+  const mk = (key: string, x: number, y: number, top = 7.5): LiveMover => ({ key, t: 0, x, y, path: [{ t: 0, x, y }], pace: { top, acc: 5 }, lastStop: true })
+  // Scripted returner: settles under the ball, catches at catchT, runs to the spot by endT.
+  const script = (key: string, from: { x: number; y: number }, catchPt: { x: number; y: number }, spot: { x: number; y: number }, catchT: number, endT: number) => {
+    const r = mk(key, from.x, from.y, 8)
+    r.path = []
+    for (let t = 0; t <= endT + 0.6001; t += 0.05) {
+      const u = t < catchT ? t / catchT : Math.min(1, (t - catchT) / (endT - catchT))
+      const p = t < catchT ? { x: from.x + (catchPt.x - from.x) * u, y: from.y + (catchPt.y - from.y) * u } : { x: catchPt.x + (spot.x - catchPt.x) * u, y: catchPt.y + (spot.y - catchPt.y) * u }
+      r.path.push({ t, ...p })
+    }
+    return r
+  }
+  const speedAt = (mv: LiveMover, t: number) => {
+    const a = livePos(mv.path, t - 0.1)
+    const b = livePos(mv.path, t)
+    return Math.hypot(b.x - a.x, b.y - a.y) / 0.1
+  }
+  const longestStill = (mv: LiveMover, t0: number, t1: number) => {
+    let run = 0
+    let worst = 0
+    for (let t = t0 + 0.1; t <= t1; t += 0.05) {
+      run = speedAt(mv, t) < 0.5 ? run + 0.05 : 0
+      worst = Math.max(worst, run)
+    }
+    return worst
+  }
+  const sd = (xs: number[]) => Math.max(...xs) - Math.min(...xs)
+  const blockOf = () => 70
+  const shedOf = () => 70
+
+  // Kickoff: return to +x from the 5; the coverage starts on the 35 (x = 75).
+  {
+    const cov: LiveMover[] = []
+    for (let i = 0; i < 10; i++) cov.push(mk(`c${i}`, 76, 6.85 + i * 4.4, 8))
+    cov.push(mk('k', 81, 26.65, 6.5))
+    const blk: LiveMover[] = []
+    const front = ['f0', 'f1', 'f2', 'f3', 'f4']
+    front.forEach((k, i) => blk.push(mk(k, 64, 26.65 + (i - 2) * 9, 7)))
+    const middle = ['m0', 'm1', 'm2']
+    middle.forEach((k, i) => blk.push(mk(k, 40, 26.65 + (i - 1) * 9, 7)))
+    const backs = ['b0', 'b1']
+    backs.forEach((k, i) => blk.push(mk(k, 22, 26.65 + (i ? 5 : -5), 7.5)))
+    const catchT = 3.9
+    const endT = 7.4
+    const catchPt = { x: 10, y: 24 }
+    const spot = { x: 34, y: 36 }
+    const ret = script('rb', { x: 6, y: 25 }, catchPt, spot, catchT, endT)
+    const rr = runReturnField({
+      kind: 'kickoff', outcome: 'return', cov, kicker: 'k', blk, returner: ret, dir: 1, kickT: 0, catchT, catchPt, spot,
+      contactT: endT - 0.5, endT, tackleFrom: endT - 1.4, tackler: 'c7', front, middle, backs, seed: 11, blockOf, shedOf,
+    })
+    assert.equal(rr.scheme, 'wall')
+    for (const mv of [...cov, ...blk]) {
+      const st = longestStill(mv, 0.3, endT)
+      assert.ok(st <= 0.6, `kickoff: ${mv.key} still for ${st.toFixed(2)} s`)
+    }
+    const lanes = cov.filter((m) => m.key !== 'k').map((m) => livePos(m.path, 2).y)
+    assert.ok(sd(lanes) >= 28 && sd(lanes) <= 46, `kickoff lanes at +2 s spread ${sd(lanes).toFixed(1)} yd (NFL ~37)`)
+    const atCatch = blk.map((m) => livePos(m.path, catchT))
+    assert.ok(sd(atCatch.map((p) => p.x)) >= 5, `return blockers not a flat line at the catch (depth range ${sd(atCatch.map((p) => p.x)).toFixed(1)})`)
+    const sideShare = atCatch.filter((p) => p.y >= catchPt.y).length / atCatch.length
+    assert.ok(sideShare >= 0.6, `the wall sets up on the return side (${sideShare.toFixed(2)})`)
+    const dEnd = cov.filter((m) => m.key !== 'k').map((m) => { const p = livePos(m.path, endT); return Math.hypot(p.x - spot.x, p.y - spot.y) }).sort((a, b) => a - b)
+    const dCatch = cov.filter((m) => m.key !== 'k').map((m) => { const p = livePos(m.path, catchT); return Math.hypot(p.x - catchPt.x, p.y - catchPt.y) }).sort((a, b) => a - b)
+    assert.ok(dEnd[5] < dCatch[5] && dEnd[5] < 12, `coverage converges on the returner (median ${dCatch[5].toFixed(1)} -> ${dEnd[5].toFixed(1)} yd)`)
+  }
+
+  // Punt (as the builder lays it out): the coverage runs toward +x, the return comes back to -x.
+  for (const outcome of ['return', 'fairCatch'] as const) {
+    const los = 40
+    const cov: LiveMover[] = []
+    const protectors = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']
+    protectors.forEach((k, i) => cov.push(mk(k, los - 0.6, 26.65 + (i - 3.5) * 2, 7)))
+    const gunners = ['g0', 'g1']
+    cov.push(mk('g0', los - 0.6, 6, 8.5), mk('g1', los - 0.6, 47.3, 8.5), mk('P', los - 14, 26.65, 6))
+    const blk: LiveMover[] = []
+    const rushers = ['r0', 'r1', 'r2', 'r3', 'r4', 'r5']
+    rushers.forEach((k, i) => blk.push(mk(k, los + 1.1, 26.65 + (i - 2.5) * 2.4, 7)))
+    const jammers = ['j0', 'j1']
+    blk.push(mk('j0', los + 1.4, 7.1, 8.5), mk('j1', los + 1.4, 46.2, 8.5), mk('h0', los + 9, 28, 7), mk('h1', los + 30, 20, 7.5))
+    const kickT = 2.0
+    const catchT = 6.4
+    const endT = outcome === 'return' ? 9.2 : 7.2
+    const catchPt = { x: 82, y: 26 }
+    const spot = outcome === 'return' ? { x: 70, y: 33 } : catchPt
+    const ret = script('s0', { x: 88, y: 30 }, catchPt, spot, catchT, outcome === 'return' ? endT : catchT + 0.01)
+    runReturnField({
+      kind: 'punt', outcome, cov, kicker: 'P', blk, returner: ret, dir: -1, kickT, catchT, catchPt, spot,
+      contactT: outcome === 'return' ? endT - 0.5 : endT, endT, tackleFrom: outcome === 'return' ? endT - 1.4 : endT, tackler: outcome === 'return' ? 'p2' : undefined,
+      gunners, jammers, rushers, protectors, seed: 5, blockOf, shedOf,
+    })
+    for (const mv of [...cov, ...blk]) {
+      const st = longestStill(mv, kickT, endT)
+      assert.ok(st <= 0.6, `punt ${outcome}: ${mv.key} still for ${st.toFixed(2)} s after the kick`)
+    }
+    // Gunners vs jammers: the jammer is with his gunner (within ~3 yd) a second after the snap.
+    for (const [g, j] of [['g0', 'j0'], ['g1', 'j1']]) {
+      const pg = livePos(cov.find((m) => m.key === g)!.path, 1.0)
+      const pj = livePos(blk.find((m) => m.key === j)!.path, 1.0)
+      assert.ok(Math.hypot(pg.x - pj.x, pg.y - pj.y) < 3, `${j} on ${g} at the line (${Math.hypot(pg.x - pj.x, pg.y - pj.y).toFixed(1)} yd)`)
+      const pg2 = livePos(cov.find((m) => m.key === g)!.path, 2.0)
+      assert.ok(pg2.x > los + 4, `${g} released downfield (x ${pg.x.toFixed(1)} @1s, ${pg2.x.toFixed(1)} @2s)`)
+    }
+    const dEnd = cov.filter((m) => m.key !== 'P').map((m) => { const p = livePos(m.path, endT); return Math.hypot(p.x - spot.x, p.y - spot.y) }).sort((a, b) => a - b)
+    assert.ok(dEnd[4] < (outcome === 'return' ? 10 : 14), `punt ${outcome}: coverage closes (median ${dEnd[4].toFixed(1)} yd)`)
+  }
+})
+
+// animflow r5 item 4: on real harness plays (seed 33333, one game) the LIVE camera keeps
+// the carrier inside the safe frame above the playback controls on every frame,
+// through the tackle and the post-play hold.
+{
+  const { fileURLToPath } = await import('node:url')
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const rj = (n: string) => JSON.parse(readFileSync(`${repo}public/data/${n}.json`, 'utf8'))
+  ;(await import('../src/game/data/realData.ts')).setRealData({ nfl: rj('madden26').players, cfb: rj('cfb26').teams, source: { madden: 'local', cfb: 'local' } })
+  ;(await import('../src/game/data/calibration.ts')).setCalibration(rj('calibration'))
+  const store = await import('../src/store/gameStore.ts')
+  const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
+  const { buildPlayAnim, holderAt, posAt } = await import('../src/components/playAnim.ts')
+  const { actorPlayers } = await import('../src/components/jersey.ts')
+  const cam = await import('../src/components/broadcast/camera.ts')
+  const { createBroadcastDirector } = await import('../src/components/broadcast/directorRules.ts')
+  ok('animflow r5: the carrier stays inside the safe frame above the controls on every frame (harness plays)', () => {
+    store.useGame.getState().startCareer({ name: 'C', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const sim = simulatePlayByPlay(world, nfl[0].id, nfl[1].id, world.seed + 13)
+    const W = 1280
+    const H = 720
+    const bot = H - (48 + 14)
+    let frames = 0
+    let plays = 0
+    for (let i = 0; i < sim.plays.length; i++) {
+      const play = sim.plays[i]
+      if (!['run', 'pass', 'kickoff', 'punt'].includes(play.type)) continue
+      const other = play.offId === nfl[0].id ? nfl[1].id : nfl[0].id
+      const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+      const d = createBroadcastDirector({ profile: 'live', viewport: { w: W, h: H }, bottomClearPx: 48 })
+      d.reset(play, anim)
+      const n = Math.ceil((anim.duration / 1000) * 60)
+      let carried = false
+      for (let j = 0; j <= n; j++) {
+        const t = j / n
+        const key = holderAt(anim, t)
+        if (!key || (key === 'qb' && play.type === 'pass')) continue
+        const a = anim.actors.find((x) => x.key === key)
+        if (!a) continue
+        carried = true
+        const p = posAt(a.path, t)
+        const s = cam.project(cam.makeCamera(d.toCamera(d.shotAt(t)), { width: W, height: H }), p.x, p.y, 0)
+        if (!s) continue
+        frames++
+        assert.ok(s.y <= bot + 2 && s.x >= W * 0.06 - 2 && s.x <= W * 0.94 + 2, `play ${i} ${play.concept}: carrier ${key} at (${s.x.toFixed(0)}, ${s.y.toFixed(0)}) outside the safe frame at t ${t.toFixed(3)}`)
+      }
+      if (carried) plays++
+    }
+    assert.ok(plays > 80 && frames > 10000, `harness coverage ${plays} plays / ${frames} frames`)
+  })
+}
 
 console.log(`check-broadcast: PASS (${n} checks)`)

@@ -69,6 +69,8 @@ const OMEGA_CENTER = 5 // rad/s, the centre spring
 const OMEGA_SPAN = 2.5 // rad/s, the slower span spring
 const OMEGA_CAM = 8 // rad/s-equivalent, the height / aim / heading springs
 const SAFE_INSET = 0.06 // 6% each side, incl. the top for the ball's height
+/** The playback controls' height (CSS px) per profile when the caller does not say (MatchView PILL_CLEAR_PX). */
+const DEFAULT_CLEAR_PX: Record<'live' | 'replay' | 'phone', number> = { live: 48, replay: 48, phone: 68 }
 
 export type PlayKind =
   | 'pass' | 'run' | 'sack' | 'scramble' | 'kickoff' | 'punt' | 'fg' | 'pat'
@@ -132,6 +134,8 @@ export interface DirectorOptions {
   rules?: DirectorRule[]
   profile?: DirectorProfile
   viewport?: { w: number; h: number }
+  /** px at the bottom the DOM playback controls cover; the safe frame stays above them (animflow r5). */
+  bottomClearPx?: number
 }
 
 export interface ShotFrame extends Shot {
@@ -354,6 +358,9 @@ export function createDirector(opts: DirectorOptions = {}): Director {
     poseFor,
     insetX: SAFE_INSET,
     insetY: SAFE_INSET,
+    // Keep everything watched (the carrier, the pile, the ball) above the
+    // playback controls: their height plus a margin, at least the 6% inset.
+    insetBottom: Math.max(SAFE_INSET, ((opts.bottomClearPx ?? DEFAULT_CLEAR_PX[profile]) + 14) / viewport.height),
     maxShift: 90,
   }
 
@@ -550,7 +557,10 @@ export function createDirector(opts: DirectorOptions = {}): Director {
     }
 
     // ── integrate ─────────────────────────────────────────────────────────────
-    const shotContain: ContainOpts<Shot> = { ...commonContain, maxShift: 24, spanMin: 20, spanMax: 55, iterations: 6 }
+    // The planned target keeps a little more room at the bottom than the hard
+    // check, so the eased, rate-limited camera never lets the carrier dip under
+    // the controls while it catches up (a keepCarrier raise moves him fast).
+    const shotContain: ContainOpts<Shot> = { ...commonContain, insetBottom: (commonContain.insetBottom ?? SAFE_INSET) + 0.04, maxShift: 24, spanMin: 20, spanMax: 55, iterations: 6 }
     const hardContain: ContainOpts<Shot> = { ...commonContain, maxShift: 8, spanMin: 20, spanMax: 55, iterations: 4 }
     const hasRules = rules.length > 0
     const out: ShotFrame[] = new Array(nFrames + 1)
@@ -622,8 +632,13 @@ export function createDirector(opts: DirectorOptions = {}): Director {
           oy += (cv.y / sp) * 2 * ramp
         }
       }
-      let wantX = lerp(preSnapOut.cx, led.x, ramp) + offX
-      let wantY = lerp(preSnapOut.cy, led.y, ramp) + ox + oy
+      // From the contact on, the lead and the strong-side offset bleed out so
+      // the camera settles on the ball / pile instead of running on toward the
+      // end zone (animflow r5: the tackle was left at the bottom edge).
+      const settle = contactSec != null && sec >= contactSec ? clamp01((sec - contactSec) / 0.5) : 0
+      const keepLead = 1 - settle
+      let wantX = lerp(preSnapOut.cx, lerp(led.x, ball.x[k], settle), ramp) + offX * keepLead
+      let wantY = lerp(preSnapOut.cy, lerp(led.y, ball.y[k], settle), ramp) + (ox + oy) * keepLead
 
       // Rule 3 span: keep the holder (or the target in flight) and the two
       // nearest defenders in frame; rule 4 tightens on contact.
@@ -743,6 +758,29 @@ export function createDirector(opts: DirectorOptions = {}): Director {
         nextSpan = limitRatio(span, hard.shot.span, MAX_SPAN_RATIO_PER_FRAME)
         clamped = true
       }
+      // A height / aim / heading change the rate-limited pan cannot keep up with
+      // (a keepCarrier raise) waits a frame rather than dropping a watched point
+      // (the carrier) under the controls (animflow r5).
+      let fz = nextZ
+      let fpitch = nextPitch
+      let fyaw = nextYaw
+      if ((fz !== cz || fpitch !== cpitch || fyaw !== cyaw) && (clamped || ruleId === 'keepCarrier')) {
+        const bot = viewport.height * (1 - (commonContain.insetBottom ?? SAFE_INSET))
+        const outBy = (sh: Shot) => {
+          let worst = 0
+          for (const w of watch) {
+            const q = projectShot(w, sh)
+            if (Number.isFinite(q.sy)) worst = Math.max(worst, q.sy - bot)
+          }
+          return worst
+        }
+        const moved = outBy({ cx: nx, cy: ny, span: nextSpan, z: fz, yaw: fyaw, pitch: fpitch })
+        if (moved > 0.5 && moved > outBy({ cx: nx, cy: ny, span: nextSpan, z: cz, yaw: cyaw, pitch: cpitch })) {
+          fz = cz
+          fpitch = cpitch
+          fyaw = cyaw
+        }
+      }
       const prevSpan = span
       // Do NOT hard-clamp the position to the field edge here: a position clamp
       // truncates the already accel-limited step and breaks the per-frame accel
@@ -752,9 +790,9 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       cx = nx
       cy = ny
       span = nextSpan
-      cz = nextZ
-      cpitch = nextPitch
-      cyaw = nextYaw
+      cz = fz
+      cpitch = fpitch
+      cyaw = fyaw
       vx = stepX / dt
       vy = stepY / dt
       vs = (span - prevSpan) / dt

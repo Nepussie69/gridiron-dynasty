@@ -369,7 +369,7 @@ export class LiveBroadcast {
     this.rp = new ReplayPlayer(plan)
     // The replay director: the higher replay rig (the phone rig + the phone
     // lens's replay variant on a phone), with B5b's special-teams rules.
-    this.rpDirector = createBroadcastDirector({ profile: this.directorProfile('replay'), viewport: this.viewport() })
+    this.rpDirector = createBroadcastDirector({ profile: this.directorProfile('replay'), viewport: this.viewport(), bottomClearPx: this.opts.hudBottomInset })
     this.rpDirector.reset(lp.play, lp.anim)
     this.tele.setReplay(plan, lp.anim, lp.actorPlay.offClub, lp.actorPlay.defClub, lp.actorPlay.numbers)
     this.rpLead = Math.max(0, leadSec)
@@ -451,7 +451,7 @@ export class LiveBroadcast {
     this.layer.setPlay(lp.actorPlay)
     this.gfx.setTimeline(lp.tl)
     // B5 director with B5b's special-teams rules (kicks, returns, FG/PAT).
-    this.director = createBroadcastDirector({ profile: this.directorProfile(), viewport: this.viewport() })
+    this.director = createBroadcastDirector({ profile: this.directorProfile(), viewport: this.viewport(), bottomClearPx: this.opts.hudBottomInset })
     this.director.reset(lp.play, lp.anim)
     this.applier.reset()
     this.pacer.reset()

@@ -217,6 +217,8 @@ export interface ContainOpts<S extends ShotGeom> {
   /** Safe-frame inset as a fraction of each side (0.06 = 6%). */
   insetX: number
   insetY: number
+  /** Bottom inset when it differs (the playback controls overlay the bottom; animflow r5). */
+  insetBottom?: number
   /** Hard span clamps while widening. */
   spanMin: number
   spanMax: number
@@ -261,6 +263,7 @@ function overflowOf(box: Box, safe: Box): number {
 export function containShot<S extends ShotGeom>(shot: S, watch: readonly Pt3[], o: ContainOpts<S>): ContainResult<S> {
   const { width: w, height: h } = o.viewport
   const safe = safeBox(w, h, o.insetX, o.insetY)
+  if (o.insetBottom != null) safe.maxY = h * (1 - Math.max(o.insetY, o.insetBottom))
   const maxShift = o.maxShift ?? 60
   const iters = o.iterations ?? 12
   // A point this far outside the viewport is not fixable by panning; drop it.

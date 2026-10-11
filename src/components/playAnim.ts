@@ -23,10 +23,12 @@
 
 import type { Play } from '../game/engine/playsim'
 import type { Player } from '../game/types'
+import { styleProfile } from '../game/engine/style'
 import { ROUTES, type RouteDef, type WP } from '../game/data/routes'
 import { formationForConcept, formationHasFullback, playbookPlay, treeFor } from '../game/data/playbookData'
 import { kickFlight, presentAnim, throwHand, THROW_TIMING, type BroadcastAnim, type ThrowStyle } from './broadcast/animData'
 import { LiveField, pursue, phases, holdSpot, livePos, type Brain, type PairPlan } from './playLive'
+import { runReturnField, returnLine, returnScheme } from './playReturn.ts'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
@@ -530,6 +532,15 @@ export interface Pace {
   acc: number
 }
 
+const ACC_CAP: Record<string, number> = {
+  OL: 2.6, K: 3.4, P: 3.4, QB: 3.6, RB: 4.4, FB: 3.8, WR: 4.4, TE: 4.0, DL: 3.2, LB: 3.4, CB: 4.3, S: 4.2,
+}
+/**
+ * Scale on ACC_CAP. 1.5: at 1.0 / 1.25 the routes still take too long (time to
+ * throw 3.6 / 3.2 s on dropbacks), so the caps sit at 1.5x the NFL-like values
+ * until routes / stems are retimed further (animflow r5).
+ */
+const ACC_CAP_K = 1.5
 const ROLE_CAP: Record<string, number> = {
   OL: 6.4, K: 6.6, P: 6.6, QB: 9.0, RB: 9.3, FB: 7.6,
   WR: 9.6, TE: 8.4, DL: 8.2, LB: 8.6, CB: 9.4, S: 9.2,
@@ -545,7 +556,10 @@ export function paceFor(p: Player | undefined, role = ''): Pace {
   const cap = ROLE_CAP[role] ?? 9.6
   const top = clampN(5.6 + (spd - 60) * 0.085, 3.4, cap)
   const ramp = clampN(1.1 - (acc - 60) * (0.65 / 39), 0.45, 1.1)
-  return { top, acc: top / ramp }
+  // animflow r5: real acceleration caps (NFL tracking p95 ~2.3-3.9 yd/s²; the
+  // caps sit a little above, ACC still orders players under them).
+  const capA = (ACC_CAP[role] ?? 4.2) * ACC_CAP_K
+  return { top, acc: Math.min(top / ramp, capA * (0.85 + 0.15 * clampN((acc - 60) / 39, 0, 1))) }
 }
 
 /** Speed-profiled, distance-timed motion along a polyline (times in seconds). */
@@ -593,6 +607,8 @@ function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; vE
 
 /** cos of the turn angle that counts as a plant (≈ 40°). */
 const TURN_COS = Math.cos(0.7)
+/** animflow r5: share of the cornering speed kept through a cut (0 = the old stop at every corner). */
+const CORNER_KEEP = 1
 
 /**
  * Time a polyline at a player's pace, slowing into any sharp change of direction
@@ -618,11 +634,19 @@ function timedLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; v
   let t0 = 0
   let v0 = Math.max(0, opts.v0 ?? 0)
   for (const c of corners) {
-    const k = baseLine(pts.slice(start, c + 1), pace, { v0, stop: true })
+    // animflow r5: brake into a cut to a cornering speed set by the turn (NFL:
+    // ~50% of the speed kept through a 45-90 deg cut), not to a dead stop.
+    const ax = pts[c].x - pts[c - 1].x
+    const ay = pts[c].y - pts[c - 1].y
+    const bx = pts[c + 1].x - pts[c].x
+    const by = pts[c + 1].y - pts[c].y
+    const cos = (ax * bx + ay * by) / Math.max(1e-9, Math.hypot(ax, ay) * Math.hypot(bx, by))
+    const vc = pace.top * CORNER_KEEP * clampN(0.2 + 0.25 * (1 + cos), 0, 0.7)
+    const k = vc > 0 ? baseLine(pts.slice(start, c + 1), pace, { v0, vEnd: vc }) : baseLine(pts.slice(start, c + 1), pace, { v0, stop: true })
     for (let i = out.length ? 1 : 0; i < k.length; i++) out.push({ t: t0 + k[i].t, x: k[i].x, y: k[i].y })
     t0 += k[k.length - 1].t
     start = c
-    v0 = 0
+    v0 = vc
   }
   const k = baseLine(pts.slice(start), pace, { v0, stop: opts.stop, vEnd: opts.vEnd })
   for (let i = 1; i < k.length; i++) out.push({ t: t0 + k[i].t, x: k[i].x, y: k[i].y })
@@ -2041,7 +2065,9 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
 
   const tacklers = DEF_KEYS.filter((k) => !stillEngaged.has(k))
   const cPt = posAt(m[carrier].path, contactT)
-  const tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom)
+  // animflow r5: with real acceleration caps the credited man is often a beat
+  // late; on a run he still makes it (hitAndRide meets the pile where it is).
+  const tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2)
   // A touchdown is chased, never forced: the closest man just runs with him.
   if (!scoreRun) hitAndRide(m[tackler], m[carrier], tackleFrom, contactT, endSec)
   const res = { tackler, endSec }
@@ -2517,11 +2543,13 @@ function natTo(mv: Mover, pt: Pt, fromSec: number): number {
 }
 
 /** The tackler who can make the contact in time: the credited man when he can, else the quickest. */
+/** How late (s) the sim's credited tackler may be and still be drawn making the tackle. */
+const TACKLE_SLACK = 0.2
 function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number): string {
   const cand = keys.filter((k) => m[k]).map((k) => ({ k, nat: natTo(m[k], c, fromSec) })).sort((a, b) => a.nat - b.nat)
   if (!cand.length) return keys[0]
   const pk = prefer ? cand.find((x) => x.k === prefer) : undefined
-  if (pk && pk.nat <= window + 0.2) return pk.k
+  if (pk && pk.nat <= window + TACKLE_SLACK) return pk.k
   return cand[0].k
 }
 
@@ -2667,6 +2695,8 @@ function resolveCarry(opts: {
   tacklerKeys: string[]
   prefer?: string
   seed: number
+  /** A catch-and-run: turn upfield and stay north-south (a slight bow at most). */
+  northSouth?: boolean
 }): { tackler: string; endSec: number } {
   const { m, carrierKey, spot, tacklerKeys, prefer, seed } = opts
   const carrier = m[carrierKey]
@@ -2675,13 +2705,24 @@ function resolveCarry(opts: {
   const cV0 = carrySpeed(carrier)
   const total = Math.hypot(spot.x - cPos.x, spot.y - cPos.y)
   const ac = yardsAfterContact(carrier.player, total, seed)
-  const bend = total > 4 ? (hash(seed + 3) - 0.5) * Math.min(3, total * 0.12) : 0
+  const bend = total > 4 ? (hash(seed + 3) - 0.5) * Math.min(opts.northSouth ? 1.2 : 3, total * (opts.northSouth ? 0.05 : 0.12)) : 0
   const line = Math.abs(bend) > 0.2 ? bowPts(cPos, spot, bend) : [spot]
   const { pre, post, c } = splitPolyline(cPos, line, Math.max(0, polyLen(cPos, line) - ac))
   const preNat = pre.length ? timedLine([cPos, ...pre], carrier.pace, { v0: cV0, stop: false }).slice(-1)[0]?.t ?? 0 : 0
-  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, preNat + 1.4)
+  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, preNat + (opts.northSouth ? 2.0 : 1.4))
   const need = natTo(m[tk], c, fromSec)
-  if (need > preNat + 0.05 && pre.length) {
+  if (need > preNat + 0.05 && pre.length && opts.northSouth) {
+    // A catch-and-run stays north-south: he runs it slower (picking his way,
+    // down to 60% of his top speed) before any bow is added to the line.
+    const saved = carrier.pace
+    let k = 1
+    const natK = (kk: number) => timedLine([cPos, ...pre], { top: saved.top * kk, acc: saved.acc }, { v0: Math.min(cV0, saved.top * kk), stop: false }).slice(-1)[0]?.t ?? 0
+    while (k > 0.6 && natK(k) < need) k -= 0.04
+    carrier.pace = { top: saved.top * k, acc: saved.acc }
+    const v0k = Math.min(cV0, carrier.pace.top)
+    carrier.run(natK(k) >= need - 0.05 ? pre : routeByTime(cPos, c, carrier.pace, v0k, need, 0), { v0: v0k, stop: false })
+    carrier.pace = saved
+  } else if (need > preNat + 0.05 && pre.length) {
     // Nobody could get there yet: he runs a wider line (never a loop) to give
     // the tackler time to arrive.
     carrier.run(routeByTime(cPos, c, carrier.pace, cV0, need, 0), { v0: cV0, stop: false })
@@ -2694,6 +2735,37 @@ function resolveCarry(opts: {
   chaseCarrier(m, tacklerKeys, fromSec, carrier, endSec, seed)
   hitAndRide(m[tk], carrier, Math.max(fromSec, contactT - 1.2), contactT, endSec)
   return { tackler: tk, endSec }
+}
+
+/**
+ * Yards after the catch to draw for a completion (animflow r5), from the NFL
+ * shape by the concept's air-yards bucket (nflverse pbp 2021-25): the share
+ * tackled at the catch (YAC <= 0), else 0.5 yd + an exponential tail scaled so
+ * the bucket mean matches. Capped by the gain (catch never behind the bucket's
+ * shallowest sensible spot).
+ */
+/**
+ * QB mobility 0..1 from his ratings (SPD, ACC, AGI) and the scrambler /
+ * improviser / dual-threat style (animflow r5): Lamar Jackson ~1, a Burrow ~0.4,
+ * a Goff / Flacco 0. Tiers: mobile >= 0.6, pocket <= 0.3.
+ */
+export function qbMobility(p: Player | undefined): number {
+  if (!p) return 0.4
+  const score = attrOf(p, 'SPD') * 0.5 + attrOf(p, 'ACC') * 0.25 + attrOf(p, 'AGI') * 0.25 + (styleProfile(p).scramble ?? 0) * 3
+  return clampN((score - 76) / 20, 0, 1)
+}
+export const qbTier = (mob: number): 'mobile' | 'average' | 'pocket' => (mob >= 0.6 ? 'mobile' : mob <= 0.3 ? 'pocket' : 'average')
+
+const YAC_NFL: [maxDepth: number, zeroShare: number, mean: number][] = [
+  [0, 0.055, 9.05], [5, 0.214, 4.75], [10, 0.336, 3.33], [20, 0.401, 3.68], [Infinity, 0.289, 5.6],
+]
+export function yacTarget(conceptDepth: number, gain: number, u: number): number {
+  const [, p0, mean] = YAC_NFL.find(([d]) => conceptDepth < d) ?? YAC_NFL[YAC_NFL.length - 1]
+  if (gain <= 0) return 0
+  if (u < p0) return 0.3 * (u / p0)
+  const s = mean / (1 - p0) - 0.5
+  const v = (u - p0) / (1 - p0)
+  return Math.min(gain, 0.5 + s * -Math.log(1 - Math.min(0.995, v)))
 }
 
 function buildPass(play: Play, ctx: AnimContext): PlayAnim {
@@ -2711,6 +2783,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const gainYds = play.endYard - play.startYard
   const simDepth = Math.max(-2, Math.min(45, play.passDepth ?? 8))
   const depth = inc || int ? simDepth : Math.min(simDepth, Math.max(1, gainYds + 3))
+  // Run after the catch (animflow r5): the drawn YAC follows the NFL shape for
+  // the concept's air-yards bucket (nflverse pbp 2021-25: share tackled at the
+  // catch, then an exponential tail at the bucket's mean), and the catch is
+  // drawn that far short of the recorded end spot, so catch + YAC = the spot.
+  const yacT = inc || int ? 0 : yacTarget(simDepth, gainYds, hash(seed + 71))
+  const catchDepth = inc || int ? depth : clampN(gainYds - yacT, Math.min(gainYds, simDepth <= 0 ? simDepth - 1 : simDepth >= 5 ? 2 : 0), Math.max(Math.min(gainYds, simDepth <= 0 ? simDepth - 1 : simDepth >= 5 ? 2 : 0), simDepth + 1))
   const tgt = targetKey(play, ctx)
   const scramble = !!play.pressure
   const rollSide = hash(seed + 9) < 0.5 ? -1 : 1
@@ -2737,15 +2815,36 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const drop = { screen: 3.2, quick: 1.0, dropback: 2.6, deep: 3.8, pa: 2.8 }[bucket]
   const dropT = { screen: 1.15, quick: 0.62, dropback: 1.2, deep: 1.5, pa: 1.55 }[bucket]
   // When the ball should come out (s after the snap), with a little spread.
-  const wantRel = SNAP + { screen: 1.75, quick: 1.65, dropback: 2.55, deep: 2.8, pa: 2.75 }[bucket] + (hash(seed + 61) - 0.5) * 0.4
+  let wantRel = SNAP + { screen: 1.75, quick: 1.65, dropback: 2.55, deep: 2.8, pa: 2.75 }[bucket] + (hash(seed + 61) - 0.5) * 0.4
   // Run fake (play-action / RPO / bootleg): QB and back mesh before the drop.
   const qbPts: Pt[] = []
   if (pa) qbPts.push({ x: f.qb.x + 0.5, y: MID_Y + side * 1.2 })
   if (boot) qbPts.push({ x: f.qb.x - 1.2, y: MID_Y - rollSide * 1.2 })
-  const rollMag = boot ? 9 : quick ? 3 : 6 + hash(seed + 2) * 3
+  // Under pressure the pocket movement comes from the QB's legs (animflow r5;
+  // NFL tracking: escape ~4.7 yd wide at ~7 yd deep, ~5 yd/s, throw ~1.1 s
+  // later; mobile QBs p90 ~10 yd wide): a mobile QB breaks the pocket early and
+  // wide and extends the play; a pocket QB climbs / slides 1-2 yd and throws
+  // hurried; an average QB slides a few yards.
+  const mob = qbMobility(ctx.actors?.get('qb'))
+  const tier = qbTier(mob)
+  const press = scramble && !boot
+  // A mobile QB extends the play outside the pocket (NFL: escape ~3.4-4.1 s, throw ~1.1 s later).
+  if (press && tier === 'mobile' && bucket !== 'screen' && bucket !== 'quick') wantRel += 0.25 + 0.4 * mob
+  const rollMag = boot ? 9 : press
+    ? (tier === 'mobile' ? 4.5 + mob * 2 + hash(seed + 2) * 2.5 : tier === 'pocket' ? 0.6 + hash(seed + 2) * 1.0 : 3.2 + hash(seed + 2) * 2)
+    : quick ? 3 : 6 + hash(seed + 2) * 3
   const rollY = clampY(MID_Y + (boot ? -rollSide : rollSide) * rollMag)
   qbPts.push({ x: f.qb.x - drop, y: MID_Y })
-  if (scramble || boot) {
+  if (press && tier === 'pocket') {
+    // Climb: a step up into the pocket and a short slide away from the pressure.
+    qbPts.push({ x: f.qb.x - drop + 1.2 + hash(seed + 5) * 0.8, y: rollY })
+    m.qb.run(qbPts, { stop: true })
+  } else if (press) {
+    // Break the pocket: a hitch, then out the side at a run (mobile QBs wider, keeping depth).
+    const climb = tier === 'mobile' ? 0.6 : 1.2
+    qbPts.push({ x: f.qb.x - drop + 0.4, y: MID_Y + (rollY - MID_Y) * 0.2 }, { x: f.qb.x - drop + climb, y: rollY })
+    m.qb.run(qbPts, { stop: true })
+  } else if (scramble || boot) {
     qbPts.push({ x: f.qb.x - drop - 0.5 + (scramble ? 1.5 : 0), y: MID_Y + (rollY - MID_Y) * 0.15 }, { x: f.qb.x - drop + 1.5, y: rollY })
     m.qb.run(qbPts, { stop: true })
   } else {
@@ -2759,9 +2858,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const routeMap = conceptTree(concept, rollSide)
   const inwOf = (k: string) => (f[k].y < MID_Y ? 1 : -1)
   let pick = tgt
-  let best = Math.abs((ROUTES[routeMap[tgt]]?.depth ?? 0) - depth)
+  let best = Math.abs((ROUTES[routeMap[tgt]]?.depth ?? 0) - catchDepth)
   for (const k of Object.keys(routeMap)) {
-    const d = Math.abs((ROUTES[routeMap[k]]?.depth ?? 0) - depth)
+    const d = Math.abs((ROUTES[routeMap[k]]?.depth ?? 0) - catchDepth)
     if (d < best) {
       best = d
       pick = k
@@ -2841,7 +2940,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // goes forward (or across), never back toward the line like a real NFL catch.
     if (!inc && !int) {
       const gain = endX0 - los
-      const yacMin = gain > 0 ? clampN(gain * 0.25, 1, 4) : 0
+      const yacMin = gain > 0 ? Math.min(yacT, Math.max(0, gain - 0.5)) : 0
       if (cPt.x > endX0 - yacMin) {
         for (let t = cSec; t >= 0.35; t -= 0.02) {
           if (posAt(m[tgt].path, t).x <= endX0 - yacMin) {
@@ -3168,7 +3267,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // the end spot (x) is unchanged.
   const endY = play.outOfBounds
     ? (catchPt.y < MID_Y ? 1.6 : FIELD_H - 1.6)
-    : clampY(catchPt.y + (MID_Y - catchPt.y) * (yac > 8 ? 0.35 : 0.12) + (hash(seed + 8) - 0.5) * 4)
+    : clampY(catchPt.y + clampN((MID_Y - catchPt.y) * (yac > 8 ? 0.3 : 0.1) + (hash(seed + 8) - 0.5) * 3, -(0.3 * yac + 0.4), 0.3 * yac + 0.4))
   const spot: Pt = { x: endX, y: endY }
 
   if (play.turnover) {
@@ -3218,7 +3317,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // In bounds and short of the goal line: the credited tackler (when the sim
   // named one) — else the defender who can actually arrive first — meets the
   // receiver at the recorded stop while he keeps running at his ratings' pace.
-  const res = resolveCarry({ m, carrierKey: tgt, spot, tacklerKeys: pursuers, prefer: creditKey, seed })
+  const res = resolveCarry({ m, carrierKey: tgt, spot, tacklerKeys: pursuers, prefer: creditKey, seed, northSouth: true })
   capAll(m, ALL_KEYS(f), res.endSec)
   ball.push(...shadow(m[tgt].path, catchSec).slice(1))
   recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
@@ -3325,7 +3424,8 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   return finish(f, m, { ball, holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }], flights: [] })
 }
 
-function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
+/** The pre-round-5 punt (touchbacks and blocked punts keep it). */
+function buildPuntLegacy(play: Play, ctx: AnimContext): PlayAnim {
   recStart()
   const los = 10 + play.startYard
   const f = formation(los)
@@ -3493,7 +3593,8 @@ function buildKick(play: Play, ctx: AnimContext): PlayAnim {
   })
 }
 
-function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
+/** The pre-round-5 kickoff (touchbacks keep it). */
+function buildKickoffLegacy(play: Play, ctx: AnimContext): PlayAnim {
   recStart()
   // The receiving club is the offense; the kick comes from their own end back.
   const f = formation(10 + play.startYard)
@@ -3625,6 +3726,348 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   ball.push(...shadow(m.rb.path, catchT).slice(1))
   recEv(catchT, 'catch', ['rb', tackler], catchPt)
   recClose(m, 'rb', tackler, end, DEF_KEYS, { td, tdX: 110, tdDir: 1, outOfBounds: !!play.outOfBounds, from: catchT })
+  return finish(f, m, {
+    ball,
+    holders: [{ t: 0, key: null }, { t: catchT, key: 'rb' }],
+    flights: [{ t0: 0, t1: catchT, height: 1 }],
+  })
+}
+
+// ── kick / punt returns on the live field (animflow round 5) ────────────────
+/** A returner's pace on the return: real acceleration (~5 yd/s², 0 → 6 yd/s in ~1.2 s). */
+function returnPace(mv: Mover): Pace {
+  return { top: mv.pace.top, acc: Math.min(mv.pace.acc, 5.2) }
+}
+
+/**
+ * Script the returner from the catch: the scheme's line to the recorded spot,
+ * first contact a yard or so short of it and the pile to exactly the spot. If
+ * the coverage could not physically be there in time he runs it patiently
+ * (slower, then a wider line). Returns contact and whistle times.
+ */
+function scriptReturn(mv: Mover, from: Pt, spot: Pt, dir: 1 | -1, scheme: 'wall' | 'middle', needT: number, td: boolean, seed: number): { contactT: number; endSec: number; c: Pt } {
+  const saved = mv.pace
+  mv.pace = returnPace(mv)
+  const line = returnLine(from, spot, dir, scheme)
+  const total = polyLen(from, line)
+  const ac = td ? 0 : clampN(yardsAfterContact(mv.player, total, seed) * 0.7, 0.4, 1.6)
+  const { pre, post, c } = splitPolyline(from, line, Math.max(0, total - ac))
+  const natFor = (k: number) => (pre.length ? timedLine([from, ...pre], { top: mv.pace.top * k, acc: mv.pace.acc }, { v0: 0, stop: false }).slice(-1)[0]?.t ?? 0 : 0)
+  const t0 = mv.t
+  let k = 1
+  if (!td) while (k > 0.74 && t0 + natFor(k) < needT) k -= 0.04
+  mv.pace = { top: mv.pace.top * k, acc: mv.pace.acc }
+  if (pre.length) {
+    if (!td && t0 + natFor(k) < needT - 0.05) mv.run(routeByTime(from, c, mv.pace, 0, needT - t0, 0), { v0: 0, stop: false })
+    else mv.run(pre, { v0: 0, stop: td })
+  }
+  const contactT = mv.t
+  if (!td) pileDrive(mv, post, carrySpeed(mv))
+  else mv.lastStop = true
+  mv.pace = saved
+  return { contactT, endSec: mv.t, c }
+}
+
+/** Earliest a coverage man (from his t=0 spot) could be at `c` (s). */
+function coverNeed(m: Record<string, Mover>, keys: string[], c: Pt): number {
+  let best = Infinity
+  for (const k of keys) {
+    const s = m[k].path[0]
+    best = Math.min(best, straightTime(m[k].pace, Math.hypot(c.x - s.x, c.y - s.y), 0) + 0.35)
+  }
+  return best
+}
+
+function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
+  const kind = play.returnKind
+  const touchback = kind === 'touchback' || play.result.includes('touchback')
+  if (touchback || kind === 'blocked') return buildPuntLegacy(play, ctx)
+  recStart()
+  const los = 10 + play.startYard
+  const f = formation(los)
+  f.qb = { ...f.qb, x: los - 14, role: 'P' }
+  f.s0 = { ...f.s0, x: los + 40, y: MID_Y - 4, role: 'PR' }
+  const m = startMovers(f, ctx)
+  recSnap(los)
+  const seed = play.n * 19 + play.startYard
+  const isReturn = kind === 'return' && !!play.returnerId
+  const td = !!play.returnTD
+  const retYds = Math.max(0, play.returnYards ?? 0)
+  const finalX = td ? 10 : clampX(changeSpot(play, ctx.next) ?? 10 + play.startYard + play.yards)
+  const isReturnOrMuff = isReturn || kind === 'muff'
+  const landX = isReturnOrMuff ? clampX(finalX + retYds) : finalX
+  const side = hash(seed + 2) < 0.5 ? -1 : 1
+  const landY = clampY(MID_Y + (hash(seed + 1) - 0.5) * 12)
+  const endY = isReturn ? clampY(landY + side * (3 + hash(seed + 3) * 7)) : landY
+  const landPt: Pt = { x: landX, y: landY }
+  const spot: Pt = { x: finalX, y: endY }
+  const kickDist = Math.max(10, Math.abs(landX - los))
+  // Snap to kick ~2.0 s (the long snap reaches the punter in ~0.8 s), a real hang.
+  const snapArr = SNAP + 0.78
+  const kickT = SNAP + 1.9 + (hash(seed + 7) - 0.5) * 0.2
+  const flight = clampN(1.4 + kickDist * 0.058, 3.0, 4.8)
+
+  // The punt unit: line, wings, personal protector, two gunners, the punter.
+  // The return unit: six rushers over the protection, two jammers on the
+  // gunners, a hold-up man in the middle, a second deep man; s0 returns.
+  const gunners = ['wr0', 'wr1']
+  const protectors = ['ol0', 'ol1', 'ol3', 'ol4', 'wr2', 'te', 'ol2', 'rb']
+  const rushers = ['dl0', 'dl1', 'dl2', 'dl3', 'lb0', 'lb1']
+  const jammers = ['cb0', 'cb1']
+  const cov = OFF_KEYS
+  const blk = DEF_KEYS.filter((k) => k !== 's0')
+  ;[-4, -2, 0, 2, 4].forEach((d, i) => m[`ol${i}`].reset(clampX(los - 0.6), clampY(MID_Y + d)))
+  m.wr2.reset(clampX(los - 1.3), clampY(MID_Y - 6.2))
+  m.te.reset(clampX(los - 1.3), clampY(MID_Y + 6.2))
+  m.rb.reset(clampX(los - 6), clampY(MID_Y + 0.9))
+  m.wr0.reset(clampX(los - 0.6), 6)
+  m.wr1.reset(clampX(los - 0.6), FIELD_H - 6)
+  m.qb.reset(clampX(los - 14), MID_Y)
+  ;[-4, -2, 2, 4].forEach((d, i) => m[`dl${i}`].reset(clampX(los + 1.1), clampY(MID_Y + d)))
+  m.lb0.reset(clampX(los + 1.2), clampY(MID_Y - 6.2))
+  m.lb1.reset(clampX(los + 1.2), clampY(MID_Y + 6.2))
+  m.cb0.reset(clampX(los + 1.4), 7.1)
+  m.cb1.reset(clampX(los + 1.4), FIELD_H - 7.1)
+  m.lb2.reset(clampX(los + 9), clampY(MID_Y + side * 2))
+  m.s1.reset(clampX(landX - 14), clampY(landY - side * 8))
+
+  // The returner drifts under the punt and times his arrival to the catch.
+  const kStart = clampN(m.s0.pace.top * flight * 0.5, 5, 18)
+  m.s0.reset(clampX(landPt.x - kStart), clampY(landPt.y + (landPt.y > MID_Y ? 4 : -4)))
+  const trackT = straightTime(m.s0.pace, Math.hypot(landPt.x - m.s0.x, landPt.y - m.s0.y), 0)
+  let landT = Math.max(kickT + flight, trackT + 0.15)
+  const covNoP = cov.filter((k) => k !== 'qb')
+  const { scheme } = returnScheme(landPt, isReturn ? spot : landPt)
+
+  // Contact/whistle of the return (or the end of a fair catch / downed / muff).
+  let contactT = landT + 0.8
+  let endSec = landT + 0.8
+  let cPt: Pt = landPt
+  const settleUnderPunt = () => {
+    runTimed(m.s0, [{ x: landPt.x, y: landPt.y }], 0, landT, false, true)
+    if (m.s0.t < landT) m.s0.hold(landT - m.s0.t)
+  }
+  if (isReturn) {
+    const line = returnLine(landPt, spot, -1, scheme)
+    const total = polyLen(landPt, line)
+    const ac = td ? 0 : clampN(yardsAfterContact(m.s0.player, total, seed) * 0.7, 0.4, 1.6)
+    cPt = splitPolyline(landPt, line, Math.max(0, total - ac)).c
+    const need = coverNeed(m, covNoP, cPt)
+    settleUnderPunt()
+    const r = scriptReturn(m.s0, landPt, spot, -1, scheme, need, td, seed)
+    contactT = r.contactT
+    endSec = r.endSec
+    cPt = r.c
+  } else {
+    settleUnderPunt()
+    // Fair catch: he stays on the spot; downed / muff: he backs away and watches.
+    if (kind === 'fairCatch') m.s0.run([{ x: clampX(landPt.x - 0.4), y: landPt.y }], { stop: true })
+    else m.s0.run([{ x: clampX(landPt.x + 3), y: clampY(landPt.y + 1.5) }], { stop: true })
+    if (m.s0.t < endSec) m.s0.hold(endSec - m.s0.t)
+  }
+  recEv(kickT, 'kick', ['qb'], posAt(m.qb.path, kickT))
+
+  const credited = play.tackleIds?.[0]
+  const creditedKey = credited ? cov.find((k) => ctx.actors?.get(k)?.id === credited) : undefined
+  const designated = isReturn && !td ? creditedKey ?? closestKey(m, covNoP, cPt, 0) : undefined
+  const tackleFrom = isReturn && !td ? Math.max(landT, contactT - 1.2) : endSec
+  const rate = (k: string) => m[k]?.player
+  const rr = runReturnField({
+    kind: 'punt',
+    outcome: isReturn ? 'return' : kind === 'fairCatch' ? 'fairCatch' : kind === 'muff' ? 'muff' : 'downed',
+    cov: cov.map((k) => m[k]),
+    kicker: 'qb',
+    blk: blk.map((k) => m[k]),
+    returner: m.s0,
+    dir: -1,
+    kickT,
+    catchT: landT,
+    catchPt: landPt,
+    spot: isReturn ? spot : landPt,
+    contactT,
+    endT: endSec,
+    tackleFrom,
+    tackler: designated,
+    gunners,
+    jammers,
+    rushers,
+    protectors,
+    seed,
+    rec: (a, b, t0, t1, k) => recEng(a, b, t0, t1, k),
+    blockOf: (k) => blockOf(rate(k), false),
+    shedOf: (k) => bestAttr(rate(k), ['BSH', 'STR']),
+  })
+
+  const ball: WP[] = [
+    { t: 0, x: los, y: MID_Y },
+    { t: SNAP, x: los, y: MID_Y },
+    { t: snapArr, ...posAt(m.qb.path, snapArr) },
+    ...shadow(m.qb.path, snapArr, kickT).slice(1),
+    { t: landT, x: landPt.x, y: landPt.y },
+  ]
+  const baseHolders = [{ t: 0, key: null }, { t: SNAP, key: null }, { t: snapArr, key: 'qb' }, { t: kickT, key: null }]
+  // One flight, the punt itself (the director / replay read flights[0] as the kick; the long snap rides low on the ball path).
+  const flights = [{ t0: kickT, t1: landT, height: 1 }]
+
+  if (!isReturn) {
+    const downKey = closestKey(m, covNoP, landPt, landT)
+    if (kind === 'downed') {
+      // The nearest cover man gets to the ball and downs it.
+      seek(m[downKey], Math.max(kickT, landT - 0.5))
+      glideTo(m[downKey], { x: clampX(landPt.x + 0.5), y: landPt.y }, 0.9, 0.8)
+    }
+    capAll(m, ALL_KEYS(f), endSec)
+    if (kind === 'muff') {
+      const loose = { x: clampX(landPt.x + (hash(seed + 4) - 0.5) * 6), y: clampY(landPt.y + (hash(seed + 5) - 0.5) * 6) }
+      ball.push({ t: landT + 0.25, x: loose.x, y: loose.y }, { t: landT + 0.45, x: loose.x, y: loose.y })
+      recEv(landT, 'fumble', ['s0'], landPt)
+      if (play.turnover) recEv(landT + 0.02, 'turnover', [downKey], landPt)
+      recEv(landT + 0.45, 'down', ['s0'], landPt)
+    } else if (kind === 'fairCatch') {
+      recEv(landT, 'fairCatch', ['s0'], landPt)
+    } else {
+      recEv(Math.min(endSec, landT + 0.4), 'down', [downKey], landPt)
+    }
+    return finish(f, m, {
+      ball,
+      holders: kind === 'fairCatch' ? [...baseHolders, { t: landT, key: 's0' }] : baseHolders,
+      flights,
+    })
+  }
+
+  const free = covNoP.filter((k) => !rr.stillEngaged.has(k))
+  const tackler = td ? closestKey(m, free.length ? free : covNoP, spot, endSec) : chooseTackler(m, free.length ? free : covNoP, designated, cPt, tackleFrom, contactT - tackleFrom)
+  if (!td) hitAndRide(m[tackler], m.s0, tackleFrom, contactT, endSec)
+  capAll(m, ALL_KEYS(f), endSec)
+  ball.push(...shadow(m.s0.path, landT).slice(1))
+  recEv(landT, 'catch', ['s0', tackler], landPt)
+  recClose(m, 's0', tackler, endSec, cov, { td, tdX: 10, tdDir: -1, outOfBounds: !!play.outOfBounds, from: landT })
+  return finish(f, m, { ball, holders: [...baseHolders, { t: landT, key: 's0' }], flights })
+}
+
+function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
+  const touchback = play.result === 'Touchback' || play.returnKind === 'touchback'
+  if (touchback) return buildKickoffLegacy(play, ctx)
+  recStart()
+  // The receiving club is the offense; the kick comes from their own end back.
+  const f = formation(10 + play.startYard)
+  const m = startMovers(f, ctx)
+  const kickX = 75
+  const endX = clampX(10 + play.endYard)
+  const td = !!play.returnTD
+  const fumble = !td && !!play.turnover
+  const retYds = Math.max(0, play.returnYards ?? 0)
+  const seed = play.n * 29 + play.startYard
+  const side = hash(seed) < 0.5 ? -1 : 1
+  const catchX = clampX(endX - retYds)
+  const catchY = clampY(MID_Y + (hash(seed + 4) - 0.5) * 8)
+  const seamY = clampY(catchY + side * (4 + hash(seed + 1) * 9))
+  const catchPt: Pt = { x: catchX, y: catchY }
+  const spot: Pt = { x: endX, y: seamY }
+  const { scheme } = returnScheme(catchPt, spot)
+
+  // Alignment: eleven cover men across the kicking line (the kicker in the
+  // middle, a run-up behind the ball); the return unit's front five on the
+  // restraining line, three in the middle, two backs ahead of the returner.
+  const covKeys = DEF_KEYS
+  const kicker = 's1'
+  const front = ['ol0', 'ol1', 'ol2', 'ol3', 'ol4']
+  const middle = ['te', 'qb', 'wr1']
+  const backs = ['wr0', 'wr2']
+  const blkKeys = [...front, ...middle, ...backs]
+  covKeys.filter((k) => k !== kicker).forEach((k, i) => m[k].reset(clampX(kickX + 1 + (i % 2) * 0.6), clampY(MID_Y - 19.8 + i * 4.4)))
+  m[kicker].reset(clampX(kickX + 6), MID_Y)
+  front.forEach((k, i) => m[k].reset(clampX(kickX - 11 - (i % 2) * 1.5), clampY(MID_Y + (i - 2) * 9)))
+  const midX = clampN(catchX + 30, 34, kickX - 20)
+  middle.forEach((k, i) => m[k].reset(clampX(midX), clampY(MID_Y + (i - 1) * 9)))
+  backs.forEach((k, i) => m[k].reset(clampX(catchX + 12), clampY(catchY + (i ? 5 : -5))))
+
+  // The hang (~4 s on a deep kick); the returner settles under it.
+  const kickDist = Math.max(10, kickX - catchX)
+  let catchT = clampN(1.2 + kickDist * 0.04, 2.4, 4.3)
+  const kStart = clampN(m.rb.pace.top * Math.max(0.4, catchT - 0.6) * 0.5, 3, 12)
+  m.rb.reset(clampX(catchX - kStart), clampY(catchY - side * 1.5))
+  catchT = Math.max(catchT, straightTime(m.rb.pace, Math.hypot(catchPt.x - m.rb.x, catchPt.y - m.rb.y), 0) + 0.15)
+  // A short return needs the coverage there: a longer hang (to 4.4 s), then a patient return.
+  const line = returnLine(catchPt, spot, 1, scheme)
+  const total = polyLen(catchPt, line)
+  const ac = td ? 0 : clampN(yardsAfterContact(m.rb.player, total, seed) * 0.7, 0.4, 1.6)
+  const cGuess = splitPolyline(catchPt, line, Math.max(0, total - ac)).c
+  const need = coverNeed(m, covKeys.filter((k) => k !== kicker), cGuess)
+  const retNat = timedLine([catchPt, cGuess], returnPace(m.rb), { v0: 0, stop: false }).slice(-1)[0]?.t ?? 0
+  if (!td && catchT + retNat < need) catchT = Math.min(4.4, Math.max(catchT, need - retNat))
+  runTimed(m.rb, [{ x: catchPt.x - 1.2, y: catchPt.y + 0.4 }, { x: catchPt.x, y: catchPt.y }], 0, catchT, false, true)
+  if (m.rb.t < catchT) m.rb.hold(catchT - m.rb.t)
+  recEv(0, 'kick', [kicker], { x: kickX, y: MID_Y })
+  const r = scriptReturn(m.rb, catchPt, spot, 1, scheme, need, td, seed)
+  const contactT = r.contactT
+  const endSec = r.endSec
+  const cPt = r.c
+
+  const designated = td ? undefined : closestKey(m, covKeys.filter((k) => k !== kicker), cPt, 0)
+  const tackleFrom = td ? endSec : Math.max(catchT, contactT - 1.2)
+  const rate = (k: string) => m[k]?.player
+  const rr = runReturnField({
+    kind: 'kickoff',
+    outcome: 'return',
+    cov: covKeys.map((k) => m[k]),
+    kicker,
+    blk: blkKeys.map((k) => m[k]),
+    returner: m.rb,
+    dir: 1,
+    kickT: 0,
+    catchT,
+    catchPt,
+    spot,
+    contactT,
+    endT: endSec,
+    tackleFrom,
+    tackler: designated,
+    front,
+    middle,
+    backs,
+    seed,
+    rec: (a, b, t0, t1, k) => recEng(a, b, t0, t1, k),
+    blockOf: (k) => blockOf(rate(k), false),
+    shedOf: (k) => bestAttr(rate(k), ['BSH', 'STR']),
+  })
+  const cand = covKeys.filter((k) => k !== kicker && !rr.stillEngaged.has(k))
+  const tackler = td ? closestKey(m, covKeys, spot, endSec) : chooseTackler(m, cand.length ? cand : covKeys, designated, cPt, tackleFrom, contactT - tackleFrom)
+
+  const ball: WP[] = [{ t: 0, x: kickX, y: MID_Y }, { t: catchT, x: catchPt.x, y: catchPt.y }]
+  if (fumble) {
+    // The ball squirts loose beside the returner and a coverage man recovers it.
+    const popT = Math.max(catchT + 0.2, catchT + (endSec - catchT) * 0.72)
+    const rbPos = posAt(m.rb.path, popT)
+    const loose = { x: clampX(rbPos.x + 1.2 + (hash(seed + 6) - 0.5) * 3), y: clampY(rbPos.y + (hash(seed + 6) - 0.5) * 4) }
+    const rec = closestKey(m, covKeys, loose, popT)
+    const rv = seek(m[rec], popT)
+    m[rec].run([{ x: loose.x, y: loose.y }], { v0: rv, stop: true })
+    const recT = m[rec].t
+    seek(m.rb, popT)
+    m.rb.hold(0.4)
+    capAll(m, ALL_KEYS(f).filter((k) => k !== rec && k !== 'rb'), Math.max(recT, popT + 0.4))
+    ball.push(
+      ...shadow(m.rb.path, catchT, popT).slice(1),
+      { t: popT + 0.12, x: loose.x, y: loose.y },
+      { t: Math.max(recT, popT + 0.2), x: loose.x, y: loose.y },
+      ...shadow(m[rec].path, recT).slice(1),
+    )
+    recEv(catchT, 'catch', ['rb', rec], catchPt)
+    recEv(popT, 'fumble', ['rb', rec], { x: loose.x, y: loose.y })
+    recEv(popT + 0.02, 'turnover', [rec], { x: loose.x, y: loose.y })
+    recEv(recT, 'down', [rec], { x: loose.x, y: loose.y })
+    return finish(f, m, {
+      ball,
+      holders: [{ t: 0, key: null }, { t: catchT, key: 'rb' }, { t: popT, key: null }, { t: recT, key: rec }],
+      flights: [{ t0: 0, t1: catchT, height: 1 }],
+    })
+  }
+  if (!td) hitAndRide(m[tackler], m.rb, tackleFrom, contactT, endSec)
+  capAll(m, ALL_KEYS(f), endSec)
+  ball.push(...shadow(m.rb.path, catchT).slice(1))
+  recEv(catchT, 'catch', ['rb', tackler], catchPt)
+  recClose(m, 'rb', tackler, endSec, DEF_KEYS, { td, tdX: 110, tdDir: 1, outOfBounds: !!play.outOfBounds, from: catchT })
   return finish(f, m, {
     ball,
     holders: [{ t: 0, key: null }, { t: catchT, key: 'rb' }],
