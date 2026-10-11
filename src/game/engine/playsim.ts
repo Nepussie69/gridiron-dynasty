@@ -25,7 +25,7 @@ import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, 
 import type { PlayReview, PendingReview, ChallengeState } from './review'
 import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
 import { clutchEdge, kickClutch } from './clutch'
-import { getIndividual } from './individual'
+import { getIndividual, positionRating } from './individual'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -464,8 +464,7 @@ function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', posi
     const use = pool.length ? pool : field
     const spec = PEN_OFF_RATING[kind] ?? { key: 'AWR' }
     return hashPick(use, (p) => {
-      const a = mkAttrs(p)
-      const v = spec.high ? Math.max(a.PMV ?? 70, a.FMV ?? 70) : (a[spec.key] ?? POS_MEAN[p.pos]?.[spec.key] ?? 70)
+      const v = spec.high ? Math.max(eff(p, 'PMV'), eff(p, 'FMV')) : eff(p, spec.key)
       return Math.max(1, spec.high ? v : 100 - v)
     }, hash32(key)) ?? use[0]
   }
@@ -492,20 +491,19 @@ function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId
       const holder = ol.length ? worstPlayer(ol, 'PBK') : undefined
       const rusher = rushers.length ? bestRusher(rushers) : undefined
       if (holder && rusher) {
-        const a = mkAttrs(rusher)
-        const diff = Math.max(a.PMV ?? 70, a.FMV ?? 70) - (mkAttrs(holder).PBK ?? 70)
+        const diff = Math.max(eff(rusher, 'PMV'), eff(rusher, 'FMV')) - eff(holder, 'PBK')
         w.holdingOff = (w.holdingOff ?? 0) * clamp(1 + (diff - J8D.penHoldCenter) * J8D.penHoldW, 0.7, 1.35)
       }
       if (ol.length) {
-        const awr = mkAttrs(worstPlayer(ol, 'AWR')!).AWR ?? 70
+        const awr = eff(worstPlayer(ol, 'AWR')!, 'AWR')
         w.falseStart = (w.falseStart ?? 0) * clamp(1 + (72 - awr + J8D.penShiftOl) * J8D.penAwrW, 0.7, 1.3) * (away ? 1.25 : 1)
       }
       if (wr.length) {
-        const awr = mkAttrs(worstPlayer(wr, 'AWR')!).AWR ?? 70
+        const awr = eff(worstPlayer(wr, 'AWR')!, 'AWR')
         w.opi = (w.opi ?? 0) * clamp(1 + (72 - awr + J8D.penShiftWr) * J8D.penOpiW, 0.8, 1.3)
       }
       if (qb) {
-        const awr = mkAttrs(qb).AWR ?? 70
+        const awr = eff(qb, 'AWR')
         w.delay = (w.delay ?? 0) * clamp(1 + (72 - awr + J8D.penShiftQb) * J8D.penAwrW, 0.7, 1.3)
       }
     } else {
@@ -514,19 +512,19 @@ function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId
       const dl = field.filter((p) => p.pos === 'DE' || p.pos === 'DT')
       const cover = db.length ? worstPlayer(db, 'MCV') : undefined
       if (cover) {
-        const mcv = mkAttrs(cover).MCV ?? 70
+        const mcv = eff(cover, 'MCV')
         w.dpi = (w.dpi ?? 0) * clamp(1 + (72 - mcv + J8D.shiftCb) * 0.012, 0.7, 1.4)
         w.illegalContact = (w.illegalContact ?? 0) * clamp(1 + (72 - mcv + J8D.shiftCb) * 0.01, 0.8, 1.3)
       }
       const dbw = dblb.length ? worstPlayer(dblb, 'AWR') : undefined
       if (dbw) {
-        const awr = mkAttrs(dbw).AWR ?? 70
+        const awr = eff(dbw, 'AWR')
         w.holdingDef = (w.holdingDef ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDb) * 0.01, 0.8, 1.3)
         w.unnecessary = (w.unnecessary ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDb) * 0.01, 0.8, 1.3)
       }
       const dlw = dl.length ? worstPlayer(dl, 'AWR') : undefined
       if (dlw) {
-        const awr = mkAttrs(dlw).AWR ?? 70
+        const awr = eff(dlw, 'AWR')
         w.offside = (w.offside ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDl) * 0.012, 0.7, 1.3)
         w.roughing = (w.roughing ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDl) * 0.008, 0.8, 1.3)
       }
@@ -615,24 +613,23 @@ function stCoverMan(world: World, teamId: string, key: string): Player | undefin
   const unit = coverUnit(world, teamId)
   if (!unit.length) return undefined
   return hashPick(unit, (p) => {
-    const a = mkAttrs(p)
-    return Math.max(1, (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.35 + (a.SPD ?? 70) * 0.25)
+    return Math.max(1, eff(p, 'TAK') * 0.4 + eff(p, 'PUR') * 0.35 + eff(p, 'SPD') * 0.25)
   }, hash32(key))
 }
 /** J8d: a cover man's individual coverage value (replaces the old unit mean). */
 function coverScoreOf(p: Player | undefined): number {
-  const a = p ? mkAttrs(p) : {}
-  return (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.35 + (a.SPD ?? 70) * 0.25 - J8D.covPickBias
+  if (!p) return 70 * 0.4 + 70 * 0.35 + 70 * 0.25 - J8D.covPickBias
+  return eff(p, 'TAK') * 0.4 + eff(p, 'PUR') * 0.35 + eff(p, 'SPD') * 0.25 - J8D.covPickBias
 }
 /** J8d: the returner's return athletics (SPD/ACC/BCV) for the TD chance. */
 function returnAthOf(p: Player | undefined): number {
-  const a = p ? mkAttrs(p) : {}
-  return (a.SPD ?? 70) * 0.5 + (a.ACC ?? 70) * 0.3 + (a.BCV ?? 70) * 0.2
+  if (!p) return 70
+  return eff(p, 'SPD') * 0.5 + eff(p, 'ACC') * 0.3 + eff(p, 'BCV') * 0.2
 }
 /** J8d: the cover man's chase athletics (SPD/TAK/PUR) for the TD chance. */
 function coverAthOf(p: Player | undefined): number {
-  const a = p ? mkAttrs(p) : {}
-  return (a.SPD ?? 70) * 0.4 + (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.2
+  if (!p) return 70
+  return eff(p, 'SPD') * 0.4 + eff(p, 'TAK') * 0.4 + eff(p, 'PUR') * 0.2
 }
 /** J8d: an individual return-TD chance (centred on the league-mean returner−cover gap). */
 function returnTdProb(base: number, returner: Player | undefined, coverMan: Player | undefined): number {
@@ -641,8 +638,9 @@ function returnTdProb(base: number, returner: Player | undefined, coverMan: Play
 }
 /** J8d: an individual ball-security multiplier from the returner's own CAR. */
 function carrySecurityOf(returner: Player | undefined): number {
-  const a = returner ? mkAttrs(returner) : {}
-  return clamp(1 + (J8D.carCenter - (a.CAR ?? J8D.carCenter)) * J8D.fumW, J8D.fumLo, J8D.fumHi)
+  if (!returner) return clamp(1 + (J8D.carCenter - J8D.carCenter) * J8D.fumW, J8D.fumLo, J8D.fumHi)
+  const car = J8A2_ON ? eff(returner, 'CAR') : (mkAttrs(returner).CAR ?? J8D.carCenter)
+  return clamp(1 + (J8D.carCenter - car) * J8D.fumW, J8D.fumLo, J8D.fumHi)
 }
 
 export interface Play {
@@ -771,6 +769,13 @@ export interface Play {
   /** R15: the scrimmage players on the field for this snap (offence / defence ids). */
   onFieldOff?: string[]
   onFieldDef?: string[]
+  // ── J8a2: the run-defence read loop (animation) ────────────────────────────
+  /** J8a2: the front defender whose read (gap fit) decided the run. */
+  readKeyId?: string
+  /** J8a2: the run defenders who bit on the misdirection / play-action key. */
+  biteIds?: string[]
+  /** J8a2: the safety (or LB) who filled the alley / gap on the run. */
+  fillId?: string
   /** animflow r6b: each on-field man's in-game fatigue at the snap (x100, rounded),
    *  aligned to onFieldOff then onFieldDef. Presentation only (the broadcast's
    *  tired gait / hands on hips); recorded read-only, no rng. */
@@ -912,6 +917,25 @@ const E1_W = 1.1
 function rmean(pos: string | undefined, key: string, val: number): number {
   const m = pos ? POS_MEAN[pos]?.[key] : undefined
   return m === undefined ? 0 : val - m
+}
+
+// ── J8a2: position-correct effective ratings for the individual pickers ───────
+// The pre-j8a2 pickers read `a.KEY ?? 70`, which gives a player who does not carry
+// a rating (a CB has no PUR in his attribute schema) the flat league 70 — below a
+// real defender's level. j8a2 uses the player's own value when he has it, else the
+// mean for his POSITION (POS_MEAN) — the position-correct effective rating — and
+// only when the position carries no mean at all, a blend of the nearest ratings
+// that position does carry (see `positionRating` in individual.ts). Never a flat
+// 70. With `setJ8a2(false)` this returns the old `?? 70` value, so the OFF path is
+// byte-identical.
+/** J8a2: a player's rating — his own, else his position's mean, else a blend of
+ *  the ratings that position does carry. Never a flat 70 (OFF keeps `?? 70`). */
+function eff(p: Player, key: string): number {
+  const a = mkAttrs(p)
+  const v = a[key]
+  if (v !== undefined) return v
+  if (!J8A2_ON) return 70
+  return positionRating(p.pos, a, key)
 }
 /** E1: QB throw power sharpens the deep separation edge (deep throws only). */
 function qbDeepThp(qbA: Record<string, number>, depth: number): number {
@@ -1426,8 +1450,7 @@ function speedMph(pos: string | undefined, spd: number): number {
 
 /** J8a: a pursuer's effective speed — top speed plus closing skill (PUR/AWR). */
 function pursuerMph(p: Player): number {
-  const a = mkAttrs(p)
-  return speedMph(p.pos, a.SPD ?? 70) + rmean(p.pos, 'PUR', a.PUR ?? 70) * J8A.chasePur + rmean(p.pos, 'AWR', a.AWR ?? 70) * J8A.chaseAwr
+  return speedMph(p.pos, eff(p, 'SPD')) + rmean(p.pos, 'PUR', eff(p, 'PUR')) * J8A.chasePur + rmean(p.pos, 'AWR', eff(p, 'AWR')) * J8A.chaseAwr
 }
 
 /** J8a: per-play chase geometry — the man who runs the carrier down. */
@@ -1445,8 +1468,7 @@ type Chase = {
 
 /** J8a: a carrier's top speed — SPD plus an ACC burst — in mph. */
 function carrierMph(p: Player): number {
-  const a = mkAttrs(p)
-  return speedMph(p.pos, a.SPD ?? 70) + rmean(p.pos, 'ACC', a.ACC ?? 70) * J8A.chaseAcc
+  return speedMph(p.pos, eff(p, 'SPD')) + rmean(p.pos, 'ACC', eff(p, 'ACC')) * J8A.chaseAcc
 }
 
 /** J8a: the chaser is a hash-picked defender from the second/third level,
@@ -1502,8 +1524,7 @@ function chaseCaughtExtra(c: Chase, u: number): number {
 function pickPursuers(key: string, lbs: Player[], saf: Player[], cbs: Player[]): Player[] {
   const pool = [...lbs, ...saf, ...cbs]
   return hashPickN(pool, (p) => {
-    const a = mkAttrs(p)
-    return Math.max(1, (a.SPD ?? 70) * 0.5 + (a.PUR ?? 70) * 0.3 + (a.AWR ?? 70) * 0.2)
+    return Math.max(1, eff(p, 'SPD') * 0.5 + eff(p, 'PUR') * 0.3 + eff(p, 'AWR') * 0.2)
   }, hash32(key), 3)
 }
 
@@ -1516,7 +1537,7 @@ function interiorShortStrength(ol: Player[], key: string): number {
   const picks = [c, g].filter((p): p is Player => !!p)
   if (!picks.length) return 0
   let s = 0
-  for (const p of picks) s += rmean(p.pos, 'STR', mkAttrs(p).STR ?? 70)
+  for (const p of picks) s += rmean(p.pos, 'STR', eff(p, 'STR'))
   return clamp((s / picks.length) * 0.1 * E1_W, -6, 6)
 }
 
@@ -1525,8 +1546,133 @@ function staRel(list: Array<Player | undefined>): number {
   const ps = list.filter((p): p is Player => !!p)
   if (!ps.length) return 0
   let s = 0
-  for (const p of ps) s += rmean(p.pos, 'STA', mkAttrs(p).STA ?? 70)
+  for (const p of ps) s += rmean(p.pos, 'STA', eff(p, 'STA'))
   return s / ps.length
+}
+
+// ── J8a2: the run-defence read loop, one defender at a time ──────────────────
+// The pre-j8a2 run front is a gap-weighted blend of the front's BSH/TAK (DL) and
+// TAK/PUR (LB). j8a2 gives every front defender his own read: he reads the guard
+// and the backfield with his PRC, takes his first step (right, or a bite on a
+// misdirection/play-action key, which the hash decides and his PRC reduces), fits
+// his gap (ACC/AGI), sheds his blocker (BSH/STR) and finishes in his tackle
+// radius (TAK/HPW/PUR). The safety fills the alley with his own ZCV/PRC/TAK/PUR
+// and the fullback's kick-out is matched against the defender at the point of
+// attack (his AWR decides kick-out vs lead-through on contact). An LB's style —
+// run-and-chase / thumper / coverage — weights which of his own ratings matter.
+// EVERY term is centred on POS_MEAN, so a league-average front reads exactly as
+// the pre-j8a2 level: only the SPREAD widens. Picks are hashes (`hash32`/`h01`)
+// — no rng() draw is added or removed. `setJ8a2(false)` restores the exact
+// pre-j8a2 (J8a-ON) behaviour, byte-identical. Tune only this block.
+let J8A2_ON = true
+export function setJ8a2(on: boolean) { J8A2_ON = on }
+/** J8a2: read the toggle so a probe can restore it exactly. */
+export function getJ8a2(): boolean { return J8A2_ON }
+
+export const J8A2 = {
+  /** PRC: read the guard / backfield and take the right first step (rating pts). */
+  readW: 0.55,
+  /** ACC+AGI: the quickness to fit the gap in front of the blocker. */
+  fitW: 0.40,
+  /** TAK+HPW+PUR: the tackle radius / finish at the point of attack. */
+  radiusW: 0.45,
+  /** STR: shed / anchor against the blocker he must beat (BSH is in the base). */
+  shedW: 0.35,
+  /** First-step right or wrong. P(bite) falls with PRC; a defender who bites is a
+   *  gap late. Applied per defender and centred on his OWN P(bite), so a mean
+   *  front is unchanged and only the low-PRC defenders lose plays. */
+  biteBase: 0.10,
+  biteMisdirection: 1.8,
+  bitePrcW: 0.010,
+  biteMin: 0.01,
+  biteMax: 0.45,
+  bitePenalty: 4.5,
+  /** Safety alley fill (his own TAK/ZCV/PRC/PUR), centred on the safeties on
+   *  the field so the pick cannot drift the run-defence mean. */
+  alleyW: 0.9,
+  /** FB kick-out / lead-through vs the defender at the point of attack: the FB's
+   *  RBK/IBL carry the block and his AWR the kick-out read, the defender's own
+   *  BSH/STR resist it. Replaces the FB-only `fbLeadBlock` term (mean-neutral). */
+  kickW: 0.9,
+  kickDefW: 0.5,
+  kickAwrW: 0.4,
+  /** LB styles: run-and-chase (PUR/SPD), thumper (BSH/STR/HPW), coverage
+   *  (ZCV/PRC). Each component is centred on the LB position mean. */
+  styleChaseW: 0.30,
+  styleThumpW: 0.30,
+  styleCoverW: 0.20,
+} as const
+// The man who read it right and filled the gap leads the tackler pick: `resolveRun`
+// passes the read key as the `decider`, which gets `J8A.deciderBoost` (2.2) in
+// `runTackler`. No separate j8a2 boost is needed.
+
+/** J8a2: P(a defender takes a wrong first step / bites on this play). Falls with
+ *  his PRC relative to his position; a misdirection or play-action key raises it. */
+function biteProb(prcRel: number, misdirection: boolean): number {
+  const base = J8A2.biteBase * (misdirection ? J8A2.biteMisdirection : 1)
+  return clamp(base - prcRel * J8A2.bitePrcW, J8A2.biteMin, J8A2.biteMax)
+}
+/** J8a2: did this defender bite (wrong first step) on this play? */
+function bitesAt(p: Player, key: string, misdirection: boolean): boolean {
+  const pBite = biteProb(rmean(p.pos, 'PRC', eff(p, 'PRC')), misdirection)
+  return pBite > 0 && h01(`${key}:bite:${p.id}`) < pBite
+}
+/** J8a2: a defender's read-loop rating contribution (centred; mean holds). */
+function readValue(p: Player, key: string, misdirection: boolean): number {
+  const prc = rmean(p.pos, 'PRC', eff(p, 'PRC'))
+  const fit = (rmean(p.pos, 'ACC', eff(p, 'ACC')) + rmean(p.pos, 'AGI', eff(p, 'AGI'))) * 0.5
+  const radius = (rmean(p.pos, 'TAK', eff(p, 'TAK')) + rmean(p.pos, 'HPW', eff(p, 'HPW')) + rmean(p.pos, 'PUR', eff(p, 'PUR'))) / 3
+  const pBite = biteProb(prc, misdirection)
+  const bit = pBite > 0 && h01(`${key}:bite:${p.id}`) < pBite ? 1 : 0
+  return J8A2.readW * prc + J8A2.fitW * fit + J8A2.radiusW * radius - J8A2.bitePenalty * (bit - pBite)
+}
+/** J8a2: an LB's style — run-and-chase / thumper / coverage — from his own
+ *  ratings, centred so a league-average LB adds 0. */
+function lbStyle(p: Player): number {
+  const chase = (rmean(p.pos, 'PUR', eff(p, 'PUR')) + rmean(p.pos, 'SPD', eff(p, 'SPD'))) * 0.5
+  const thump = (rmean(p.pos, 'BSH', eff(p, 'BSH')) + rmean(p.pos, 'STR', eff(p, 'STR')) + rmean(p.pos, 'HPW', eff(p, 'HPW'))) / 3
+  const cover = (rmean(p.pos, 'ZCV', eff(p, 'ZCV')) + rmean(p.pos, 'PRC', eff(p, 'PRC'))) * 0.5
+  return J8A2.styleChaseW * chase + J8A2.styleThumpW * thump + J8A2.styleCoverW * cover
+}
+/** J8a2: a defender's run-support value (for the safety alley fill), centred. */
+function supportRel(p: Player): number {
+  return rmean(p.pos, 'TAK', eff(p, 'TAK')) * 0.4 + rmean(p.pos, 'ZCV', eff(p, 'ZCV')) * 0.2 +
+    rmean(p.pos, 'PRC', eff(p, 'PRC')) * 0.2 + rmean(p.pos, 'PUR', eff(p, 'PUR')) * 0.2
+}
+/** J8a2: the filling safety (alley) and his centred run-support value. The value
+ *  is measured against the weighted mean of the pick, so E[value] = 0 exactly. */
+function alleyFill(saf: Player[], key: string): { value: number; player?: Player } {
+  if (!saf.length) return { value: 0 }
+  const w = (p: Player) => Math.max(1, eff(p, 'TAK') * 0.5 + eff(p, 'PRC') * 0.3 + eff(p, 'PUR') * 0.2)
+  const pick = hashPick(saf, w, hash32(`${key}:alley`))
+  if (!pick) return { value: 0 }
+  let tot = 0
+  let wMean = 0
+  for (const p of saf) { const wi = w(p); tot += wi; wMean += wi * supportRel(p) }
+  if (tot <= 0) return { value: 0, player: pick }
+  return { value: supportRel(pick) - wMean / tot, player: pick }
+}
+/** J8a2: the fullback's kick-out vs the defender at the point of attack. Centred:
+ *  an average FB against an average defender adds 0, replacing `fbLeadBlock`. */
+function fbKick(fb: Player | undefined, def: Player | undefined): number {
+  if (!fb) return 0
+  const block = rmean('FB', 'RBK', eff(fb, 'RBK')) * 0.7 + rmean('FB', 'IBL', eff(fb, 'IBL')) * 0.5
+  const awr = rmean('FB', 'AWR', eff(fb, 'AWR')) * J8A2.kickAwrW
+  const resist = def
+    ? (rmean(def.pos, 'BSH', eff(def, 'BSH')) * 0.5 + rmean(def.pos, 'STR', eff(def, 'STR')) * 0.5) * J8A2.kickDefW
+    : 0
+  return clamp(J8A2.kickW * (block + awr - resist), -7, 7)
+}
+
+/** J8a2: the front defender whose read decided the run — the point-of-attack DL
+ *  or LB who did NOT bite on the misdirection, then the better reader. */
+function readKeyDefender(poiDl: Player | undefined, poiLb: Player | undefined, dlKey: string, lbKey: string, mis: boolean): Player | undefined {
+  const cands = [poiDl, poiLb].filter((p): p is Player => !!p)
+  if (!cands.length) return undefined
+  if (cands.length === 1) return cands[0]
+  const score = (p: Player) => ({ p, bite: bitesAt(p, p.pos === 'LB' ? lbKey : dlKey, mis) ? 1 : 0, prc: rmean(p.pos, 'PRC', eff(p, 'PRC')) })
+  const s = cands.map(score).sort((a, b) => a.bite - b.bite || b.prc - a.prc)
+  return s[0].p
 }
 
 function topGroup(world: World, teamId: string, positions: Position[], n: number, qbOverride?: Record<string, string>): Player[] {
@@ -1915,6 +2061,12 @@ export interface PlayOutcome {
   onFieldOff?: string[]
   /** R15: the scrimmage defenders actually on the field for this snap (ids). */
   onFieldDef?: string[]
+  /** J8a2: the front defender whose read decided the run (animation). */
+  readKeyId?: string
+  /** J8a2: the run defenders who bit on the misdirection / play-action key. */
+  biteIds?: string[]
+  /** J8a2: the alley / gap filler on the run (animation). */
+  fillId?: string
   /** animflow r6b: fatigue at the snap per on-field man (see Play.fatOn). */
   fatOn?: number[]
 }
@@ -2224,6 +2376,11 @@ function oobSituation(env: SimEnv | undefined): boolean {
 // sideline; an inside hand-off cannot.
 const OUTSIDE_RUNS = new Set(['Toss', 'Outside Zone', 'Pin-Pull', 'Jet Sweep', 'RPO Run', 'Read Option'])
 
+// J8a2: the run concepts a defence must read (misdirection / a pulling guard, a
+// delayed hand-off or a QB read) — a defender who bites on the first key is a gap
+// late. The pass play-action key is handled in `resolvePass`.
+const MISDIRECTION_RUNS = new Set(['Counter', 'Gun Counter', 'Trap', 'Toss', 'Pin-Pull', 'Draw', 'Jet Sweep', 'RPO Run', 'Read Option', 'Zone Read'])
+
 /**
  * T2M: the chance a sideline carry goes out of bounds. Outside runs and short
  * completions (outs, flats, screens, checkdowns) only; more for WR/RB on those
@@ -2287,10 +2444,13 @@ function runTackler(n: number, defId: string, gain: number, lbs: Player[], dl: P
   // J8a OFF: the exact pre-J8a uniform in-group pick (byte-identical).
   if (!J8A_ON) return group[hash32(`${n}:${defId}:runtackle`) % group.length]?.id
   // J8a ON: weight the in-group pick by tackling proximity (TAK/PUR/SPD) and let
-  // the man who decided the play (gap defender / catching pursuer) lead.
+  // the man who decided the play (gap defender / catching pursuer) lead. J8a2
+  // folds in the read-loop ratings (PRC read, BSH shed) so the man who read it
+  // right is likelier credited. All pickers use the position-correct rating.
   return hashPick(group, (p) => {
-    const a = mkAttrs(p)
-    const base = Math.max(1, (a.TAK ?? 70) * 0.5 + (a.PUR ?? 70) * 0.3 + (a.SPD ?? 70) * 0.2)
+    const base = J8A2_ON
+      ? Math.max(1, eff(p, 'TAK') * 0.4 + eff(p, 'PUR') * 0.25 + eff(p, 'SPD') * 0.15 + eff(p, 'PRC') * 0.1 + eff(p, 'BSH') * 0.1)
+      : Math.max(1, (mkAttrs(p).TAK ?? 70) * 0.5 + (mkAttrs(p).PUR ?? 70) * 0.3 + (mkAttrs(p).SPD ?? 70) * 0.2)
     return p.id === decider?.id ? base * J8A.deciderBoost : base
   }, hash32(`${n}:${defId}:runtackle`))?.id
 }
@@ -2418,8 +2578,7 @@ function finishTackler(key: string, first: string | undefined, lists: Player[][]
   if (COVERAGE_INDIV_ON) return hashPick(pool, (p) => proximityWeight(p, undefined), hash32(key))?.id
   if (!J8A_ON) return pool[hash32(key) % pool.length]?.id
   return hashPick(pool, (p) => {
-    const a = mkAttrs(p)
-    return Math.max(1, (a.TAK ?? 70) * 0.5 + (a.PUR ?? 70) * 0.3 + (a.SPD ?? 70) * 0.2)
+    return Math.max(1, eff(p, 'TAK') * 0.5 + eff(p, 'PUR') * 0.3 + eff(p, 'SPD') * 0.2)
   }, hash32(key))?.id
 }
 
@@ -2625,8 +2784,7 @@ function recognitionRel(p: Player | undefined): number {
 
 /** J8c: a post-catch tackler pick weighted by proximity (PUR/SPD/TAK). */
 function proximityWeight(p: Player, coverId: string | undefined): number {
-  const a = mkAttrs(p)
-  const prox = (a.PUR ?? 70) * J8C.tackPurW + (a.SPD ?? 70) * J8C.tackSpdW + (a.TAK ?? 70) * J8C.tackTakW
+  const prox = eff(p, 'PUR') * J8C.tackPurW + eff(p, 'SPD') * J8C.tackSpdW + eff(p, 'TAK') * J8C.tackTakW
   return Math.max(1, prox * (p.id === coverId ? J8C.tackCoverBoost : 1))
 }
 
@@ -3408,6 +3566,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
 
   // J8a: the point of attack and the chasers for this run (deterministic hashes).
   const gKey = `${n}:${defId}:gap`
+  // J8a2: a misdirection / pulling-guard run raises the first-step bite chance.
+  const misdirection = MISDIRECTION_RUNS.has(concept.name)
   const wOl = gapWeights(ol.length, gapIndex(gKey, ol.length), J8A.poaWeight, J8A.gapFade)
   const wDl = gapWeights(dl.length, gapIndex(gKey, dl.length), J8A.poaWeight, J8A.gapFade)
   const wLb = gapWeights(lbs.length, gapIndex(`${gKey}:lb`, lbs.length), J8A.poaWeight, J8A.gapFade)
@@ -3416,14 +3576,26 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const poiLb = lbs[gapIndex(`${gKey}:lb`, lbs.length)]
   const runPursuers = J8A_ON ? pickPursuers(`${gKey}:chase`, lbs, saf, cbs) : []
   const runClose = J8A_ON ? chaseInfo(carrier, runPursuers, `${gKey}:chase`) : { edge: 0, headStart: 0, angle: 0, nP: 0 } as Chase
+  // J8a2: the per-defender read loop. The man who read it right and filled the gap
+  // is the read key; the alley filler is a hash-picked safety's own run support;
+  // the front defenders who took a wrong first step (bit) are recorded for the
+  // animation. All deterministic — no rng() draw.
+  const readKey = J8A2_ON ? readKeyDefender(poiDl, poiLb, gKey, `${gKey}:lb`, misdirection) : undefined
+  const alley = J8A2_ON ? alleyFill(saf, gKey) : { value: 0, player: undefined as Player | undefined }
+  const biteIds = J8A2_ON
+    ? [...dl, ...lbs].filter((p) => bitesAt(p, p.pos === 'LB' ? `${gKey}:lb` : gKey, misdirection)).map((p) => p.id)
+    : []
+  const readExtras = (p: Player, key: string): number => J8A2_ON ? readValue(p, key, misdirection) : 0
   // J8a ON: the gap matchup replaces the unit means — the point-of-attack man
   // carries most of the weight, the rest of the front a faded individual sum.
   const runBlock = J8A_ON
-    ? gapValue(ol, wOl, (p) => { const a = mkAttrs(p); return (a.RBK ?? 70) * 0.7 + (a.IMP ?? 70) * 0.3 })
+    ? gapValue(ol, wOl, (p) => { return eff(p, 'RBK') * 0.7 + eff(p, 'IMP') * 0.3 })
       + teRunBlock(te) + (te2 ? teRunBlock(te2) * 0.6 : 0) + clamp((poiOl ? masteryOffset(poiOl, means) : 0) * 0.06, -3, 3)
     : avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te) + (te2 ? teRunBlock(te2) * 0.6 : 0) + clamp(masteryRelAvg(ol, means) * 0.06, -3, 3)
   const runDefBase = (J8A_ON
-    ? gapValue(dl, wDl, (p) => { const a = mkAttrs(p); return (a.BSH ?? 70) * 0.5 + (a.TAK ?? 70) * 0.5 })
+    ? gapValue(dl, wDl, (p) => {
+        return eff(p, 'BSH') * 0.5 + eff(p, 'TAK') * 0.5 + readExtras(p, gKey) + (J8A2_ON ? J8A2.shedW * rmean(p.pos, 'STR', eff(p, 'STR')) : 0)
+      })
     : avg(dl.map((p) => (mkAttrs(p).BSH ?? 70) * 0.5 + (mkAttrs(p).TAK ?? 70) * 0.5))) * dStyle.runFit
   // The live defensive plan moves the front: stacking the box stops the run,
   // a soft-zone light box gives a little back on the ground.
@@ -3433,13 +3605,18 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const runDef = ((dp
     ? runDefBase * (1 + (dp.aggression - 0.5) * 0.06 - (dp.coverage <= 0 ? 0.03 : 0))
     : runDefBase) * boxMult)
-    + (J8A_ON ? (poiDl ? rmean(poiDl.pos, 'STR', mkAttrs(poiDl).STR ?? 70) : 0) * 0.05 * E2_W : relAvg('STR', dl) * 0.05 * E2_W)
+    + (J8A_ON ? (poiDl ? rmean(poiDl.pos, 'STR', eff(poiDl, 'STR')) : 0) * 0.05 * E2_W : relAvg('STR', dl) * 0.05 * E2_W)
+    // J8a2: the safety who fills the alley — his own run support (centred on the
+    // safeties on the field, so the pick cannot drift the run-defence mean).
+    + (J8A2_ON ? alley.value * J8A2.alleyW : 0)
     + (J8A_ON
       ? clamp((poiDl ? masteryOffset(poiDl, means) : 0) * 0.05, -3, 3) + clamp((runClose.chaser ? masteryOffset(runClose.chaser, means) : 0) * 0.03, -2, 2)
       : clamp(masteryRelAvg(dl, means) * 0.05, -3, 3) + clamp(masteryRelAvg([...cbs, ...saf], means) * 0.03, -2, 2))
   const lbsDef = J8A_ON
-    ? gapValue(lbs, wLb, (p) => { const a = mkAttrs(p); return (a.TAK ?? 70) * 0.6 + (a.PUR ?? 70) * 0.4 })
-      + gapValue(lbs, wLb, (p) => { const a = mkAttrs(p); return rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.16 + rmean(p.pos, 'BSH', a.BSH ?? 70) * 0.16 + rmean(p.pos, 'STR', a.STR ?? 70) * 0.08 + rmean(p.pos, 'ACC', a.ACC ?? 70) * 0.08 + rmean(p.pos, 'AGI', a.AGI ?? 70) * 0.08 }) * E2_W
+    ? gapValue(lbs, wLb, (p) => {
+        return eff(p, 'TAK') * 0.6 + eff(p, 'PUR') * 0.4 + readExtras(p, `${gKey}:lb`) + (J8A2_ON ? lbStyle(p) : 0)
+      })
+      + gapValue(lbs, wLb, (p) => { return rmean(p.pos, 'PRC', eff(p, 'PRC')) * 0.16 + rmean(p.pos, 'BSH', eff(p, 'BSH')) * 0.16 + rmean(p.pos, 'STR', eff(p, 'STR')) * 0.08 + rmean(p.pos, 'ACC', eff(p, 'ACC')) * 0.08 + rmean(p.pos, 'AGI', eff(p, 'AGI')) * 0.08 }) * E2_W
       + clamp((poiLb ? masteryOffset(poiLb, means) : 0) * 0.05, -3, 3)
     : avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + lbRunExtras(lbs) * E2_W + clamp(masteryRelAvg(lbs, means) * 0.05, -3, 3)
   const elusiveness = carrier?.pos === 'QB'
@@ -3455,7 +3632,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + (J8A_ON ? interiorShortStrength(ol, gKey) : olShortStrength(ol, distance)) + fbLeadBlock(fb) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + (J8A_ON ? interiorShortStrength(ol, gKey) : olShortStrength(ol, distance)) + (J8A2_ON ? fbKick(fb, poiDl ?? poiLb) : fbLeadBlock(fb)) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
     + (isQ4 ? (J8A_ON ? staRel([poiOl, carrier]) - staRel([poiDl, runClose.chaser]) : relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25 * (env?.wx?.runVarianceMult ?? 1), gains, yard, tier)
@@ -3516,7 +3693,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // defender's contact is what jars the ball loose, so the forcer is the real
   // stopping tackler just as the strip/pass path credits its stopper. The forcer
   // only ever comes from the actual defence on the field.
-  let tackler = oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs, J8A_ON ? (gain > 20 ? runClose.chaser : poiDl ?? poiLb) : undefined)
+  let tackler = oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs, J8A_ON ? (gain > 20 ? runClose.chaser : (J8A2_ON ? readKey : poiDl ?? poiLb)) : undefined)
   // J8a: on a long gain the man who ran him down (the fastest of the hash-picked
   // pursuers) is the deciding player, so he takes the credit.
   if (J8A_ON && !oob && gain > 20 && runClose.chaser) tackler = runClose.chaser.id
@@ -3567,6 +3744,11 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     goalLineFumble: fumble && yard >= R16.goalLineYard ? true : undefined,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
     defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : undefined,
+    // J8a2: what the animation needs — the defender whose read decided the run,
+    // the defenders who bit on the misdirection, and the alley/gap filler.
+    readKeyId: J8A2_ON ? readKey?.id : undefined,
+    biteIds: J8A2_ON && biteIds.length ? biteIds : undefined,
+    fillId: J8A2_ON ? alley.player?.id : undefined,
     onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
   }
 }
