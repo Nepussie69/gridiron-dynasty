@@ -13,6 +13,7 @@
 
 import type { CareerState, SeasonMoment, SeasonQuestion } from '../types'
 import type { World } from './generate'
+import type { GameSim } from './playsim'
 import { hash32, makeRng, rpick } from './rng'
 import { overallRep } from './career'
 
@@ -62,6 +63,17 @@ export function logMoment(career: CareerState, moment: SeasonMoment): CareerStat
   const moments = [...(career.seasonMoments ?? []), moment]
   // Keep the most recent handful so saves stay small.
   return { ...career, seasonMoments: moments.slice(-8) }
+}
+
+/**
+ * FUTURES #5: a one-line recap for a game-turning replay reversal — a red flag
+ * the user's club won that flipped a close call. Null when there was none.
+ */
+export function reversalMoment(sim: GameSim, userTeamId: string, week: number): SeasonMoment | null {
+  const flips = sim.plays.filter((p) => p.review?.outcome === 'reversed' && p.review.club === userTeamId)
+  if (!flips.length) return null
+  const last = flips[flips.length - 1]
+  return { week, text: `The replay booth saved you: the ${last.review!.kind} call was reversed.`, tone: 'info' }
 }
 
 /** Pick the three moments that tell the season's story, best first. */
