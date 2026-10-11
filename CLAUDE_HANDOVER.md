@@ -7,7 +7,8 @@ Orchestrate the FUTURES queue and playtest fixes; main thrust is NFL-realistic p
 
 ## Chat 3 (2026-10-11 19:00)
 - BDB 2021 verified + unzipped to `~/gridiron-work/nfl-tracking/bdb/2021` (week1–17.csv). Round 6 prompt updated with BDB 2021/22/23 + real accel caps + round 5 side effects.
-- SL1 (Opus) and C3 (Sonnet) relaunched from briefs. W2 on try 2 (try 1 hit 5400 s watchdog).
+- SL1 MERGED dc59f2a (backlog 268/269 ✅; check-broadcast needs `--import ~/gridiron-work/loader.mjs`, 54 checks). C3 (Sonnet) relaunched → logs/c3-blankfield.out.
+- **Round 6a** (Opus) running in wt/animflow (at e50ae0e) → appends 'Round 6a' to logs/animflow-report.out. Relaunch brief: prompts/animflow-round6a-launch.txt. W2 on try 2 (try 1 hit 5400 s watchdog).
 
 ## Current state (main a2aaab0, 15 commits NOT pushed; 4173 HELD at 0f898f0)
 - Merged this chat: FP3 Future classes UI (I hid the header List/Cards on future tabs), animflow round 5 (returns, QB mobility, YAC, camera at tackle; accel caps 1.5× NFL by decision). Gates on main: build, lint 4, hex, contrast, broadcast 53 all pass.
