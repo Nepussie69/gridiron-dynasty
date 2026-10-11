@@ -502,6 +502,17 @@ export interface DraftProspect {
   character?: Character
   characterReads?: CharacterRead[]
   generated?: boolean
+  /**
+   * FUTURES #29: an underclassman's declare status at the mid-January deadline.
+   * Optional — a legacy save (and a class generated before the deadline) has
+   * none, which reads as 'undecided'.
+   */
+  declare?: 'undecided' | 'declared' | 'returning'
+  /**
+   * FUTURES #29: the season this prospect returned from, set once he is promoted
+   * back into a class. Optional — every prospect that never returned has none.
+   */
+  returnedFrom?: number
   /** Recruiting: relationship per coach key ('user' or assistant id), 0-100. */
   relations?: Record<string, number>
   /** Head Coach has approved an offer for this recruit. */
@@ -511,6 +522,31 @@ export interface DraftProspect {
   leadRecruiterName?: string
   /** Coordinator's recommended NIL split for this target (advisory). */
   nilRecommend?: number
+}
+
+/**
+ * FUTURES #29: a fogged scouting read you earned on a not-yet-current prospect,
+ * keyed by id under `World.futureClasses.scout`. It survives the rollover: when the class
+ * turns current the promoted prospect inherits these values.
+ */
+export interface FutureScoutRead {
+  myGrade: number
+  confidence: number
+  scoutConfidence: number
+}
+
+/**
+ * FUTURES #29: the single optional `World` overlay for future classes — kept to
+ * one field so `generate.ts` stays out of the FP1 scope (mirrors FA1's
+ * `faFrenzy?: FrenzyState`). Both parts are consumed and cleared at the next
+ * rollover; with neither present the promoted class is byte-identical to the
+ * freshly generated one.
+ */
+export interface FutureClassesState {
+  /** Early scouting reads you earned, by prospect id. */
+  scout?: Record<string, FutureScoutRead>
+  /** Underclassmen who returned, carried into the next class (season-tagged). */
+  returners?: DraftProspect[]
 }
 
 export type CareerPath = 'coach' | 'personnel'
@@ -647,6 +683,12 @@ export interface CareerState {
   ledger?: LedgerEntry[]
   /** Your ranked board for the upcoming draft (prospect ids, best first). */
   userBoard?: string[]
+  /**
+   * FUTURES #29: the future prospects you're watching (prospect ids, max 30).
+   * No season scope — a watched id keeps the same id when his class turns
+   * current, so the watch carries over. Optional — a legacy save has none.
+   */
+  prospectWatch?: string[]
   /** G1: how much you trust each evaluator's reports (staffId → trust). */
   scoutTrust?: Record<string, 'fade' | 'normal' | 'lean'>
   /** G2: the prospects you've tagged as conviction calls this draft (max 3). */

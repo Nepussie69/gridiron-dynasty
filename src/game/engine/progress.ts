@@ -9,6 +9,7 @@ import { unscaleOvr } from './ovrScale'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
+import { nextClassCount, nextClassSeed, promoteNextClass } from './futureClasses'
 import { applyDevFocus, focusPointsFor } from './devPlan'
 import { mentorGrowthBonus } from './lockerRoom'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
@@ -305,10 +306,13 @@ export function evaluateScouting(world: World, _career: CareerState): ScoutingRe
  * We guarantee a floor so a draft can always be run.
  */
 export function refreshProspectClass(world: World) {
-  const rng = makeRng(world.seed + (world.season + 1) * 65537)
+  const rng = makeRng(nextClassSeed(world))
   // NFL draft pool: draft-eligible college players. Keep a floor of 400.
-  const draftCount = Math.max(400, world.draft?.length ?? 0)
-  world.draft = generateProspectClass(rng, world.season + 1, draftCount)
+  const draftCount = nextClassCount(world)
+  // FUTURES #29: fold in the future scouting overlay and any returners. With
+  // both overlays empty this returns the generated class untouched, so the
+  // result is byte-identical to every existing save and to `balance.ts`.
+  world.draft = promoteNextClass(world, generateProspectClass(rng, world.season + 1, draftCount))
 }
 
 /** Safety net: refill the draft pool if it is somehow exhausted mid-cycle. */

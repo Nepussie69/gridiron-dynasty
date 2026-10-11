@@ -132,6 +132,11 @@ export interface World {
   /** FUTURES #11: the March free-agency frenzy (competing priced offers with
    *  deadlines). Optional — an old save without it plays March as before. */
   faFrenzy?: import('./faFrenzy').FrenzyState
+  /** FUTURES #29: the one optional overlay for future classes — the early
+   *  scouting reads you earned and the underclassmen who returned, both consumed
+   *  at the next rollover. Optional — a legacy save has none. The shape lives in
+   *  types.ts (FutureClassesState); see engine/futureClasses.ts. */
+  futureClasses?: import('../types').FutureClassesState
 }
 
 // Backwards-compatible alias used by screen/selector imports.
