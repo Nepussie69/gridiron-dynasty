@@ -1,45 +1,52 @@
-# Claude handover — Gridiron Dynasty
+# Claude handover — Gridiron Dynasty (2026-10-11 17:05 AEDT)
 
-Prepared 2026-10-11 08:35 AEDT by Claude Opus 5.5 for a new chat (the previous chat's context got large). Read AGENTS.md first, then this file. `PLAYTEST_BACKLOG.md` rows 195–223 are this session's requests and results. Only ONE orchestrator chat at a time — the old chat stops once the new one takes over.
+Read AGENTS.md first. Backlog rows 225–243 in `PLAYTEST_BACKLOG.md` are the previous chat's requests and results. Only ONE orchestrator chat at a time.
 
-## First 5 minutes in the new chat
+## Goal
+Orchestrate the Gridiron Dynasty FUTURES queue and fix the user's playtest complaints, mainly making the Broadcast 2.5D play animation look like the design mockup `~/gridiron-work/logs/anim-b-broadcast25d-mockup.html`. DeepSeek implements; Claude plans, verifies and merges.
 
-1. **Load first** (user rule, memory `keep-machine-responsive`): `uptime` — don't launch anything while the 1-minute load average is ≥ 4. Max 2 DeepSeek jobs at once (3 only when load is low and no calibration runs), one `nice -n 15` calibration at a time, at most one headless browser.
-2. **Jobs:** `pgrep -fl "gridiron-work/ds-push-"` and `/Applications/OpenCode.app/Contents/Resources/opencode-cli api GET /api/session/active`. Any session listed whose ds-push is gone is an orphan → `opencode-cli api POST /api/session/<id>/interrupt` (memory `opencode-orphan-sessions`; it happened 3× this session).
-3. **Running at handover (08:35):**
-   - **B8 Broadcast integration** — a Claude sub-agent of the OLD chat, worktree `~/gridiron-work/wt/b8` (branch `wt-b8` off main `caf8c53`). It wires B6b replays into Game Day (liveView.ts + minimal MatchView hooks), checks the live camera is the B5 director, and runs the full review matrix. It writes `~/gridiron-work/logs/b8-report.out` and screenshots to `~/gridiron-work/logs/b8-shots/` when done. The new chat cannot message it; just wait for the report file (check `ls -la ~/gridiron-work/logs/b8-report.out` and `git -C ~/gridiron-work/wt/b8 status`). If it never appears (old chat closed early), relaunch B8 yourself from that worktree with the same brief (see "B8 brief" below).
-   - **Challenges C2** — DeepSeek, worktree `~/gridiron-work/wt/challengesc2`, prompt `~/gridiron-work/prompts/challenges-c2.txt`, log `~/gridiron-work/logs/challengesc2.log`, verify `~/gridiron-work/logs/challenges-c2-verify.out`. Gate: reviews OFF calibration identical to `~/gridiron-work/logs/main-after-c1p1-calib.out`; reviews ON all bands pass with deltas within the spec limits.
-   - **Primetime P4 UI** — DeepSeek job FINISHED its work (build, lint 4, check-hex, contrast, browser 1440/375 all green per its log) but exited 130 during teardown, so `~/gridiron-work/logs/primetime-p4-verify.out` may be missing. Worktree `~/gridiron-work/wt/primetimep4` changes `Schedule.tsx`, `Dashboard.tsx`, `GamePlanScreen.tsx`. **Review it yourself** (build, lint 4, check-hex on the 3 files, quick browser check at 1440 + 375, light/dark) and merge.
-4. **State:** main `b4deefa` is ~32 commits ahead of origin (pushed at 06:47 with the user's ok). **Push needs the user's ok each time.** Stable 4173 serves `2d6a3fe` (rebuilt 08:0x with the user's ok, Broadcast 2.5D B1–B7) from `~/gridiron-work/rv-stable` via `vite preview --port 4173` in Terminal tab "stable 4173". The user asked to rebuild it again once B8 lands.
+## Current state (main 003a327, ~60 commits ahead of origin, NOT pushed)
+- **Merged this session:** Primetime P4, NFL-style schedule S1, Broadcast B8, FA frenzy FA1–FA3 (feature complete), Challenges C2, kickoff touchback fix, animflow round 1, Future prospects FP1.
+- **Stable 4173:** rebuilt at 003a327 (`index-BNvtKTT5.js`) from `~/gridiron-work/rv-stable`.
+- **Running at handover:**
+  1. **animflow round 2 (Claude sub-agent of the old chat)** in `~/gridiron-work/wt/animflow`: pass timing (QB drops, time to throw ~1.0 s → 2.3–3.0 s) plus mockup side-by-sides. It writes a "Round 2" section in `~/gridiron-work/logs/animflow-report.out`. If that never appears and the worktree goes idle (mtime of `src/components/playAnim.ts`), relaunch a Claude sub-agent with `~/gridiron-work/prompts/animflow-round2.txt`.
+  2. **Weather W2 (DeepSeek, continuation)** in `wt/weatherw2`; writes `logs/weather-w2-verify.out`. It's the only sim-editing job.
+  3. **FP2 (DeepSeek, continuation)** in `wt/futureprospects2`. It fixes the FP1 horizon off-by-one in `futureClasses.ts` (futureClass(world,1) returned the CURRENT class; it must use seed and label season+n+1) and rewrites the FP1/FP2 probes over a real rollover. Writes `logs/fp2-verify.out`.
 
-## How to finish Broadcast 2.5D (B8)
+## Decisions and why
+- **C2:** per-seed calibration swings of ±0.4 points are sample noise. A pooled reviews OFF/ON drift over 6 fresh seeds × 500 (`~/gridiron-work/c2-drift.mjs`) gave −0.03 points. Use that method whenever a single seed misses a band by ≤0.2.
+- **FP2:** personnel smoke `finalLevel` 5→4 is accepted, because declares change who gets drafted. SIM, eq and balance stay identical.
+- **FA3:** the March card lives in `Career.tsx`; `CareerHub.tsx` is the pre-career start screen.
+- **Animation:** the problem was the generated motion data in `playAnim.ts`, not the 2.5D renderer; the figures already port the mockup's pose system. Judge by motion metrics (`logs/animflow-metrics.mjs`) and mid-play frames, never hero stills.
 
-When `b8-report.out` exists: read it, `cd ~/gridiron-work/wt/b8`, build / lint exactly 4 / `bash scripts/check-hex.sh` / `node --experimental-strip-types scripts/check-contrast.ts` / `nice -n 15 node --experimental-strip-types scripts/check-broadcast.ts` / anim harness. Browser-check a real coached game yourself in the app's browser pane (add a `.claude/launch.json` entry on a free port, e.g. 4408): desktop 2.5D live, a big play → replay with telestration + Skip, a decision card, sim to end (no replays), phone 375 (top-down live, 2.5D replay). Note: when the browser pane is hidden rAF is throttled (fps reads ~1) — judge by per-frame ms. Then commit in the worktree, `git merge --no-edit wt-b8` on main, re-verify, update `NEXT_PHASE_ANIM_BROADCAST.md` progress table + backlog, and **rebuild stable 4173**:
-`S=~/gridiron-work/rv-stable; git -C $S checkout -q --detach main && (cd $S && PATH="$HOME/.local/node/bin:$PATH" nice -n 10 npx vite build --outDir $S/dist)` then `curl -s http://localhost:4173/ | grep -o 'index-[^"]*\.js'` to confirm. Then offer the user a polish pass (replay length is a constant in replay.ts; occlusion ratio 0.677 accepted; pocket trapezoid on some sacks).
+## Next steps
+1. Check the three running jobs (`pgrep -fl ds-push-`, `opencode-cli api GET /api/session/active`, the verify/report files). For each: run the gates yourself, read the diff, merge, update the spec progress row and the backlog.
+2. **W2:** weather OFF must be byte-identical to `logs/weather-w2-calib-before.out`, and weather ON must pass all bands. Then browser-check that nothing in the UI broke (W3 is the weather UI).
+3. **animflow round 2:** review the mockup-vs frames and time-to-throw metrics, merge, then offer the user a 4173 rebuild.
+4. **Queue (one `playsim.ts` job at a time):** Clutch P2 → Primetime P5 (clutch UI) → Challenges C3 UI (+C4) → Halftime H1 → FP3 UI (after FP2) → Weather W3 UI → Injury decisions / Playcalling / Draft philosophy / Choose coaches / Trick plays. Specs are in `NEXT_PHASE_FUT_*.md`; write prompts from each spec's phase row.
+5. **Polish lists for the user:**
+   - B8 replay polish in `NEXT_PHASE_ANIM_BROADCAST.md`.
+   - FA3 wording: "0/7 days", "0 suitors" while leading, "behind on every factor" with no rivals.
+   - P4: "Profile 2.5 of 4" shows a fraction.
 
-**B8 brief (if you must relaunch):** wire replays into Game Day via liveView.ts (replayPlan with the B7 Replays setting 'big'|'all'|'off', playback 'fast' when simming → never replays, ReplayPlayer + 'replay' director + attachTelestrator, Skip control + Space/Escape, user Replay button forces, phone replays in 2.5D, never block a decision card); live camera = B5 director + B4 shake; full review across play types × 2 seeds × 1440/375 × light/dark × CLE/PIT/KC; fix in broadcast/ files or minimal MatchView edits. APIs: `~/gridiron-work/logs/b6b-report.out`, `b7-verify.out`, `b4-verify.out`, `b6a-report.out`.
+## Gotchas
+- **User rules:**
+  - No `git push` or Pages until the user says, then push all commits in one go.
+  - Rebuild 4173 only when asked.
+  - Every user request gets a backlog row.
+  - Keep load under 4, at most 2 DeepSeek jobs, one calibration at a time.
+- **Calibration wait loop for prompts:** `while pgrep -f '/Users/aaron/.local/node/bin/nod[e] --import' >/dev/null; do sleep 60; done`. The `[e]` stops the pattern matching agents' own command lines; `pgrep -f calib.mjs` matches prompt text forever.
+- **DeepSeek failure modes:**
+  - It often hits its step limit or a network outage (ENOTFOUND opencode.ai) before writing the verify file. Send a continuation in the same worktree (`ds-wt <same name> <cont prompt>`).
+  - ds-push RETRIES a job that has already finished after a late transport error. Kill the `ds-push-<name>` pid, then the `opencode-cli run` client, then interrupt the session.
+- **DeepSeek cleanup:** jobs have edited out-of-scope markdown (C2 rewrote HANDOFF.md, since reverted) and left vite/Chrome running (check ports and kill them). `kill` works.
+- **Browser pane:** too narrow to judge animation at 1440. Use the agents' full-res screenshots or zoom.
+- **Driving the app from the console:** dev server plus `window.__game` / `window.__world()` (see `/private/var/folders/.../opencode/fa3-drive.mjs` pattern), e.g. advanceWeek loops to reach March.
+- **Keep this chat lean:** read only the parts of big logs you need (sed/grep), and send broad reviews to sub-agents.
 
-## What landed this session (all verified, on main)
-
-- **UI redesign "Sunday Broadcast" complete:** D1–D7 (orchestrator fixed phone grid overflows and 44px tap targets in most), V1 (Claude: shims removed, 12px floor, kit 44px, BroadcastScope, Staff hiring preview uses `coordinatorEdge()`), heroSlab fix (17 clubs had unreadable slab ink). Merged `9ce3993`.
-- **Broadcast 2.5D B1–B7 + B6a/B6b** (spec `NEXT_PHASE_ANIM_BROADCAST.md`): animation data, renderer, figures (60 fps; players 0.5–0.7 ms/frame), ball + effects, camera director (carrier 100% / ball ≥98% all play kinds, 0 jumps), broadcast graphics, telestrator replay, phone/quality/settings and the live 2.5D view in MatchView (phone defaults to top-down live).
-- **Animation:** animcontact4 (double teams, route separation) + animfix (sackers on time 100%, credited rusher rushes, no stacked blitzers, screens/run fakes restored).
-- **Engine:** vacant OC/DC = −4.5 (193) + tenure resets at the moment of change, AI seats backfilled (185, eng185b); K/P games played (149, kpgp + kpgp2); team pass identity spread 0.041–0.044 (passid2, one dial `PASS_ID_WIDEN 1.9`); Primetime P1 (night slots, stakes, caps); Challenges C1 (booth reviews display-only); Weather W1 (stadium data + weather model, not wired into the sim yet).
-- **Specs written:** 11 FUTURES specs `NEXT_PHASE_FUT_*.md` (challenges, weather, halftime, trick plays, primetime, FA frenzy, injury decisions, playcalling, draft philosophy, choose coaches, future prospects).
-- Latest main calibration: 93/93 bands, eq 20/20 (`~/gridiron-work/logs/main-after-c1p1-calib.out`).
-
-## Queue after B8 / C2 / P4 (each has a spec; user approved this direction)
-
-Weather W2 (wire weather into playsim — affects calibration; also fixes the wind sign bug noted in the spec), Clutch P2 (playsim), Challenges C3 (UI) + C4, Primetime P5 (clutch UI, after P2), Halftime H1, then FA frenzy FA1, Future prospects FP1, Injury decisions, Playcalling P1, Draft philosophy, Choose coaches, Trick plays. Jobs that edit `playsim.ts` must run one at a time. Prompts: write from the spec's phase row; existing ones are in `~/gridiron-work/prompts/`.
-
-## Ground rules (unchanged, user-confirmed)
-
-- Orchestrator plans + verifies; DeepSeek implements via `IDLE=1800 HARD=5400 ~/gridiron-work/ds-wt <name> <ABSOLUTE prompt> [base]` (or `~/gridiron-work/queue-chain.sh <base> name:prompt ...`); Claude sub-agents do taste-heavy/broadcast rendering work. Never merge unverified work; DeepSeek often stops before verifying (exit 130 or "waiting for calibration") — finish the checks yourself or send a short continuation reusing the worktree.
-- Stable 4173 is rebuilt only when the user asks. No `git push` / Pages without the user's explicit ok for that push.
-- Never commit `NEXT_PHASE.md`, `CLAUDE_RESUME.md`, `.claude/`. Leave `ORCHESTRATION_COORDINATION.md` alone. Commit trailer names your model.
-- Every user request → a PLAYTEST_BACKLOG row. Status table after merges. Browser checks use isolated ports via `.claude/launch.json`, never 4173/5173.
-- Claude cannot kill processes (permission classifier blocks it); leftover DeepSeek vite/Chrome processes need the user — give them `pkill` commands. Presentation-only jobs whose new files aren't imported by the sim skip calibration.
-
-## Infrastructure (`~/gridiron-work/`)
-
-`ds-wt`, `queue-chain.sh` (launches when < 4 `opencode-cli run`; honours env IDLE/HARD), `queue-launch.sh`, `keep-awake.sh` (running: caffeinate per ds-push job), `loader.mjs`, `calib.mjs`, `anim.mjs`, `passid.mjs`, `prompts/`, `logs/` (probes: animfix-probe, b1a/b1b/b4/b5a/b5b probes, eng185b-probe, kpgp-probe, primetime-p1-probe, weather-w1-probe; review findings `review-*.findings`), `wt/` (57 worktrees — merged ones can be cleaned up with the user's ok), `rv-stable` (stable 4173 build).
+## Key files
+- `PLAYTEST_BACKLOG.md` — every request and result (rows ≤243).
+- `NEXT_PHASE_FUT_*.md`, `NEXT_PHASE_SCHEDULE.md`, `NEXT_PHASE_ANIM_BROADCAST.md` — specs with progress tables.
+- `src/components/playAnim.ts`, `src/components/playLive.ts` — animation data (shared by top-down and 2.5D).
+- `~/gridiron-work/prompts/` — all job prompts, including `*-cont.txt` continuations.
+- `~/gridiron-work/logs/` — verify files, probes, calibration outputs, `animflow-shots/`.
