@@ -39,5 +39,25 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 29 | **Future draft prospects tab** (user 2026-10-10) | In the Draft screen, a "Future classes" tab: next year's (and a thin 2-years-out) prospects visible early with fog-of-war grades that firm up as you scout; watch list carries over; underclassmen declare decisions. Audit whether future classes already exist in the world before generating new ones | 14 | ⏳ |
 | 30 | **Animation realism** (`NEXT_PHASE_ANIM_REALISM.md`, user 2026-10-10) | Every movement explained by player ratings + coaches' calls (matchup script, ratings→motion library): line play/doubles, routes vs coverage, run schemes, YAC/tackling, special teams, pre/post snap; then guided physics and finally calibrated physics that must itself pass all 31 NFL bands × 3 seeds × 500, with the fast sim refit to match | animcontact3/4 (#150–#153) | 📋 spec ready |
 | 31 | **Broadcast 2.5D game view** (`NEXT_PHASE_ANIM_BROADCAST.md`, user 2026-10-10) | Tilted TV skycam live view: perspective field + stadium, posed player figures with run cycles, 3D ball arc, camera director per play type, Sunday Broadcast graphics, telestrator replays; top-down stays as a setting and the phone default | redesign D5, animcontact4 | 📋 spec ready |
+| 32 | **Coach sub-ratings (J9)** (user 2026-10-11) | Staff get individual sub-ratings like players: Play calling (each snap's call vs the defence), Game management (clock, timeouts, 4th downs), Adjustments (halftime/in-game fixes), Disguise/Reads (DC), Discipline (penalties), Motivation, Development. No average fallbacks: a vacant seat plays at the floor. First of the user-approved idea batch | J8a–d (playsim one at a time) | ⏳ |
+| 33 | **Pre-snap reads & audibles** (user 2026-10-11) | QB AWR/experience checks the call vs the defensive look: audibles out of bad plays, hot routes, protection slides; smart vets fix bad calls, rookies don't | J9 | ⏳ |
+| 34 | **Coverage disguise** (user 2026-10-11) | DC Disguise + safety AWR hide the shell until the snap; the QB reads post-snap; poor reads → INTs/sacks | J9, J8c | ⏳ |
+| 35 | **Game plan vs individual opponents** (user 2026-10-11) | Shadow their WR1 with your CB1, double their top rusher, chip the edge, spy a running QB; costs elsewhere on the field | J8b, J8c | ⏳ |
+| 36 | **Individual scouting reports** (user 2026-10-11) | Weekly report on opponent players' tendencies ("CB bites on double moves", "RB fumbles"); better staff find more and the plan can target them | J9 | ⏳ |
+| 37 | **QB–WR timing & OL continuity** (user 2026-10-11) | Pairs that share snaps build chemistry (QB-receiver timing, adjacent OL communication); new pairings start lower | J8b | ⏳ |
+| 38 | **Featured plays for stars** (user 2026-10-11) | Plays built around a player's skills: wildcat for an athletic RB, jet sweep for the fastest WR, back-shoulder for a contested-catch WR | J5 | ⏳ |
+| 39 | **Hard counts** (user 2026-10-11) | QB cadence vs each DL's discipline → offsides/false starts per player | J8d | ⏳ |
+| 40 | **Kicker & punter traits** (user 2026-10-11) | Leg strength vs accuracy vs wind handling; directional and coffin-corner punting; return-man decisions | W2, J8d | ⏳ |
+| 41 | **In-game injuries by player** (user 2026-10-11) | Injury proneness per player, contact type, next man up from the depth chart, play through pain | #15 | ⏳ |
+| 42 | **In-game confidence / hot hand** (user 2026-10-11) | Per-player confidence within a game (a WR who's caught 3 in a row, a CB who got beaten deep) — individual, not a team momentum meter | J7 | ⏳ |
+| 43 | **Rotation control** (user 2026-10-11) | Set DL rotation %, RB committee, snap shares; fatigue-aware | R15 fatigue | ⏳ |
+| 44 | **Coaching careers** (user 2026-10-11) | Coaches gain sub-ratings with experience, have contracts, get poached, fired mid-season, interim HC | J9, #21 | ⏳ |
+| 45 | **Practice-week reps** (user 2026-10-11) | Split reps starters vs backups: development vs fatigue vs game readiness; install opponent-specific plays | #13 | ⏳ |
+| 46 | **Player personalities in contracts** (user 2026-10-11) | Money, winning, loyalty, playing time, market; agent behaviour in talks | #11, #12 | ⏳ |
+| 47 | **Combine & pro-day measurables** (user 2026-10-11) | 40 time, shuttle, vertical tied to ratings with scouting error, mapped with the real BDB speed proxies | #14 | ⏳ |
+| 48 | **Medical staff & sports science** (user 2026-10-11) | Trainer rating shortens injuries; load management | #15 | ⏳ |
+| 49 | **AI GM personalities** (user 2026-10-11) | Analytics, old-school, trade-happy, cap-reckless GMs drive AI trades, drafts and FA | #9–#11 | ⏳ |
+| 50 | **Market & fans** (user 2026-10-11) | City size, ticket and jersey sales, revenue feeding the budget | #25 | ⏳ |
+| 51 | **Former players become coaches** (user 2026-10-11) | Retired players enter coaching with sub-ratings informed by their playing ratings (a smart QB → OC with high Play calling) | J9, #13 | ⏳ |
 
 NFL statistical retuning is approved and running in `wt-realism`.
