@@ -235,6 +235,16 @@ export function getJ3b(): boolean {
  *     individual spread: an elite power back converts where a poor one is stood
  *     up, and an elite nose tackle stuffs where a weak one is moved.
  *
+ *     The stand is rolled once per series, on the plunge itself: only downs 1-3
+ *     (`glMaxDown`) and only while the ball is still short of the 1-yard line
+ *     (`glNoStuffYard`). A stuffed carrier is stopped ON the 1, where the base
+ *     engine's short-yardage push already owns the conversion. Without those two
+ *     guards the stand was re-rolled on every doorstep plunge — a 50% coin flip
+ *     per snap on a play the base engine converts — and the extra failed series
+ *     (not the goal-line spread) were what moved the league's points and RZ TD%
+ *     (measured: points drift −0.93 with the re-roll, −0.27 without it, over 6×500
+ *     fresh seeds; Rushing TD stays in band either way).
+ *
  *  2. Missed tackles. R5's `missRate` is already per-defender/per-carrier; J3b
  *     adds a small league lift (`mtBase`) plus a steeper individual tackler-vs-
  *     carrier term (`mtDefW`/`mtCarW`) centred on the same measured league blends,
@@ -244,21 +254,48 @@ export function getJ3b(): boolean {
 export const J3B = {
   /** Yard line at/inside which a would-be scoring run is a real goal-line plunge. */
   glYard: 93,
-  /** League-average chance the POA defender stands the carrier up (the tune). */
+  /** League-average chance the POA defender stands the carrier up (the tune).
+   *  Fixed at 0.50: the site average is what lands pooled Rushing TD 0.963→0.913
+   *  over 3 seeds × 500 (band 0.68-0.92, main 0.96) and keeps the spread large.
+   *  0.50 is the optimum of points-drift vs the Rushing-TD cap: the removed TDs cost
+   *  ~4 net points each, so lowering glBase to buy back the last of the drift lets
+   *  Rushing TD back out of band (it sits at 0.913, 0.007 under the 0.92 cap). */
   glBase: 0.5,
-  /** Per rating-point slope on (defender blend − carrier blend); > 0 = defence wins. */
+  /** Per rating-point slope on (defender blend − carrier blend); > 0 = defence wins.
+   *  Sizes the individual spread: carrier elite-vs-poor TD% 86.8 vs 37.7 (49 pts),
+   *  POA defender 37.7 vs 71.7 (34 pts). */
   glSlope: 0.014,
   /** Clamp on the stuff chance. */
   glLo: 0.02,
   glHi: 0.72,
-  // carrier blend weights (relative, via rmean on his own position)
+  /** Down after which a would-be goal-line score is left to the base engine. On a
+   *  fourth-down plunge the base engine's own handling (the short-yardage push, the
+   *  coach's go-for-it call) already owns the conversion; the J3b stand is a
+   *  once-per-series rep. Without this the last-down plunge — the one outcome that
+   *  cannot be recovered on a later down — moved the league's points by ~0.3 a
+   *  team-game for no extra realism. */
+  glMaxDown: 3,
+  /** Ball spot at/inside which the base engine already owns the plunge: the offence
+   *  is on the doorstep, so the stand is not re-rolled down after down. 99 = the
+   *  1-yard line (the base model's short-yardage push converts there). */
+  glNoStuffYard: 99,
+  // carrier blend weights (absolute; centred on J3B.carCenter below)
   carStrW: 0.4,
   carTrkW: 0.35,
   carBcvW: 0.25,
-  // POA-defender blend weights (relative)
+  /** Fixed centre for the carrier blend: the measured site-population mean of the
+   *  weighted (STR·.4 + TRK·.35 + BCV·.25) blend over the men who carry on a
+   *  goal-line plunge (1144 RB, 212 QB, 1 FB over 576 NFL games). A single
+   *  hard-coded league constant (the MT_REF_TACKLER pattern), NOT a per-play mean
+   *  and not a POS_MEAN lookup — no average decides the play. */
+  carCenter: 77.4,
+  // POA-defender blend weights (absolute; centred on J3B.defCenter below)
   defBshW: 0.4,
   defStrW: 0.3,
   defTakW: 0.3,
+  /** Fixed centre for the point-of-attack defender blend: the measured site mean of
+   *  (BSH·.4 + STR·.3 + TAK·.3) over the DE/DT who play the gap (753 DE, 604 DT). */
+  defCenter: 83.3,
   /** Missed tackles: small league lift added to R5's `missBase`. */
   mtBase: 0.0012,
   /** Extra per-rating-point slopes on the tackler and the carrier (on top of R2's). */
@@ -836,6 +873,10 @@ export interface Play {
   carrierId?: string
   targetId?: string
   passDepth?: number
+  /** J3: the concept's nominal depth (the pre-J3 meaning of `passDepth`), emitted
+   *  only while the air model is on. The replay-review catch ruling keeps the spot
+   *  it had before J3, so the air model moves presentation, not the sim. */
+  passConceptDepth?: number
   pressure?: boolean
   /** The defense sent extra rushers on this pass (animation only). */
   blitz?: boolean
@@ -1765,21 +1806,21 @@ function staRel(list: Array<Player | undefined>): number {
 // defender at all — an implicit "average defender" assumption. J3b decides a
 // would-be goal-line score between the specific carrier (his own STR/TRK/BCV) and
 // the specific man at the point of attack (J8a's gap pick; his own BSH/STR/TAK).
-// Every rating is relative to the player's position mean, so an average pair sits
-// at J3B.glBase; a power back / elite nose tackle swings the whole result.
-/** J3b: the carrier's goal-line power (relative STR/TRK/BCV). */
+// Every rating is read from the deciding man himself and centred on a single fixed
+// league constant (J3B.carCenter / J3B.defCenter — no position table, no unit mean),
+// so an average pair sits at J3B.glBase; a power back / elite nose tackle swings the
+// whole result.
+/** J3b: the carrier's goal-line power (his own STR/TRK/BCV, centred on the fixed
+ *  J3B.carCenter league constant — no position mean, no unit mean). */
 function glCarrierPower(p: Player | undefined): number {
   if (!p) return 0
-  return rmean(p.pos, 'STR', eff(p, 'STR')) * J3B.carStrW +
-    rmean(p.pos, 'TRK', eff(p, 'TRK')) * J3B.carTrkW +
-    rmean(p.pos, 'BCV', eff(p, 'BCV')) * J3B.carBcvW
+  return eff(p, 'STR') * J3B.carStrW + eff(p, 'TRK') * J3B.carTrkW + eff(p, 'BCV') * J3B.carBcvW - J3B.carCenter
 }
-/** J3b: the point-of-attack defender's goal-line resistance (relative BSH/STR/TAK). */
+/** J3b: the point-of-attack defender's goal-line resistance (his own BSH/STR/TAK,
+ *  centred on the fixed J3B.defCenter league constant). */
 function glDefResist(p: Player | undefined): number {
   if (!p) return 0
-  return rmean(p.pos, 'BSH', eff(p, 'BSH')) * J3B.defBshW +
-    rmean(p.pos, 'STR', eff(p, 'STR')) * J3B.defStrW +
-    rmean(p.pos, 'TAK', eff(p, 'TAK')) * J3B.defTakW
+  return eff(p, 'BSH') * J3B.defBshW + eff(p, 'STR') * J3B.defStrW + eff(p, 'TAK') * J3B.defTakW - J3B.defCenter
 }
 /** J3b: chance the POA defender stands the carrier up short of the goal line. */
 function glStuffChance(carrier: Player | undefined, defs: Array<Player | undefined>): number {
@@ -2243,6 +2284,10 @@ export interface PlayOutcome {
   carrierId?: string
   targetId?: string
   passDepth?: number
+  /** J3: the concept's nominal depth (the pre-J3 meaning of `passDepth`), emitted
+   *  only while the air model is on. The replay-review catch ruling keeps the spot
+   *  it had before J3, so the air model moves presentation, not the sim. */
+  passConceptDepth?: number
   pressure?: boolean
   /** The defense sent extra rushers on this pass (animation only). */
   blitz?: boolean
@@ -3865,7 +3910,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
-      ...(DEPTH_AWARE_ON ? { passDepth: passAir } : {}),
+      ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
       timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
@@ -3982,7 +4027,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return maybeScramble(offId, n, qb, qbStyle, pressured, {
       type: 'pass', concept: concept.name, yards: gain, blitz,
       result: oob ? `${baseResult} (out of bounds)` : baseResult,
-      turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, bigPlay: !loose && big,
+      turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
       outOfBounds: oob || undefined,
       fumbleId: strip ? stopper : undefined, muffedCatch: muff || undefined,
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
@@ -3994,7 +4039,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -4229,12 +4274,15 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // J3b: a would-be goal-line score is decided by the specific carrier against the
   // specific man at the point of attack (J8a's gap pick) — not an implicit average
   // defender. Only real plunges (ball spotted inside J3B.glYard) are affected; a
-  // long breakaway is J8a's chase model above. `glPoaId` records the deciding
-  // defender for the animation, and `glStopId` only when the stop actually fires.
-  // A stuffed carrier is stopped at the 1. No rng() draw.
+  // long breakaway is J8a's chase model above. The stand is a once-per-series rep:
+  // downs 1-3 only and never once the ball is already on the 1 (J3B.glMaxDown /
+  // glNoStuffYard), where the base short-yardage push owns the conversion.
+  // `glPoaId` records the deciding defender for the animation, and `glStopId` only
+  // when the stop actually fires. A stuffed carrier is stopped at the 1. No rng().
   let glStopId: string | undefined
   let glPoaId: string | undefined
-  if (J3B_ON && gain > 0 && yard >= J3B.glYard && yard + gain >= 100) {
+  if (J3B_ON && gain > 0 && yard >= J3B.glYard && yard < J3B.glNoStuffYard &&
+    (env?.down ?? 0) <= J3B.glMaxDown && yard + gain >= 100) {
     const glDefs = [poiDl, poiLb].filter((p): p is Player => !!p)
     if (glDefs.length) {
       glPoaId = glDefs[0].id

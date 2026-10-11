@@ -115,6 +115,10 @@ export interface CloseOutcome {
   reception?: boolean
   targetId?: string
   passDepth?: number
+  /** J3: the concept's nominal depth, present only with the air model on. The catch
+   *  ruling uses it (the spot the pre-J3 engine used) so the emitted air yards stay
+   *  presentation-only. */
+  passConceptDepth?: number
   fumbleCause?: 'run' | 'carry' | 'strip' | 'muff' | 'kickoff'
   fumbleId?: string
   muffedCatch?: boolean
@@ -262,7 +266,7 @@ export function altRuling(kind: ReviewKind, s: CloseState, out: CloseOutcome): A
     }
     case 'catch':
       return out.result === 'Incomplete'
-        ? { text: `ruled a catch at the ${Math.min(s.yard + (out.passDepth ?? 0), 99)}`, score: false, turnover: false }
+        ? { text: `ruled a catch at the ${Math.min(s.yard + (out.passConceptDepth ?? out.passDepth ?? 0), 99)}`, score: false, turnover: false }
         : { text: 'ruled incomplete', score: false, turnover: false }
     case 'fumble':
       return out.turnover
@@ -351,9 +355,10 @@ export function rulingOutcome(kind: ReviewKind, s: CloseState, out: PlayOutcome)
     }
     case 'catch': {
       if (out.result === 'Incomplete') {
-        // A contested incompletion ruled a catch, caught at passDepth, short of
-        // the goal line.
-        const yards = Math.max(0, Math.min(out.passDepth ?? 0, 99 - s.yard))
+        // A contested incompletion ruled a catch, caught at the concept depth
+        // (J3: the air model's emitted `passDepth` is presentation-only, so the
+        // ruling keeps the pre-J3 spot), short of the goal line.
+        const yards = Math.max(0, Math.min(out.passConceptDepth ?? out.passDepth ?? 0, 99 - s.yard))
         return { ...out, result: 'Complete', yards, reception: true }
       }
       // A contested completion ruled incomplete.
