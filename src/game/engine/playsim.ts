@@ -26,6 +26,7 @@ import type { PlayReview, PendingReview, ChallengeState } from './review'
 import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
 import { clutchEdge, kickClutch } from './clutch'
 import { getIndividual, positionRating } from './individual'
+import { buildScoutReport, weaknessEdge, primaryTag, type ScoutFinding } from './scoutReport'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -194,6 +195,18 @@ export function setJ12(on: boolean) {
 /** J12: read the current disguise/game-plan toggle so a probe can restore it. */
 export function getJ12(): boolean {
   return J12_ON
+}
+// J36 (FUTURES #36): individual scouting reports — the game plan targets a player
+// the staff flagged. Dev-only toggle in the setStamina pattern. Default ON; with
+// it OFF no target list is read and no scout edge is applied, so the rng() stream
+// and every resolved play are byte-identical to the pre-J36 engine.
+let J36_ON = true
+export function setJ36(on: boolean) {
+  J36_ON = on
+}
+/** J36: read the current scouting-targeting toggle so a probe can restore it. */
+export function getJ36(): boolean {
+  return J36_ON
 }
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
@@ -774,6 +787,8 @@ export interface Play {
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
   qbFooled?: boolean
   bigPlay?: boolean
+  /** J36: the opponent player the play was steered at (a targeted report finding). */
+  scoutTarget?: string
   timeUsed?: number
   /** J5: this snap used pre-snap motion (animation use is a later job). */
   motion?: boolean
@@ -2144,6 +2159,8 @@ export interface PlayOutcome {
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
   qbFooled?: boolean
   bigPlay?: boolean
+  /** J36: the opponent player the play was steered at (a targeted report finding). */
+  scoutTarget?: string
   /** J5: this snap used pre-snap motion (set when the play is pushed). */
   motion?: boolean
   timeUsed: number
@@ -3054,6 +3071,78 @@ export function j12OffPlan(world: World, n: number, offId: string, defId: string
   return best >= J12.doubleThresh ? 'doubleRusher' : 'chipEdge'
 }
 
+// ── J36 (FUTURES #36): individual scouting reports — targeting ────────────────
+// A club's staff writes a weekly report on the NEXT opponent's individual players
+// (`buildScoutReport`). The game plan (user) or the AI then keys on one or two of
+// them: the offence steers a pass at the flagged defender (the `targetWeakCB`
+// pattern) or a run at the flagged tackler; the defence keys on the flagged
+// opponent's skill player. The tag's edge applies ONLY when the player is
+// genuinely weak on that trait (`weaknessEdge` reads his own ratings) — keying a
+// strong player wrongly flagged gives nothing, and the steer itself already
+// costs. Every pick is a deterministic hash, so with J36 off (or no targets) the
+// engine is byte-identical to the pre-J36 sim.
+export const J36 = {
+  /** Most opponent player ids a plan may target (the UI enforces the same cap). */
+  maxTargets: 2,
+  /** AI clubs auto-key the top findings from their own staff's report. */
+  autoTargets: 2,
+  /** Share of snaps the targeting side actually keys on the flagged player. */
+  steerRate: 0.14,
+  /** A weak tackle-miss edge → run-yard scale. */
+  runYardScale: 8,
+  /** Sack-chance multiplier per unit of a weak OT's edge (speed rushers win). */
+  otSackScale: 14,
+  /** INT multiplier per unit of a weak QB's `qb-force` edge. */
+  qbForceIntScale: 8,
+  /** Fumble multiplier per unit of a back's `rb-fumble` edge. */
+  fumbleScale: 10,
+  /**
+   * The cost of steering a throw at a flagged defender: the safety rotates over
+   * the top (exactly the risk `targetWeakCB` already pays — intRisk 1.15). Keeps
+   * the offence's targeting gain from being a free lunch, so the league mean holds.
+   */
+  steerIntRisk: 1.25,
+} as const
+
+/** J36: tags whose true edge opens the pass window (a defender the offence attacks). */
+const J36_COVER_TAGS = new Set(['cb-bite', 's-angles', 'lb-tackle'])
+
+/** J36: one keyed opponent player and the tag the offence/defence is exploiting. */
+interface ScoutKey { id: string; tag?: string }
+
+/** J36: the opponent's report, cached per (world, season, week, sides). */
+const j36ReportCache = new WeakMap<World, Map<string, ScoutFinding[]>>()
+function j36Report(world: World, myId: string, oppId: string): ScoutFinding[] {
+  let m = j36ReportCache.get(world)
+  if (!m) {
+    m = new Map()
+    j36ReportCache.set(world, m)
+  }
+  const key = `${world.season}:${world.week}:${myId}:${oppId}`
+  const hit = m.get(key)
+  if (hit) return hit
+  const rep = buildScoutReport(world, myId, oppId)
+  m.set(key, rep)
+  return rep
+}
+
+/**
+ * J36: the opponent players this club keys on this week. The user's club uses its
+ * own plan targets (≤2, any reported player); an AI club takes the top findings
+ * from its own staff's report on the opponent. No plan and no report → none.
+ */
+function j36TargetIds(world: World, myId: string, oppId: string, plan: import('./gameplan').GamePlan | null): ScoutKey[] {
+  const planTargets = plan?.targets
+  if (planTargets && planTargets.length) {
+    return planTargets.slice(0, J36.maxTargets).map((id) => {
+      const p = (world.roster[oppId] ?? []).find((x) => x.id === id)
+      return { id, tag: p ? primaryTag(p.pos) : undefined }
+    })
+  }
+  return j36Report(world, myId, oppId).slice(0, J36.autoTargets).map((f) => ({ id: f.playerId, tag: f.tag }))
+}
+
+
 // J12 #34: the league mean of the pre-snap read margin (disguise quality minus QB
 // read) across the NFL's coordinators/players, cached per world (the WX_CENTER
 // pattern). Subtracting it makes the per-snap read term zero-mean, so the league
@@ -3164,6 +3253,45 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const saf = defEleven.filter((p) => p.pos === 'S')
   const onFieldDefIds = defEleven.map((p) => p.id)
   const onFieldOffIds = offEleven.map((p) => p.id)
+  // ── J36 (FUTURES #36): the scouting-report game plan ────────────────────────
+  // Read the targets the club keys on this week (plan targets for the user, the
+  // staff report for the AI) and the edge a GENUINE weakness is worth. The steer
+  // itself is applied to `coverId` below; a false read earns nothing.
+  let scoutTarget: string | undefined
+  let scoutSteerId: string | undefined
+  let scoutCoverEdge = 0
+  let scoutDropId: string | undefined
+  let scoutDropEdge = 0
+  let scoutSackBonus = 0
+  let scoutIntMult = 1
+  let scoutFumbleId: string | undefined
+  let scoutFumbleMult = 1
+  if (J36_ON) {
+    for (const t of j36TargetIds(world, offId, defId, planFor(offId, 'off'))) {
+      const dp = defEleven.find((x) => x.id === t.id)
+      if (!dp || h01(`${n}:${offId}:j36steer`) >= J36.steerRate) continue
+      scoutTarget = dp.id
+      if (J36_COVER_TAGS.has(t.tag ?? '') && (dp.pos === 'CB' || dp.pos === 'S' || dp.pos === 'LB')) {
+        scoutSteerId = dp.id
+        scoutIntMult *= J36.steerIntRisk
+      }
+      scoutCoverEdge += weaknessEdge(dp, t.tag)
+      break
+    }
+    for (const t of j36TargetIds(world, defId, offId, planFor(defId, 'def'))) {
+      const op = offEleven.find((x) => x.id === t.id)
+      if (!op) continue
+      const edge = weaknessEdge(op, t.tag)
+      if (edge <= 0) continue
+      scoutTarget = scoutTarget ?? op.id
+      if (t.tag === 'ot-speed') scoutSackBonus += edge * J36.otSackScale
+      else if (t.tag === 'qb-force') scoutIntMult *= 1 + edge * J36.qbForceIntScale
+      else if (t.tag === 'rb-fumble') { scoutFumbleId = op.id; scoutFumbleMult *= 1 + edge * J36.fumbleScale }
+      else if (t.tag === 'wr-drops') { scoutDropId = op.id; scoutDropEdge = edge }
+      break
+    }
+  }
+  const scoutFields: Pick<PlayOutcome, 'scoutTarget'> = scoutTarget ? { scoutTarget } : {}
   // ── J12 (FUTURES #34 + #35) ────────────────────────────────────────────────
   // The AI's game plan vs the opponent's best players (deterministic hash, never
   // an rng draw; the user's club uses the AI choice for now). A user-set matchup
@@ -3284,7 +3412,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
   // J12 #34: a fooled QB holds the ball — a higher share of pressures convert to
   // sacks; a QB who reads the disguise gets the ball out. Linear and zero-mean.
-  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack), 0.02, 0.13)
+  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus), 0.02, 0.13)
 
   // ── R7: per-dropback pressure decision (stats only) ─────────────────────────
   // Derived from the existing `pressureEdge` by a per-play hash, so no rng() draw
@@ -3364,6 +3492,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J8c: `let` because the plan-driven coverage (`targetWeakCB` / `shadowWR1`) may
   // reassign the actual defender below.
   let coverId = coverDefender(target, concept, wrs, cbs, saf, lbs)
+  // J36: a steered throw attacks the flagged defender (he becomes the cover man,
+  // exactly like `targetWeakCB`) — the report's finding is what put him there.
+  if (J36_ON && scoutSteerId) coverId = scoutSteerId
 
   if (rng() < sackChance) {
     // R2: a sack costs ≈ 7 yards (real 2015–2024).
@@ -3388,7 +3519,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
-      qbId: qb?.id, sackId, coverId, ...j12Fields,
+      qbId: qb?.id, sackId, coverId, ...j12Fields, ...scoutFields,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
@@ -3682,6 +3813,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // (the base clamp is 0.42–0.74), so an elite CB closes the window and a poor
   // one opens it — individual ratings get a big say.
   if (MATCHUPS_ON && target) compProb = clamp(compProb + compRaw - MU_CENTER.comp, MU.compMin, MU.compMax)
+  // J36: the scouting-report edge. The offence keying a genuinely weak defender
+  // opens the window; the defence keying a receiver who drops closes it. A false
+  // read adds nothing (the steer alone already costs).
+  if (J36_ON) {
+    const drop = target && scoutDropId && target.id === scoutDropId ? scoutDropEdge : 0
+    const net = scoutCoverEdge - drop
+    if (net) compProb = clamp(compProb + net, MU.compMin, MU.compMax)
+  }
   // J12 #34: a fooled QB works through his progressions late and misses; a QB who
   // reads the disguise through throws with a small, matched edge. Zero-mean (the
   // per-snap read noise is symmetric), so the league completion rate holds.
@@ -3707,7 +3846,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         const a = mkAttrs(p)
         return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
       })) * E2_W)
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt), 0.005, 0.06)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult, 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -3739,7 +3878,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -3818,7 +3957,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R16: the ball can still come loose on a clean stop — a big-hit strip, or the
     // receiver's own bobble (a muff). Either way a proximity hash decides who falls
     // on it; the offence keeps roughly half of all loose balls.
-    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < (R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)) * (env?.wx?.fumbleMult ?? 1)
+    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < (R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)) * (env?.wx?.fumbleMult ?? 1) * (target && scoutFumbleId === target.id ? scoutFumbleMult : 1)
     const muff = !strip && gain > 0 && yard + gain < 100 && h01(`${n}:${offId}:muff`) < muffChance(target?.pos, tA) * (env?.wx?.muffMult ?? 1)
     const loose = strip || muff
     const recovery = loose ? fumbleRecovery(`${n}:${offId}:passrec`, R16.offRecover) : undefined
@@ -3845,13 +3984,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -3962,6 +4101,31 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const fb = offEleven.find((p) => p.pos === 'FB')
   const rb = offEleven.filter((p) => p.pos === 'RB')
   const onFieldOffIds = offEleven.map((p) => p.id)
+  // ── J36 (FUTURES #36): the scouting-report game plan (run side) ─────────────
+  // The offence aims the run at a flagged bad tackler (a genuine weakness buys a
+  // little extra); the defence keys on a back who puts the ball on the ground.
+  // Deterministic hashes; with J36 off this whole block is inert.
+  let scoutTarget: string | undefined
+  let scoutGain = 0
+  let scoutFumbleId: string | undefined
+  let scoutFumbleMult = 1
+  if (J36_ON) {
+    for (const t of j36TargetIds(world, defId, offId, planFor(defId, 'def'))) {
+      const op = offEleven.find((x) => x.id === t.id)
+      if (!op || t.tag !== 'rb-fumble') continue
+      const edge = weaknessEdge(op, t.tag)
+      if (edge > 0) { scoutFumbleId = op.id; scoutFumbleMult = 1 + edge * J36.fumbleScale }
+      break
+    }
+    for (const t of j36TargetIds(world, offId, defId, planFor(offId, 'off'))) {
+      const dp = defEleven.find((x) => x.id === t.id)
+      if (!dp || !J36_COVER_TAGS.has(t.tag ?? '') || h01(`${n}:${offId}:j36runsteer`) >= J36.steerRate) continue
+      const edge = weaknessEdge(dp, t.tag)
+      if (edge > 0) { scoutTarget = dp.id; scoutGain = Math.round(edge * J36.runYardScale) }
+      break
+    }
+  }
+  const scoutFields: Pick<PlayOutcome, 'scoutTarget'> = scoutTarget ? { scoutTarget } : {}
   // R15: offence-vs-defence average in-game fatigue (difference only).
   const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...saf, ...cbs]) - unitFatigue(env?.fat, [qb, ...ol, ...rb, fb])
   const cA = carrier ? mkAttrs(carrier) : {}
@@ -4055,6 +4219,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     gain += Math.round(rmean('FB', 'RBK', fA.RBK ?? 70) * 0.06 + rmean('FB', 'IBL', fA.IBL ?? 70) * 0.04)
   }
   gain = clamp(gain, -10, 90)
+  // J36: the flagged tackler's miss is worth a little extra ground.
+  if (J36_ON && scoutGain) gain = clamp(gain + scoutGain, -10, 90)
   // R2: on a money down a runner lowers his shoulder to the marker.
   if (gain > 0 && env?.down === 3) gain += R2.moneyYards
   // L12 E2 / J8a: the long-run tail. OFF keeps the team DL/LB PUR+SPD mean cap;
@@ -4087,7 +4253,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
   // squirts out. Threshold only, so no rng() draw is added or removed.
   const glMult = yard >= R16.goalLineYard ? R16.goalLineMult : 1
-  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1)
+  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1) * (J36_ON && carrier?.id === scoutFumbleId ? scoutFumbleMult : 1)
   // R16: a proximity hash decides who falls on it; goal-line piles lean defence.
   const recovery = fumble ? fumbleRecovery(`${n}:${defId}:runrec`, yard >= R16.goalLineYard ? R16.goalLineOffRecover : R16.offRecover) : undefined
   const lost = fumble && recovery === 'def'
@@ -4161,6 +4327,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     biteIds: J8A2_ON && biteIds.length ? biteIds : undefined,
     fillId: J8A2_ON ? alley.player?.id : undefined,
     onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
+    ...scoutFields,
   }
 }
 
