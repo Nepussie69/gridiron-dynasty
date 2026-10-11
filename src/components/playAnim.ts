@@ -2570,7 +2570,11 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   const covKeys = DEF_KEYS
   const blkKeys = OFF_KEYS.filter((k) => k !== 'rb')
   covKeys.forEach((k, i) => m[k].reset(clampX(kickX + 1), clampY(3 + i * 4.7)))
-  blkKeys.forEach((k, i) => m[k].reset(clampX(catchX + 3 + (i % 2) * 3), clampY(5 + i * 4.6)))
+  // A touchback's front line sets up around its own 35 (no wall to form); a
+  // return's blockers form the wall just ahead of the catch.
+  blkKeys.forEach((k, i) =>
+    m[k].reset(clampX(touchback ? 43 + (i % 2) * 5 : catchX + 3 + (i % 2) * 3), clampY(5 + i * 4.6)),
+  )
   const kickDist = Math.max(10, kickX - catchX)
   const minFlight = clampN(0.9 + kickDist * 0.035, 1.8, 3.2)
   const kStart = clampN(m.rb.pace.top * Math.max(0.4, minFlight - 0.1) * 0.8, 3, 16)
@@ -2582,12 +2586,13 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   recEv(0, 'kick', ['s1'], { x: kickX, y: MID_Y })
 
   if (touchback) {
-    // No return: the coverage converges downfield and the returner kneels. No
-    // tackle is invented. The blockers retreat.
+    // No return: the kick sails into the RECEIVING end zone (low x — the kick
+    // travels from kickX toward catchX), the coverage converges downfield, the
+    // front line drifts back and the returner downs it. No tackle is invented.
     covKeys.forEach((k, i) => m[k].run([{ x: clampX(kickX - 16 - i * 1.5), y: clampY(4 + i * 4.6) }], { stop: true }))
-    blkKeys.forEach((k, i) => m[k].run([{ x: clampX(30 + i * 3), y: clampY(4 + i * 4.6) }], { stop: true }))
-    const ball: WP[] = [{ t: 0, x: kickX, y: MID_Y }, { t: catchT, x: clampX(106), y: MID_Y }]
-    recEv(catchT, 'touchback', ['rb'], { x: 106, y: MID_Y })
+    blkKeys.forEach((k, i) => m[k].run([{ x: clampX(30 + (i % 2) * 4), y: clampY(4 + i * 4.6) }], { stop: true }))
+    const ball: WP[] = [{ t: 0, x: kickX, y: MID_Y }, { t: catchT, x: catchX, y: MID_Y }]
+    recEv(catchT, 'touchback', ['rb'], { x: catchX, y: MID_Y })
     return finish(f, m, { ball, holders: [{ t: 0, key: null }], flights: [{ t0: 0, t1: catchT, height: 1 }] })
   }
 
