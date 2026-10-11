@@ -14,7 +14,7 @@ import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../da
 import { NO_USER_BONUS, coachEffect } from './coaching'
 import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
-import { clubReturners, coverageScore, returnScore } from './returns'
+import { clubReturners, coverageScore, coverUnit, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
@@ -25,6 +25,7 @@ import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, 
 import type { PlayReview, PendingReview, ChallengeState } from './review'
 import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
 import { clutchEdge, kickClutch } from './clutch'
+import { getIndividual } from './individual'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -70,6 +71,24 @@ export function setJ8b(on: boolean) {
 /** J8b: read the current rush/protection toggle so a probe can restore it exactly. */
 export function getJ8b(): boolean {
   return PROT_ON
+}
+// J8d: dev-only toggle for the individual-ratings pass over penalties, special
+// teams and the fast sim. The flag itself lives in `individual.ts` (so the fast-sim
+// `teamStrength` in generate.ts can read it without a module cycle); re-exported
+// here so the probe and the OFF calibration copy share one switch, the J1 pattern.
+// Default ON; OFF restores the pre-J8d unit-average / OVR-stand-in engine exactly.
+export { setIndividual, getIndividual } from './individual'
+// J8c: dev-only toggle for the individual coverage / ball-skills layer (the
+// setStamina pattern). Default on; the shipped sim always leaves it on. With it
+// off the resolver uses the pre-J8c team/unit averages verbatim, so its rng
+// stream and every resolved play are byte-identical to the J7 engine.
+let COVERAGE_INDIV_ON = true
+export function setJ8c(on: boolean) {
+  COVERAGE_INDIV_ON = on
+}
+/** J8c: read the current individual-coverage toggle so a probe can restore it. */
+export function getJ8c(): boolean {
+  return COVERAGE_INDIV_ON
 }
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
@@ -340,6 +359,70 @@ const PEN_DEF_W: Partial<Record<PenaltyKind, number>> = {
   offside: 0.3, holdingDef: 0.25, dpi: 0.18, illegalContact: 0.12, unnecessary: 0.09, roughing: 0.06,
 }
 
+// ── J8d: individual special teams / penalties / fast sim ─────────────────────
+// Every constant this job adds lives here. The `*Center`/`*Shift` numbers are the
+// measured league means (32 real clubs) of the individual metric minus the unit
+// mean it replaces, so each new term is centred and league totals do not drift
+// (the `WX_CENTER` pattern). Tune only this block.
+export const J8D = {
+  // Penalty kind weights: the R14 slopes are kept, but the value is now ONE player
+  // on the field (the likeliest offender) rather than a whole-roster/unit mean.
+  penHoldW: 0.012, penHoldCenter: 21.34,
+  penAwrW: 0.012, penOpiW: 0.01, penShiftOl: -6.23, penShiftWr: -1.5, penShiftQb: 8.65,
+  penShiftDb: -4.99, penShiftDl: -1.13, shiftCb: -3.94,
+  // Return coverage: the value is the individual cover man the returner must beat.
+  // The rating-weighted pick sits `covPickBias` above the old unit mean.
+  covPickBias: 0.37,
+  // Return TD = base × f(returner athletic − cover man); centred on the league mean.
+  tdCenter: 13.04, tdW: 0.05, tdLo: 0.3, tdHi: 2.6,
+  tdPunt: 0.0103, tdKick: 0.0013, tdSquib: 0.0004,
+  // Ball security: the returner's own CAR (centred on the league-mean CAR).
+  carCenter: 71.75, fumW: 0.03, fumLo: 0.35, fumHi: 2.4,
+  muffPunt: 0.01, fumKick: 0.005, fumSquib: 0.008,
+}
+
+/** J8d: the on-field player with the lowest value of `key` (the weakest link). */
+function worstPlayer(list: Player[], key: string): Player | undefined {
+  let out: Player | undefined
+  let worst = Infinity
+  for (const p of list) {
+    const v = mkAttrs(p)[key]
+    if (v !== undefined && v < worst) { worst = v; out = p }
+  }
+  return out
+}
+/** J8d: the on-field player with the best edge-rush rating (max of PMV/FMV). */
+function bestRusher(list: Player[]): Player | undefined {
+  let out: Player | undefined
+  let best = -Infinity
+  for (const p of list) {
+    const a = mkAttrs(p)
+    const v = Math.max(a.PMV ?? -1, a.FMV ?? -1)
+    if (v > best) { best = v; out = p }
+  }
+  return out
+}
+/** J8d: the individual rating that makes a player the likeliest offender for a foul. */
+const PEN_OFF_RATING: Partial<Record<PenaltyKind, { key: string; high?: boolean }>> = {
+  holdingOff: { key: 'PBK' }, falseStart: { key: 'AWR' }, opi: { key: 'AWR' }, delay: { key: 'AWR' },
+  dpi: { key: 'MCV' }, illegalContact: { key: 'MCV' }, holdingDef: { key: 'AWR' }, offside: { key: 'AWR' },
+  roughing: { key: 'PMV', high: true }, unnecessary: { key: 'AWR' },
+}
+/** J8d: a missing specialist's replacement value — the league mean at his position. */
+function specMean(pos: 'K' | 'P', key: string, hard: number): number {
+  return getIndividual() ? (POS_MEAN[pos]?.[key] ?? hard) : hard
+}
+
+/** J8d: the on-field units for the penalty stage (the concept is already chosen). */
+function penaltyFields(world: World, s: GameState, concept: Concept, offId: string, defId: string): { off: Player[]; def: Player[] } {
+  const env = envFor(s)
+  const userOffP = s.ctx?.userTeamId === offId ? s.ctx?.personnel?.off : undefined
+  const off = fillToEleven(world, offId, offenseOnField(world, offId, concept, env.qbOverride, undefined, env.fat, userOffP ? offenseCounts(userOffP) : undefined), OFF_FILL)
+  const userDefP = s.ctx?.userTeamId === defId ? s.ctx?.personnel?.def : undefined
+  const def = fillToEleven(world, defId, defenseOnField(world, defId, concept.personnel, env.fat, userDefP ? defenseCounts(userDefP) : undefined), DEF_FILL)
+  return { off, def }
+}
+
 /** R14: mean rating across a club's non-injured players at these positions. */
 function posRatingAvg(world: World, teamId: string, positions: Position[], key: string): number {
   const ps = (world.roster[teamId] ?? []).filter((p) => positions.includes(p.pos) && !p.injured)
@@ -360,7 +443,19 @@ function passRushAvg(world: World, teamId: string): number {
   return sum / ps.length
 }
 /** R14: the most likely offender for a foul — a starter at one of its positions. */
-function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', positions: Position[], key: string): Player | undefined {
+function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', positions: Position[], key: string, kind?: PenaltyKind, field?: Player[]): Player | undefined {
+  // J8d: a specific man on the field at one of the foul's positions, picked by the
+  // rating that makes him likeliest to commit it (weighted hash, no rng draw).
+  if (getIndividual() && field && field.length && kind) {
+    const pool = field.filter((p) => positions.includes(p.pos))
+    const use = pool.length ? pool : field
+    const spec = PEN_OFF_RATING[kind] ?? { key: 'AWR' }
+    return hashPick(use, (p) => {
+      const a = mkAttrs(p)
+      const v = spec.high ? Math.max(a.PMV ?? 70, a.FMV ?? 70) : (a[spec.key] ?? POS_MEAN[p.pos]?.[spec.key] ?? 70)
+      return Math.max(1, spec.high ? v : 100 - v)
+    }, hash32(key)) ?? use[0]
+  }
   let ps = (world.roster[teamId] ?? []).filter((p) => positions.includes(p.pos) && !p.injured)
   // Fall back to the whole unit if the position list does not fit this side.
   if (!ps.length) ps = (world.roster[teamId] ?? []).filter((p) => (p.side === 'DEF' ? 'def' : 'off') === side && !p.injured)
@@ -369,9 +464,61 @@ function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', posi
   return ps[(hash32(key) >>> 0) % ps.length]
 }
 /** R14: pick the foul type from the rating-modulated weights, within the tier. */
-function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId: string, oppId: string, away: boolean, tier: number): PenaltyKind {
+function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId: string, oppId: string, away: boolean, tier: number, field?: Player[], oppField?: Player[]): PenaltyKind {
   const w: Partial<Record<PenaltyKind, number>> = { ...(side === 'off' ? PEN_OFF_W : PEN_DEF_W) }
-  if (side === 'off') {
+  if (getIndividual() && field && field.length) {
+    // J8d: every weight below is driven by ONE player on the field — the man who
+    // commits the foul — instead of a whole-roster/unit mean. Each term is shifted
+    // by the measured difference between the individual metric's league mean and
+    // the old mean, so the foul mix (and the league totals) does not drift.
+    if (side === 'off') {
+      const ol = field.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
+      const wr = field.filter((p) => p.pos === 'WR' || p.pos === 'TE')
+      const qb = field.find((p) => p.pos === 'QB')
+      const rushers = (oppField ?? []).filter((p) => p.pos === 'DE' || p.pos === 'DT' || p.pos === 'LB')
+      const holder = ol.length ? worstPlayer(ol, 'PBK') : undefined
+      const rusher = rushers.length ? bestRusher(rushers) : undefined
+      if (holder && rusher) {
+        const a = mkAttrs(rusher)
+        const diff = Math.max(a.PMV ?? 70, a.FMV ?? 70) - (mkAttrs(holder).PBK ?? 70)
+        w.holdingOff = (w.holdingOff ?? 0) * clamp(1 + (diff - J8D.penHoldCenter) * J8D.penHoldW, 0.7, 1.35)
+      }
+      if (ol.length) {
+        const awr = mkAttrs(worstPlayer(ol, 'AWR')!).AWR ?? 70
+        w.falseStart = (w.falseStart ?? 0) * clamp(1 + (72 - awr + J8D.penShiftOl) * J8D.penAwrW, 0.7, 1.3) * (away ? 1.25 : 1)
+      }
+      if (wr.length) {
+        const awr = mkAttrs(worstPlayer(wr, 'AWR')!).AWR ?? 70
+        w.opi = (w.opi ?? 0) * clamp(1 + (72 - awr + J8D.penShiftWr) * J8D.penOpiW, 0.8, 1.3)
+      }
+      if (qb) {
+        const awr = mkAttrs(qb).AWR ?? 70
+        w.delay = (w.delay ?? 0) * clamp(1 + (72 - awr + J8D.penShiftQb) * J8D.penAwrW, 0.7, 1.3)
+      }
+    } else {
+      const db = field.filter((p) => p.pos === 'CB' || p.pos === 'S')
+      const dblb = field.filter((p) => p.pos === 'CB' || p.pos === 'S' || p.pos === 'LB')
+      const dl = field.filter((p) => p.pos === 'DE' || p.pos === 'DT')
+      const cover = db.length ? worstPlayer(db, 'MCV') : undefined
+      if (cover) {
+        const mcv = mkAttrs(cover).MCV ?? 70
+        w.dpi = (w.dpi ?? 0) * clamp(1 + (72 - mcv + J8D.shiftCb) * 0.012, 0.7, 1.4)
+        w.illegalContact = (w.illegalContact ?? 0) * clamp(1 + (72 - mcv + J8D.shiftCb) * 0.01, 0.8, 1.3)
+      }
+      const dbw = dblb.length ? worstPlayer(dblb, 'AWR') : undefined
+      if (dbw) {
+        const awr = mkAttrs(dbw).AWR ?? 70
+        w.holdingDef = (w.holdingDef ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDb) * 0.01, 0.8, 1.3)
+        w.unnecessary = (w.unnecessary ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDb) * 0.01, 0.8, 1.3)
+      }
+      const dlw = dl.length ? worstPlayer(dl, 'AWR') : undefined
+      if (dlw) {
+        const awr = mkAttrs(dlw).AWR ?? 70
+        w.offside = (w.offside ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDl) * 0.012, 0.7, 1.3)
+        w.roughing = (w.roughing ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDl) * 0.008, 0.8, 1.3)
+      }
+    }
+  } else if (side === 'off') {
     const olAwr = posRatingAvg(world, teamId, ['OT', 'OG', 'C'], 'AWR')
     const qbAwr = posRatingAvg(world, teamId, ['QB'], 'AWR')
     const wrAwr = posRatingAvg(world, teamId, ['WR', 'TE'], 'AWR')
@@ -450,6 +597,41 @@ function returnYards(key: string, retScore: number, covScore: number, base: numb
   return Math.round(clamp(base + bell * spread + edge, -4, 45))
 }
 
+/** J8d: the individual cover man who takes the angle on a return (weighted pick). */
+function stCoverMan(world: World, teamId: string, key: string): Player | undefined {
+  const unit = coverUnit(world, teamId)
+  if (!unit.length) return undefined
+  return hashPick(unit, (p) => {
+    const a = mkAttrs(p)
+    return Math.max(1, (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.35 + (a.SPD ?? 70) * 0.25)
+  }, hash32(key))
+}
+/** J8d: a cover man's individual coverage value (replaces the old unit mean). */
+function coverScoreOf(p: Player | undefined): number {
+  const a = p ? mkAttrs(p) : {}
+  return (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.35 + (a.SPD ?? 70) * 0.25 - J8D.covPickBias
+}
+/** J8d: the returner's return athletics (SPD/ACC/BCV) for the TD chance. */
+function returnAthOf(p: Player | undefined): number {
+  const a = p ? mkAttrs(p) : {}
+  return (a.SPD ?? 70) * 0.5 + (a.ACC ?? 70) * 0.3 + (a.BCV ?? 70) * 0.2
+}
+/** J8d: the cover man's chase athletics (SPD/TAK/PUR) for the TD chance. */
+function coverAthOf(p: Player | undefined): number {
+  const a = p ? mkAttrs(p) : {}
+  return (a.SPD ?? 70) * 0.4 + (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.2
+}
+/** J8d: an individual return-TD chance (centred on the league-mean returner−cover gap). */
+function returnTdProb(base: number, returner: Player | undefined, coverMan: Player | undefined): number {
+  const diff = returnAthOf(returner) - coverAthOf(coverMan)
+  return base * clamp(1 + (diff - J8D.tdCenter) * J8D.tdW, J8D.tdLo, J8D.tdHi)
+}
+/** J8d: an individual ball-security multiplier from the returner's own CAR. */
+function carrySecurityOf(returner: Player | undefined): number {
+  const a = returner ? mkAttrs(returner) : {}
+  return clamp(1 + (J8D.carCenter - (a.CAR ?? J8D.carCenter)) * J8D.fumW, J8D.fumLo, J8D.fumHi)
+}
+
 export interface Play {
   n: number
   qtr: number
@@ -494,6 +676,8 @@ export interface Play {
   /** J7: the covering defender chosen at target time (mirrors `coverId`); the
    *  matchup record. Undefined when the matchups layer is off. */
   coverDefenderId?: string
+  /** J8c: the covering defender who got a hand on the ball (a pass break-up). */
+  pbuId?: string
   /** J7: modelled separation to the nearest defender at the catch point (yards, 1 dp). */
   separationYd?: number
   /** J7: how tight the coverage was — `bust`/`miscall` are breakdowns. */
@@ -1402,6 +1586,8 @@ export interface PlayOutcome {
   intId?: string
   /** L11.5 Q7: coverage defender on the target. */
   coverId?: string
+  /** J8c: the covering defender who broke the pass up (bookkeeping/animation). */
+  pbuId?: string
   // ── J7: matchups & busts ────────────────────────────────────────────────────
   /** J7: the covering defender (mirrors `coverId`); only set when matchups are on. */
   coverDefenderId?: string
@@ -1825,7 +2011,15 @@ function runTackler(n: number, defId: string, gain: number, lbs: Player[], dl: P
  * L12 S3: the single tackler on a completion — the coverage defender 55%, a
  * safety 25%, a linebacker 20%. Deterministic hash of the play number.
  */
-function passTackler(n: number, defId: string, coverId: string | undefined, saf: Player[], lbs: Player[]): string | undefined {
+function passTackler(n: number, defId: string, coverId: string | undefined, coverPlayer: Player | undefined, saf: Player[], lbs: Player[]): string | undefined {
+  // J8c: the tackler after the catch is the defender who can actually get there —
+  // the covering defender (nearest) or a support safety/linebacker — weighted by
+  // his own PUR/SPD/TAK, not a fixed 55/25/20 split with a uniform in-group pick.
+  if (COVERAGE_INDIV_ON) {
+    const pool: Player[] = []
+    for (const p of [coverPlayer, ...saf, ...lbs]) if (p && !pool.some((x) => x.id === p.id)) pool.push(p)
+    if (pool.length) return hashPick(pool, (p) => proximityWeight(p, coverId), hash32(`${n}:${defId}:passtackle`))?.id
+  }
   const roll = hash32(`${n}:${defId}:passtackle`) % 100
   if (roll < 55 && coverId) return coverId
   if (roll < 80 && saf.length) return saf[hash32(`${n}:${defId}:safety`) % saf.length]?.id
@@ -1930,6 +2124,9 @@ function finishTackler(key: string, first: string | undefined, lists: Player[][]
   for (const l of lists) for (const p of l) if (p.id !== first && !pool.some((x) => x.id === p.id)) pool.push(p)
   // No alternative defender: never credit the man who just missed with the stop.
   if (!pool.length) return undefined
+  // J8c: the finishing defender is the nearest able body — weighted by his own
+  // PUR/SPD/TAK — instead of a uniform pick from the group.
+  if (COVERAGE_INDIV_ON) return hashPick(pool, (p) => proximityWeight(p, undefined), hash32(key))?.id
   return pool[hash32(key) % pool.length]?.id
 }
 
@@ -2041,6 +2238,107 @@ export const MU_STAT = { on: false, n: 0, rawSep: 0, rawSep2: 0, rawComp: 0, bus
 function muBaseSep(depth: number): number {
   return depth <= 2 ? MU.baseScreen : depth <= 9 ? MU.baseShort : depth <= 19 ? MU.baseMid : MU.baseDeep
 }
+
+// ── J8c: individual coverage & ball skills (beyond J7) ───────────────────────
+// J7 made the *separation* depend on the covering defender. J8c extends that to
+// the rest of the coverage: the man actually covering (`coverPlayer`) — plus the
+// specific deep safety who helps on his side (`j8cHelp`) — decides the coverage
+// skill, the completion window's edge, the busts, the PICK/deflection chance and
+// who makes the tackle after the catch. Never a team/unit average.
+//
+// Every term deviates from the league mean at the defender's own position
+// (`rmean`), so an average defender reproduces the old league level and only the
+// SPREAD widens. The constant `coverBase` plays the `WX_CENTER` role: it holds the
+// league-average coverage level so removing the team average does not move the
+// league means. All picks are deterministic (`hash32`/`h01`) — no rng draw is
+// added or removed, so `setJ8c(false)` is byte-identical to the J7 engine.
+export const J8C = {
+  // The league-average cover-skill level. The ON path replaces the old
+  // `manW·avg(CB MCV)+…` unit level with the actual defender; because the
+  // coverage defender is systematically the *top* CB/S/LB (above the positional
+  // mean the old unit average sat at), this level is centred below the raw
+  // positional mean so the play-weighted league mean matches the pre-J8c
+  // coverage (measured: coverBase 78.0 → ON coverSkill mean 79.0, OFF 77.5;
+  // this value lands ON at 77.5). The individual terms are centred, so this
+  // constant alone sets the league level. Re-measured with the J8c diag (see
+  // logs/j8c-verify.out).
+  coverBase: 76.5,
+  coverW: 1.0, // the covering defender's own man/zone blend (deviation)
+  helpW: 0.35, // the deep safety helping over the top
+  helpSpdW: 0.15, // a fast safety's range on deep throws (ZCV+SPD)
+  awrW: 0.08, // help safety's AWR (replaces avg(saf AWR))
+  mastW: 0.05, // mastery of the covering defender + help (replaces the unit mean)
+  q4StaW: 0.12, // Q4 covering-defender stamina
+  deepPrsW: 0.004, // deep press risk: covering defender's PRS
+  deepSpdW: 0.003, // deep cap: help safety's SPD
+  hawkW: 0.05, // INT ball skills: JMP+PRC of the covering defender + help
+  ballHawkW: 0.5, // the ball-hawk instinct of the deciding pair
+  // Centre for the added ball-skills term (JMP+PRC plus the ball-hawk instinct
+  // of the deciding pair). The pre-J8c factor sat at ~0.956 (it subtracted a
+  // secondary-wide average ball-hawk trait + JMP/PRC), so `hawkCenter` holds the
+  // league INT rate at that same level. Measured on the J8c diag (300 games,
+  // seed 33333): E[hawkPair] = 0.327, so hawkCenter = 1 + 0.327 − 0.956. The
+  // individual spread (elite ball-hawk vs poor) is what widens; the league mean
+  // does not move.
+  hawkCenter: 0.371,
+  // Weighted post-catch tackler pick (replaces the uniform in-group pick).
+  tackPurW: 0.5,
+  tackSpdW: 0.3,
+  tackTakW: 0.5,
+  tackCoverBoost: 7.5, // the covering defender is nearest to the catch
+  // A coverage bust / mis-call keyed off the deciding defenders' own AWR/PRC.
+  bustBase: 0.004,
+  bustRecogW: 0.0016,
+  // Ball skills: a break-up mark on an incompletion (bookkeeping + animation).
+  pbuBase: 0.05,
+  pbuSlope: 0.0016,
+} as const
+
+/**
+ * J8c: a defender's man/zone cover blend *relative to the average starter at his
+ * position* — 0 for an average defender, so blending individuals cannot drift the
+ * league mean. `manW` is the club's man-coverage tendency (0 = zone).
+ */
+function coverRelOf(p: Player | undefined, manW: number): number {
+  if (!p) return 0
+  const a = mkAttrs(p)
+  return manW * rmean(p.pos, 'MCV', a.MCV ?? 70) + (1 - manW) * rmean(p.pos, 'ZCV', a.ZCV ?? 70)
+}
+
+/**
+ * J8c: the deep safety who rotates over the top on the target's side (or the
+ * second safety). Deterministic hash of the play + club — never an rng draw.
+ */
+function j8cHelp(n: number, defId: string, saf: Player[], coverId: string | undefined): Player | undefined {
+  if (!saf.length) return undefined
+  const pool = saf.filter((p) => p.id !== coverId)
+  const list = pool.length ? pool : saf
+  return list[hash32(`${n}:${defId}:j8chelp`) % list.length]
+}
+
+/** J8c: one defender's ball skills (JMP+PRC), relative to his position's mean. */
+function ballSkills(p: Player | undefined): number {
+  if (!p) return 0
+  const a = mkAttrs(p)
+  return rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5
+}
+
+/** J8c: one defender's play recognition (PRC+AWR), relative to his position. */
+function recognitionRel(p: Player | undefined): number {
+  if (!p) return 0
+  const a = mkAttrs(p)
+  return rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5 + rmean(p.pos, 'AWR', a.AWR ?? 70) * 0.5
+}
+
+/** J8c: a post-catch tackler pick weighted by proximity (PUR/SPD/TAK). */
+function proximityWeight(p: Player, coverId: string | undefined): number {
+  const a = mkAttrs(p)
+  const prox = (a.PUR ?? 70) * J8C.tackPurW + (a.SPD ?? 70) * J8C.tackSpdW + (a.TAK ?? 70) * J8C.tackTakW
+  return Math.max(1, prox * (p.id === coverId ? J8C.tackCoverBoost : 1))
+}
+
+/** J8c: dev accumulator (turned on by `j8cProbe`): the mean individual terms. */
+export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
   const ocEff = ocEffect(world, offId)
@@ -2219,7 +2517,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const tA = target ? mkAttrs(target) : {}
   const tStyle = target ? styleProfile(target) : styleProfile({ traits: [''] } as Player)
   // Q7: pick the coverage defender now, from the same groups, with no rng draw.
-  const coverId = coverDefender(target, concept, wrs, cbs, saf, lbs)
+  // J8c: `let` because the plan-driven coverage (`targetWeakCB` / `shadowWR1`) may
+  // reassign the actual defender below.
+  let coverId = coverDefender(target, concept, wrs, cbs, saf, lbs)
 
   if (rng() < sackChance) {
     // R2: a sack costs ≈ 7 yards (real 2015–2024).
@@ -2251,10 +2551,35 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   }
 
   const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
-  // E1: the coverage defender, for the release-vs-press term (no rng draw).
-  const coverPlayer = coverId ? [...cbs, ...saf, ...lbs].find((p) => p.id === coverId) : undefined
+  // J8c: resolve WHO is actually covering before the matchup layer reads him.
+  // `targetWeakCB` attacks the weakest corner (he BECOMES the cover defender) and
+  // `shadowWR1` sends the CB1 with the WR1 — the declared defender, not a knob on
+  // a team average. The single rng() draw below is the same draw at the same point
+  // in the stream (no draw sits between its old and new position).
   const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
   const zoneCov = avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
+  let weakCb = false
+  let manCov = avg(cbMcv)
+  if (offMove === 'targetWeakCB' && cbMcv.length) {
+    weakCb = rng() < 0.35
+    if (weakCb) manCov = Math.min(...cbMcv)
+  }
+  if (COVERAGE_INDIV_ON && weakCb && cbs.length) {
+    coverId = cbs.reduce((best, p) => ((mkAttrs(p).MCV ?? 70) < (mkAttrs(best).MCV ?? 70) ? p : best)).id
+  }
+  // G11 shadowWR1: with J8c the CB1 is actually assigned to the WR1 when the plan
+  // says so (the OFF path keeps the pre-J8c team-average nudge further down).
+  if (defMove === 'shadowWR1' && COVERAGE_INDIV_ON) {
+    const wr1 = topGroup(world, offId, ['WR'], 1)[0]
+    if (wr1 && target && target.id === wr1.id && cbs.length) coverId = cbs[0].id
+  }
+  // E1: the coverage defender, for the release-vs-press term (no rng draw).
+  const coverPlayer = coverId ? [...cbs, ...saf, ...lbs].find((p) => p.id === coverId) : undefined
+  // J8c: the specific deep safety helping over the top on this side.
+  const helpS = COVERAGE_INDIV_ON ? j8cHelp(n, defId, saf, coverId) : undefined
+  // L12 E2: RB/TE targets are covered by linebackers, so their MCV joins man.
+  // (OFF only: with J8c the covering LB's own MCV already decides his cover.)
+  if (!COVERAGE_INDIV_ON && target && (target.pos === 'TE' || target.pos === 'RB' || target.pos === 'FB')) manCov += relAvg('MCV', lbs) * 0.35 * E2_W
   // ── J7: MATCHUPS & BUSTS ────────────────────────────────────────────────────
   // The covering defender (never an rng draw). Off → every value is zero and no
   // Play field is added, so the base sim is untouched.
@@ -2283,9 +2608,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       // A big receiver's contested-catch edge in the red zone.
       if (yard >= 80) muSep += rmean(target.pos, 'CIT', tA.CIT ?? tA.CTH ?? 70) * MU.rzCatchSep
     }
-    // Safety help over the top closes the window a little.
-    muSep -= avg(saf.map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70))) * MU.safAwr
-    muSep -= avg(saf.map((p) => rmean(p.pos, 'ZCV', mkAttrs(p).ZCV ?? 70))) * MU.safZcv
+    // Safety help over the top closes the window a little. J8c: the specific deep
+    // safety on this side, not the unit average.
+    if (COVERAGE_INDIV_ON) {
+      if (helpS) {
+        muSep -= rmean('S', 'AWR', mkAttrs(helpS).AWR ?? 70) * MU.safAwr
+        muSep -= rmean('S', 'ZCV', mkAttrs(helpS).ZCV ?? 70) * MU.safZcv
+      }
+    } else {
+      muSep -= avg(saf.map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70))) * MU.safAwr
+      muSep -= avg(saf.map((p) => rmean(p.pos, 'ZCV', mkAttrs(p).ZCV ?? 70))) * MU.safZcv
+    }
     // Per-play variation (deterministic hash, centred): the route/coverage
     // does not play out the same way every snap. This is what gives the
     // separation distribution its spread. No rng draw.
@@ -2293,11 +2626,20 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // hashes of strings that differ only in the last character ~0.95 correlated.
     const z = (h01(`sj1:${n}:${defId}`) + h01(`sj2:${n}:${defId}`) + h01(`sj3:${n}:${defId}`) + h01(`sj4:${n}:${defId}`) - 2) / 0.5774
     muSep += clamp(z, -2.5, 2.5) * MU.jitter
-    // Bust (a communication breakdown): rarer for smart, experienced secondaries
-    // and a good DC; likelier with pre-snap movement and a tired defence.
-    const secAwr = avg([...cbs, ...saf, ...lbs].map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70)))
-    const secPrc = avg([...cbs, ...saf].map((p) => rmean(p.pos, 'PRC', mkAttrs(p).PRC ?? 70)))
-    const secExp = avg([...cbs, ...saf, ...lbs].map((p) => Math.max(0, p.age - 22)))
+    // Bust (a communication breakdown): rarer for smart, experienced defenders
+    // and a good DC; likelier with pre-snap movement and a tired defence. J8c:
+    // the breakdown belongs to the deciding pair (the covering defender + his
+    // help safety) — their own AWR/PRC/experience — not a unit average.
+    const focus = COVERAGE_INDIV_ON ? [coverPlayer, helpS].filter((p): p is Player => !!p) : []
+    const secAwr = COVERAGE_INDIV_ON
+      ? (focus.length ? avg(focus.map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70))) : 0)
+      : avg([...cbs, ...saf, ...lbs].map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70)))
+    const secPrc = COVERAGE_INDIV_ON
+      ? (focus.length ? avg(focus.map((p) => rmean(p.pos, 'PRC', mkAttrs(p).PRC ?? 70))) : 0)
+      : avg([...cbs, ...saf].map((p) => rmean(p.pos, 'PRC', mkAttrs(p).PRC ?? 70)))
+    const secExp = COVERAGE_INDIV_ON
+      ? (focus.length ? avg(focus.map((p) => Math.max(0, p.age - 22))) : 0)
+      : avg([...cbs, ...saf, ...lbs].map((p) => Math.max(0, p.age - 22)))
     const complex = concept.depth >= 15 || !!offMove || concept.name.startsWith('PA ')
     const bustP = clamp(
       MU.bustBase - secAwr * MU.bustAwr - secPrc * MU.bustPrc - secExp * MU.bustExp
@@ -2308,6 +2650,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // A mis-call: the defensive call was the wrong answer to the concept (the
     // call matrix already gives the offence a big edge), and the coverage breaks.
     miscall = !bust && !!call && call.edge >= MU.miscallEdge && h01(`${n}:${defId}:miscall`) < MU.miscallRate
+    // J8c: a blown assignment by the deciding pair (their own PRC/AWR) breaks the
+    // coverage even without a wrong call. Centred: an average pair leaves the base
+    // rate, a poor one is beaten more often.
+    if (COVERAGE_INDIV_ON && !bust && !miscall && focus.length) {
+      const recogFocus = avg(focus.map((p) => recognitionRel(p)))
+      miscall = h01(`${n}:${defId}:miscall8`) < clamp(J8C.bustBase - recogFocus * J8C.bustRecogW, 0.001, 0.05)
+    }
     if (bust) muSep += MU.bustSep
     if (miscall) muSep += MU.miscallSep
     // The completion effect: the separation gap, plus the covering defender's
@@ -2342,8 +2691,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const coverIntMult = MATCHUPS_ON && coverA && covPos
     ? clamp(1 + (manW * rmean(covPos, 'MCV', coverA.MCV ?? 70) + (1 - manW) * rmean(covPos, 'ZCV', coverA.ZCV ?? 70)) * MU.intW, 0.85, 1.3)
     : 1
+  // J8d: the route-rating fallback is the receiver's raw OVR, exactly like target
+  // selection above — a receiver whose position does not carry DRR/MRR (TE/RB) no
+  // longer silently drops to 70 in separation.
+  const tRaw = target ? unscaleOvr(target.ovr) : 70
+  const targetRoute = concept.depth > 14 ? (tA.DRR ?? (getIndividual() ? tRaw : 70))
+    : concept.depth > 7 ? (tA.MRR ?? (getIndividual() ? tRaw : 70))
+      : (tA.SRR ?? (getIndividual() ? tRaw : 70))
   const separation =
-    (concept.depth > 14 ? (tA.DRR ?? 70) : concept.depth > 7 ? (tA.MRR ?? 70) : (tA.SRR ?? 70)) * 0.5 +
+    targetRoute * 0.5 +
     (tA.SPD ?? 70) * 0.3 +
     (tA.AGI ?? 70) * 0.2 +
     tStyle.deepBias * (concept.depth >= 12 ? 6 : -2) -
@@ -2357,19 +2713,24 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     (target && (target.pos === 'WR' || target.pos === 'TE') ? clamp(masteryOffset(target, means) * 0.06, -3, 3) : 0) +
     // J7: the covering defender, mismatches and coverage busts.
     muSepNet * MU.sepToRating
-  // G11 targetWeakCB: on 35% of passes the coverage keys their weakest corner
-  // (and the safety help raises the interception risk on those throws).
-  let manCov = avg(cbMcv)
-  let weakCb = false
-  if (offMove === 'targetWeakCB' && cbMcv.length) {
-    weakCb = rng() < 0.35
-    if (weakCb) manCov = Math.min(...cbMcv)
+  // The covering defender's own cover ability (J8c). The *level* is a league
+  // constant (`coverBase`, the WX_CENTER role) and the deviation is the man
+  // himself — centred per position — plus the help safety. Never a unit mean.
+  // OFF keeps the pre-J8c team-average form exactly.
+  const covRel = coverRelOf(coverPlayer, dStyle.manCoverage)
+  const helpRel = COVERAGE_INDIV_ON
+    ? coverRelOf(helpS, dStyle.manCoverage) +
+      (concept.depth >= 15 ? rmean('S', 'SPD', helpS ? mkAttrs(helpS).SPD ?? 70 : 70) * J8C.helpSpdW : 0)
+    : 0
+  let coverSkill: number
+  if (COVERAGE_INDIV_ON) {
+    coverSkill = J8C.coverBase + J8C.coverW * covRel + J8C.helpW * helpRel
+  } else {
+    coverSkill = dStyle.manCoverage * manCov + (1 - dStyle.manCoverage) * zoneCov
   }
-  // L12 E2: RB/TE targets are covered by linebackers, so their MCV joins man.
-  if (target && (target.pos === 'TE' || target.pos === 'RB' || target.pos === 'FB')) manCov += relAvg('MCV', lbs) * 0.35 * E2_W
-  let coverSkill = dStyle.manCoverage * manCov + (1 - dStyle.manCoverage) * zoneCov
-  // G11 shadowWR1: your CB1 trails their WR1; help over the top on everyone else.
-  if (defMove === 'shadowWR1') {
+  // G11 shadowWR1 (OFF path only): the pre-J8c code nudged the team average; with
+  // J8c the CB1 was actually assigned to the WR1 above.
+  if (!COVERAGE_INDIV_ON && defMove === 'shadowWR1') {
     const wr1 = topGroup(world, offId, ['WR'], 1)[0]
     if (wr1 && target && target.id === wr1.id) coverSkill = (cbMcv.length ? cbMcv[0] : 70) * 1.05
     else coverSkill *= 0.96
@@ -2379,26 +2740,61 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // caps explosives; third-down heat concedes more explosives on 3rd down.
   const compMult = planOverrides.compMult * (hasFix(env, defId, 'twoDeep') ? 1.04 : 1)
   let bigPlayRisk = planOverrides.bigPlayRisk * (hasFix(env, defId, 'twoDeep') ? 0.85 : 1) * (heat ? 1.1 : 1) * (1 + fatDiff * R15.fatBig)
-  // L12 E2: press coverage risks a deep shot if the receiver wins; a fast safety caps it.
+  // L12 E2: press coverage risks a deep shot if the receiver wins; a fast safety
+  // caps it. J8c: the covering corner's own press (PRS) and the help safety's own
+  // speed (SPD) — range = ZCV+SPD — not the CB/safety unit means.
   if (concept.depth >= 15) {
-    bigPlayRisk *= clamp(1 + (relAvg('PRS', cbs) * 0.004 - relAvg('SPD', saf) * 0.003) * E2_W, 0.6, 1.5)
+    if (COVERAGE_INDIV_ON) {
+      const prs = coverPlayer ? rmean(coverPlayer.pos, 'PRS', coverA?.PRS ?? 70) : 0
+      const spd = helpS ? rmean('S', 'SPD', mkAttrs(helpS).SPD ?? 70) : 0
+      bigPlayRisk *= clamp(1 + prs * J8C.deepPrsW - spd * J8C.deepSpdW, 0.6, 1.5)
+    } else {
+      bigPlayRisk *= clamp(1 + (relAvg('PRS', cbs) * 0.004 - relAvg('SPD', saf) * 0.003) * E2_W, 0.6, 1.5)
+    }
   }
   // J7: a coverage bust means the receiver is already gone — a big-play chance.
   if (bust) bigPlayRisk *= 1.3
-  let coverage = coverSkill * dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
-  // L12 E2: secondary athleticism joins coverage; good recognition covers screens;
-  // a tired defense loses a step in Q4.
-  coverage += dbCoverageExtras(cbs, saf) * E2_W
-  // L12.13 M3: a secondary's mastery of the system shows in its coverage.
-  coverage += clamp(masteryRelAvg([...cbs, ...saf], means) * 0.05, -3, 3)
-  if (concept.depth <= 2 && concept.yac >= 0.8) coverage += recog * 0.4 * E2_W
-  if (isQ4) coverage += relAvg('STA', [...cbs, ...saf, ...lbs, ...dl]) * 0.12 * E2_W
+  // J8c: the coverage on this play is the covering defender + his help safety —
+  // never a unit average. Each term below replaces the pre-J8c team mean and is
+  // centred (per position / per league level), so the league mean holds.
+  const extraInd = COVERAGE_INDIV_ON && coverPlayer
+    ? rmean(coverPlayer.pos, 'ACC', coverA?.ACC ?? 70) * 0.05
+      + rmean(coverPlayer.pos, 'AGI', coverA?.AGI ?? 70) * 0.05
+      + rmean(coverPlayer.pos, 'STR', coverA?.STR ?? 70) * 0.03
+    : dbCoverageExtras(cbs, saf) * E2_W
+  // The help safety's own AWR (a uniform safety pick, so the league level holds).
+  const awrInd = COVERAGE_INDIV_ON
+    ? (helpS ? mkAttrs(helpS).AWR ?? 70 : saf.length ? mkAttrs(saf[0]).AWR ?? 70 : 70) * J8C.awrW
+    : avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
+  // Recognition of the nearest defenders (covering defender + help + a flat LB).
+  const flatLb = lbs.length ? lbs[hash32(`${n}:${defId}:flatlb`) % lbs.length] : undefined
+  const recogInd = COVERAGE_INDIV_ON
+    ? clamp(
+        (coverPlayer ? recognitionRel(coverPlayer) : 0) * 0.5 +
+        (helpS ? recognitionRel(helpS) : 0) * 0.3 +
+        (flatLb ? recognitionRel(flatLb) : 0) * 0.2,
+        -25, 25,
+      )
+    : recog
+  let coverage = coverSkill * dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) + awrInd
+  // L12 E2: the covering defender's own athleticism (replaces the all-DB mean).
+  coverage += extraInd
+  // L12.13 M3: the defending pair's mastery of the system (replaces the unit mean).
+  coverage += COVERAGE_INDIV_ON
+    ? clamp((masteryOffset(coverPlayer, means) + masteryOffset(helpS, means)) * 0.5 * J8C.mastW, -3, 3)
+    : clamp(masteryRelAvg([...cbs, ...saf], means) * 0.05, -3, 3)
+  if (concept.depth <= 2 && concept.yac >= 0.8) coverage += recogInd * 0.4 * E2_W
+  if (isQ4) coverage += (COVERAGE_INDIV_ON
+    ? (coverA && coverPlayer ? rmean(coverPlayer.pos, 'STA', coverA.STA ?? 70) : 0)
+    : relAvg('STA', [...cbs, ...saf, ...lbs, ...dl])) * J8C.q4StaW * E2_W
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
+  if (J8C_STAT.on) { J8C_STAT.n++; J8C_STAT.cov += coverage; J8C_STAT.sep += separation; J8C_STAT.compRaw += compRaw; J8C_STAT.qAcc += qAccuracy; J8C_STAT.sk += coverSkill; J8C_STAT.ks += dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) }
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
   const offPassBias = planFor(offId, 'off')?.passBias ?? 0
-  // E1: QB play-action rating scales the existing bonus; E2: good recognition beats it.
+  // E1: QB play-action rating scales the existing bonus; E2: the deciding pair's
+  // own recognition beats it (J8c), replacing the unit mean.
   const pacMult = qbPacMult(qbA)
-  const recogMult = clamp(1 - recog * 0.004 * E2_W, 0.6, 1.4)
+  const recogMult = clamp(1 - recogInd * 0.004 * E2_W, 0.6, 1.4)
   const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) * pacMult * recogMult : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
@@ -2432,13 +2828,28 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // (the base clamp is 0.42–0.74), so an elite CB closes the window and a poor
   // one opens it — individual ratings get a big say.
   if (MATCHUPS_ON && target) compProb = clamp(compProb + compRaw - MU_CENTER.comp, MU.compMin, MU.compMax)
+  if (J8C_STAT.on) { J8C_STAT.cov2 += coverage * coverage; J8C_STAT.compProb += compProb }
   // G7 hurry: a faster offense forces riskier throws.
-  // L12 E2: JMP/PRC replace part of the trait-only ball-hawk in the pick rate.
-  const ratingHawk = avg([...cbs, ...saf].map((p) => {
-    const a = mkAttrs(p)
-    return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
-  }))
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult, 0.005, 0.06)
+  // L12 E2: JMP+PRC replace part of the trait-only ball-hawk in the pick rate.
+  // J8c: those ball skills belong to the deciding pair — the covering defender
+  // and the deep safety helping him — and they ADD to the pick rate (the pre-J8c
+  // term SUBTRACTED a secondary-wide average, which inverted the signal: an elite
+  // ball-hawk took *fewer* picks). `hawkCenter` plays the WX_CENTER role: it
+  // removes the mean bias from always picking the top cover defender, so the
+  // league INT level stays where the calibration set it. OFF keeps the pre-J8c
+  // term exactly (`ratingHawk` * E2_W is folded back in verbatim).
+  const hawkPair = COVERAGE_INDIV_ON
+    ? (coverPlayer ? ballSkills(coverPlayer) * J8C.hawkW + styleProfile(coverPlayer).ballHawk * J8C.ballHawkW : 0) +
+      (helpS ? (ballSkills(helpS) * J8C.hawkW + styleProfile(helpS).ballHawk * J8C.ballHawkW) * 0.5 : 0)
+    : 0
+  if (J8C_STAT.on) J8C_STAT.hawk += hawkPair
+  const intSkillTerm = COVERAGE_INDIV_ON
+    ? clamp(1 + hawkPair - J8C.hawkCenter, 0.25, 2.5)
+    : (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - avg([...cbs, ...saf].map((p) => {
+        const a = mkAttrs(p)
+        return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
+      })) * E2_W)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult, 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -2506,7 +2917,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // bounds (T2M: a real sideline receiver steps out, so the clock stops).
     const oob = oobSituation(env) && gain > 0 && yard + gain < 100 &&
       h01(`${n}:${offId}:oob`) < oobChance(concept, target?.pos)
-    const stopped = yard + gain < 100 && !oob ? passTackler(n, defId, coverId, saf, lbs) : undefined
+    const stopped = yard + gain < 100 && !oob
+      ? passTackler(n, defId, coverId, coverPlayer, saf, lbs)
+      : undefined
     const tacklerGroups = [cbs, saf, lbs]
     // L12 E2: a strong tackler cuts the YAC short.
     if (stopped && gain > 0) gain = Math.max(-4, gain - tacklerYacShrink(stopped, tacklerGroups))
@@ -2525,6 +2938,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       // A miss that reaches the end zone has no finishing tackle to credit.
       stopper = yard + gain < 100 ? finishTackler(`${n}:${defId}:passmt2`, stopped, [cbs, saf, lbs]) : undefined
       forcedMissedIds = target?.id ? [target.id] : undefined
+    }
+    if (J8C_STAT.on && stopped) {
+      const sp = [...cbs, ...saf, ...lbs].find((p) => p.id === stopped)
+      J8C_STAT.stopN++
+      if (sp) J8C_STAT.stopRating += tackleRating(sp)
+      if (missedTackleIds) J8C_STAT.stopMiss++
     }
     const big = gain >= 25
     // R16: the ball can still come loose on a clean stop — a big-hit strip, or the
@@ -2568,6 +2987,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
   if (target && hash32(`${n}:${offId}:drop`) / 4294967296 < dropChance(target.pos, tA) * (env?.wx?.dropMult ?? 1)) incomplete.dropId = target.id
+  // J8c: a pass defended — the covering defender's own ball skills (JMP+PRC)
+  // decide how often he gets a hand on an incompletion. Bookkeeping only (the
+  // animation shows the break-up); no outcome or counter moves.
+  if (COVERAGE_INDIV_ON && target && coverPlayer && !incomplete.dropId) {
+    const pbuP = clamp(J8C.pbuBase + ballSkills(coverPlayer) * J8C.pbuSlope, 0.01, 0.2)
+    if (h01(`${n}:${defId}:pbu`) < pbuP) incomplete.pbuId = coverPlayer.id
+  }
   return incomplete
 }
 
@@ -2801,7 +3227,7 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
     const dist = 100 - yard + 10 + FG_HOLDER_DEPTH
     // L12 E2: an aware kicker is steadier in a one-score fourth quarter.
     const late = (env?.qtr ?? 0) >= 4 && Math.abs(margin) <= 3
-    const power = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
+    const power = (kA.KPW ?? specMean('K', 'KPW', 78)) * 0.5 + (kA.KAC ?? specMean('K', 'KAC', 78)) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
     // R17: the lone rng() draw is unchanged; a blocked kick is a per-play hash.
     // FUTURES #6: the weather layer supplies a bounded, centred make-probability
     // offset (sign already fixed: a headwind lowers the chance). Exactly 0 when
@@ -2828,7 +3254,7 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   // R6: the existing distance formula is the GROSS punt; the return (or a
   // touchback) comes out of it, so the net lands at ~40–41 with ~9-yard
   // returns. The lone rng() draw is unchanged; the outcome is a per-play hash.
-  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wx?.puntAdd ?? 0) + m.gross)
+  const gross = 40 + Math.round(((pA.KPW ?? specMean('P', 'KPW', 80)) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wx?.puntAdd ?? 0) + m.gross)
   const key = `${n}:${offId}:punt`
   const u = h01(`${key}:kind`)
   const pr = defId ? clubReturners(world, defId).pr : undefined
@@ -2841,7 +3267,8 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   const fc = 0.25 + m.fcDelta
   const dn = fc + 0.2
   const tb = dn + 0.08
-  const mu = tb + 0.01 * clamp(m.fumble, 0.4, 2)
+  const muffBase = getIndividual() ? J8D.muffPunt * carrySecurityOf(pr) : 0.01
+  const mu = tb + muffBase * clamp(m.fumble, 0.4, 2)
   let kind: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff' | 'blocked'
   if (blocked) kind = 'blocked'
   else if (u < fc) kind = 'fairCatch'
@@ -2858,9 +3285,11 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   let returnerId: string | undefined
   if ((kind === 'return' || kind === 'fairCatch' || kind === 'muff') && pr) returnerId = pr.id
   if (kind === 'return' && pr) {
-    const cov = defId ? coverageScore(world, defId) : 72
+    // J8d: the deciding cover man on the play (specific player, not the unit mean).
+    const covMan = getIndividual() && defId ? stCoverMan(world, defId, `${key}:cov`) : undefined
+    const cov = defId ? (getIndividual() ? coverScoreOf(covMan) : coverageScore(world, defId)) : 72
     retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 7 + m.base, 14 * m.spread))
-    returnTD = h01(`${key}:td`) < 0.006
+    returnTD = h01(`${key}:td`) < (getIndividual() ? returnTdProb(J8D.tdPunt, pr, covMan) : 0.006)
     // A return touchdown is caught at the punt's landing spot and taken the rest
     // of the way, so its recorded yardage runs to the kicking team's goal line
     // (yard + gross yards back the way the punt came).
@@ -2891,7 +3320,7 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
 
 function resolvePAT(world: World, rng: Rng, offId: string, n = 0, env?: SimEnv): PlayOutcome {
   const k = topGroup(world, offId, ['K'], 1)[0]
-  const acc = k ? (mkAttrs(k).KAC ?? 84) : 84
+  const acc = k ? (mkAttrs(k).KAC ?? specMean('K', 'KAC', 84)) : specMean('K', 'KAC', 84)
   // R2: the real extra-point rate is ≈ 94% over the last decade.
   // R17: the lone rng() draw is unchanged; a block is a per-play hash and the
   // FUTURES #6 weather offset is exactly 0 when weather is off. The base carries
@@ -2920,7 +3349,7 @@ function planForClub(s: GameState, clubId: string): SpecialTeamsPlan {
  */
 function resolveStKick(
   world: World, s: GameState, call: KickoffCall, base: string, kicking: string, receiving: string,
-  kA: Record<string, number>, cov: number, alert: number,
+  kA: Record<string, number>, cov: number, alert: number, covMan?: Player,
 ): { scored: boolean } {
   const kAbbr = world.byId[kicking]?.abbr ?? kicking
   const rAbbr = world.byId[receiving]?.abbr ?? receiving
@@ -2932,8 +3361,8 @@ function resolveStKick(
     const returner = clubReturners(world, receiving).kr
     const cy = clamp(3 + Math.round(h01(`${base}:cy`) * 5), 0, 8)
     const ry = returner ? Math.max(0, returnYards(base, returnScore(returner), cov, 26, 8)) : 24
-    const returnTD = !!returner && h01(`${base}:sqt`) < 0.001
-    const fumble = !returnTD && !!returner && h01(`${base}:fum`) < 0.008 * (stWx?.fumbleMult ?? 1)
+    const returnTD = !!returner && h01(`${base}:sqt`) < (getIndividual() ? returnTdProb(J8D.tdSquib, returner, covMan) : 0.001)
+    const fumble = !returnTD && !!returner && h01(`${base}:fum`) < (getIndividual() ? J8D.fumSquib * carrySecurityOf(returner) * (stWx?.fumbleMult ?? 1) : 0.008 * (stWx?.fumbleMult ?? 1))
     const start = returnTD ? 100 : clamp(cy + ry, 1, 99)
     pushPlay(s, {
       type: 'kickoff', concept: 'Squib kick', yards: 0, kickCall: 'squib',
@@ -2965,8 +3394,8 @@ function resolveStKick(
   // club's surprise is cut. A failed surprise gives the receiving club the ball
   // near midfield — the risk that makes it a surprise.
   const surprise = call === 'surprise'
-  const kpw = kA.KPW ?? 78
-  const kac = kA.KAC ?? 78
+  const kpw = kA.KPW ?? specMean('K', 'KPW', 78)
+  const kac = kA.KAC ?? specMean('K', 'KAC', 78)
   const recoverChance = surprise ? surpriseChance(kpw, kac, cov, alert) : onsideChance(kpw, kac, cov)
   const recovered = h01(`${base}:onsiderec`) < recoverChance
   if (recovered) {
@@ -3015,7 +3444,9 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   const base = `${s.n}:${kicking}:ko`
   const koMargin = kicking === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const desperate = s.qtr === 4 && s.clock <= 150 && koMargin < 0 && koMargin >= -10
-  const cov = coverageScore(world, kicking)
+  // J8d: the deciding cover man on this kick (specific player, not the unit mean).
+  const covMan = getIndividual() ? stCoverMan(world, kicking, `${base}:cov`) : undefined
+  const cov = getIndividual() ? coverScoreOf(covMan) : coverageScore(world, kicking)
   const mem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
   const alert = alertness(mem?.[kicking])
   // FUTURES #6: a kick into the wind carries shorter (fewer touchbacks) and a wet
@@ -3031,8 +3462,8 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
     const options: MomentOption[] = [
       { id: 'deep', label: 'Deep kick', hint: 'Kick it deep — the safe call.' },
       { id: 'squib', label: 'Squib kick', hint: 'No touchback; a short return, ball near their 30.' },
-      { id: 'onside', label: `Onside kick (≈${Math.round(onsideChance(kA.KPW ?? 78, kA.KAC ?? 78, cov) * 100)}%)`, hint: 'A long shot at keeping the ball.' },
-      ...(!desperate ? [{ id: 'surprise', label: `Surprise onside (≈${Math.round(surpriseChance(kA.KPW ?? 78, kA.KAC ?? 78, cov, alert) * 100)}%)`, hint: 'A real shot — but a miss leaves them near midfield.' }] : []),
+      { id: 'onside', label: `Onside kick (≈${Math.round(onsideChance(kA.KPW ?? specMean('K', 'KPW', 78), kA.KAC ?? specMean('K', 'KAC', 78), cov) * 100)}%)`, hint: 'A long shot at keeping the ball.' },
+      ...(!desperate ? [{ id: 'surprise', label: `Surprise onside (≈${Math.round(surpriseChance(kA.KPW ?? specMean('K', 'KPW', 78), kA.KAC ?? specMean('K', 'KAC', 78), cov, alert) * 100)}%)`, hint: 'A real shot — but a miss leaves them near midfield.' }] : []),
     ]
     const choice = decide(s, {
       kind: 'kickoff', side: 'hc', teamId: kicking, qtr: s.qtr, clock: fmtClock(s.clock), down: null, distance: null,
@@ -3045,7 +3476,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   }
 
   if (call === 'squib' || call === 'onside' || call === 'surprise') {
-    return resolveStKick(world, s, call, base, kicking, receiving, kA, cov, alert)
+    return resolveStKick(world, s, call, base, kicking, receiving, kA, cov, alert, covMan)
   }
 
   // R17: a desperate, trailing AI club can still try an onside kick. FUTURES #4:
@@ -3081,7 +3512,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   // FUTURES #4: the kick + return strategies bend the same hashes. Every
   // modifier is 0/1 at the default strategies, so this is identity by default.
   const rm = kickReturnMods(recST.kr, kickST.kickoff)
-  const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006 + rm.tb + (koWx?.kickoffAdd ?? 0) * WX.kickoffTbPerYd, 0.42, 0.85)
+  const pTb = clamp(0.47 + ((kA.KPW ?? specMean('K', 'KPW', 80)) - 78) * 0.006 + rm.tb + (koWx?.kickoffAdd ?? 0) * WX.kickoffTbPerYd, 0.42, 0.85)
   const returner = clubReturners(world, receiving).kr
   const touchback = !returner || h01(`${base}:tb`) < pTb
   let retYds = 0
@@ -3091,8 +3522,8 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   if (!touchback && returner) {
     catchYard = clamp(2 + Math.round(h01(`${base}:cy`) * 7), 0, 9)
     retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5 + rm.base, 26 * rm.spread))
-    returnTD = h01(`${base}:td`) < 0.003
-    fumble = !returnTD && h01(`${base}:fum`) < 0.005 * rm.fumble * (koWx?.fumbleMult ?? 1)
+    returnTD = h01(`${base}:td`) < (getIndividual() ? returnTdProb(J8D.tdKick, returner, covMan) : 0.003)
+    fumble = !returnTD && h01(`${base}:fum`) < (getIndividual() ? J8D.fumKick * carrySecurityOf(returner) * rm.fumble * (koWx?.fumbleMult ?? 1) : 0.005 * rm.fumble * (koWx?.fumbleMult ?? 1))
     if (returnTD) retYds = 100 - catchYard
   }
   const start = touchback ? R2.kickoffYard : returnTD ? 100 : clamp(catchYard + retYds, 1, 99)
@@ -3469,7 +3900,7 @@ function fmtEV(v: number): string {
 function kickPowerOf(world: World, teamId: string): number {
   const k = topGroup(world, teamId, ['K'], 1)[0]
   const kA = k ? mkAttrs(k) : {}
-  return (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5
+  return (kA.KPW ?? specMean('K', 'KPW', 78)) * 0.5 + (kA.KAC ?? specMean('K', 'KAC', 78)) * 0.5
 }
 
 function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake' | null {
@@ -4491,15 +4922,16 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   // Defensive penalty — typed by hash within the R2 yardage tier, automatic first down.
+  const penFields = getIndividual() ? penaltyFields(world, s, concept, offId, defId) : undefined
   const defDisc = ocEffect(world, defId).discipline * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
   // L12.13 M3: a defense that knows the system makes fewer mental errors.
   if (s.rng() < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
     const py = penaltyYards(`${s.n}:penD:${defId}`, 'def')
-    const kind = pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py)
+    const kind = pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py, penFields?.def, penFields?.off)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`)
+    const offender = penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`, kind, penFields?.def)
     const who = shortName(offender?.name)
     // R14: offsetting — both clubs fouled on the snap; replay, no yardage.
     const offset = h01(`${s.n}:penOffset:${defId}`) < 0.001
@@ -4537,9 +4969,9 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const penS = statFor(s, offId)
     const startY = s.yard
     const py = penaltyYards(`${s.n}:penO:${offId}`, 'off')
-    const kind = pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py)
+    const kind = pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py, penFields?.off, penFields?.def)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`)
+    const offender = penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`, kind, penFields?.off)
     const who = shortName(offender?.name)
     s.yard = clamp(s.yard - py, 1, 99)
     // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).

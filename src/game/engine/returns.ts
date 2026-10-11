@@ -82,10 +82,7 @@ export function returnScore(p: Player): number {
  * to tilt return yardage: a fast, sound cover team gives up fewer return yards.
  */
 export function coverageScore(world: World, teamId: string): number {
-  const backups = (pos: 'LB' | 'S' | 'CB', starters: number) =>
-    depthAt(world, teamId, pos).filter((p) => !p.injured).slice(starters)
-  const group = [...backups('LB', 3), ...backups('S', 2), ...backups('CB', 2)]
-  const pool = group.length ? group : depthGroup(world, teamId, ['LB', 'S', 'CB'], 6)
+  const pool = coverUnit(world, teamId)
   if (!pool.length) return 72
   let s = 0
   for (const p of pool) {
@@ -93,6 +90,18 @@ export function coverageScore(world: World, teamId: string): number {
     s += (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.35 + (a.SPD ?? 70) * 0.25
   }
   return s / pool.length
+}
+
+/**
+ * J8d: the special-teams cover unit as individual players — the same backup
+ * LB/S/CB pool the old `coverageScore` averaged. Returning the players lets the
+ * deciding cover man be picked on the play instead of using a unit mean.
+ */
+export function coverUnit(world: World, teamId: string): Player[] {
+  const backups = (pos: 'LB' | 'S' | 'CB', starters: number) =>
+    depthAt(world, teamId, pos).filter((p) => !p.injured).slice(starters)
+  const group = [...backups('LB', 3), ...backups('S', 2), ...backups('CB', 2)]
+  return group.length ? group : depthGroup(world, teamId, ['LB', 'S', 'CB'], 6)
 }
 
 /**
