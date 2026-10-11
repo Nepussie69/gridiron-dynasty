@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { World } from '../game/engine/generate'
-import type { Play } from '../game/engine/playsim'
+import { getJ12, j12DefPlan, j12OffPlan, type Play } from '../game/engine/playsim'
 import { depthAt, depthGroup } from '../game/engine/depth'
 import { hash32 } from '../game/engine/rng'
 import { formationForConcept, formationHasFullback } from '../game/data/playbookData'
@@ -113,7 +113,46 @@ function stUnit(world: World, teamId: string, role: 'coverage' | 'return', speci
  * kicking side (the real kicker or punter plus ten coverage players) each field
  * eleven distinct, healthy, correctly-clubbed players.
  */
+/**
+ * animflow r6d (J12): the game plan the sim ran on this snap — the AI's DOUBLE / CHIP of the best
+ * rusher and SHADOW of the WR1 / SPY on the QB (j12OffPlan / j12DefPlan are pure hashes of the snap
+ * number and the coordinators, so the animation reads the same call the engine made). A user club's
+ * own matchup choice (career.matchups) overrides the AI's for that side when the caller passes it.
+ */
+export interface AnimPlan {
+  off?: 'doubleRusher' | 'chipEdge' | 'targetWeakCB'
+  def?: 'shadowWR1' | 'spyQB'
+}
+const ACTOR_PLAN = new WeakMap<Map<string, Player>, AnimPlan>()
+/** The J12 plan recorded for an actor map built by actorPlayers (undefined when none). */
+export function planOf(actors: Map<string, Player> | undefined): AnimPlan | undefined {
+  return actors ? ACTOR_PLAN.get(actors) : undefined
+}
+
 export function actorPlayers(
+  world: World,
+  play: Play,
+  defId: string,
+  targetKey: string | null,
+  user?: { teamId?: string; matchups?: AnimPlan },
+): Map<string, Player> {
+  const map = actorPlayersRaw(world, play, defId, targetKey)
+  if (play.type === 'pass' && !play.spike) {
+    try {
+      const on = getJ12()
+      const userOff = !!user?.teamId && user.teamId === play.offId
+      const userDef = !!user?.teamId && user.teamId === defId
+      const off = (userOff ? user?.matchups?.off : undefined) ?? (on ? j12OffPlan(world, play.n, play.offId, defId) : undefined)
+      const def = (userDef ? user?.matchups?.def : undefined) ?? (on ? j12DefPlan(world, play.n, play.offId, defId) : undefined)
+      if (off || def) ACTOR_PLAN.set(map, { off, def })
+    } catch {
+      // A world without staff / ratings (tests): no plan.
+    }
+  }
+  return map
+}
+
+function actorPlayersRaw(
   world: World,
   play: Play,
   defId: string,

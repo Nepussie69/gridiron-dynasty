@@ -2163,7 +2163,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const spans: number[] = []
     let worst = ''
     let worstLag = -Infinity
-    for (let g = 0; g < 2; g++) {
+    // animflow r6d: sample whole games until the coverage is reached (any sim stream: J12/J6 changed how
+    // many fast-carrier frames two games hold), at most 6 games.
+    for (let g = 0; g < 6 && lags.length < 2000; g++) {
       const home = nfl[2 * g].id
       const away = nfl[2 * g + 1].id
       const sim = simulatePlayByPlay(world, home, away, world.seed + 13 + g * 101)
@@ -2200,7 +2202,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           spans.push(shot.span)
           if (lag > worstLag) {
             worstLag = lag
-            worst = `play ${i} ${play.concept} t ${t.toFixed(3)} lag ${lag.toFixed(1)} yd (rule ${shot.rule})`
+            worst = `game ${g} play ${i} ${play.concept} t ${t.toFixed(3)} lag ${lag.toFixed(1)} yd (rule ${shot.rule})`
           }
         }
       }
@@ -2392,7 +2394,8 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         const want = kind === 'under' ? 1.0 : kind === 'pistol' ? 4 : 5
         if (Math.abs(depth - want) > 0.05) bad.push(`play ${i} ${play.concept}: QB ${depth.toFixed(1)} yd deep (${kind})`)
         const th = (anim.events ?? []).find((e) => e.kind === 'throw')
-        if (play.type === 'pass' && kind === 'under' && th) {
+        // animflow r6d: a spike is thrown into the turf off the snap (no drop).
+        if (play.type === 'pass' && kind === 'under' && th && !play.spike) {
           let deep = 0
           for (let t = 0; t <= th.t; t += 0.01) deep = Math.max(deep, los - posAt(q.path, t).x)
           if (deep < 4.5) bad.push(`play ${i} ${play.concept}: under-centre drop only ${deep.toFixed(1)} yd`)
@@ -2432,6 +2435,116 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(errs.length >= 80, `coverage: ${errs.length} catches with a separation`)
     const p75 = errs[Math.floor(errs.length * 0.75)]
     assert.ok(p75 <= 0.5, `drawn separation off the recorded one by ${p75.toFixed(2)} yd p75`)
+  })
+
+  // ── animflow r6d ────────────────────────────────────────────────────────────
+  const { poseAt: poseAt6d } = await import('../src/components/broadcast/animData.ts')
+  const { planOf } = await import('../src/components/jersey.ts')
+  const games6d = (games: number, seedOff: number, fn: (play: Play, anim: BroadcastAnim, actors: Map<string, Player>) => void) => {
+    store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    for (let g = 0; g < games; g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 5) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + seedOff + g * 389)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' && play.type !== 'run') continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        fn(play, buildPlayAnim(play, { next: sim.plays[i + 1], actors }), actors)
+      }
+    }
+  }
+  const atSec = (anim: BroadcastAnim, key: string, sec: number) => {
+    const a = anim.actors.find((x) => x.key === key)
+    return a ? posAt(a.path, Math.min(1, (sec * 1000) / anim.duration)) : null
+  }
+
+  ok('animflow 6d (J6): a kneel is a victory formation and the QB ends on a knee at the spot; a spike goes into the turf off the snap; a carrier out of bounds crosses the sideline', () => {
+    let kneels = 0
+    let spikes = 0
+    let oob = 0
+    let crossed = 0
+    const bad: string[] = []
+    games6d(8, 59, (play, anim) => {
+      if (play.kneel) {
+        kneels++
+        const q = atSec(anim, 'qb', anim.duration / 1000)!
+        if (Math.abs(q.x - (10 + play.endYard)) > 1e-3) bad.push(`kneel ${play.n} ends at ${q.x.toFixed(1)}`)
+        if (poseAt6d(anim, 'qb', 0.98) !== 'hold') bad.push(`kneel ${play.n} QB not on a knee`)
+        const rb = atSec(anim, 'rb', 0)!
+        if (10 + play.startYard - rb.x < 6) bad.push(`kneel ${play.n} no deep back`)
+      }
+      if (play.spike) {
+        spikes++
+        const kinds = (anim.events ?? []).map((e) => e.kind).join(',')
+        if (kinds !== 'snap,throw,incomplete') bad.push(`spike ${play.n} events ${kinds}`)
+        const th = (anim.events ?? []).find((e) => e.kind === 'throw')
+        if (th && th.t * anim.duration / 1000 > 0.8) bad.push(`spike ${play.n} thrown late`)
+      }
+      if (play.outOfBounds && (play.type === 'run' || play.reception) && !play.turnover && play.endYard < 100) {
+        const key = anim.holders[anim.holders.length - 1]?.key
+        const e = key ? atSec(anim, key, anim.duration / 1000) : null
+        if (!e) return
+        oob++
+        if (e.y < 0 || e.y > FIELD_WIDTH) crossed++
+      }
+    })
+    assert.ok(kneels >= 3 && oob >= 30, `coverage: ${kneels} kneels, ${spikes} spikes, ${oob} out of bounds`)
+    assert.ok(!bad.length, bad.slice(0, 4).join('; '))
+    assert.ok(crossed / oob >= 0.95, `only ${crossed}/${oob} out-of-bounds carriers cross the sideline`)
+  })
+
+  ok('animflow 6d (J12 / J8a-2): a disguised shell changes at the snap (an honest one mostly does not), DOUBLE shows two blockers, the spy mirrors the QB; the alley filler comes downhill and the read key beats the biters to the ball', () => {
+    const shell = { disg: 0, disgN: 0, hon: 0, honN: 0 }
+    const dbl = { y: 0, n: 0 }
+    const spyOff: number[] = []
+    const fillDown: number[] = []
+    const otherDown: number[] = []
+    const keyD: number[] = []
+    const biteD: number[] = []
+    games6d(6, 77, (play, anim, actors) => {
+      const los = 10 + play.startYard
+      if (play.type === 'pass' && !play.result.startsWith('Sack') && !play.spike) {
+        const deep = (sec: number) => ['s0', 's1'].filter((k) => (atSec(anim, k, sec)?.x ?? 0) - los >= 10).length
+        const changed = deep(0) !== deep(1.75)
+        if (play.disguised) { shell.disgN++; if (changed) shell.disg++ } else { shell.honN++; if (changed) shell.hon++ }
+        const plan = planOf(actors)
+        if (plan?.off === 'doubleRusher') { dbl.n++; if ((anim.engagements ?? []).some((e) => e.kind === 'double')) dbl.y++ }
+        if (plan?.def === 'spyQB') {
+          const q = atSec(anim, 'qb', 1.5)!
+          spyOff.push(Math.min(...['lb0', 'lb1', 'lb2'].map((k) => { const p = atSec(anim, k, 1.5); return p && p.x - q.x > 3 ? Math.abs(p.y - q.y) : 99 })))
+        }
+      }
+      if (play.type === 'run' && play.fillId && !play.kneel) {
+        const fk = [...actors.entries()].find(([, p]) => p.id === play.fillId)?.[0]
+        for (const k of ['s0', 's1']) {
+          const a = atSec(anim, k, 0)!
+          const b = atSec(anim, k, 1.2)!
+          ;(k === fk ? fillDown : otherDown).push(a.x - b.x)
+        }
+        const keyOfId = (id?: string) => [...actors.entries()].find(([, p]) => p.id === id)?.[0]
+        const car = anim.holders[anim.holders.length - 1]?.key
+        const c = car ? atSec(anim, car, 1.0) : null
+        const rk = keyOfId(play.readKeyId)
+        const bites = new Set((play.biteIds ?? []).map(keyOfId))
+        for (const k of ['lb0', 'lb1', 'lb2']) {
+          const p = atSec(anim, k, 1.0)
+          if (!c || !p) continue
+          if (k === rk) keyD.push(Math.hypot(p.x - c.x, p.y - c.y))
+          else if (bites.has(k)) biteD.push(Math.hypot(p.x - c.x, p.y - c.y))
+        }
+      }
+    })
+    const med = (a: number[]) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]
+    assert.ok(shell.disgN >= 40 && shell.disg / shell.disgN >= 0.7, `disguised shells that change at the snap ${shell.disg}/${shell.disgN}`)
+    assert.ok(shell.hon / shell.honN <= 0.3, `honest shells that change at the snap ${shell.hon}/${shell.honN}`)
+    assert.ok(dbl.n >= 5 && dbl.y / dbl.n >= 0.85, `DOUBLE shown ${dbl.y}/${dbl.n}`)
+    assert.ok(spyOff.length >= 5 && med(spyOff) <= 1.5, `spy lateral offset from the QB median ${med(spyOff)?.toFixed(2)} yd (n ${spyOff.length})`)
+    assert.ok(keyD.length >= 20 && biteD.length >= 10 && med(keyD) < med(biteD) - 1, `read key ${med(keyD)?.toFixed(2)} vs biters ${med(biteD)?.toFixed(2)} yd from the carrier at 1.0 s`)
+    assert.ok(fillDown.length >= 40 && med(fillDown) >= 1 && med(fillDown) > med(otherDown) + 1, `alley filler downhill ${med(fillDown)?.toFixed(2)} vs ${med(otherDown)?.toFixed(2)} yd at 1.2 s`)
   })
 }
 

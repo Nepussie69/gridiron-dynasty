@@ -649,18 +649,25 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       const ramp = clamp01((sec - snapSec) / 0.6)
       const bv = ballVel(k)
       const led = leadPoint({ x: ball.x[k], y: ball.y[k] }, bv, 0.35)
-      let ox = strongSide * 4 * ramp
+      const hKey = holders[k]
+      // animflow r6d: a ball carrier in the open (any play kind: a run, a catch-and-run, a return) owns the
+      // framing — the formation's strong-side offset and the dropback's downfield push bleed out with his
+      // speed and the heading lead applies to him (a receiver turning up the sideline after the catch was
+      // trailed by the strong-side 4 yd on the other side of the field).
+      const runnerK = hKey != null && !flightActive[k] && !(hKey === 'qb' && (kind === 'pass' || kind === 'sack'))
+      const cvK = hKey ? carrierVel(hKey, k) : { x: 0, y: 0 }
+      const spK = Math.hypot(cvK.x, cvK.y)
+      const own = runnerK ? clamp01((spK - FAST_SPAN_V0) / (FAST_SPAN_V1 - FAST_SPAN_V0)) : 0
+      let ox = strongSide * 4 * ramp * (1 - own)
       let oy = 0
       // Rule 2: downfield on dropbacks / toward the carrier's heading on runs.
       let offX = 0
-      if (kind === 'pass' || kind === 'sack' || kind === 'scramble') offX += 3 * ramp
-      const hKey = holders[k]
-      if (hKey && (kind === 'run' || kind === 'scramble')) {
-        const cv = carrierVel(hKey, k)
-        const sp = Math.hypot(cv.x, cv.y)
-        if (sp > 0.5) {
-          offX += (cv.x / sp) * 2 * ramp
-          oy += (cv.y / sp) * 2 * ramp
+      if (kind === 'pass' || kind === 'sack' || kind === 'scramble') offX += 3 * ramp * (1 - own)
+      if (hKey && (kind === 'run' || kind === 'scramble' || own > 0)) {
+        if (spK > 0.5) {
+          const w = kind === 'run' || kind === 'scramble' ? 1 : own
+          offX += (cvK.x / spK) * 2 * ramp * w
+          oy += (cvK.y / spK) * 2 * ramp * w
         }
       }
       // From the contact on, the lead and the strong-side offset bleed out so
