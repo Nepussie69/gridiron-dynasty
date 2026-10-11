@@ -90,7 +90,7 @@ Slots use no rng and the swing is career-only, so they have zero sim impact. Clu
 |---|---|
 | Spec | ✅ 2026-10-11 |
 | P1 prime-eng | ✅ merged (slots/flex/stakes/caps; calibration identical) |
-| P2 clutch-eng | ⏳ |
+| P2 clutch-eng | ✅ merged (Claude Opus 5.5, 2026-10-11): OFF byte-identical, ON drift 0.0×3, pooled 6-seed 0.000, eq 20/20, smokes 0/0; one graze 2222 net pass 216.9 (−0.1). Report ~/gridiron-work/logs/clutch-p2-verify.out |
 | P3 clutch-season | ⏳ |
 | P4 prime-ui | ✅ 2026-10-11 merged (Schedule badges + next-game line, Dashboard/Game Plan stakes chip + shared StakesSheet; CareerHub not needed) |
 | P5 clutch-ui | ⏳ |
