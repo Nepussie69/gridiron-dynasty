@@ -414,13 +414,25 @@ export function MatchView() {
   const vsettings = useViewSettings()
   const homeId = match?.homeId
   const awayId = match?.awayId
-  const liveCanvasRef = useRef<HTMLCanvasElement>(null)
+  // The live canvas element itself (callback ref -> state), so a remounted
+  // canvas (new game over an old one, error-boundary reset) gets a fresh view.
+  const [liveCanvas, setLiveCanvas] = useState<HTMLCanvasElement | null>(null)
+  // Hands a freshly mounted live view the current play + clock (set below).
+  const liveFeedRef = useRef<((ctl: LiveBroadcast) => void) | null>(null)
   const autoQRef = useRef(vsettings.autoQ)
   const [liveChip, setLiveChip] = useState(false)
   useEffect(() => {
     autoQRef.current = vsettings.autoQ
   }, [vsettings.autoQ])
   const broadcastLive = !!match && latchLiveView(`${matchSeq}:${idx}`, view.live, !!view.fallback) === 'broadcast'
+
+  useEffect(() => {
+    liveFeedRef.current = (ctl) => {
+      if (!homeId || !awayId || !play || !anim) return
+      ctl.setPlay(buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }))
+      ctl.setTime(clock.i === idx ? clock.t : 0)
+    }
+  })
 
   // Mount the composed 2.5D view (renderer + actors + graphics + director) once
   // per view / matchup / quality; the canvas keeps a fixed CSS size, so a DPR
@@ -431,7 +443,7 @@ export function MatchView() {
       liveCtlRef.current = null
       return
     }
-    const cv = liveCanvasRef.current
+    const cv = liveCanvas
     if (!cv) return
     const ctl = createLiveBroadcast(cv, {
       homeTeamId: homeId,
@@ -448,13 +460,18 @@ export function MatchView() {
       onAutoQ: (a) => setAutoQState(a),
     })
     liveCtlRef.current = ctl
-    if (ctl) ctl.onReplay = (ph) => setReplayPhase(ph)
+    if (ctl) {
+      ctl.onReplay = (ph) => setReplayPhase(ph)
+      // A new view starts blank: load the play on screen and its clock at once,
+      // not only on the next play / clock change (first-open + post-remount blank).
+      liveFeedRef.current?.(ctl)
+    }
     return () => {
       ctl?.skipReplay()
       ctl?.destroy()
       if (liveCtlRef.current === ctl) liveCtlRef.current = null
     }
-  }, [broadcastLive, homeId, awayId, view.cameraProfile, view.live, vsettings.quality, reduced])
+  }, [broadcastLive, liveCanvas, homeId, awayId, view.cameraProfile, view.live, vsettings.quality, reduced])
 
   // Load each recorded play into the live view (the PlayAnim is the truth; only
   // the drawing differs from the top-down view).
@@ -834,7 +851,7 @@ export function MatchView() {
             {broadcastLive ? (
               <BroadcastBoundary onError={() => reportFallback('render-error')}>
                 <div className="relative h-full w-full">
-                  <canvas ref={liveCanvasRef} className="absolute inset-0 block h-full w-full" role="img" aria-label="Broadcast 2.5D game view" />
+                  <canvas ref={setLiveCanvas} className="absolute inset-0 block h-full w-full" role="img" aria-label="Broadcast 2.5D game view" />
                 </div>
               </BroadcastBoundary>
             ) : (
