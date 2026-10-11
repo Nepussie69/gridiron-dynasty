@@ -7,7 +7,7 @@ Orchestrate the FUTURES queue and playtest fixes; main thrust is NFL-realistic p
 
 ## Chat 3 (2026-10-11 19:00)
 - BDB 2021 verified + unzipped to `~/gridiron-work/nfl-tracking/bdb/2021` (week1–17.csv). Round 6 prompt updated with BDB 2021/22/23 + real accel caps + round 5 side effects.
-- SL1 MERGED dc59f2a (backlog 268/269 ✅; check-broadcast needs `--import ~/gridiron-work/loader.mjs`, 54 checks). C3 (Sonnet) relaunched → logs/c3-blankfield.out.
+- SL1 MERGED dc59f2a (backlog 268/269 ✅; check-broadcast needs `--import ~/gridiron-work/loader.mjs`, 54 checks). C3 blank-field fix MERGED (MatchView canvas as state; first-open + remount blank).
 - **Round 6a** (Opus) running in wt/animflow (at e50ae0e) → appends 'Round 6a' to logs/animflow-report.out. Relaunch brief: prompts/animflow-round6a-launch.txt. W2 on try 2 (try 1 hit 5400 s watchdog).
 
 ## Current state (main a2aaab0, 15 commits NOT pushed; 4173 HELD at 0f898f0)
