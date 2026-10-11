@@ -2402,6 +2402,37 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok((seen['pass:under'] ?? 0) >= 10 && (seen['run:under'] ?? 0) >= 20 && (seen['run:pistol'] ?? 0) >= 5 && (seen['pass:gun'] ?? 0) >= 50, `coverage ${JSON.stringify(seen)}`)
     assert.ok(bad.length === 0, `${bad.length} bad snaps: ${bad.slice(0, 4).join('; ')}`)
   })
+
+  ok('animflow 6c (J7): the recorded cover defender stands the recorded separation (separationYd) off the target at the catch', () => {
+    store.useGame.getState().startCareer({ name: 'J', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const errs: number[] = []
+    for (let g = 0; g < 4; g++) {
+      const home = nfl[(g * 11) % nfl.length].id
+      const away = nfl[(g * 11 + 3) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 41 + g * 613)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' || play.separationYd == null || !play.coverId || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const c = (anim.events ?? []).find((e) => e.kind === 'catch')
+        const ck = [...actors.entries()].find(([, p]) => p.id === play.coverId)?.[0]
+        const a = c && anim.actors.find((x) => x.key === c.keys[0])
+        const d = ck && anim.actors.find((x) => x.key === ck)
+        if (!c || !a || !d) continue
+        const p = posAt(a.path, c.t)
+        const q = posAt(d.path, c.t)
+        errs.push(Math.abs(Math.hypot(p.x - q.x, p.y - q.y) - Math.min(12, Math.max(0.6, play.separationYd))))
+      }
+    }
+    errs.sort((x, y) => x - y)
+    assert.ok(errs.length >= 80, `coverage: ${errs.length} catches with a separation`)
+    const p75 = errs[Math.floor(errs.length * 0.75)]
+    assert.ok(p75 <= 0.5, `drawn separation off the recorded one by ${p75.toFixed(2)} yd p75`)
+  })
 }
 
 console.log(`check-broadcast: PASS (${n} checks)`)

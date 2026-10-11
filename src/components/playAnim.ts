@@ -3871,7 +3871,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // The front plus any blitzers rush; the line (and a back/tight end staying
   // in) slides and doubles the best rusher. The recorded pressure rusher beats
   // his block home; anyone the slide does not pick up comes free.
-  const blitzK = play.blitz ? blitzKeys(seed) : []
+  // animflow r6c2 (J7): the man the sim says covered the target is in coverage, not on the blitz.
+  const coverK0 = play.coverId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.coverId) : undefined
+  const blitzK = (play.blitz ? blitzKeys(seed) : []).filter((k) => k !== coverK0 || play.pressureId === play.coverId)
   const pressureKey = play.pressureId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.pressureId) : undefined
   // The recorded pressure rusher always rushes, even when the sim credited a
   // linebacker the slide never sent (backlog 152 follow-up).
