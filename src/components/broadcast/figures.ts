@@ -292,6 +292,7 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
     fallDir: 'live',
   },
   down: { base: { af: 0.2, fall: 1, run: 0 }, fallDir: 'start' },
+  tackle: { base: { af: 1, ln: 0.62, cr: 0.3, jos: 0.5, run: 0.6 } },
   kick: {
     base: { ln: 0.12, sp: 0.8, run: 0.3 },
     dyn: (age, _len, p) => {

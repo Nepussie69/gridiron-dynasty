@@ -1962,14 +1962,22 @@ function routeRunRating(p: Player | undefined, depth: number): number {
 }
 
 /** Run a route: high route running = a crisp near-stop cut, low = a rounded drift. */
-function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number) {
+function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1) {
   const v0 = 0
+  const saved = mv.pace
+  // The stem can be run under control (animflow round 2: timed to the drop);
+  // out of the break he is at full speed again.
+  const stem = () => { if (stemPace < 1) mv.pace = { top: saved.top * stemPace, acc: saved.acc * Math.min(1, stemPace + 0.1) } }
   if (breakIdx <= 0 || breakIdx >= pts.length - 1) {
+    stem()
     mv.run(pts, { v0, stop: true })
+    mv.pace = saved
     return
   }
   const crisp = rr >= 76
+  stem()
   mv.run(pts.slice(0, breakIdx + 1), { v0, stop: true })
+  mv.pace = saved
   if (crisp) mv.hold(clampN(0.04 + (rr - 76) * 0.002, 0.04, 0.12))
   mv.run(pts.slice(breakIdx + 1), { v0: 0, stop: true })
 }
@@ -2575,18 +2583,35 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // protection itself is planned later (backlog 152), once the drop and the
   // throw are known, so a doubled rusher can be shown splitting the block.
 
+  // ── timing by concept (animflow round 2) ─────────────────────────────────
+  // A real dropback develops: the QB takes a drop that fits the concept (quick
+  // game a hitch from the gun, a 3-/5-/7-step equivalent, a play-action fake
+  // first), receivers fight to get off the line, routes are run at a stem pace
+  // the route runner can break from, and the ball comes out after the drop is
+  // finished. Catch spot / receiver / result are unchanged; only when.
+  const screen = /Screen/.test(concept)
+  const quickGame = !screen && !pa && !boot && (/Slant|Bubble|Hitch|Stick|Quick|Flat/.test(concept) || depth <= 4)
+  const bucket: 'screen' | 'quick' | 'dropback' | 'deep' | 'pa' = screen ? 'screen' : pa || boot ? 'pa' : quickGame ? 'quick' : depth >= 18 ? 'deep' : 'dropback'
+  // Drop depth (yd behind the shotgun spot) and its duration (s).
+  const drop = { screen: 3.2, quick: 1.0, dropback: 2.6, deep: 3.8, pa: 2.8 }[bucket]
+  const dropT = { screen: 1.15, quick: 0.62, dropback: 1.2, deep: 1.5, pa: 1.55 }[bucket]
+  // When the ball should come out (s after the snap), with a little spread.
+  const wantRel = SNAP + { screen: 1.75, quick: 1.65, dropback: 2.55, deep: 2.8, pa: 2.75 }[bucket] + (hash(seed + 61) - 0.5) * 0.4
   // Run fake (play-action / RPO / bootleg): QB and back mesh before the drop.
   const qbPts: Pt[] = []
   if (pa) qbPts.push({ x: f.qb.x + 0.5, y: MID_Y + side * 1.2 })
   if (boot) qbPts.push({ x: f.qb.x - 1.2, y: MID_Y - rollSide * 1.2 })
-  const drop = depth >= 15 ? 4 : 2.2
   const rollMag = boot ? 9 : quick ? 3 : 6 + hash(seed + 2) * 3
   const rollY = clampY(MID_Y + (boot ? -rollSide : rollSide) * rollMag)
   qbPts.push({ x: f.qb.x - drop, y: MID_Y })
   if (scramble || boot) {
     qbPts.push({ x: f.qb.x - drop - 0.5 + (scramble ? 1.5 : 0), y: MID_Y + (rollY - MID_Y) * 0.15 }, { x: f.qb.x - drop + 1.5, y: rollY })
+    m.qb.run(qbPts, { stop: true })
+  } else {
+    // The drop at a drop's pace (not a sprint): done at dropT.
+    runTimed(m.qb, qbPts, 0, dropT, false, true)
   }
-  m.qb.run(qbPts, { stop: true })
+  const dropEnd = m.qb.t
   if (pa || boot) recEv(0.34, 'playAction', ['qb', 'rb'], posAt(m.qb.path, 0.34))
 
   // Route tree; the target runs the route whose depth best matches the throw.
@@ -2634,20 +2659,107 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   let catchPt: Pt = { x: los, y: MID_Y }
   let catchSec = 0.4
   const breaks: { k: string; t: number; pt: Pt }[] = []
-  for (const k of receivers) {
-    if (stayIn.has(k)) continue
+  const chipped = m.rb.t > 0
+  const routePts = (k: string): Pt[] => {
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const inw = inwOf(k)
-    const raw = def.wps(f[k].y, los, 1, inw, -inw, side)
-    const pts = raw.map((w) => ({ x: clampX(w.x), y: clampY(w.y) }))
-    const rr = routeRunRating(m[k].player, def.depth)
+    return def.wps(f[k].y, los, 1, inw, -inw, side).map((w) => ({ x: clampX(w.x), y: clampY(w.y) }))
+  }
+  // Getting off the line: a wideout fights the jam (release vs his rating), a
+  // back or tight end checks his protection first; a screen's men just go.
+  const releaseOf = (k: string): number => {
+    if (screen || (k === 'rb' && chipped)) return 0
+    const rls = attrNum(m[k].player, 'RLS', 70)
+    const base = k === 'rb' || k === 'te' || k === 'fb' ? 0.32 : bucket === 'quick' ? 0.12 : 0.3
+    return clampN(base - (rls - 75) * 0.006 + hash(seed + k.length * 13 + 7) * 0.18, 0.05, 0.65)
+  }
+  /** Run receiver k: the release at the line, then his route at `pace` of his speed. */
+  const runRecv = (k: string, pace: number) => {
+    const pts = routePts(k)
+    if (!(k === 'rb' && chipped)) m[k].reset(f[k].x, f[k].y)
+    const rel = releaseOf(k)
+    if (rel > 0.04) {
+      // Hand-fight / jab step: a half-yard of foot work, never standing.
+      const jab = (hash(seed + k.length * 5) < 0.5 ? -1 : 1) * 0.55
+      runTimed(m[k], [{ x: clampX(f[k].x + 0.35), y: clampY(f[k].y + jab) }, { x: clampX(f[k].x + 0.8), y: clampY(f[k].y + jab * 0.3) }], m[k].t, m[k].t + rel, false, false)
+    }
+    const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const breakIdx = pts.length >= 3 ? pts.length - 2 : -1
-    runRoute(m[k], pts, breakIdx, rr)
+    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace)
+    return { pts, breakIdx }
+  }
+  const endX0 = clampX(10 + play.endYard)
+  /** The target at a stem pace: where and when the ball meets him, and when it must leave. */
+  const planTarget = (pace: number) => {
+    const { pts, breakIdx } = runRecv(tgt, pace)
+    let cPt = pts[pts.length - 1]
+    let cSec = m[tgt].t
+    let v0 = 0
+    // A completion that gains less than the route's depth: the ball arrives
+    // earlier on the route, short of the end spot, so the run after the catch
+    // goes forward (or across), never back toward the line like a real NFL catch.
+    if (!inc && !int) {
+      const gain = endX0 - los
+      const yacMin = gain > 0 ? clampN(gain * 0.25, 1, 4) : 0
+      if (cPt.x > endX0 - yacMin) {
+        for (let t = cSec; t >= 0.35; t -= 0.02) {
+          if (posAt(m[tgt].path, t).x <= endX0 - yacMin) {
+            cPt = posAt(m[tgt].path, t)
+            v0 = seek(m[tgt], t)
+            cSec = t
+            break
+          }
+        }
+      }
+    }
+    cSec = Math.max(cSec, 0.35)
+    const air = Math.hypot(cPt.x - (f.qb.x - drop), cPt.y - MID_Y)
+    return { pts, breakIdx, cPt, cSec, v0, rel: cSec - flightFor(air) }
+  }
+  // Release and flight: throw power sets a bullet vs a floater. Ball speed ~19
+  // yd/s off a strong arm, plus loft on deep balls (a slant is a ~0.5 s dart).
+  const qb = ctx.actors?.get('qb')
+  const thp = attrOf(qb, 'THP')
+  const tup = attrOf(qb, 'TUP')
+  const pac = attrOf(qb, 'PAC')
+  const flightFor = (air: number) =>
+    clampN(0.12 + air / (18.5 + (thp - 70) * 0.18) + Math.max(0, depth - 15) * 0.014 + (tup - 70) * 0.003 + (pa ? (pac - 70) * 0.002 : 0), 0.35, 2.8)
+  // The ball never comes out before the drop is done (a hitch to set).
+  const minRel = scramble || boot ? SNAP + 1.2 : dropEnd + (bucket === 'quick' ? 0.08 : 0.15)
+  // Pick the stem pace (route runners at 50-100% of top speed on the stem) that brings the
+  // target open when the QB wants to throw.
+  let bestPace = 1
+  let bestErr = Infinity
+  for (let pace = 1; pace >= 0.5 - 1e-9; pace -= 0.04) {
+    const r = planTarget(pace).rel
+    const err = Math.abs(r - Math.max(wantRel, minRel)) + (r < minRel ? 5 + (minRel - r) : 0)
+    if (err < bestErr) {
+      bestErr = err
+      bestPace = pace
+    }
+  }
+  const tp = planTarget(bestPace)
+  catchPt = tp.cPt
+  catchSec = tp.cSec
+  let catchV0 = tp.v0
+  if (tp.breakIdx > 0) breaks.push({ k: tgt, t: timeNearest(m[tgt], tp.pts[tp.breakIdx], 0, m[tgt].t), pt: tp.pts[tp.breakIdx] })
+  // Even at an easy stem he would be there well before the QB is ready (a short
+  // route, or a catch early on it): he settles in the window (feet alive) until
+  // the ball arrives, so the throw still comes after a full drop and a hitch.
+  const relGoal = Math.max(minRel, wantRel - 0.3)
+  if (tp.rel < relGoal) {
+    const late = relGoal + flightFor(Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y))
+    seek(m[tgt], catchSec)
+    pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
+    catchSec = m[tgt].t
+    catchPt = { x: m[tgt].x, y: m[tgt].y }
+    catchV0 = 0
+  }
+  for (const k of receivers) {
+    if (stayIn.has(k) || k === tgt) continue
+    const { pts, breakIdx } = runRecv(k, Math.min(1, bestPace + 0.05))
     if (breakIdx > 0) breaks.push({ k, t: timeNearest(m[k], pts[breakIdx], 0, m[k].t), pt: pts[breakIdx] })
-    if (k === tgt) {
-      catchPt = pts[pts.length - 1]
-      catchSec = m[k].t
-    } else if (routeMap[k] === 'stalk') {
+    if (routeMap[k] === 'stalk') {
       // A stalk block: he squares up on his man (engaged below, with coverage).
     } else {
       const a = pts[pts.length - 2] ?? pts[pts.length - 1]
@@ -2655,46 +2767,16 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       const dx = b.x - a.x
       const dy = b.y - a.y
       const len = Math.hypot(dx, dy) || 1
+      // Keep working: carry on through the route, then find space.
       m[k].run([{ x: clampX(b.x + (dx / len) * 2.5), y: clampY(b.y + (dy / len) * 2.5) }], { stop: true })
+      if (m[k].t < catchSec) jogTo(m[k], { x: clampX(m[k].x + 2), y: clampY(m[k].y + (MID_Y - m[k].y) * 0.25) }, 4)
     }
   }
   if (m.fb) m.fb.run([{ x: los - 3, y: MID_Y + 1 }, { x: los - 1, y: MID_Y + side * 4 }], { stop: true })
-  // A completion that gains less than the route's depth: the ball arrives
-  // earlier on the route, short of the end spot, so the run after the catch
-  // goes forward (or across), never back toward the line like a real NFL catch.
-  let catchV0 = 0
-  if (!inc && !int) {
-    const endX0 = clampX(10 + play.endYard)
-    const gain = endX0 - los
-    const yacMin = gain > 0 ? clampN(gain * 0.25, 1, 4) : 0
-    if (catchPt.x > endX0 - yacMin) {
-      let tc = -1
-      for (let t = catchSec; t >= 0.35; t -= 0.02) {
-        if (posAt(m[tgt].path, t).x <= endX0 - yacMin) {
-          tc = t
-          break
-        }
-      }
-      if (tc > 0) {
-        catchPt = posAt(m[tgt].path, tc)
-        catchV0 = seek(m[tgt], tc)
-        catchSec = tc
-      }
-    }
-  }
-  catchSec = Math.max(catchSec, 0.35)
 
   // Release and flight: throw power sets a bullet vs a floater.
-  const qb = ctx.actors?.get('qb')
-  const thp = attrOf(qb, 'THP')
-  const tup = attrOf(qb, 'TUP')
-  const pac = attrOf(qb, 'PAC')
-  // Ball speed ~19 yd/s off a strong arm, plus loft on deep balls: a quick
-  // slant is a ~0.5 s dart thrown about a second after the snap, not a 1 s lob
-  // released at the snap (animflow); touch / play-action fakes adjust it a bit.
-  const airYds = Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y)
-  const flightSec = clampN(0.12 + airYds / (18.5 + (thp - 70) * 0.18) + Math.max(0, depth - 15) * 0.014 + (tup - 70) * 0.003 + (pa ? (pac - 70) * 0.002 : 0), 0.35, 2.8)
-  const releaseSec = Math.max(0.15, catchSec - flightSec)
+  const flightSec = flightFor(Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y))
+  const releaseSec = Math.max(minRel, catchSec - flightSec)
   // Set in the pocket until the throw: he hitches up and keeps his feet alive.
   if (m.qb.t < releaseSec - 0.1) pocketPair(m, null, ['qb'], m.qb.t, releaseSec, -0.6, seed + 77)
   const releasePos = posAt(m.qb.path, releaseSec)
@@ -2978,9 +3060,14 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   // A sack takes 2.5-3.5 s of real time: give the pocket a realistic duration so
   // the recorded rusher can actually get home (a 1.7 s drop would make any rush
   // arrive "late"). The drop shape and the final spot are unchanged.
-  const qbPts: Pt[] = [{ x: f.qb.x - 3, y: MID_Y }, { x: endX + 0.6, y: MID_Y + dodge * 2.5 }, qbEnd]
   const pocketT = clampN(2.3 + (los - endX) * 0.09, 2.3, 3.5)
-  runTimed(m.qb, qbPts, 0, pocketT, false, true)
+  // animflow round 2: a real drop first (done ~1.2 s), a set with his feet
+  // alive while he looks downfield, then the escape attempt into the sack spot.
+  const dropPt: Pt = { x: f.qb.x - 2.6, y: MID_Y }
+  const dropT = Math.min(1.25, pocketT - 0.9)
+  runTimed(m.qb, [dropPt], 0, dropT, false, true)
+  pocketPair(m, null, ['qb'], m.qb.t, pocketT - 0.55, -0.4, seed + 77)
+  runTimed(m.qb, [{ x: (m.qb.x + endX) / 2 + 0.3, y: MID_Y + dodge * 2.5 }, qbEnd], m.qb.t, pocketT, false, true)
   const sackT = m.qb.t
   passProtect(m, f, los, {
     rushers,
