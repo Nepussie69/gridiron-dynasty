@@ -12,6 +12,8 @@ import { makeCharacter } from './character'
 import { makeScoutBias } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
 import { rescaleOvr, rescaleQuantile, unscaleOvr } from './ovrScale'
+import { getIndividual, FAST_ROLES, FAST_BLEND, FAST_NORM } from './individual'
+import { playerAttrs } from '../data/ratings'
 import { assignSlots } from './primetime'
 import { buildNflSchedule, divisionFinishFromStandings, type DivisionFinish } from './schedule'
 import { STARS } from './starSeed'
@@ -862,11 +864,51 @@ export function indexPlayers(world: World): void {
 /** Team strength used by the simulation (top-22 weighted overall). */
 export function teamStrength(players: Player[]): number {
   if (!players.length) return 60
+  if (getIndividual()) return teamStrengthIndividual(players)
   const top = [...players].sort((a, b) => b.ovr - a.ovr).slice(0, 22)
   // L12.15 S2: report on the old (sim) scale so fast-sim/playoff/AI results hold.
   // Invert each player then average (the remap is nonlinear, so inverting the
   // mean is not the same score).
   return top.reduce((s, p) => s + unscaleOvr(p.ovr), 0) / top.length
+}
+
+/**
+ * J8d: the fast-sim team strength from the actual starters' own ratings, not the
+ * top-22-by-OVR mean. Each selected starter contributes his own position blend at
+ * a fixed per-player weight (QB heaviest) — a weighted sum of individuals; the raw
+ * value is then normalised onto the old league mean and spread (FAST_NORM) so
+ * AI-vs-AI margins and standings keep the same distribution while individual
+ * ratings drive the differences.
+ */
+function teamStrengthIndividual(players: Player[]): number {
+  let sum = 0
+  for (const role of FAST_ROLES) {
+    const group = players
+      .filter((p) => role.pos.includes(p.pos) && !p.injured)
+      .sort((a, b) => b.ovr - a.ovr)
+      .slice(0, role.n)
+    if (!group.length) continue
+    // Each selected starter contributes his OWN value at a fixed per-player weight
+    // (QB heaviest) — a weighted sum of individuals, never a unit mean.
+    const w = role.w / role.n
+    for (const p of group) sum += starterValue(p) * w
+  }
+  if (!FAST_NORM.rawSd) return sum
+  return (sum - FAST_NORM.rawMean) * (FAST_NORM.sd / FAST_NORM.rawSd) + FAST_NORM.mean
+}
+
+/** J8d: one starter's value from his own position ratings, on the old sim scale. */
+function starterValue(p: Player): number {
+  const blend = FAST_BLEND[p.pos]
+  if (!blend) return unscaleOvr(p.ovr)
+  const a = playerAttrs(p)
+  let v = 0
+  let w = 0
+  for (const [k, ww] of blend) {
+    v += (a[k] ?? 0) * ww
+    w += ww
+  }
+  return w ? unscaleOvr(v / w) : unscaleOvr(p.ovr)
 }
 
 export { hash32 }
