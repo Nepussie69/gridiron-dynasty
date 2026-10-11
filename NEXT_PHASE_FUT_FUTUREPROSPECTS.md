@@ -88,4 +88,5 @@ User (2026-10-10, backlog 142): a **Future classes** tab on the Draft screen. Ne
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| FP1 / FP2 / FP3 | ⏳ |
+| FP1 engine | ✅ 2026-10-11 merged (probe 35/35; calibration identical; overlays live in World.futureClasses.{scout,returners}) |
+| FP2 / FP3 | ⏳ |
