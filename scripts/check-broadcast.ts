@@ -55,7 +55,7 @@ import {
   type PoseParams,
 } from '../src/components/broadcast/figures.ts'
 import { ActorLayer } from '../src/components/broadcast/actors.ts'
-import { ballZAt, presentAnim, THROW_STATE, THROW_TIMING, throwHand, type BroadcastAnim, type ThrowStyle } from '../src/components/broadcast/animData.ts'
+import { ballZAt, kickFlight, presentAnim, THROW_STATE, THROW_TIMING, throwHand, type BroadcastAnim, type ThrowStyle } from '../src/components/broadcast/animData.ts'
 import { LiveField, livePos, pursue, PAIR_GAP, type LiveMover } from '../src/components/playLive.ts'
 import type { BroadcastFrame } from '../src/components/broadcast/renderer.ts'
 import { readFileSync } from 'node:fs'
@@ -1502,6 +1502,66 @@ ok('animflow r3: the QB throw is a set, wind-up, release at the flight start and
   assert.ok(THROW_TIMING.quick.wind < THROW_TIMING.normal.wind && THROW_TIMING.deep.wind > THROW_TIMING.normal.wind, 'quick shorter, deep longer')
   poseParams('throwQuick', 0.1, 0.4, p)
   assert.ok(p.qtr === 1, 'quick game is three-quarter')
+})
+
+ok('animflow r4: a field goal / PAT carries through the uprights and past the end line (miss: wide / short / off an upright / blocked); the clip runs on until it is down', () => {
+  const posAtWp = (ps: { t: number; x: number; y: number }[], t: number) => {
+    if (t <= ps[0].t) return ps[0]
+    for (let i = 1; i < ps.length; i++) if (t <= ps[i].t) { const a = ps[i - 1], b = ps[i]; const u = (t - a.t) / Math.max(1e-9, b.t - a.t); return { t, x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u } }
+    return ps[ps.length - 1]
+  }
+  const zAtK = (kz: { t: number; z: number }[], t: number) => {
+    for (let i = 1; i < kz.length; i++) if (t <= kz[i].t) { const a = kz[i - 1], b = kz[i]; return a.z + (b.z - a.z) * ((t - a.t) / Math.max(1e-9, b.t - a.t)) }
+    return kz[kz.length - 1].z
+  }
+  const seen = new Set<string>()
+  for (const los of [25, 50, 66, 78, 95]) {
+    for (let s = 0; s < 40; s++) {
+      for (const good of [true, false]) {
+        const rnd = (k: number) => ((Math.sin((s + 1) * 12.9898 + k * 78.233 + los) * 43758.5453) % 1 + 1) % 1
+        const kf = kickFlight({ los, kickT: 0.3, good, blocked: false, kpw: 80, seed: rnd })
+        seen.add(kf.miss)
+        const p = posAtWp(kf.ball, kf.resT)
+        const z = zAtK(kf.kz, kf.resT)
+        assert.ok(kf.endT > kf.resT + 0.3, `clip runs past the posts (${kf.miss})`)
+        assert.ok(Math.abs(kf.tc - (120 - (los - 7)) / (18.5 + 0.06 * (127 - los) + 0.8)) < 1e-6, 'time to the posts = distance / ball speed')
+        if (kf.miss === 'none') {
+          assert.ok(Math.abs(p.x - 120) < 1e-6 && Math.abs(p.y - 26.65) < 3.08 && z > 10 / 3, `make through the uprights: ${JSON.stringify(p)} z ${z}`)
+          const last = kf.ball[kf.ball.length - 1]
+          assert.ok(last.x > 120.5, `make carries past the end line: ${last.x}`)
+          assert.ok(kf.ball.every((b) => b.t <= kf.resT + 1e-9 || b.x >= 120 - 1e-9), 'never comes back in front of the posts')
+        } else if (kf.miss === 'wide') {
+          assert.ok(Math.abs(p.x - 120) < 1e-6 && Math.abs(p.y - 26.65) > 3.08 + 0.5, `wide: ${JSON.stringify(p)}`)
+        } else if (kf.miss === 'short') {
+          assert.ok(Math.abs(p.x - 120) < 1e-6 && z < 10 / 3, `short: under the bar ${z}`)
+        } else if (kf.miss === 'doink') {
+          assert.ok(Math.abs(Math.abs(p.y - 26.65) - 3.08) < 1e-6 && z > 10 / 3 && z < 13.3, `doink at the upright ${JSON.stringify(p)} z ${z}`)
+          assert.ok(kf.ball[kf.ball.length - 1].x < 120, 'kicks back out off the upright')
+        }
+      }
+    }
+  }
+  for (const k of ['none', 'wide', 'short', 'doink']) assert.ok(seen.has(k), `covers ${k}`)
+  const bl = kickFlight({ los: 60, kickT: 0.3, good: false, blocked: true, kpw: 80, seed: () => 0.3 })
+  assert.ok(bl.miss === 'blocked' && Math.abs(bl.resPt.x - 60.3) < 1e-6, 'blocked at the line')
+  // presentAnim draws the kick's real height (not a generic arc that ends at the posts' foot).
+  const kf = kickFlight({ los: 78, kickT: 0.3, good: true, blocked: false, kpw: 75, seed: () => 0.4 })
+  const T = kf.endT + 0.5
+  const fr = (t: number) => t / T
+  const anim = {
+    duration: T * 1000,
+    actors: [{ key: 'qb', side: 'off', role: 'H', path: [{ t: 0, x: 71, y: 26.65 }, { t: 1, x: 71, y: 26.65 }] }, { key: 'rb', side: 'off', role: 'K', path: [{ t: 0, x: 68.5, y: 24.65 }, { t: 1, x: 70.8, y: 26.15 }] }],
+    ball: [{ t: 0, x: 78, y: 26.65 }, ...kf.ball.map((b) => ({ t: fr(b.t), x: b.x, y: b.y }))],
+    holders: [{ t: 0, key: null }, { t: fr(0.14), key: 'qb' }, { t: fr(0.3), key: null }],
+    flights: [{ t0: fr(0.3), t1: fr(kf.endT), height: 1 }],
+    posts: true,
+    kickZ: kf.kz.map((k) => ({ t: fr(k.t), z: k.z })),
+    events: [{ t: fr(0.3), kind: 'kick', keys: ['rb'], spot: { x: 71, y: 26.65 } }, { t: fr(kf.resT), kind: 'kickGood', keys: ['rb'], spot: kf.resPt }],
+    engagements: [],
+  } as unknown as BroadcastAnim
+  const pa = presentAnim(anim, { type: 'fg', concept: 'Field goal', result: '39-yd FG is good', startYard: 68, endYard: 68, yards: 0 } as unknown as Play)
+  const zc = ballZAt(pa, fr(kf.resT))
+  assert.ok(zc > 10 / 3 + 0.5 && Math.abs(zc - zAtK(kf.kz, kf.resT)) < 0.05, `drawn over the crossbar at the posts: ${zc}`)
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)

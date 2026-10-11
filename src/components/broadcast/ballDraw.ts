@@ -96,7 +96,22 @@ export function drawBall(ctx: CanvasRenderingContext2D, anim: BroadcastAnim, t: 
   const p = project(d.cam, w.x, w.y, st.z)
   if (!p) return
   const minPx = Math.max(3, 5 * d.dpr)
-  let len = Math.max(minPx, 0.55 * scaleAt(d.cam, p.depth))
+  // animflow r4: a held ball is drawn hand-sized (0.34 yd); in flight and loose
+  // it keeps the readable broadcast size (0.55), blending over 0.2 s out of the
+  // hand and 0.15 s back into it.
+  const D = Math.max(0.05, (anim.duration || 0) / 1000)
+  let k = 0.55
+  if (st.holder && !st.inFlight) {
+    k = 0.34
+    for (const f of anim.flights ?? []) {
+      const since = (t - f.t1) * D
+      if (since >= 0 && since < 0.15) k = 0.55 - 0.21 * (since / 0.15)
+    }
+  } else if (st.inFlight) {
+    const f = flightContaining(anim, t)
+    if (f) k = 0.34 + 0.21 * clamp(((t - f.t0) * D) / 0.2, 0, 1)
+  }
+  let len = Math.max(minPx, k * scaleAt(d.cam, p.depth))
   const wid = len * 0.6
   // Screen-space angle along the projected arc tangent.
   let ang = -0.35

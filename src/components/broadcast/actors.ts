@@ -491,19 +491,32 @@ export class ActorLayer {
   private ballCore(t: number, dir: Direction): { x: number; y: number; z: number; carried: boolean; holder: string | null } {
     const a = this.play?.anim
     if (!a) return { ...offenseToWorld(60, MID_WIDTH, dir), z: 0, carried: false, holder: null }
-    const p = posAt(a.ball, t)
-    const w = offenseToWorld(p.x, p.y, dir)
+    const p0 = posAt(a.ball, t)
+    const p = { x: p0.x, y: p0.y }
     let z = ballZAt(a, t)
     const holder = holderAt(a.holders, t)
     const carried = holder != null && z < CARRIED_Z
     if (carried) {
-      // Carried by a man going to ground: the ball goes down with him.
+      // Carried by a man going to ground: the ball goes down with him — and
+      // stays in his arms: his body lies along the fall direction from his
+      // feet, so the ball moves with his chest, not left at his feet on the
+      // turf beside the pile (animflow r4).
       const ht = this.byKey.get(holder)
       if (ht && ht.poses.length) {
-        this.poseInto(ht.poses, windowIndex(ht.poses, t), t, this.ballPose, 0)
-        z = Math.min(z, 1.05 * (1 - 0.72 * this.ballPose.fall))
+        const i = windowIndex(ht.poses, t)
+        this.poseInto(ht.poses, i, t, this.ballPose, 0)
+        const fall = this.ballPose.fall
+        z = Math.min(z, 1.05 * (1 - 0.72 * fall))
+        if (fall > 0.01) {
+          const wn = ht.poses[i]
+          const fd = POSE_LIBRARY[wn.state]?.fallDir ?? 'none'
+          const hd = fd === 'start' ? this.headingAt(ht, wn.t0) : this.headingAt(ht, t)
+          p.x += Math.cos(hd) * 0.85 * fall
+          p.y += Math.sin(hd) * 0.85 * fall
+        }
       }
     }
+    const w = offenseToWorld(p.x, p.y, dir)
     return { x: w.x, y: w.y, z, carried, holder }
   }
 

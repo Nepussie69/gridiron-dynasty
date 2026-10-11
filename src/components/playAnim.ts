@@ -25,7 +25,7 @@ import type { Play } from '../game/engine/playsim'
 import type { Player } from '../game/types'
 import { ROUTES, type RouteDef, type WP } from '../game/data/routes'
 import { formationForConcept, formationHasFullback, playbookPlay, treeFor } from '../game/data/playbookData'
-import { presentAnim, throwHand, THROW_TIMING, type BroadcastAnim, type ThrowStyle } from './broadcast/animData'
+import { kickFlight, presentAnim, throwHand, THROW_TIMING, type BroadcastAnim, type ThrowStyle } from './broadcast/animData'
 import { LiveField, pursue, phases, holdSpot, livePos, type Brain, type PairPlan } from './playLive'
 
 export const FIELD_W = 120
@@ -59,6 +59,8 @@ export interface PlayAnim {
   engagements?: Engagement[]
   /** Recorded beats of the play, in time order (B1). */
   events?: AnimEvent[]
+  /** A field goal / PAT ball's height (yd) over its flight, times 0..1 (animflow r4). */
+  kickZ?: { t: number; z: number }[]
   /** How the quarterback throws (animflow round 3; passes only). */
   throwStyle?: ThrowStyle
 }
@@ -419,6 +421,17 @@ export function posAt(path: WP[], t: number): { x: number; y: number } {
 
 /** The ball's lift (0..1) at time t, for drawing it in the air. */
 export function liftAt(anim: PlayAnim, t: number): number {
+  // A field goal / PAT: its real height (animflow r4), so the top-down ball is
+  // still high as it crosses the crossbar instead of sinking to the turf.
+  const kz = anim.kickZ
+  if (kz && kz.length && t > kz[0].t && t < kz[kz.length - 1].t) {
+    let i = 1
+    while (i < kz.length - 1 && kz[i].t < t) i++
+    const a = kz[i - 1]
+    const b = kz[i]
+    const z = a.z + (b.z - a.z) * ((t - a.t) / Math.max(1e-9, b.t - a.t))
+    return Math.max(0, z - 0.15) / 8
+  }
   for (const f of anim.flights) {
     if (t > f.t0 && t < f.t1) return Math.sin(Math.PI * ((t - f.t0) / (f.t1 - f.t0))) * f.height
   }
@@ -536,7 +549,7 @@ export function paceFor(p: Player | undefined, role = ''): Pace {
 }
 
 /** Speed-profiled, distance-timed motion along a polyline (times in seconds). */
-function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean } = {}) {
+function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; vEnd?: number } = {}) {
   const out: { t: number; x: number; y: number }[] = []
   if (!pts.length) return out
   out.push({ t: 0, x: pts[0].x, y: pts[0].y })
@@ -549,8 +562,11 @@ function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean } =
   const stop = !!opts.stop
   const floor = 0.7
   const acc = Math.max(0.5, pace.acc)
+  const vEnd = opts.vEnd
   const speedAt = (s: number) => {
     const a = Math.min(pace.top, Math.sqrt(v0 * v0 + 2 * acc * Math.max(0, s)))
+    // animflow r4: brake into a cut and come out of it at vEnd (a cut costs speed).
+    if (!stop && vEnd != null) return Math.max(floor, Math.min(a, Math.sqrt(vEnd * vEnd + 2 * acc * Math.max(0, L - s))))
     if (!stop) return Math.max(floor, a)
     const d = Math.sqrt(Math.max(0, 2 * acc * Math.max(0, L - s)))
     return Math.max(floor, Math.min(a, d))
@@ -583,7 +599,7 @@ const TURN_COS = Math.cos(0.7)
  * (a route cut, a plant) so the speed never jumps — a real player can't reverse
  * at full speed. Each corner is crossed at a near-stop, then re-accelerated.
  */
-function timedLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean } = {}) {
+function timedLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; vEnd?: number } = {}) {
   if (pts.length < 3) return baseLine(pts, pace, opts)
   const corners: number[] = []
   for (let i = 1; i < pts.length - 1; i++) {
@@ -608,7 +624,7 @@ function timedLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean } 
     start = c
     v0 = 0
   }
-  const k = baseLine(pts.slice(start), pace, { v0, stop: opts.stop })
+  const k = baseLine(pts.slice(start), pace, { v0, stop: opts.stop, vEnd: opts.vEnd })
   for (let i = 1; i < k.length; i++) out.push({ t: t0 + k[i].t, x: k[i].x, y: k[i].y })
   return out
 }
@@ -643,7 +659,7 @@ class Mover {
     }
   }
   /** Move along a polyline (the first point is the *next* waypoint). */
-  run(pts: Pt[], opts: { v0?: number; stop?: boolean } = {}): number {
+  run(pts: Pt[], opts: { v0?: number; stop?: boolean; vEnd?: number; cut?: boolean } = {}): number {
     this.lastStop = !!opts.stop
     if (!pts.length) return this.t
     let v0 = Math.max(0, opts.v0 ?? 0)
@@ -662,7 +678,8 @@ class Mover {
     // A sharp change of direction across two separate moves is a plant: the
     // player decelerates in his current heading, then re-accelerates. Without
     // it a reversal would traverse the corner at full speed (a speed spike).
-    if (v0 > 1 && this.path.length >= 2) {
+    // `cut`: he already braked into this turn (vEnd) and plants on the spot.
+    if (v0 > 1 && this.path.length >= 2 && !opts.cut) {
       let hx = 0
       let hy = 0
       if (inH) {
@@ -807,6 +824,8 @@ function finish(
     flights: { t0: number; t1: number; height: number }[]
     flag?: { t: number; x: number; y: number }
     posts?: boolean
+    /** Ball height (yd) over a kick's flight, in seconds (animflow r4: FG / PAT). */
+    kickZ?: { t: number; z: number }[]
   },
 ): PlayAnim {
   const keys = ALL_KEYS(f)
@@ -836,6 +855,7 @@ function finish(
     holders: rest.holders.map((h) => ({ t: frac(h.t), key: h.key })),
     flights: rest.flights.map((fl) => ({ t0: frac(fl.t0), t1: frac(fl.t1), height: fl.height })),
     flag: rest.flag ? { t: frac(rest.flag.t), x: rest.flag.x, y: rest.flag.y } : undefined,
+    kickZ: rest.kickZ ? rest.kickZ.map((k) => ({ t: frac(k.t), z: k.z })) : undefined,
     posts: rest.posts,
     engagements,
     events,
@@ -1678,41 +1698,62 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const wide = /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
   const power = /Power|Counter|Trap|Iso|Dive/.test(play.concept)
   const side = hash(seed) < 0.5 ? -1 : 1
-  const holeY = MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 1.5 + hash(seed + 1) * 3.5)
+  // Inside holes sit between the guards and tackles (NFL R4: inside runs cross
+  // the line ~1.5 yd from the ball); designed outside runs bend to the edge.
+  const holeY = MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
   const endX = clampX(10 + play.endYard)
   const fumble = !!play.turnover
+  // ── the carrier's line (animflow r4: NFL tracking targets, logs/nfl-motion-reference.out) ──
+  // He presses the hole, makes ONE decisive cut, then gets north-south: a single
+  // smooth arc with no weave (lateral velocity changes sign at most once, at the
+  // cut), drifting <= ~1.6 yd per 5 yd downfield after the line (R1-R3). Lateral
+  // travel is spent behind the line: inside runs cross within ~1.5 yd of the
+  // hole, designed outside runs bend wide and turn up past the edge (R4). A
+  // sharp cut costs speed (he keeps ~half of it through a > 45 deg cut, R7).
+  const gain = endX - los
+  const cutback = !wide && !power && !qbRun && hash(seed + 6) < 0.2
+  // The lane he finishes in: the hole, or the back side on a cutback.
+  const lane = cutback ? clampY(holeY - side * (2.5 + hash(seed + 8) * 2)) : holeY
+  // Drift after the line keeps going the way he cut (never back): per NFL R3.
+  const driftDir = cutback ? -side : side
+  const drift = Math.max(0, gain) * (wide ? 0.32 : 0.24) * (0.4 + hash(seed + 2) * 0.6) + (Math.abs(play.yards) > 12 ? hash(seed + 9) * 4 : 0)
   // T2M: a run that went out of bounds finishes against the sideline, not in the
   // middle of the field. The end spot (x) is unchanged.
   const endY = play.outOfBounds
     ? (side < 0 ? 1.6 : FIELD_H - 1.6)
-    : clampY(holeY + (hash(seed + 2) - 0.5) * (Math.abs(play.yards) > 12 ? 18 : 7))
+    : clampY(lane + driftDir * drift)
   const carrier = qbRun ? 'qb' : 'rb'
   const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
   const meshX = qbRun ? f.qb.x - 1 : f.qb.x + 0.7
   const meshY = qbRun ? MID_Y : MID_Y + side * 1.4
 
-  // The run after the hole: the same curve as before, sampled for a speed profile.
-  const bow = side * (0.5 + hash(seed + 4) * 2.5)
-  const ctrl = { x: (holeX + endX) / 2 - (endY - holeY) * 0.08, y: (holeY + endY) / 2 + bow * 2 }
+  // The run after the hole: one arc toward the end spot, bowed (a little) only
+  // in the direction he is already drifting, so it never snakes back.
+  const bow = (endY - lane) * 0.12
+  const ctrl = { x: (holeX + endX) / 2, y: (lane + endY) / 2 + bow }
   const curve: Pt[] = []
   const SAMPLES = 24
   for (let i = 0; i <= SAMPLES; i++) {
     const u = i / SAMPLES
     curve.push({
       x: clampX((1 - u) * (1 - u) * holeX + 2 * (1 - u) * u * ctrl.x + u * u * endX),
-      y: clampY((1 - u) * (1 - u) * holeY + 2 * (1 - u) * u * ctrl.y + u * u * endY),
+      y: clampY((1 - u) * (1 - u) * lane + 2 * (1 - u) * u * ctrl.y + u * u * endY),
     })
   }
 
-  // R5: a broken tackle adds a brief stumble while preserving timed motion.
+  // R5: a broken tackle is one sidestep away from the man (a jump cut that
+  // carries on in the new lane), not a swerve that comes back.
   if ((play.missedTackleIds?.length ?? 0) > 0) {
+    const jd = driftDir * 1.1
     for (let i = 0; i < curve.length; i++) {
       const u = i / (curve.length - 1)
-      if (u > 0.6 && u < 0.82) curve[i].y = clampY(curve[i].y + side * 2.2 * Math.sin(((u - 0.6) / 0.22) * Math.PI))
+      if (u > 0.6) curve[i].y = clampY(curve[i].y + jd * clampN((u - 0.6) / 0.16, 0, 1) ** 2 * (3 - 2 * clampN((u - 0.6) / 0.16, 0, 1)))
     }
   }
 
   // ── the scripted backfield: mesh, handoff, the carry ──────────────────────
+  // The back takes his open step and is already moving (~4-5 yd/s) through the
+  // mesh: the handoff comes ~1.1-1.3 s after the snap, ~4 yd deep (R5).
   let handoffT = 0
   if (qbRun) {
     m.rb.run([{ x: los - 1, y: MID_Y - side * 5 }], { stop: true })
@@ -1720,31 +1761,77 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     const meshPt = { x: meshX, y: meshY }
     m.qb.run([meshPt], { stop: true })
     const qbT = m.qb.t
-    m.rb.run([meshPt], { stop: true })
-    handoffT = Math.max(qbT, m.rb.t)
+    const delay = 0.05 + hash(seed + 10) * 0.15
+    // A back accelerates at ~3.5 yd/s² (NFL E1), not the sprint ramp: he is at
+    // mesh speed (~4.5 yd/s) when he takes the ball.
+    const rbPace = m.rb.pace
+    const approach = () => {
+      m.rb.pace = { top: rbPace.top * 0.62, acc: Math.min(rbPace.acc, 3.6) }
+      m.rb.run([meshPt], { stop: false })
+      m.rb.pace = rbPace
+    }
+    m.rb.hold(delay)
+    approach()
+    if (m.rb.t < qbT + 0.05) {
+      // He would beat the quarterback to the mesh: leave a beat later.
+      const late = qbT + 0.05 - m.rb.t
+      m.rb.reset(f.rb.x, f.rb.y)
+      m.rb.hold(delay + late)
+      approach()
+    }
+    handoffT = m.rb.t
     m.qb.hold(handoffT - m.qb.t)
     m.qb.run([{ x: f.qb.x - 1.5, y: MID_Y - side * 4 }], { stop: false })
   }
-  // Press and read: the back presses the play side under control (vision, a
-  // patient ~3/4 pace), then plants on his cut into the hole — the time a real
-  // carry spends behind the line.
+  // Press and cut: he presses the play side under control (vision, ~3/4 pace),
+  // brakes into his one cut and comes out of it into the lane.
+  // The carry pace: inside runs are run at a modest speed (NFL R6: inside peak
+  // ~4 yd/s, outside ~6, breakaways 8-9), long gains open up to full speed,
+  // and a back builds speed at ~4 yd/s² (E1), not in a few steps.
+  const carryK = clampN(0.6 + 0.012 * Math.max(0, gain) + (wide ? 0.1 : 0), 0.6, 1)
+  // Burst by rating: ~3.2 yd/s² (ACC 65) to ~4.6 (ACC 99), the NFL band.
+  const accCap = (mv: Mover) => clampN(3.4 + (attrNum(mv.player, 'ACC', 75) - 70) * 0.045, 3.0, 4.8)
   const press = (mv: Mover) => {
-    const saved = mv.pace
+    const orig = mv.pace
+    const saved = { top: mv.pace.top * carryK, acc: Math.min(mv.pace.acc, accCap(mv)) }
     const vis = attrNum(mv.player, 'BCV', 70)
-    mv.pace = { top: saved.top * clampN(0.66 + (vis - 70) * 0.004, 0.6, 0.8), acc: saved.acc * 0.8 }
-    mv.run([{ x: holeX - 1.1, y: holeY + side * (wide ? 1.0 : 1.4) }], { stop: false })
+    const pressK = clampN(0.66 + (vis - 70) * 0.004, 0.6, 0.8)
+    // Inside: press at the hole's shoulder; outside: bend to the edge, then turn up.
+    const P = wide
+      ? { x: holeX - 1.3, y: clampY(holeY - side * 1.0) }
+      : cutback ? { x: holeX - 1.4, y: clampY(holeY + side * 0.4) } : { x: holeX - 1.4, y: clampY(holeY - side * 0.25) }
+    const H = { x: holeX, y: wide ? clampY(holeY + side * 0.3) : lane }
+    const a0 = Math.atan2(P.y - mv.y, P.x - mv.x)
+    const a1 = Math.atan2(H.y - P.y, H.x - P.x)
+    let cut = Math.abs(a1 - a0)
+    if (cut > Math.PI) cut = 2 * Math.PI - cut
+    const keep = cut > Math.PI / 4 ? 0.5 : cut > Math.PI / 6 ? 0.72 : 0.95
+    mv.pace = { top: saved.top * pressK, acc: saved.acc * 0.8 }
+    const vIn = carrySpeed(mv)
+    const vCut = saved.top * pressK * keep
+    // Into the hole: a second bend (outside runs turning up, a cutback
+    // squaring up downhill) is taken under control too.
+    const a2 = Math.atan2(curve[Math.min(2, curve.length - 1)].y - H.y, curve[Math.min(2, curve.length - 1)].x - H.x)
+    let bend = Math.abs(a2 - a1)
+    if (bend > Math.PI) bend = 2 * Math.PI - bend
+    const vH = bend > Math.PI / 4.5 ? Math.max(vCut, saved.top * 0.5) : undefined
+    mv.run([P], { v0: vIn, stop: false, vEnd: vCut, cut: true })
     mv.pace = saved
-    mv.run([{ x: holeX, y: holeY }], { v0: carrySpeed(mv), stop: false })
+    mv.run([H], { v0: vCut, stop: false, vEnd: vH, cut: true })
+    mv.pace = orig
   }
   if (qbRun) {
     if (/Sneak/.test(play.concept)) m.qb.run([{ x: holeX, y: holeY }], { stop: false })
     else press(m.qb)
   } else {
-    m.rb.hold(Math.max(0, handoffT - m.rb.t))
     press(m.rb)
   }
+  {
+    const mv = m[carrier]
+    mv.pace = { top: mv.pace.top * carryK, acc: Math.min(mv.pace.acc, accCap(mv)) }
+  }
   const holeT = m[carrier].t
-  const holeSpeed = m[carrier].pace.top * 0.7
+  const holeSpeed = carrySpeed(m[carrier])
   // The carry: the curve to a yard or two short of the recorded stop, where the
   // tackler meets him, then the pile goes forward to exactly that spot. A
   // fumble is a loose ball at the recorded spot, so there the carrier runs the
@@ -1753,12 +1840,12 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const scoreRun = endX >= 110
   let contactT: number
   if (fumble || scoreRun) {
-    m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: true })
+    m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: true, cut: true })
     contactT = m[carrier].t
   } else {
     const ac = yardsAfterContact(m[carrier].player, polyLen(curve[0], curve.slice(1)), seed)
     const { pre, post } = splitPolyline(curve[0], curve.slice(1), Math.max(0, polyLen(curve[0], curve.slice(1)) - ac))
-    m[carrier].run(pre, { v0: holeSpeed, stop: false })
+    m[carrier].run(pre, { v0: holeSpeed, stop: false, cut: true })
     contactT = m[carrier].t
     pileDrive(m[carrier], post, carrySpeed(m[carrier]))
   }
@@ -1787,7 +1874,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     }
     return base
   }
-  const pursueBrain = (k: string, i: number) => pursue(carrier, { keep: keepFor(k), lead: 0.6 + clampN((attrNum(rate(k), 'PUR') - 60) * 0.01, 0, 0.4), side: (hash(seed + i * 4.1) - 0.5) * 1.6 })
+  const pursueBrain = (k: string, i: number) => pursue(carrier, { keep: keepFor(k), lead: 0.8 + clampN((attrNum(rate(k), 'PUR') - 60) * 0.01, 0, 0.4), side: (hash(seed + i * 4.1) - 0.5) * 1.6 })
   const hasCarrier = (t: number) => t >= (qbRun ? SNAP : handoffT)
   const field = new LiveField(0, {
     rec: (a, b, t0, t1, kind) => recEng(a, b, t0, t1, kind),
@@ -2899,8 +2986,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const p = posAt(m[k].path, releaseSec)
     return Math.hypot(p.x - releasePos.x, p.y - releasePos.y)
   }))
-  const throwStyle: ThrowStyle = qbSpdAt(releaseSec) > 1.6 ? 'run'
-    : scramble || rushGap < 1.9 ? 'hurry'
+  // 'run' only when he is genuinely outside the pocket and moving at the release
+  // (a bootleg / rollout, a real scramble past the tackle box); a recorded
+  // pressure throw from inside it is a hurried pocket throw (animflow r4).
+  const outsidePocket = Math.abs(releasePos.y - MID_Y) > 4.2
+  const throwStyle: ThrowStyle = (boot || outsidePocket) && qbSpdAt(releaseSec) > 1.2 ? 'run'
+    : scramble || rushGap < 1.9 || play.pressureType === 'hit' || play.pressureType === 'hurry' ? 'hurry'
     : depth >= 20 ? 'deep'
     : bucket === 'quick' || bucket === 'screen' ? 'quick' : 'normal'
   const thT = THROW_TIMING[throwStyle]
@@ -3371,24 +3462,34 @@ function buildKick(play: Play, ctx: AnimContext): PlayAnim {
   const m = startMovers(f, ctx)
   recSnap(los)
   const good = /good/.test(play.result) && !/no good|MISSED/i.test(play.result)
+  const blocked = !!play.blockedKick || /BLOCKED/i.test(play.result)
   const seed = play.n * 23 + play.startYard
-  const missY = MID_Y + (hash(seed) < 0.5 ? -1 : 1) * (4 + hash(seed + 1) * 3)
   const kpw = attrOf(m.rb.player, 'KPW')
-  const flight = clampN(1.1 - (kpw - 70) * 0.004, 0.7, 1.5)
   const kickT = 0.3
-  const landT = kickT + flight
   m.qb.run([{ x: los - 7.5, y: MID_Y - 0.5 }], { stop: true })
   m.rb.run([{ x: los - 7.2, y: MID_Y - 0.5 }], { stop: true })
   for (let i = 0; i < 4; i++) m[`dl${i}`].run([{ x: los, y: f[`dl${i}`].y }], { stop: true })
-  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: SNAP, x: los - 7, y: MID_Y }, { t: kickT, x: los - 7, y: MID_Y }, { t: landT, x: 116, y: good ? MID_Y : missY }]
   recEv(kickT, 'kick', ['rb'], posAt(m.rb.path, kickT))
-  if (play.turnover) recEv(kickT + 0.04, 'turnover', ['dl0'], posAt(m.dl0.path, kickT + 0.04))
-  recEv(landT, good ? 'kickGood' : 'kickMiss', ['rb'], { x: 116, y: good ? MID_Y : missY })
+  if (play.turnover && blocked) recEv(kickT + 0.04, 'turnover', ['dl0'], posAt(m.dl0.path, kickT + 0.04))
+
+  // ── the kick's flight (animflow r4): broadcast/animData kickFlight ─────────
+  const kf = kickFlight({ los, kickT, good, blocked, kpw, seed: (k) => hash(seed + k) })
+  const ball: WP[] = [{ t: 0, x: los, y: MID_Y }, { t: SNAP, x: los - 7, y: MID_Y }, ...kf.ball]
+  const kz = kf.kz
+  const endT = kf.endT
+  const resT = kf.resT
+  const resPt = kf.resPt
+  recEv(resT, good ? 'kickGood' : 'kickMiss', ['rb'], resPt)
+  // Everyone watches it through; the clip runs until the ball is down.
+  const tail = endT + 0.5
+  { const lb = ball[ball.length - 1]; ball.push({ t: tail, x: lb.x, y: lb.y }) }
+  for (const k of ALL_KEYS(f)) if (m[k].t < tail) m[k].hold(tail - m[k].t)
   return finish(f, m, {
     ball,
     holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: kickT, key: null }],
-    flights: [{ t0: kickT, t1: landT, height: 1 }],
+    flights: [{ t0: kickT, t1: endT, height: 1 }],
     posts: true,
+    kickZ: kz,
   })
 }
 
