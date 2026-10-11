@@ -2163,7 +2163,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const spans: number[] = []
     let worst = ''
     let worstLag = -Infinity
-    for (let g = 0; g < 2; g++) {
+    // animflow r6d: sample whole games until the coverage is reached (any sim stream: J12/J6 changed how
+    // many fast-carrier frames two games hold), at most 6 games.
+    for (let g = 0; g < 6 && lags.length < 2000; g++) {
       const home = nfl[2 * g].id
       const away = nfl[2 * g + 1].id
       const sim = simulatePlayByPlay(world, home, away, world.seed + 13 + g * 101)
@@ -2200,7 +2202,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           spans.push(shot.span)
           if (lag > worstLag) {
             worstLag = lag
-            worst = `play ${i} ${play.concept} t ${t.toFixed(3)} lag ${lag.toFixed(1)} yd (rule ${shot.rule})`
+            worst = `game ${g} play ${i} ${play.concept} t ${t.toFixed(3)} lag ${lag.toFixed(1)} yd (rule ${shot.rule})`
           }
         }
       }
