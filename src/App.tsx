@@ -43,6 +43,7 @@ export default function App() {
   const screen = useGame((s) => s.screen)
   const ready = useGame((s) => s.ready)
   const hydrate = useGame((s) => s.hydrate)
+  const savesOpen = useGame((s) => s.savesOpen)
 
   useEffect(() => {
     void hydrate()
@@ -69,7 +70,7 @@ export default function App() {
     )
   }
 
-  if (!career) return <CareerHub />
+  if (!career || savesOpen) return <CareerHub />
 
   return (
     <>

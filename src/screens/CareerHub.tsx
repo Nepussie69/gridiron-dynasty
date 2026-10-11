@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react'
-import { ArrowRight, ChevronDown, Play, Search, Shield, Sparkles, TriangleAlert, TrendingUp } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ChevronDown, Download, Pencil, Play, Plus, Save, Search, Shield, Sparkles, Trash2, TriangleAlert, TrendingUp, Upload, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import { minNflLevel, nflLadder, tierFor } from '../game/engine/career'
 import { capabilities } from '../game/engine/capabilities'
 import { SCENARIOS, scenarioById } from '../game/engine/scenarios'
 import { parseSeedCode } from '../game/engine/seed'
+import { SLOT_COUNT, type SlotView } from '../game/persistence'
 import type { CareerPath, ScenarioId } from '../game/types'
 import { useGame } from '../store/gameStore'
 import { Badge, Button, Card, ConfirmSheet, OptionCard, OptionGroup, SegmentedControl, TeamCrest } from '../ui/kit'
@@ -115,12 +116,41 @@ function unlocksFor(path: CareerPath, level: number): string[] {
   return powers
 }
 
+/** Trigger a JSON download without leaving the page. */
+function downloadText(text: string, filename: string) {
+  const blob = new Blob([text], { type: 'application/json' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+function savedStamp(ms: number): string {
+  return ms > 0 ? new Date(ms).toLocaleString() : 'Not saved yet'
+}
+
+/** A slot's display name: its custom label, else "Slot N". */
+function slotName(s: SlotView): string {
+  const label = s.meta?.label?.trim()
+  return label || `Slot ${s.slot}`
+}
+
 export function CareerHub() {
   const startCareer = useGame((s) => s.startCareer)
-  const continueCareer = useGame((s) => s.continueCareer)
-  const discardSave = useGame((s) => s.discardSave)
+  const continueSlot = useGame((s) => s.continueSlot)
+  const renameSlot = useGame((s) => s.renameSlot)
+  const deleteSlot = useGame((s) => s.deleteSlot)
+  const exportSlotText = useGame((s) => s.exportSlotText)
+  const importSlotText = useGame((s) => s.importSlotText)
+  const closeSaves = useGame((s) => s.closeSaves)
+  const career = useGame((s) => s.career)
+  const slots = useGame((s) => s.slots)
+  const activeSlot = useGame((s) => s.activeSlot)
   const saveInfo = useGame((s) => s.saveInfo)
   const saveError = useGame((s) => s.saveError)
+  const slotError = useGame((s) => s.slotError)
+  const busy = useGame((s) => s.busy)
   const [name, setName] = useState('A. Reeves')
   const [path, setPath] = useState<CareerPath>('personnel')
   const [archetype, setArchetype] = useState('scout')
@@ -130,7 +160,11 @@ export function CareerHub() {
   const [seedText, setSeedText] = useState('')
   const [scenarioId, setScenarioId] = useState<ScenarioId>('climb')
   const [openRung, setOpenRung] = useState<number | null>(null)
-  const [freshOpen, setFreshOpen] = useState(false)
+  const [targetSlot, setTargetSlot] = useState<number | null>(slots.find((s) => !s.occupied)?.slot ?? null)
+  const [renaming, setRenaming] = useState<number | null>(null)
+  const [renameText, setRenameText] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
+  const [confirmImport, setConfirmImport] = useState<{ slot: number; text: string } | null>(null)
 
   const seedValue = parseSeedCode(seedText)
   const seedInvalid = seedText.trim() !== '' && seedValue === null
@@ -140,6 +174,16 @@ export function CareerHub() {
   const startSalary = salaryForLevel(path, level)
   const scenario = scenarioById(scenarioId)
   const scenarioLocked = scenarioId !== 'climb'
+  // Always show every slot, even before hydrate has read them.
+  const slotRows: SlotView[] = slots.length ? slots : Array.from({ length: SLOT_COUNT }, (_, i) => ({ slot: i + 1, occupied: false, meta: null }))
+  const allFull = slotRows.every((s) => s.occupied)
+  // The New Career target: the chosen empty slot, or the first empty one if the
+  // chosen slot is gone/filled. Derived during render — no effect needed.
+  const firstEmpty = slotRows.find((s) => !s.occupied)?.slot ?? null
+  const targetOccupied = targetSlot !== null && slotRows.some((s) => s.slot === targetSlot && s.occupied)
+  const effectiveTargetSlot = targetSlot === null || targetOccupied ? firstEmpty : targetSlot
+  const deleting = confirmDelete !== null ? slotRows.find((s) => s.slot === confirmDelete) ?? null : null
+  const importing = confirmImport ? slotRows.find((s) => s.slot === confirmImport.slot) ?? null : null
 
   function choosePath(p: CareerPath) {
     setPath(p)
@@ -158,47 +202,211 @@ export function CareerHub() {
     if (s.forceLowestPrestige) setTeamId(pool[0].id)
   }
 
+  async function begin() {
+    if (!selected || effectiveTargetSlot === null || busy) return
+    // startCareer commits the current career's autosave and claims the target
+    // slot atomically (never overwrites an occupied slot); it reports its own failure.
+    await startCareer({
+      name,
+      path,
+      archetype,
+      teamId: selected.id,
+      startLevel: level,
+      seed: seedValue ?? undefined,
+      scenarioId,
+      slot: effectiveTargetSlot,
+    })
+  }
+
+  function newCareerIn(slot: number) {
+    setTargetSlot(slot)
+    document.getElementById('hub-new-career')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function startRename(s: SlotView) {
+    setRenaming(s.slot)
+    setRenameText(slotName(s))
+  }
+
+  async function commitRename(slot: number) {
+    await renameSlot(slot, renameText)
+    setRenaming(null)
+  }
+
+  async function doExport(slot: number) {
+    const text = await exportSlotText(slot)
+    if (!text) return
+    downloadText(text, `gridiron-slot${slot}-save.json`)
+  }
+
+  async function doImport(slot: number, file: File | undefined) {
+    if (!file) return
+    const text = await file.text()
+    // Overwriting an occupied slot is reviewed first; an empty slot imports directly.
+    if (slotRows.find((s) => s.slot === slot)?.occupied) setConfirmImport({ slot, text })
+    else await importSlotText(text, slot)
+  }
+
   return (
     <div className="min-h-screen bg-canvas">
       <div className="mx-auto max-w-[1240px] px-6 py-10">
-        {/* Continue first: on phone the resumable save leads, before the pitch. */}
-        {saveInfo && (
-          <div className="mx-auto mb-8 max-w-[760px] rounded-[var(--r-lg)] border border-line-strong bg-surface p-5 shadow-[var(--shadow-1)]">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="label">Continue Career</div>
-              {saveInfo.usedBackup && <Badge tone="warn">Recovered from backup</Badge>}
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[var(--r-md)] bg-surface-3 text-ink-2">
-                <Play size={20} aria-hidden />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="font-display text-xl font-800 italic uppercase leading-none text-ink">{saveInfo.title}</div>
-                <div className="mt-0.5 font-cond text-small text-muted">
-                  {saveInfo.teamName} · Season {saveInfo.season} · {saveInfo.tier}
-                </div>
-                {saveInfo.savedAt > 0 && (
-                  <div className="mt-0.5 text-label text-faint">Saved {new Date(saveInfo.savedAt).toLocaleString()}</div>
-                )}
-              </div>
-            </div>
-            <Button variant="primary" size="lg" className="mt-3 w-full" icon={<Play size={16} aria-hidden />} onClick={continueCareer}>
-              Continue
-            </Button>
-            <Button variant="quiet" size="sm" className="mt-2 w-full" onClick={() => setFreshOpen(true)}>
-              Start fresh (erase this save)
+        {career && (
+          <div className="mx-auto mb-4 max-w-[860px]">
+            <Button variant="secondary" size="sm" icon={<ArrowLeft size={14} aria-hidden />} onClick={closeSaves}>
+              Back to your career
             </Button>
           </div>
         )}
 
-        {saveError && !saveInfo && (
-          <div className="mx-auto mb-8 flex max-w-[760px] items-start gap-2 rounded-[var(--r-lg)] border border-warn/30 bg-warn-soft p-3 text-small text-warn">
+        {(slotError || saveError) && (
+          <div className="mx-auto mb-4 flex max-w-[860px] items-start gap-2 rounded-[var(--r-lg)] border border-warn/30 bg-warn-soft p-3 text-small text-warn">
             <TriangleAlert size={15} className="mt-0.5 shrink-0" aria-hidden />
-            <span>{saveError}</span>
+            <span>{slotError ?? saveError}</span>
           </div>
         )}
 
-        <div className="grid gap-8 lg:grid-cols-[1.05fr_1fr]">
+        {/* Save slots lead the page: load a career, or start a new one in an empty slot. */}
+        <section aria-labelledby="hub-saves" className="mx-auto mb-8 max-w-[860px] rounded-[var(--r-lg)] border border-line-strong bg-surface p-5 shadow-[var(--shadow-1)]">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 id="hub-saves" className="font-display text-xl font-800 italic uppercase leading-none text-ink">
+              Career Saves
+            </h2>
+            <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">
+              {slotRows.filter((s) => s.occupied).length} / {SLOT_COUNT} used · each slot autosaves separately
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {slotRows.map((s) => {
+              const isActive = s.slot === activeSlot
+              const isLive = isActive && !!career
+              return s.occupied ? (
+                <div
+                  key={s.slot}
+                  data-slot={s.slot}
+                  className={cn('rounded-[var(--r-md)] border p-3', isActive ? 'border-line-strong bg-surface-2' : 'border-line')}
+                >
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--r-md)] bg-slab font-display text-lg font-800 text-on-slab">
+                      {s.slot}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      {renaming === s.slot ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            aria-label={`Name for slot ${s.slot}`}
+                            value={renameText}
+                            // Focus + preselect once on open so typing replaces the old name.
+                            ref={(el) => {
+                              if (el && document.activeElement !== el) {
+                                el.focus()
+                                el.select()
+                              }
+                            }}
+                            maxLength={28}
+                            onChange={(e) => setRenameText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') void commitRename(s.slot)
+                              if (e.key === 'Escape') setRenaming(null)
+                            }}
+                            className="min-w-0 flex-1 rounded-[var(--r-sm)] border border-line-strong bg-surface px-2 py-1 text-[16px] font-600 text-ink outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-focus)]"
+                          />
+                          <IconAction label="Save name" onClick={() => void commitRename(s.slot)} icon={<Check size={16} aria-hidden />} />
+                          <IconAction label="Cancel rename" onClick={() => setRenaming(null)} icon={<X size={16} aria-hidden />} />
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="truncate font-display text-base font-800 italic uppercase leading-none text-ink">
+                            Save {s.slot}
+                            {slotName(s) !== `Slot ${s.slot}` ? ` · ${slotName(s)}` : ''}
+                          </span>
+                          {isActive && <Badge tone="win">{isLive ? 'Playing' : 'Last played'}</Badge>}
+                          {s.meta?.recoveredAt ? <Badge tone="warn">Recovered</Badge> : null}
+                        </div>
+                      )}
+                      <div className="mt-1 truncate font-cond text-small font-600 text-ink-2">
+                        {s.meta?.managerName || 'Unknown manager'}
+                        {s.meta?.roleTitle ? ` · ${s.meta.roleTitle}` : ''}
+                      </div>
+                      <div className="truncate font-cond text-small text-muted">
+                        {s.meta?.teamName || '—'} · Season {s.meta?.season ?? '—'} · Week {s.meta?.week ?? '—'}
+                      </div>
+                      <div className="text-label text-muted">Saved {savedStamp(s.meta?.savedAt ?? 0)}</div>
+                    </div>
+                    <Button
+                      variant="primary"
+                      size="md"
+                      className="max-sm:w-full"
+                      disabled={busy}
+                      icon={<Play size={14} aria-hidden />}
+                      onClick={() => (isLive ? closeSaves() : void continueSlot(s.slot))}
+                    >
+                      {isLive ? `Resume ${s.slot}` : `Load ${s.slot}`}
+                    </Button>
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5 sm:pl-[52px]">
+                    <SlotAction onClick={() => startRename(s)} icon={<Pencil size={12} aria-hidden />} label="Rename" />
+                    <SlotAction onClick={() => void doExport(s.slot)} icon={<Download size={12} aria-hidden />} label="Export" />
+                    <label className={SLOT_ACTION}>
+                      <Upload size={12} aria-hidden /> Import
+                      <input
+                        type="file"
+                        accept="application/json"
+                        className="sr-only"
+                        onChange={(e) => {
+                          void doImport(s.slot, e.target.files?.[0])
+                          e.target.value = ''
+                        }}
+                      />
+                    </label>
+                    <SlotAction onClick={() => setConfirmDelete(s.slot)} icon={<Trash2 size={12} aria-hidden />} label="Delete" danger />
+                  </div>
+                </div>
+              ) : (
+                <div key={s.slot} data-slot={s.slot} className="flex flex-wrap items-center gap-3 rounded-[var(--r-md)] border border-dashed border-line p-3">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--r-md)] bg-surface-3 font-display text-lg font-800 text-muted">
+                    {s.slot}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-display text-base font-800 italic uppercase leading-none text-ink-2">Save {s.slot}</div>
+                    <div className="mt-1 text-small text-muted">Empty</div>
+                  </div>
+                  <label className={SLOT_ACTION}>
+                    <Upload size={12} aria-hidden /> Import
+                    <input
+                      type="file"
+                      accept="application/json"
+                      className="sr-only"
+                      onChange={(e) => {
+                        void doImport(s.slot, e.target.files?.[0])
+                        e.target.value = ''
+                      }}
+                    />
+                  </label>
+                  <Button
+                    variant={effectiveTargetSlot === s.slot ? 'primary' : 'secondary'}
+                    size="md"
+                    className="max-sm:w-full"
+                    disabled={busy}
+                    icon={<Plus size={14} aria-hidden />}
+                    onClick={() => newCareerIn(s.slot)}
+                  >
+                    New career in Save {s.slot}
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+          {allFull && (
+            <p className="mt-3 text-small text-muted">All {SLOT_COUNT} slots are full. Delete one to start a new career.</p>
+          )}
+          {saveInfo?.usedBackup && (
+            <p className="mt-3 flex items-center gap-1.5 text-small text-warn">
+              <Save size={14} aria-hidden /> Your last career was recovered from its backup.
+            </p>
+          )}
+        </section>
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[1.05fr_1fr]">
           {/* Hero */}
           <div>
             <div className="mb-6 flex items-center gap-3">
@@ -297,7 +505,10 @@ export function CareerHub() {
           {/* Setup card */}
           <div className="space-y-4">
             <Card>
-              <div className="label mb-1">New Career</div>
+              <div id="hub-new-career" className="mb-1 flex scroll-mt-4 items-center justify-between gap-2">
+                <div className="label">New Career</div>
+                {effectiveTargetSlot !== null && <Badge tone="neutral">Saves to Save {effectiveTargetSlot}</Badge>}
+              </div>
               <h2 className="mb-5 font-display text-2xl font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
                 Build Your Resumé
               </h2>
@@ -442,14 +653,48 @@ export function CareerHub() {
                 </div>
               </div>
 
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="label">Save to</span>
+                <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">Other slots are never touched</span>
+              </div>
+              <div className="mb-5 flex flex-wrap gap-1.5" role="group" aria-label="Save slot for the new career">
+                {slotRows.map((s) => (
+                  <button
+                    key={s.slot}
+                    type="button"
+                    onClick={() => setTargetSlot(s.slot)}
+                    disabled={s.occupied}
+                    aria-pressed={effectiveTargetSlot === s.slot}
+                    title={s.occupied ? `Slot ${s.slot} holds ${slotName(s)}. Delete it first to reuse it.` : `Start this career in slot ${s.slot}`}
+                    className={cn(
+                      'motion pointer-coarse:min-h-11 max-sm:min-h-11 rounded-[var(--r-sm)] border px-2.5 py-1 font-cond text-label font-700 uppercase tracking-[0.06em]',
+                      s.occupied && 'cursor-not-allowed opacity-60',
+                      effectiveTargetSlot === s.slot ? 'border-line-strong bg-surface-3 text-ink' : 'border-line text-muted hover:bg-surface-2',
+                    )}
+                  >
+                    Save {s.slot}
+                    {s.occupied ? ' · Used' : ''}
+                  </button>
+                ))}
+              </div>
+
               <Button
                 variant="primary"
                 size="lg"
                 className="w-full"
                 icon={<Search size={16} aria-hidden />}
-                onClick={() => selected && startCareer({ name, path, archetype, teamId: selected.id, startLevel: level, seed: seedValue ?? undefined, scenarioId })}
+                disabled={busy || effectiveTargetSlot === null}
+                onClick={() => void begin()}
               >
-                Begin: {scenario.title} <ArrowRight size={15} aria-hidden />
+                {busy ? (
+                  'Working…'
+                ) : effectiveTargetSlot === null ? (
+                  'All slots are full'
+                ) : (
+                  <>
+                    Begin in Save {effectiveTargetSlot}: {scenario.title} <ArrowRight size={15} aria-hidden />
+                  </>
+                )}
               </Button>
 
               <Button variant="quiet" size="sm" className="mt-3 w-full" onClick={() => setAdvanced((a) => !a)}>
@@ -463,30 +708,73 @@ export function CareerHub() {
         Real team brands · ratings seeded from Madden NFL 26 · 32-club league sim
       </div>
 
-      {/* Erasing the save is one-way: review it first. */}
       <ConfirmSheet
-        open={freshOpen}
-        onClose={() => setFreshOpen(false)}
-        eyebrow="Save file"
-        title="Start fresh?"
-        subtitle="This erases the saved career on this device. It can't be undone."
+        open={deleting !== null}
+        onClose={() => setConfirmDelete(null)}
+        eyebrow={deleting ? `Save ${deleting.slot}` : 'Save slot'}
+        title={deleting ? `Delete ${slotName(deleting)}?` : 'Delete this save?'}
+        subtitle="Only this slot and its backup are removed. Your other slots are not touched. There is no undo."
         consequences={
-          saveInfo
+          deleting
             ? [
-                { label: 'Saved career', value: `${saveInfo.title} · ${saveInfo.teamName}` },
-                { label: 'Season', value: `Season ${saveInfo.season} · ${saveInfo.tier}` },
-                { label: 'What replaces it', value: 'Nothing — you begin again from the bottom', tone: 'warn' },
+                { label: 'Career', value: `${deleting.meta?.managerName || 'Unknown'} · ${deleting.meta?.teamName || '—'}` },
+                { label: 'Season', value: `Season ${deleting.meta?.season ?? '—'} · Week ${deleting.meta?.week ?? '—'}` },
+                { label: `Save ${deleting.slot}`, value: 'Erased', tone: 'loss' },
               ]
             : []
         }
-        confirmLabel="Erase save"
+        saferAlternative={deleting ? { label: 'Export it first', onClick: () => void doExport(deleting.slot) } : undefined}
+        confirmLabel="Delete this save"
         ledgerNote={null}
         onConfirm={() => {
-          discardSave()
-          setFreshOpen(false)
+          if (confirmDelete !== null) void deleteSlot(confirmDelete)
+          setConfirmDelete(null)
+        }}
+      />
+      <ConfirmSheet
+        open={confirmImport !== null}
+        onClose={() => setConfirmImport(null)}
+        eyebrow={importing ? `Save ${importing.slot}` : 'Import'}
+        title={importing ? `Replace ${slotName(importing)}?` : 'Replace this save?'}
+        subtitle="The imported file replaces the career in this slot and its backup. Other slots are not touched."
+        consequences={
+          importing
+            ? [
+                { label: 'Current career', value: `${importing.meta?.managerName || 'Unknown'} · ${importing.meta?.teamName || '—'}` },
+                { label: `Save ${importing.slot}`, value: 'Replaced by the file', tone: 'loss' },
+              ]
+            : []
+        }
+        confirmLabel="Replace with file"
+        ledgerNote={null}
+        onConfirm={() => {
+          const pending = confirmImport
+          setConfirmImport(null)
+          if (pending) void importSlotText(pending.text, pending.slot)
         }}
       />
     </div>
+  )
+}
+
+const SLOT_ACTION =
+  'motion inline-flex min-h-8 cursor-pointer items-center gap-1 rounded-[var(--r-sm)] border border-line bg-surface px-2 font-cond text-label font-700 uppercase tracking-[0.06em] text-muted hover:text-ink focus-within:outline-2 focus-within:outline-[var(--color-focus)] pointer-coarse:min-h-11'
+
+/** One small secondary action on a save slot card. */
+function SlotAction({ onClick, icon, label, danger }: { onClick: () => void; icon: ReactNode; label: string; danger?: boolean }) {
+  return (
+    <button type="button" onClick={onClick} className={cn(SLOT_ACTION, danger && 'hover:text-loss')}>
+      {icon} {label}
+    </button>
+  )
+}
+
+/** A compact icon-only action (rename confirm/cancel). */
+function IconAction({ onClick, icon, label }: { onClick: () => void; icon: ReactNode; label: string }) {
+  return (
+    <button type="button" onClick={onClick} title={label} aria-label={label} className="motion grid h-8 w-8 place-items-center rounded-[var(--r-sm)] text-ink-2 hover:bg-surface-3 pointer-coarse:h-11 pointer-coarse:w-11">
+      {icon}
+    </button>
   )
 }
 
