@@ -29,6 +29,7 @@ export function ScoreBlock({
   sub,
   hasBall = false,
   timeouts,
+  challenges,
   align = 'left',
   size = 'md',
   dim = false,
@@ -41,6 +42,8 @@ export function ScoreBlock({
   sub?: ReactNode
   hasBall?: boolean
   timeouts?: number
+  /** FUTURES #5: red-flag challenges left (flag pips under the timeout pips). */
+  challenges?: number
   align?: 'left' | 'right'
   size?: 'sm' | 'md' | 'lg'
   /** Loser of a final: slightly receded. */
@@ -76,6 +79,7 @@ export function ScoreBlock({
           sub != null && <span className="mt-1 font-cond text-small font-600 tnum opacity-90">{sub}</span>
         )}
         {timeouts != null && <TimeoutPips n={timeouts} />}
+        {challenges != null && <FlagPips n={challenges} />}
       </div>
     </div>
   )
@@ -101,6 +105,21 @@ function TimeoutPips({ n }: { n: number }) {
           className="h-1.5 w-2.5 rounded-full border border-current"
           style={{ background: i < n ? 'currentColor' : 'transparent', opacity: i < n ? 0.9 : 0.4 }}
         />
+      ))}
+    </span>
+  )
+}
+
+/** FUTURES #5: one small red-flag pip per challenge left, in the block's ink. */
+function FlagPips({ n }: { n: number }) {
+  if (n <= 0) return null
+  return (
+    <span className="mt-1 flex gap-0.5" role="img" aria-label={`${n} challenge${n === 1 ? '' : 's'} left`}>
+      {Array.from({ length: n }, (_, i) => (
+        <svg key={i} width={9} height={11} viewBox="0 0 9 11" aria-hidden className="shrink-0">
+          <rect x="1" y="0.5" width="1.3" height="10" rx="0.65" fill="currentColor" opacity="0.85" />
+          <path d="M2.3 1.1h6L6.7 3.2l1.6 2.1H2.3z" fill="currentColor" opacity="0.9" />
+        </svg>
       ))}
     </span>
   )
