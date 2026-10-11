@@ -56,14 +56,26 @@ export function nextClassCount(world: World): number {
   return Math.max(400, world.draft?.length ?? 0)
 }
 
+/**
+ * The seed of the class the rollover `n` seasons ahead promotes. At season S the
+ * next rollover first bumps to S+1 and then calls `nextClassSeed` there, i.e.
+ * seed + (S+n+1)*65537 — the same arithmetic as `nextClassSeed`, one season ahead
+ * per hop. `nextClassSeed` itself is left untouched: calibration and `balance.ts`
+ * depend on its exact value at the season the refresh actually runs.
+ */
 function classSeed(world: World, n: 1 | 2): number {
-  return n === 1 ? nextClassSeed(world) : world.seed + (world.season + n) * 65537
+  return world.seed + (world.season + n + 1) * 65537
 }
 
-function classCount(world: World, n: 1 | 2): number {
-  // The next class always goes through the shared helper so preview and refresh
-  // can never drift apart.
-  return n === 1 ? nextClassCount(world) : Math.max(400, world.draft?.length ?? 0)
+/**
+ * The class the next rollover promotes is sized from the CURRENT class
+ * (`nextClassCount`); the class after that is sized from the class the next
+ * rollover promotes, whose length is exactly `nextClassCount` too (the generated
+ * class always has exactly `count`, and the 400 floor is stable). So both
+ * horizons share the count and the preview can never drift from refresh.
+ */
+function classCount(world: World): number {
+  return nextClassCount(world)
 }
 
 /** The top `THIN_CLASS_SIZE` of a class by consensus grade (id breaks ties). */
@@ -77,19 +89,21 @@ const classCache = new Map<string, DraftProspect[]>()
 
 /**
  * The class `yearsOut` seasons ahead, derived from the refresh seed. `yearsOut`
- * 1 is the full next class (identical to what refresh will promote); `yearsOut`
- * 2 is the thin early look (the top 60 by consensus of the season+2 class).
- * Memoized per (seed, season, count, yearsOut): the class is a pure function of
- * those, and the cache is only ever handed out read-only.
+ * 1 is the full next class (identical to what the NEXT rollover will promote:
+ * the class whose label is `world.season + 2`); `yearsOut` 2 is the thin early
+ * look (the top 60 by consensus of the `world.season + 3` class). Memoized per
+ * (seed, label, count, yearsOut): the class is a pure function of those, and the
+ * cache is only ever handed out read-only.
  */
 export function futureClass(world: World, yearsOut = 1): DraftProspect[] {
   const n = horizon(yearsOut)
   const seed = classSeed(world, n)
-  const count = classCount(world, n)
-  const key = `${seed}:${world.season + n}:${count}:${n}`
+  const count = classCount(world)
+  const label = world.season + n + 1
+  const key = `${seed}:${label}:${count}:${n}`
   const hit = classCache.get(key)
   if (hit) return hit
-  const full = generateProspectClass(makeRng(seed), world.season + n, count)
+  const full = generateProspectClass(makeRng(seed), label, count)
   const out = n === 2 ? thinClass(full) : full
   classCache.set(key, out)
   return out
