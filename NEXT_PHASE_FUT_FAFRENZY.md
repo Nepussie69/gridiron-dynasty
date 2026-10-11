@@ -84,4 +84,4 @@ FA1 can start now in parallel with any job that does not touch those three files
 | Spec | ✅ 2026-10-11 |
 | FA1 engine | ✅ 2026-10-11 merged (probe: AAV/market 1.06, money wins 72.5%, contenders 314 vs rebuilders 9 stars, 0 double signings/cap violations; calibration identical) |
 | FA2 store + probe | ✅ 2026-10-11 merged (probe all green: AAV/market 1.07, money wins 73%, 0 new cap/floor violations; balance/market/faFlow probes + calibration identical) |
-| FA3 UI (redesign) | ⏳ |
+| FA3 UI (redesign) | ✅ 2026-10-11 merged (board/inspector/offer sheet/withdraw/next day; card on Career.tsx; orchestrator browser check PIT 2027 full 40-lot board, 1440 + 375 light/dark, 0 console errors, 44px fix) — feature complete |
