@@ -69,7 +69,7 @@ export interface LiveViewState {
   live: 'broadcast' | 'topdown'
   /** Whether replays use the 2.5D view. */
   replayView: 'broadcast' | 'off'
-  replayPolicy: 'big' | 'all' | 'off'
+  replayPolicy: ViewSettings['replays']
   quality: QualityLevel
   qualitySource: 'auto' | 'user'
   cameraProfile: 'main' | 'phone'

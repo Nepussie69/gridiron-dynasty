@@ -19,7 +19,9 @@
 //   lateDownSack    a sack on 3rd or 4th down
 //   longFieldGoal   a made field goal of LONG_FG_YDS (50) or more
 // Setting 'all' replays every snapped play (not PATs, kneels, spikes or
-// pre-snap penalties); 'off' none. `force` (a user pressing Replay) replays any
+// pre-snap penalties); 'off' none. Setting 'custom' replays only plays with at
+// least one reason in `types` (the user's chosen set; default all six = 'big').
+// `force` (a user pressing Replay) replays any
 // replayable play. playback 'fast' (sim to end) NEVER replays: the plan is
 // empty and nothing waits.
 //
@@ -50,10 +52,16 @@ import type { Play } from '../../game/engine/playsim'
 import type { BroadcastAnim } from './animData.ts'
 import { posAt } from './interp.ts'
 
-export type ReplaySetting = 'big' | 'all' | 'off'
+export type ReplaySetting = 'big' | 'all' | 'off' | 'custom'
 /** 'live': the user watches the play; 'fast': sim to end (never replays). */
 export type ReplayPlayback = 'live' | 'fast'
-export type ReplayReason = 'touchdown' | 'safety' | 'turnover' | 'bigGain' | 'lateDownSack' | 'longFieldGoal' | 'all' | 'forced'
+/** The six big-play reasons a custom replay set picks from (gd.view.replayTypes). */
+export type ReplayReasonId = 'touchdown' | 'safety' | 'turnover' | 'bigGain' | 'lateDownSack' | 'longFieldGoal'
+export type ReplayReason = ReplayReasonId | 'all' | 'forced'
+/** Every reason, in a fixed order. */
+export const REPLAY_REASON_IDS = ['touchdown', 'safety', 'turnover', 'bigGain', 'lateDownSack', 'longFieldGoal'] as const
+/** The default custom set: all six reasons, i.e. exactly the plays 'big' replays. */
+export const DEFAULT_REPLAY_TYPES: readonly ReplayReasonId[] = REPLAY_REASON_IDS
 export type KeyKind = 'catch' | 'interception' | 'sack' | 'brokenTackle' | 'score' | 'tackle'
 export type TeleKind = 'route' | 'yac' | 'airYards' | 'separation' | 'doubleTeam' | 'pocket' | 'pursuit'
 /** Telestrator inks: the yellow pen, broadcast ink (white) and the defence red. */
@@ -93,6 +101,8 @@ export interface ReplayOptions {
   reducedMotion?: boolean
   /** The user asked for this replay (a Replay button): any replayable play. */
   force?: boolean
+  /** 'custom': the reason ids to replay (default: every reason, same as 'big'). */
+  types?: readonly ReplayReasonId[]
   /** B1 events (default anim.events). */
   events?: AnimEvent[]
 }
@@ -227,6 +237,16 @@ export function replayReasons(play: Play, anim: BroadcastAnim, events: AnimEvent
   if (sack && play.down != null && play.down >= 3) out.push('lateDownSack')
   if (play.type === 'fg' && fgGood(play, events) && fgDistance(play) >= LONG_FG_YDS) out.push('longFieldGoal')
   return out
+}
+
+/**
+ * The reasons a custom replay keeps: those present in `types` (the user's chosen
+ * set, gd.view.replayTypes). Pure and order-preserving; unknown ids are ignored.
+ * An empty set keeps none, so nothing replays. Default = every reason ('big').
+ */
+export function customReplayReasons(reasons: readonly ReplayReason[], types: readonly ReplayReasonId[] = DEFAULT_REPLAY_TYPES): ReplayReason[] {
+  const keep = new Set<string>(types)
+  return reasons.filter((r) => keep.has(r))
 }
 
 function finalHolder(anim: BroadcastAnim): string | null {
@@ -366,6 +386,7 @@ export function replayPlan(play: Play, anim: BroadcastAnim, opts: ReplayOptions 
   if (opts.force) reasons = big.length ? big : ['forced']
   else if (setting === 'off') return EMPTY(big, D)
   else if (setting === 'all') reasons = big.length ? big : ['all']
+  else if (setting === 'custom') reasons = customReplayReasons(big, opts.types)
   else reasons = big
   if (!reasons.length) return EMPTY([], D)
 
@@ -664,6 +685,8 @@ export const GAME_DAY_LEAD_SEC = 0.9
 export interface GameDayReplayCtx {
   /** The user's Replays setting (B7: localStorage gd.view.replays). */
   setting: ReplaySetting
+  /** 'custom': the reason ids to replay (B7: gd.view.replayTypes). */
+  types?: readonly ReplayReasonId[]
   /** The Replay button on the replay pill: replay the play on screen now. */
   force?: boolean
   reducedMotion?: boolean
@@ -690,6 +713,7 @@ export function gameDayReplay(play: Play, anim: BroadcastAnim, ctx: GameDayRepla
   if (!force && (!ctx.playing || ctx.frozen || ctx.decisionPending)) return { plan: EMPTY([], D), lead: 0 }
   const plan = replayPlan(play, anim, {
     setting: ctx.setting,
+    types: ctx.types,
     force,
     reducedMotion: ctx.reducedMotion,
     playback: !force && ctx.simming ? 'fast' : 'live',
