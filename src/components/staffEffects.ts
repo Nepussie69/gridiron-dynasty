@@ -1,5 +1,6 @@
 import type { CareerState, StaffMember } from '../game/types'
 import type { World } from '../game/engine/generate'
+import { J9 } from '../game/engine/coachSubs'
 import { coachEffect, coordinatorEdge, NO_USER_BONUS, type CoachEffect, type UserCoachingBonus } from '../game/engine/coaching'
 import { isFrontOfficeRole, ANALYTICS_ROLE } from '../game/engine/hiring'
 import { ANALYTICS_LEVEL_LABEL, analyticsLevel } from '../game/engine/analytics'
@@ -573,7 +574,7 @@ export function vacancyCost(role: string, heldByUser = false): string {
   const floor = `${signed(coordinatorEdge(null))} / snap`
   switch (role) {
     case 'Head Coach':
-      return 'situational calls run at league average until hired'
+      return `4th downs, timeouts, adjustments and discipline play at the floor (${J9.floor}) until hired`
     case 'Offensive Coordinator':
       return heldByUser
         ? 'you call the offense yourself; no vacancy penalty'
