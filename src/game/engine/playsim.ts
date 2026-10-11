@@ -90,6 +90,10 @@ export function setJ8c(on: boolean) {
 export function getJ8c(): boolean {
   return COVERAGE_INDIV_ON
 }
+// J9 (FUTURES #32): individual coach sub-ratings. The flag itself lives in
+// coachSubs.ts; re-exported here so the probe and every site share one switch.
+// Default ON; OFF falls back to the exact pre-J9 expressions (byte-identical).
+export { setCoachSubs, getCoachSubs } from './coachSubs'
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
     // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
@@ -126,6 +130,7 @@ function cohesionMult(mean: number | undefined, coh: number | undefined, factor:
 import type { World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
 import { situationalPassRate, getSituational, type SituationInput } from './situational'
+import { J9, centeredSub, getCoachSubs } from './coachSubs'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -442,6 +447,14 @@ function passRushAvg(world: World, teamId: string): number {
   }
   return sum / ps.length
 }
+
+/** J9: the head coach's DISCIPLINE sub as a penalty multiplier (league mean = 1). */
+function disciplineMult(world: World, teamId: string): number {
+  const hc = (world.staff[teamId] ?? []).find((m) => m.role === 'Head Coach')
+  const d = centeredSub(world, 'Head Coach', 'discipline', hc)
+  return clamp(J9.disciplineBase + (d - 74) * J9.disciplinePerPt, J9.disciplineLo, J9.disciplineHi)
+}
+
 /** R14: the most likely offender for a foul — a starter at one of its positions. */
 function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', positions: Position[], key: string, kind?: PenaltyKind, field?: Player[]): Player | undefined {
   // J8d: a specific man on the field at one of the foul's positions, picked by the
@@ -1723,10 +1736,18 @@ function pickConcept(rng: Rng, style: OffenseStyle, down: number, distance: numb
 // ── L10 G8/G9: tendencies, the call matrix, and the AI's counter-calls ────────
 
 function coordRating(world: World, teamId: string, role: 'Offensive Coordinator' | 'Defensive Coordinator'): number {
+  const m = (world.staff[teamId] ?? []).find((x) => x.role === role)
+  if (getCoachSubs()) {
+    // J9: the exact coordinator's own sub-ratings model his counter-calls against
+    // the opponent's tendencies — the OC's play calling + reads, the DC's disguise
+    // + reads. A vacant seat takes the floor (a poor coach), never league average.
+    const primary: 'playCalling' | 'disguise' = role === 'Offensive Coordinator' ? 'playCalling' : 'disguise'
+    return (centeredSub(world, role, primary, m) + centeredSub(world, role, 'reads', m)) / 2
+  }
   // Backlog 193/185: a VACANT coordinator seat is not an average one. Return a
   // floor rating so an empty chair counters tendencies like a poor coach instead
   // of a league-average (74) one, consistent with the on-field vacancy floor.
-  return (world.staff[teamId] ?? []).find((x) => x.role === role)?.rating ?? 51
+  return m?.rating ?? 51
 }
 
 function normalizeDist<T extends string>(dist: Record<T, number>, keys: readonly T[]): Record<T, number> {
@@ -4033,7 +4054,11 @@ function rollAIHalftime(world: World, s: GameState) {
     const top = diagnose(s.plays, teamId)[0]
     if (!top) { s.adjust[teamId] = []; continue }
     const hc = (world.staff[teamId] ?? []).find((m) => m.role === 'Head Coach')
-    const p = clamp(0.4 + ((hc?.rating ?? 74) - 60) / 100, 0.2, 0.8)
+    // J9: the head coach's ADJUSTMENTS sub decides whether the AI makes a
+    // halftime fix — a top adjuster fixes; a poor one stands pat.
+    const p = getCoachSubs()
+      ? clamp(J9.adjBase + (centeredSub(world, 'Head Coach', 'adjustments', hc) - 60) / J9.adjScale, J9.adjLo, J9.adjHi)
+      : clamp(0.4 + ((hc?.rating ?? 74) - 60) / 100, 0.2, 0.8)
     s.adjust[teamId] = s.rng() < p ? [top.fix] : []
   }
 }
@@ -4923,7 +4948,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   // Defensive penalty — typed by hash within the R2 yardage tier, automatic first down.
   const penFields = getIndividual() ? penaltyFields(world, s, concept, offId, defId) : undefined
-  const defDisc = ocEffect(world, defId).discipline * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
+  const defDisc = (getCoachSubs() ? disciplineMult(world, defId) : ocEffect(world, defId).discipline) * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
   // L12.13 M3: a defense that knows the system makes fewer mental errors.
   if (s.rng() < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1)) {
     const penS = statFor(s, offId)
@@ -4960,7 +4985,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   // Offensive penalty — typed by hash within the R2 yardage tier, replay the down.
-  const offDisc = ocEffect(world, offId).discipline * cohesionMult(s.cohesionMean?.off, s.cohesion?.[offId]?.off, 0.6)
+  const offDisc = (getCoachSubs() ? disciplineMult(world, offId) : ocEffect(world, offId).discipline) * cohesionMult(s.cohesionMean?.off, s.cohesion?.[offId]?.off, 0.6)
   const hurryPen = s.twoMinMode === 'hurry' ? 1.3 : 1
   // FUTURES #6: the road offence false-starts more in a loud house; the home side
   // carries the centering offset. Exactly 1 with weather off, so the base is exact.
