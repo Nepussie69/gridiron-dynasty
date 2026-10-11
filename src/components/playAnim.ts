@@ -4042,6 +4042,53 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     else zoneDrop(m[dk], { fromSec: 0.1, toSec: trailEnd, releaseSec, landmark: { x: los + 8, y: dk === 'cb0' ? 8 : dk === 'cb1' ? FIELD_H - 8 : MID_Y + (dk === 'lb0' ? -8 : dk === 'lb2' ? 8 : 0) }, zcv: attrOf(m[dk].player, 'ZCV'), threat: m[deepKey], catchPt })
   }
 
+  // animflow r6c2 (J7): the sim's matchup decides how open he is. The recorded
+  // cover defender (coverDefenderId / coverId) is eased, over the last beat of
+  // the route, to the recorded separation at the catch (separationYd: blanket
+  // ~0.3, tight ~1.3, open ~2.5, wide ~5, a bust 9-12 yd) on the side he was
+  // already playing — a trailing man trails further, a tight one closes.
+  const sepYd = play.separationYd
+  if (sepYd != null && !int && coverKey && m[coverKey] && !isBlitzer(coverKey) && coverKey !== tgt) {
+    const mv = m[coverKey]
+    const want = clampN(sepYd, 0.6, 12)
+    const R = posAt(m[tgt].path, catchSec)
+    const Dp = posAt(mv.path, catchSec)
+    let ux = Dp.x - R.x
+    let uy = Dp.y - R.y
+    let ul = Math.hypot(ux, uy)
+    if (ul < 0.3) {
+      ux = -1
+      uy = 0
+      ul = 1
+    }
+    ux /= ul
+    uy /= ul
+    const P = { x: clampX(R.x + ux * want), y: clampY(R.y + uy * want) }
+    const sx = P.x - Dp.x
+    const sy = P.y - Dp.y
+    const shift = Math.hypot(sx, sy)
+    if (shift > 0.15) {
+      const tA = Math.max(SNAP + 0.5, catchSec - clampN(shift / 2.2, 0.5, 2.2))
+      if (catchSec - tA > 0.2) {
+        const old = mv.path
+        const out = old.filter((w) => w.t < tA - 1e-9)
+        for (let t = tA; t < catchSec - 1e-6; t += 0.04) {
+          const q = posAt(old, t)
+          const u = (t - tA) / (catchSec - tA)
+          const e = u * u * (3 - 2 * u)
+          out.push({ t, x: clampX(q.x + sx * e), y: clampY(q.y + sy * e) })
+        }
+        out.push({ t: catchSec, x: P.x, y: P.y })
+        for (const w of old) if (w.t > catchSec + 1e-6) out.push({ t: w.t, x: clampX(w.x + sx), y: clampY(w.y + sy) })
+        mv.path = out
+        const last = out[out.length - 1]
+        mv.t = last.t
+        mv.x = last.x
+        mv.y = last.y
+      }
+    }
+  }
+
   if (inc) {
     // A drop or a bang-bang miss: the ball skips off the receiver's hands.
     const cth = attrOf(m[tgt].player, 'CTH')
