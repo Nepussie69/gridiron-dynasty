@@ -254,9 +254,9 @@ export function CommandPalette() {
       ),
     )
     actions.push(act('export', 'Export save', 'Download this career as a .json file', () => window.dispatchEvent(new Event('gd:export-save'))))
-    actions.push(act('import', 'Import save…', 'Load a career from a .json file', () => window.dispatchEvent(new Event('gd:import-save'))))
+    actions.push(act('import', 'Import save…', 'Add a career from a .json file into an empty slot', () => window.dispatchEvent(new Event('gd:import-save'))))
     actions.push(act('settings', 'Settings', 'Theme, density, sim mode, save file, new career', () => openSettings()))
-    actions.push(act('new-career', 'New career…', 'Erase this save, after a review step', () => window.dispatchEvent(new Event('gd:new-career'))))
+    actions.push(act('new-career', 'Saves & slots…', 'Load a slot or start a new career in an empty one', () => window.dispatchEvent(new Event('gd:new-career'))))
     return base.concat(actions.map((a) => ({ item: a, hay: `${a.label} ${a.sub} action` })))
   }, [base, stage, canCoach, advanceWeek, advanceStage, startGameDay, world, leaguePbp, setLeaguePbp, density, collapsed])
 

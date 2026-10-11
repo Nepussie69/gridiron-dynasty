@@ -51,7 +51,6 @@ import {
   Avatar,
   Badge,
   Button,
-  ConfirmSheet,
   DensityToggle,
   IconButton,
   RatingTile,
@@ -662,6 +661,7 @@ export function Sidebar() {
   const unread = useUnread()
   const collapsed = useSyncExternalStore(subscribeSidebar, getSidebarCollapsed, () => false)
   const visible = visibleScreens(career)
+  const slotLine = useActiveSlotLine()
   const navRef = useRef<HTMLElement | null>(null)
   const stage = stageOf(league)
 
@@ -755,7 +755,7 @@ export function Sidebar() {
 
       <div
         className={cn(
-          'flex h-[58px] shrink-0 items-center gap-2.5 border-t border-line px-3.5',
+          'flex min-h-[58px] shrink-0 items-center gap-2.5 border-t border-line px-3.5 py-2',
           collapsed ? 'justify-center' : 'justify-center lg:justify-start',
         )}
       >
@@ -767,6 +767,17 @@ export function Sidebar() {
           <span className="block truncate text-label text-muted">
             {career?.path === 'coach' ? 'Coaching' : 'Personnel'} · {career?.season ?? league.season}
           </span>
+          {slotLine && (
+            <button
+              type="button"
+              onClick={() => void openSavesNow()}
+              title={`Autosaves to ${slotLine}. Open saves & slots`}
+              className="motion block max-w-full truncate text-left text-label text-muted hover:text-ink"
+              data-active-slot
+            >
+              {slotLine} · Autosaves
+            </button>
+          )}
         </div>
         <IconButton label="Settings: theme, density, sim mode, save, new career" size="sm" onClick={openSettings}>
           <Settings size={17} />
@@ -774,6 +785,19 @@ export function Sidebar() {
       </div>
     </aside>
   )
+}
+
+/** "Save 2" or "Save 2 · My Bills run" for the active save slot (null before one is assigned). */
+function useActiveSlotLine(): string | null {
+  const activeSlot = useGame((s) => s.activeSlot)
+  const slots = useGame((s) => s.slots)
+  if (activeSlot === null) return null
+  const label = slots.find((s) => s.slot === activeSlot)?.meta?.label?.trim()
+  return label && label !== `Slot ${activeSlot}` ? `Save ${activeSlot} · ${label}` : `Save ${activeSlot}`
+}
+
+function openSavesNow() {
+  return useGame.getState().openSaves()
 }
 
 /** Remember the last screen opened in each group (phone tab → that screen). */
@@ -893,18 +917,18 @@ function PhoneTabBar() {
   )
 }
 
-// ── Settings sheet (gear, palette) + New career confirm ───────────────────────
+// ── Settings sheet (gear, palette) + save slots ───────────────────────────────
 
 function SettingsHost() {
   const career = useGame((s) => s.career)
-  const resetCareer = useGame((s) => s.resetCareer)
+  const openSaves = useGame((s) => s.openSaves)
+  const slotLine = useActiveSlotLine()
   const exportSaveText = useGame((s) => s.exportSaveText)
   const importSaveText = useGame((s) => s.importSaveText)
   const leaguePbp = useGame((s) => s.leaguePbp)
   const setLeaguePbp = useGame((s) => s.setLeaguePbp)
   const collapsed = useSyncExternalStore(subscribeSidebar, getSidebarCollapsed, () => false)
   const [open, setOpen] = useState(false)
-  const [confirm, setConfirm] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const doExport = useCallback(async () => {
@@ -914,7 +938,8 @@ function SettingsHost() {
 
   useEffect(() => {
     const onSettings = () => setOpen(true)
-    const onNew = () => setConfirm(true)
+    // Save slots: "new career" opens the slot picker; nothing is ever erased here.
+    const onNew = () => void openSaves()
     // Synchronous inside the palette's click/Enter, so the file picker may open.
     const onImport = () => fileRef.current?.click()
     const onExport = () => void doExport()
@@ -928,10 +953,9 @@ function SettingsHost() {
       window.removeEventListener('gd:import-save', onImport)
       window.removeEventListener('gd:export-save', onExport)
     }
-  }, [doExport])
+  }, [doExport, openSaves])
 
   const row = 'flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-line py-3 first:border-t-0'
-  const title = career ? tierFor(career.path, career.level).title : 'Career'
 
   return (
     <>
@@ -995,7 +1019,9 @@ function SettingsHost() {
         <div className={row}>
           <div>
             <span className="label block">Save file</span>
-            <span className="text-small text-muted">Season {career?.season ?? '—'} · stored in this browser</span>
+            <span className="text-small text-muted">
+              {slotLine ? `${slotLine} · autosaves here` : 'Not saved'} · Season {career?.season ?? '—'} · stored in this browser
+            </span>
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" icon={<Download size={14} />} onClick={() => void doExport()}>
@@ -1008,42 +1034,24 @@ function SettingsHost() {
         </div>
         <div className={row}>
           <div>
-            <span className="label block">New career</span>
-            <span className="text-small text-muted">Erases this save, after a review step</span>
+            <span className="label block">Saves &amp; slots</span>
+            <span className="text-small text-muted">Load another slot or start a new career in an empty one. Other slots are never touched.</span>
           </div>
           <button
             type="button"
             onClick={() => {
               setOpen(false)
-              setConfirm(true)
+              void openSaves()
             }}
-            className="motion inline-flex min-h-8 items-center rounded-[var(--r-md)] border border-line-strong bg-surface px-2.5 font-cond text-small font-700 uppercase tracking-[0.06em] text-loss hover:bg-loss-soft pointer-coarse:min-h-11"
+            className="motion inline-flex min-h-8 items-center rounded-[var(--r-md)] border border-line-strong bg-surface px-2.5 font-cond text-small font-700 uppercase tracking-[0.06em] text-ink-2 hover:bg-surface-2 pointer-coarse:min-h-11"
           >
-            New career…
+            Saves &amp; slots…
           </button>
         </div>
         <p className="pt-2 text-label text-muted">
           {PALETTE_KEYS} search and actions · {ADVANCE_KEYS} advance
         </p>
       </Sheet>
-      <ConfirmSheet
-        open={confirm}
-        onClose={() => setConfirm(false)}
-        onConfirm={() => {
-          setConfirm(false)
-          resetCareer()
-        }}
-        eyebrow="New career"
-        title="Erase this career?"
-        subtitle="Starting over replaces your current save. There is no undo."
-        consequences={[
-          { label: 'Current career', value: `${title} · Season ${career?.season ?? '—'}` },
-          { label: 'Save file', value: 'Erased', tone: 'loss' },
-        ]}
-        saferAlternative={{ label: 'Export the save first', onClick: () => void doExport() }}
-        confirmLabel="Erase and start over"
-        ledgerNote={null}
-      />
     </>
   )
 }
