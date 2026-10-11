@@ -2151,7 +2151,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   ;(await import('../src/game/data/calibration.ts')).setCalibration(rj('calibration'))
   const store = await import('../src/store/gameStore.ts')
   const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
-  const { buildPlayAnim, holderAt, posAt } = await import('../src/components/playAnim.ts')
+  const { buildPlayAnim, holderAt, posAt, snapKindFor } = await import('../src/components/playAnim.ts')
   const { actorPlayers } = await import('../src/components/jersey.ts')
   const { createBroadcastDirector } = await import('../src/components/broadcast/directorRules.ts')
   const { FAST_SPAN_MAX } = await import('../src/components/broadcast/director.ts')
@@ -2366,6 +2366,41 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     }
     assert.ok(n >= 60, `coverage: ${n} crossing / vertical catches`)
     assert.ok(moving / n >= 0.7, `only ${moving}/${n} crossing / vertical catches made in stride`)
+  })
+
+  ok('animflow 6c (295): the snap follows the play\'s formation — shotgun 5 yd, pistol 4, under centre at the ball with a real 3/5/7-step drop and a reverse-pivot handoff', () => {
+    store.useGame.getState().startCareer({ name: 'U', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const seen: Record<string, number> = {}
+    const bad: string[] = []
+    for (let g = 0; g < 4; g++) {
+      const home = nfl[(g * 9) % nfl.length].id
+      const away = nfl[(g * 9 + 5) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 17 + g * 389)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if ((play.type !== 'pass' && play.type !== 'run') || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const q = anim.actors.find((a) => a.key === 'qb')
+        if (!q) continue
+        const los = 10 + play.startYard
+        const kind = snapKindFor(play.concept)
+        const depth = los - q.path[0].x
+        seen[`${play.type}:${kind}`] = (seen[`${play.type}:${kind}`] ?? 0) + 1
+        const want = kind === 'under' ? 1.0 : kind === 'pistol' ? 4 : 5
+        if (Math.abs(depth - want) > 0.05) bad.push(`play ${i} ${play.concept}: QB ${depth.toFixed(1)} yd deep (${kind})`)
+        const th = (anim.events ?? []).find((e) => e.kind === 'throw')
+        if (play.type === 'pass' && kind === 'under' && th) {
+          let deep = 0
+          for (let t = 0; t <= th.t; t += 0.01) deep = Math.max(deep, los - posAt(q.path, t).x)
+          if (deep < 4.5) bad.push(`play ${i} ${play.concept}: under-centre drop only ${deep.toFixed(1)} yd`)
+        }
+      }
+    }
+    assert.ok((seen['pass:under'] ?? 0) >= 10 && (seen['run:under'] ?? 0) >= 20 && (seen['run:pistol'] ?? 0) >= 5 && (seen['pass:gun'] ?? 0) >= 50, `coverage ${JSON.stringify(seen)}`)
+    assert.ok(bad.length === 0, `${bad.length} bad snaps: ${bad.slice(0, 4).join('; ')}`)
   })
 }
 

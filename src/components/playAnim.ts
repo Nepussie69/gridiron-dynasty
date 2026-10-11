@@ -839,12 +839,27 @@ interface Formation {
   [key: string]: { x: number; y: number; side: 'off' | 'def'; role: string }
 }
 
-function formation(los: number, fb = false): Formation {
+/**
+ * animflow r6c2 (295): how the ball is snapped, from the play's formation in
+ * the playbook — shotgun (QB 5 yd deep), pistol (4 yd, back behind him) or
+ * under centre (singleback, I-form, goal line, jumbo).
+ */
+export type SnapKind = 'gun' | 'pistol' | 'under'
+export function snapKindFor(concept: string): SnapKind {
+  const fm = formationForConcept(concept)
+  if (/^Gun/.test(fm)) return 'gun'
+  if (fm === 'Pistol') return 'pistol'
+  return 'under'
+}
+
+function formation(los: number, fb = false, snap: SnapKind = 'gun'): Formation {
   const f: Formation = {}
   ;[-2.6, -1.3, 0, 1.3, 2.6].forEach((d, i) => (f[`ol${i}`] = { x: los - 0.6, y: MID_Y + d, side: 'off', role: 'OL' }))
-  f.qb = { x: los - 5, y: MID_Y, side: 'off', role: 'QB' }
-  f.rb = { x: los - 7, y: MID_Y + 2.5, side: 'off', role: 'RB' }
-  if (fb) f.fb = { x: los - 8.5, y: MID_Y + 0.8, side: 'off', role: 'FB' }
+  f.qb = { x: snap === 'under' ? los - 1.0 : snap === 'pistol' ? los - 4 : los - 5, y: MID_Y, side: 'off', role: 'QB' }
+  // Shotgun: the back offset beside / behind the passer; pistol and under
+  // centre: straight behind him (an I with a fullback in front of him).
+  f.rb = snap === 'gun' ? { x: los - 7, y: MID_Y + 2.5, side: 'off', role: 'RB' } : { x: los - 7, y: MID_Y, side: 'off', role: 'RB' }
+  if (fb) f.fb = snap === 'under' ? { x: los - 4.3, y: MID_Y, side: 'off', role: 'FB' } : { x: los - 8.5, y: MID_Y + 0.8, side: 'off', role: 'FB' }
   f.wr0 = { x: los - 0.6, y: 5, side: 'off', role: 'WR' }
   f.wr1 = { x: los - 0.6, y: 48.3, side: 'off', role: 'WR' }
   // animflow r6b: eleven on offense — a fullback set trades the slot for the FB.
@@ -2050,7 +2065,8 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   recStart()
   const los = 10 + play.startYard
   const hasFb = formationHasFullback(formationForConcept(play.concept))
-  const f = formation(los, hasFb)
+  const snapK = snapKindFor(play.concept)
+  const f = formation(los, hasFb, snapK)
   const m = startMovers(f, ctx)
   recSnap(los)
   const seed = play.n * 7 + play.startYard
@@ -2084,7 +2100,8 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     : clampY(lane + driftDir * drift)
   const carrier = qbRun ? 'qb' : 'rb'
   const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
-  const meshX = qbRun ? f.qb.x - 1 : f.qb.x + 0.7
+  // Under centre the QB opens and gets back to the mesh ~3.5 yd deep (animflow r6c2).
+  const meshX = snapK === 'under' ? (qbRun ? f.qb.x - 0.6 : los - 3.4) : qbRun ? f.qb.x - 1 : f.qb.x + 0.7
   const meshY = qbRun ? MID_Y : MID_Y + side * 1.4
 
   // The run after the hole: one arc toward the end spot, bowed (a little) only
@@ -2145,7 +2162,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     }
     handoffT = m.rb.t
     m.qb.hold(handoffT - m.qb.t)
-    m.qb.run([{ x: f.qb.x - 1.5, y: MID_Y - side * 4 }], { stop: false })
+    m.qb.run([{ x: (snapK === 'under' ? meshX : f.qb.x) - 1.5, y: MID_Y - side * 4 }], { stop: false })
   }
   // Press and cut: he presses the play side under control (vision, ~3/4 pace),
   // brakes into his one cut and comes out of it into the lane.
@@ -3465,7 +3482,8 @@ export function yacTarget(conceptDepth: number, gain: number, u: number): number
 function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   recStart()
   const los = 10 + play.startYard
-  const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
+  const snapK = snapKindFor(play.concept)
+  const f = formation(los, formationHasFullback(formationForConcept(play.concept)), snapK)
   const m = startMovers(f, ctx)
   recSnap(los)
   const seed = play.n * 11 + play.startYard
@@ -3508,15 +3526,27 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // Drop depth (yd behind the shotgun spot) and its duration (s).
   // animflow r6a: screens come out fast (BDB 2021 n 1.2k screens: snap to
   // release median 1.7 s, p25 1.3): a short, quick drop, then the dump-off.
-  const drop = { screen: 2.4, quick: 1.0, dropback: 2.6, deep: 3.8, pa: 2.8 }[bucket]
-  const dropT = { screen: 0.85, quick: 0.62, dropback: 1.2, deep: 1.5, pa: 1.55 }[bucket]
+  // animflow r6c2 (295): from under centre a real 3- / 5- / 7-step drop (QB
+  // ~5 / 7 / 8.5 yd deep at ~1.0 / 1.35 / 1.7 s); from the gun a 1- / 3- / 5-
+  // step (the old values); the pistol in between.
+  const drop = snapK === 'under'
+    ? { screen: 5.0, quick: 4.0, dropback: 6.0, deep: 7.5, pa: 6.5 }[bucket]
+    : snapK === 'pistol'
+      ? { screen: 3.0, quick: 1.6, dropback: 3.4, deep: 4.6, pa: 3.6 }[bucket]
+      : { screen: 2.4, quick: 1.0, dropback: 2.6, deep: 3.8, pa: 2.8 }[bucket]
+  const dropT = snapK === 'under'
+    ? { screen: 1.0, quick: 0.95, dropback: 1.35, deep: 1.7, pa: 1.75 }[bucket]
+    : snapK === 'pistol'
+      ? { screen: 0.9, quick: 0.7, dropback: 1.25, deep: 1.55, pa: 1.6 }[bucket]
+      : { screen: 0.85, quick: 0.62, dropback: 1.2, deep: 1.5, pa: 1.55 }[bucket]
   // When the ball should come out (s after the snap), with a little spread.
   // animflow r6a: all dropbacks 0.1 s quicker (BDB snap to release median 2.6-2.7 s, n 13.4k / 7.6k).
   let wantRel = SNAP + { screen: 1.75, quick: 1.65, dropback: 2.45, deep: 2.7, pa: 2.65 }[bucket] + (hash(seed + 61) - 0.5) * 0.4
   // Run fake (play-action / RPO / bootleg): QB and back mesh before the drop.
   const qbPts: Pt[] = []
-  if (pa) qbPts.push({ x: f.qb.x + 0.5, y: MID_Y + side * 1.2 })
-  if (boot) qbPts.push({ x: f.qb.x - 1.2, y: MID_Y - rollSide * 1.2 })
+  // Under centre the fake is a reverse pivot back to the back at the mesh.
+  if (pa) qbPts.push({ x: snapK === 'under' ? f.qb.x - 3.2 : snapK === 'pistol' ? f.qb.x - 0.3 : f.qb.x + 0.5, y: MID_Y + side * 1.2 })
+  if (boot) qbPts.push({ x: snapK === 'under' ? f.qb.x - 3.6 : f.qb.x - 1.2, y: MID_Y - rollSide * 1.2 })
   // Under pressure the pocket movement comes from the QB's legs (animflow r5;
   // NFL tracking: escape ~4.7 yd wide at ~7 yd deep, ~5 yd/s, throw ~1.1 s
   // later; mobile QBs p90 ~10 yd wide): a mobile QB breaks the pocket early and
@@ -4127,7 +4157,8 @@ function blitzKeys(seed: number): string[] {
 function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   recStart()
   const los = 10 + play.startYard
-  const f = formation(los)
+  const snapK = snapKindFor(play.concept)
+  const f = formation(los, false, snapK)
   const m = startMovers(f, ctx)
   recSnap(los)
   const seed = play.n * 17 + play.startYard
@@ -4157,7 +4188,7 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   const pocketT = clampN(2.3 + (los - endX) * 0.09, 2.3, 3.5)
   // animflow round 2: a real drop first (done ~1.2 s), a set with his feet
   // alive while he looks downfield, then the escape attempt into the sack spot.
-  const dropPt: Pt = { x: f.qb.x - 2.6, y: MID_Y }
+  const dropPt: Pt = { x: f.qb.x - (snapK === 'under' ? 6 : snapK === 'pistol' ? 3.2 : 2.6), y: MID_Y }
   const dropT = Math.min(1.25, pocketT - 0.9)
   runTimed(m.qb, [dropPt], 0, dropT, false, true)
   pocketPair(m, null, ['qb'], m.qb.t, pocketT - 0.55, -0.4, seed + 77)

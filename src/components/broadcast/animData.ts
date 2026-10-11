@@ -717,6 +717,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   // coverage rating plus a per-play draw.
   const r6Hash = (n: number) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x) }
   const scrimmage = type === 'pass' || type === 'run'
+  const qbUnder = scrimmage && (() => { const q = anim.actors.find((a) => a.key === 'qb'); return !!q && 10 + (play.startYard ?? 0) - q.path[0].x < 1.6 })()
   const pedalEnd: Record<string, number> = {}
   const ballLag: Record<string, number> = {}
   keys.forEach((k, i) => {
@@ -749,7 +750,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (k === returnerKey) return 'stand'
     if (kickerKey && k === kickerKey && (fgPlay || puntPlay)) return 'stand'
     if (k.startsWith('ol') || k.startsWith('dl')) return 'stance3'
-    if (k === 'qb') return 'stand'
+    // animflow r6c2 (295): under centre the passer is crouched over the ball.
+    if (k === 'qb') return qbUnder ? 'stance2' : 'stand'
     return 'stance2'
   }
 
