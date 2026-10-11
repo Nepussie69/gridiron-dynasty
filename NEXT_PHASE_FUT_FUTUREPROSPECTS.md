@@ -90,4 +90,4 @@ User (2026-10-10, backlog 142): a **Future classes** tab on the Draft screen. Ne
 | Spec | ✅ 2026-10-11 |
 | FP1 engine | ✅ 2026-10-11 merged (probe 35/35; calibration identical; overlays live in World.futureClasses.{scout,returners}) |
 | FP2 store | ✅ 2026-10-11 merged (probes FP1 36/36, FP2 29/29 on 33333+2222; SIM+eq identical; personnel smoke finalLevel 5→4 accepted; FP1 horizon fixed: futureClass(world,1) = class the next rollover promotes, seed+(S+n+1)·65537) |
-| FP3 UI | ⏳ (code to the corrected horizon) |
+| FP3 UI | 🔨 2026-10-11 running on DeepSeek (wt/futureprospects3, verify logs/fp3-verify.out) |
