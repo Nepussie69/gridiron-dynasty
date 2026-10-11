@@ -1157,6 +1157,13 @@ function gangPursuit(m: Record<string, Mover>, keys: string[], fromSec: number, 
       const want = { x: c.x + (dx / dn) * gap, y: c.y + (dy / dn) * gap }
       let dvx = (want.x - p.x) / 0.4 + cv.x
       let dvy = (want.y - p.y) / 0.4 + cv.y
+      if (d > gap + 3) {
+        // animflow r6c2 (297): still well off him — run the pursuit angle.
+        const I = interceptPt(carrier.path, p, t, top, toSec, gap)
+        const il = Math.hypot(I.x - p.x, I.y - p.y) || 1e-6
+        dvx = ((I.x - p.x) / il) * top
+        dvy = ((I.y - p.y) / il) * top
+      }
       const dl = Math.hypot(dvx, dvy)
       if (dl > top) { dvx *= top / dl; dvy *= top / dl }
       let ax = (dvx - v.x) / dt
@@ -2011,7 +2018,7 @@ function readTime(p: Player | undefined, base: number, seed: number): number {
   return clampN(base + (85 - prc) * 0.011 + hash(seed) * 0.15, base - 0.1, base + 0.75)
 }
 
-function buildRun(play: Play, ctx: AnimContext): PlayAnim {
+function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   recStart()
   const los = 10 + play.startYard
   const hasFb = formationHasFullback(formationForConcept(play.concept))
@@ -2117,7 +2124,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   // The carry pace: inside runs are run at a modest speed (NFL R6: inside peak
   // ~4 yd/s, outside ~6, breakaways 8-9), long gains open up to full speed,
   // and a back builds speed at ~4 yd/s² (E1), not in a few steps.
-  const carryK = clampN(0.6 + 0.012 * Math.max(0, gain) + (wide ? 0.1 : 0), 0.6, 1)
+  const carryK = clampN(0.6 + 0.012 * Math.max(0, gain) + (wide ? 0.1 : 0), 0.6, 1) * slow
   // Burst by rating: ~3.2 yd/s² (ACC 65) to ~4.6 (ACC 99), the NFL band.
   const accCap = (mv: Mover) => clampN(3.4 + (attrNum(mv.player, 'ACC', 75) - 70) * 0.045, 3.0, 4.8)
   const press = (mv: Mover) => {
@@ -2169,8 +2176,10 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const scoreRun = endX >= 110
   let contactT: number
   if (fumble || scoreRun) {
-    m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: true, cut: true })
+    m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: !scoreRun, cut: true })
     contactT = m[carrier].t
+    // animflow r6c2 (297): a score is run through the line, not stopped on it.
+    if (scoreRun) runThroughGoal(m[carrier], 110, 1)
   } else {
     const ac = yardsAfterContact(m[carrier].player, polyLen(curve[0], curve.slice(1)), seed)
     const { pre, post } = splitPolyline(curve[0], curve.slice(1), Math.max(0, polyLen(curve[0], curve.slice(1)) - ac))
@@ -2212,7 +2221,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   }
   const credFree = clampN(0.2 + (bestAttr(rate(creditedKey ?? ''), ['BSH']) - 65) * 0.008 + hash(seed + 41) * 0.15, 0.1, 0.45)
   let credShed: number | null = null
-  const pursueBrain = (k: string, i: number) => pursue(carrier, { keep: keepFor(k), lead: 0.8 + clampN((attrNum(rate(k), 'PUR') - 60) * 0.01, 0, 0.4), side: (hash(seed + i * 4.1) - 0.5) * 1.6 })
+  const pursueBrain = (k: string, i: number) => pursue(carrier, { keep: keepFor(k), lead: 0.8 + clampN((attrNum(rate(k), 'PUR') - 60) * 0.01, 0, 0.4), side: (hash(seed + i * 4.1) - 0.5) * 1.6, intercept: true })
   const hasCarrier = (t: number) => t >= (qbRun ? SNAP : handoffT)
   const field = new LiveField(0, {
     rec: (a, b, t0, t1, kind) => recEng(a, b, t0, t1, kind),
@@ -2421,10 +2430,45 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const cPt = posAt(m[carrier].path, contactT)
   // animflow r5: with real acceleration caps the credited man is often a beat
   // late; on a run he still makes it (hitAndRide meets the pile where it is).
-  const tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2)
+  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2)
   // A touchdown is chased, never forced: the closest man just runs with him.
   // animflow r6c: a credited man who shed inside the tackle phase closes from his rip.
-  const hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
+  let hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
+  if (!scoreRun && contactT - holeT > 0.6) {
+    // animflow r6c2 (297): on a longer run the tackler has to be able to get
+    // there. He leaves on his pursuit angle as early as he must (once off any
+    // block); when even that is too late the carrier is drawn picking his way
+    // a little slower (re-run, same result), so the credited man explains the
+    // spot instead of the carrier stopping on his own.
+    const busy = (k: string, t: number) => (REC?.eng ?? []).some((e) => (e.a === k || e.b === k) && (e.kind === 'block' || e.kind === 'double') && t >= e.t0 && t <= e.t1)
+    const late = Math.min(contactT + 0.45, endSec - 0.15)
+    const leave = (k: string, from: number): { s: number | null; best: number } => {
+      let best = Infinity
+      for (let s0 = from; s0 >= Math.max(holeT * 0.6, from - 2.6) - 1e-6; s0 -= 0.2) {
+        if (busy(k, s0)) break
+        const d = catchDist(m[k], m[carrier].path, s0, late)
+        best = Math.min(best, d)
+        if (d <= 2.0) return { s: s0, best: d }
+      }
+      return { s: null, best }
+    }
+    const mine = leave(tackler, hitFrom)
+    if (mine.s != null) hitFrom = mine.s
+    else if (slow === 1 && mine.best <= 4.5) return buildRun(play, ctx, 0.86)
+    else {
+      // Nobody credited can get there: the man who can makes the hit.
+      let alt: { k: string; s: number; d: number } | null = null
+      for (const k of tacklers) {
+        if (k === tackler || !m[k]) continue
+        const r = leave(k, tackleFrom)
+        if (r.s != null && (!alt || r.best < alt.d)) alt = { k, s: r.s, d: r.best }
+      }
+      if (alt) {
+        tackler = alt.k
+        hitFrom = alt.s
+      }
+    }
+  }
   if (!scoreRun) hitAndRide(m[tackler], m[carrier], hitFrom, contactT, endSec)
   const res = { tackler, endSec }
   capAll(m, ALL_KEYS(f), res.endSec)
@@ -2963,7 +3007,22 @@ function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string 
  * carrier through the pile to the spot.
  */
 function hitAndRide(tk: Mover, carrier: Mover, fromSec: number, contactT: number, endSec: number, vHit = 2.2) {
-  const v0 = seek(tk, fromSec)
+  let v0 = seek(tk, fromSec)
+  // animflow r6c2 (297): a man still well off the carrier runs his pursuit
+  // angle at full speed first; the squared-up hit is only the last step.
+  {
+    const c0 = posAt(carrier.path, contactT)
+    const until = contactT - 0.35
+    if (until - fromSec > 0.2 && Math.hypot(c0.x - tk.x, c0.y - tk.y) > 3.5) {
+      pursuitLeg(tk, carrier.path, until, 2.0, contactT)
+      // Still not there: he keeps chasing into the pile (it is slowing).
+      const cNow = posAt(carrier.path, tk.t)
+      if (Math.hypot(cNow.x - tk.x, cNow.y - tk.y) > 3 && endSec - 0.3 > tk.t + 0.1) pursuitLeg(tk, carrier.path, endSec - 0.3, 2.0, endSec)
+      fromSec = tk.t
+      const sv = speedVec(tk.path, tk.t)
+      v0 = Math.min(tk.pace.top, Math.hypot(sv.x, sv.y))
+    }
+  }
   const start = { x: tk.x, y: tk.y }
   // A tackler who can't be there at the planned contact meets the carrier
   // where the carrier is when he does get there (the pile is already moving).
@@ -3082,6 +3141,155 @@ function speedVec(path: WP[], t: number): Pt {
   const a = posAt(path, Math.max(0, t - dt))
   const b = posAt(path, t)
   return { x: (b.x - a.x) / dt, y: (b.y - a.y) / dt }
+}
+
+/**
+ * animflow r6c2 (backlog 297): the pursuit angle. The earliest point on the
+ * carrier's (already scripted) path that a man at `p` running at `top` can
+ * reach by the time the carrier gets there — not where the carrier is now (a
+ * tail chase). When nobody could get there before `tMax` he runs at the end of
+ * the path (the spot, the pylon).
+ */
+function interceptPt(carrierPath: WP[], p: Pt, t: number, top: number, tMax: number, reach = 0.8): Pt {
+  for (let tau = t; tau <= tMax + 1e-6; tau += 0.05) {
+    const c = posAt(carrierPath, tau)
+    if (Math.hypot(c.x - p.x, c.y - p.y) - reach <= top * (tau - t)) return c
+  }
+  return posAt(carrierPath, tMax)
+}
+
+/**
+ * animflow r6c2 (297): a full-speed pursuit leg on the intercept angle (time
+ * stepped, his own top speed and acceleration) until he is `near` the carrier
+ * or `untilSec`. A far-off tackler used to glide in at a breaking-down pace and
+ * arrive after the whistle, leaving the carrier to stop on his own.
+ */
+function pursuitLeg(mv: Mover, carrierPath: WP[], untilSec: number, near: number, tAim: number) {
+  let p = { x: mv.x, y: mv.y }
+  let v = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 0, y: 0 }
+  const top = mv.pace.top
+  const acc = Math.max(3, mv.pace.acc)
+  const dt = 0.05
+  let t = mv.t
+  while (t + dt <= untilSec + 1e-6) {
+    const c = posAt(carrierPath, t)
+    const d = Math.hypot(c.x - p.x, c.y - p.y)
+    let want: Pt
+    if (d <= near) {
+      // Closed: run with him a step off on his own side until the hit.
+      const cv = speedVec(carrierPath, t)
+      const ux = d > 1e-6 ? (p.x - c.x) / d : 0
+      const uy = d > 1e-6 ? (p.y - c.y) / d : 1
+      want = { x: (c.x + ux * near - p.x) / 0.3 + cv.x, y: (c.y + uy * near - p.y) / 0.3 + cv.y }
+      const wl = Math.hypot(want.x, want.y)
+      if (wl > top) { want.x *= top / wl; want.y *= top / wl }
+    } else {
+      const aim = interceptPt(carrierPath, p, t, top, tAim)
+      const dx = aim.x - p.x
+      const dy = aim.y - p.y
+      const dl = Math.hypot(dx, dy) || 1e-6
+      want = { x: (dx / dl) * top, y: (dy / dl) * top }
+    }
+    let ax = (want.x - v.x) / dt
+    let ay = (want.y - v.y) / dt
+    const al = Math.hypot(ax, ay)
+    if (al > acc) { ax *= acc / al; ay *= acc / al }
+    v = { x: v.x + ax * dt, y: v.y + ay * dt }
+    t += dt
+    p = { x: clampX(p.x + v.x * dt), y: clampY(p.y + v.y * dt) }
+    mv.path.push({ t, x: p.x, y: p.y })
+  }
+  mv.t = t
+  mv.x = p.x
+  mv.y = p.y
+  mv.lastStop = Math.hypot(v.x, v.y) < 1
+  mv.inHeading = undefined
+}
+
+/** How far off the carrier a man still is at `byT` if he leaves on his pursuit angle at `s0` (dry run). */
+function catchDist(mv: Mover, carrierPath: WP[], s0: number, byT: number): number {
+  const c = new Mover(mv.key, mv.role, mv.pace, mv.x, mv.y, mv.player)
+  c.path = mv.path.filter((w) => w.t <= s0 + 1e-9)
+  if (!c.path.length) return Infinity
+  const last = posAt(mv.path, s0)
+  if (c.path[c.path.length - 1].t < s0 - 1e-9) c.path.push({ t: s0, x: last.x, y: last.y })
+  c.t = s0
+  c.x = last.x
+  c.y = last.y
+  pursuitLeg(c, carrierPath, byT, 1.0, byT)
+  const cp = posAt(carrierPath, c.t)
+  return Math.hypot(cp.x - c.x, cp.y - c.y)
+}
+
+/**
+ * animflow r6c2 (297): coverage chasing a carrier nobody tackles (a score, a
+ * step out of bounds). Each man runs his pursuit angle at his own speed — the
+ * fast ones close and run alongside a body's width off, the slow ones angle at
+ * the pylon / the spot and give up the ground they cannot make.
+ */
+function angleChase(m: Record<string, Mover>, keys: string[], fromSec: number, carrier: Mover, toSec: number, seed: number) {
+  keys.forEach((k, i) => {
+    const mv = m[k]
+    if (!mv || mv === carrier) return
+    seek(mv, fromSec)
+    let p = { x: mv.x, y: mv.y }
+    let v = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 0, y: 0 }
+    const top = mv.pace.top
+    const acc = Math.max(3, mv.pace.acc)
+    const gap = 1.3 + hash(seed + i * 1.7) * 0.6
+    const dt = 0.05
+    let t = mv.t
+    while (t + dt <= toSec + 1e-6) {
+      const c = posAt(carrier.path, t)
+      const cv = speedVec(carrier.path, t)
+      const d = Math.hypot(c.x - p.x, c.y - p.y)
+      let want: Pt
+      if (d < gap + 1.2) {
+        // Alongside: a body's width off on his own side, matching the carrier.
+        const ux = d > 1e-6 ? (p.x - c.x) / d : 0
+        const uy = d > 1e-6 ? (p.y - c.y) / d : 1
+        const tgt = { x: c.x + ux * gap, y: c.y + uy * gap }
+        want = { x: (tgt.x - p.x) / 0.3 + cv.x, y: (tgt.y - p.y) / 0.3 + cv.y }
+      } else {
+        const aim = interceptPt(carrier.path, p, t, top, toSec, gap)
+        const dx = aim.x - p.x
+        const dy = aim.y - p.y
+        const dl = Math.hypot(dx, dy) || 1e-6
+        const sp = dl < 1 ? dl * top : top
+        want = { x: (dx / dl) * sp, y: (dy / dl) * sp }
+      }
+      const wl = Math.hypot(want.x, want.y)
+      if (wl > top) { want.x *= top / wl; want.y *= top / wl }
+      let ax = (want.x - v.x) / dt
+      let ay = (want.y - v.y) / dt
+      const al = Math.hypot(ax, ay)
+      if (al > acc) { ax *= acc / al; ay *= acc / al }
+      v = { x: v.x + ax * dt, y: v.y + ay * dt }
+      t += dt
+      p = { x: clampX(p.x + v.x * dt), y: clampY(p.y + v.y * dt) }
+      mv.path.push({ t, x: p.x, y: p.y })
+    }
+    mv.t = t
+    mv.x = p.x
+    mv.y = p.y
+    mv.lastStop = Math.hypot(v.x, v.y) < 1
+    mv.inHeading = undefined
+  })
+}
+
+/**
+ * animflow r6c2 (297): a score is run through the goal line at speed, then he
+ * eases up in the end zone (never a stop on the line, never a fall).
+ */
+function runThroughGoal(mv: Mover, goalX: number, dir: 1 | -1) {
+  const h = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: dir, y: 0 }
+  const v = Math.min(mv.pace.top, Math.hypot(h.x, h.y))
+  const hl = Math.hypot(h.x, h.y) || 1
+  const d = clampN((v * v) / (2 * 4.5), 1.5, 7.5)
+  const ux = Math.abs(h.x / hl) > 0.3 ? h.x / hl : dir * 0.7
+  const uy = Math.abs(h.x / hl) > 0.3 ? h.y / hl : 0.7 * Math.sign(h.y || 1)
+  const end = { x: clampN(mv.x + ux * d, dir > 0 ? goalX + 1 : 1, dir > 0 ? FIELD_W - 1 : goalX - 1), y: clampY(mv.y + uy * d) }
+  mv.run([end], { v0: v, stop: true, cut: true })
 }
 
 /**
@@ -3725,9 +3933,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   if (isTD || play.outOfBounds) {
     // A score or a step out of bounds: he keeps the ball to the spot and the
     // coverage chases, but nothing forces a tackle.
-    m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: true })
+    m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: !isTD })
+    // animflow r6c2 (297): through the goal line at speed; the coverage takes
+    // real pursuit angles (the fast men close, the rest angle at the pylon).
+    if (isTD) runThroughGoal(m[tgt], 110, 1)
     const endSec = m[tgt].t
-    chaseCarrier(m, pursuers, catchSec, m[tgt], endSec, seed)
+    angleChase(m, pursuers, catchSec, m[tgt], endSec, seed)
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
     recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)

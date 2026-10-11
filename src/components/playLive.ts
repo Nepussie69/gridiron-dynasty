@@ -213,6 +213,12 @@ export class LiveField {
     return s ? livePos(s.path, t) : null
   }
 
+  /** A scripted man's position at a future time (null for live agents). */
+  future(key: string, t: number): LPt | null {
+    const s = this.scripted.get(key)
+    return s ? livePos(s.path, t) : null
+  }
+
   velOf(key: string, t = this.t): LPt {
     const a = this.agents.get(key)
     if (a) return { x: a.vx, y: a.vy }
@@ -544,7 +550,7 @@ export class LiveField {
  * runs alongside instead of through him (the builder's tackle phase brings the
  * recorded tackler in), so nobody reaches the carrier early.
  */
-export function pursue(carrier: string, opts: { keep: (t: number) => number; lead?: number; speed?: number; side?: number }): Brain {
+export function pursue(carrier: string, opts: { keep: (t: number) => number; lead?: number; speed?: number; side?: number; intercept?: boolean }): Brain {
   return (t, me, f) => {
     const c = f.where(carrier, t)
     if (!c) return null
@@ -579,6 +585,18 @@ export function pursue(carrier: string, opts: { keep: (t: number) => number; lea
     }
     // Intercept: where the carrier will be after the time it takes to get
     // there, aimed at the near side of his line (a pursuit angle).
+    if (opts.intercept && f.future(carrier, t)) {
+      // animflow r6c2 (297): the true pursuit angle on the carrier's scripted
+      // line — the earliest spot he can reach as the carrier gets there; a
+      // good pursuer (lead ~1) takes all of it, a poor one undercuts less.
+      let ts = 3
+      for (let tau = 0.1; tau <= 3 + 1e-6; tau += 0.1) {
+        const q = f.future(carrier, t + tau)!
+        if (Math.hypot(q.x - me.x, q.y - me.y) - R <= top * tau) { ts = tau; break }
+      }
+      const q = f.future(carrier, t + ts * Math.min(1, opts.lead ?? 0.85))!
+      return { x: q.x + nx * R * 0.8, y: q.y + ny * R * 0.8 + (opts.side ?? 0) * 0.5, speed: top, ring }
+    }
     const tau = clampN(d / Math.max(2, top), 0, 1.4) * (opts.lead ?? 0.85)
     const tx = c.x + cv.x * tau + nx * R * 0.8
     const ty = c.y + cv.y * tau + ny * R * 0.8 + (opts.side ?? 0)
