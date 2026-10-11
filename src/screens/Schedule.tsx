@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Play, SkipForward } from 'lucide-react'
+import { Cloud, CloudRain, CloudSnow, CloudSun, Play, SkipForward } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { recordOf, recordStr, scheduleFor } from '../game/selectors'
+import { forecastFor, gameWeather, getWeather, type GameWeather, type WeatherForecast } from '../game/engine/weather'
 import { useGame, useWorld } from '../store/gameStore'
 import { BoxScore } from '../components/MatchView'
 import { TeamHoverCard } from '../components/TeamHoverCard'
@@ -121,6 +122,10 @@ export function Schedule() {
             const slot = raw?.slot
             const stakes = raw && career ? stakesFor(league, career, raw) : null
             const stakesLine = raw && career ? stakesText(league, career, raw) : ''
+            // FUTURES #6: actual conditions for played games, the forecast for
+            // upcoming ones. Hidden entirely when `getWeather()` is off.
+            const wx = raw && getWeather() ? gameWeather(league, raw) : null
+            const fc = !g.played && getWeather() ? forecastFor(league, activeTeamId, g.week) : null
             if (g.played) {
               if ((g.teamScore ?? 0) > (g.oppScore ?? 0)) w++
               else if ((g.teamScore ?? 0) < (g.oppScore ?? 0)) l++
@@ -140,6 +145,7 @@ export function Schedule() {
                 <div className="w-14 shrink-0">
                   <div className="label">Week {g.week}</div>
                   <div className="label normal-case text-muted">{g.home ? 'Home' : 'Away'}</div>
+                  <RowWeather played={g.played} wx={wx} fc={fc} />
                 </div>
                 {/* max-sm:min-w-40 lets the action buttons wrap below instead of squeezing the opponent to a sliver. */}
                 <TeamHoverCard team={opp} className="min-w-0 flex-1 max-sm:min-w-40" info>
@@ -270,6 +276,34 @@ export function Schedule() {
 }
 
 const EMPTY_TOTALS = { passYds: 0, rushYds: 0, turnovers: 0, sacks: 0 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUTURES #6: the per-row weather read-out (icon + temperature). Played games
+// show the conditions they were played in; upcoming games show the forecast.
+// ─────────────────────────────────────────────────────────────────────────────
+function WxGlyph({ precip, closed, size = 13 }: { precip: GameWeather['precip']; closed: boolean; size?: number }) {
+  if (closed) return <Cloud size={size} aria-hidden />
+  if (precip === 'snow') return <CloudSnow size={size} aria-hidden />
+  if (precip === 'rain') return <CloudRain size={size} aria-hidden />
+  return <CloudSun size={size} aria-hidden />
+}
+
+function RowWeather({ played, wx, fc }: { played: boolean; wx: GameWeather | null; fc: WeatherForecast | null }) {
+  const temp = played ? wx?.tempF : fc ? Math.round((fc.tempF.lo + fc.tempF.hi) / 2) : undefined
+  if (temp == null) return null
+  const precip = (played ? wx?.precip : fc?.precip) ?? 'none'
+  const closed = played ? !!wx?.closed : !!fc?.closed
+  const wind = played ? wx?.windMph ?? 0 : fc ? Math.round((fc.windMph.lo + fc.windMph.hi) / 2) : 0
+  const title = played
+    ? `Played in ${temp}°F, ${wind} mph wind${precip === 'none' ? '' : `, ${precip}`}${closed ? ' (indoors)' : ''}`
+    : `Forecast: ${temp}°F, ${wind} mph wind${precip === 'none' ? '' : `, ${precip}`}${closed ? ' (indoors)' : ''}`
+  return (
+    <span className="mt-0.5 flex items-center gap-1 text-label text-muted" title={title}>
+      <WxGlyph precip={precip} closed={closed} size={12} />
+      <span className="font-cond font-600 tnum text-ink-2">{temp}°</span>
+    </span>
+  )
+}
 
 function TeamTotals({
   name,

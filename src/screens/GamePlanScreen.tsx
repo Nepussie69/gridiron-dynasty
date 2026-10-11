@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronRight, ClipboardList, Repeat, Search, X } from 'lucide-react'
+import { useMemo, useState, type ReactNode } from 'react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronRight, ClipboardList, Cloud, CloudRain, CloudSnow, CloudSun, Repeat, Search, Thermometer, Volume2, Wind, X } from 'lucide-react'
 import { cn } from '../lib/cn'
+import { forecastFor, gameWeather, getWeather, type GameWeather } from '../game/engine/weather'
 import { signed } from '../lib/format'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
 import { DEFAULT_ST, stRecordText, alertness } from '../game/engine/specialCalls'
@@ -91,6 +92,8 @@ export function GamePlanScreen() {
 
   const awayTeam = next ? (next.home ? opp : team) : null
   const homeTeam = next ? (next.home ? team : opp) : null
+  // FUTURES #6: this week's conditions. Off (`getWeather()`) hides the whole card.
+  const showWeather = next ? getWeather() && !!forecastFor(league, career.teamId, next.week) : false
 
   return (
     <div>
@@ -121,6 +124,7 @@ export function GamePlanScreen() {
 
       {/* Up Next — the ScoreBlock hero, first on every breakpoint. */}
       {next && opp && oppRatings && awayTeam && homeTeam && (
+        <div className={cn('grid items-start gap-4', showWeather && 'xl:grid-cols-[minmax(0,1fr)_340px]')}>
         <Card pad={false} className="overflow-hidden">
           <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-2">
             <span className="label">Up next · Week {next.week}</span>
@@ -208,6 +212,10 @@ export function GamePlanScreen() {
             {oppSt && <div className="mt-0.5">Special teams: <strong className="text-ink-2">{oppSt}</strong></div>}
           </div>
         </Card>
+
+        {/* FUTURES #6: this week's forecast, beside the opponent card. */}
+        <WeatherCard teamId={career.teamId} week={next.week} home={next.home} />
+        </div>
       )}
 
       {/* ── This week: the orders the side switch edits. ──────────────────────── */}
@@ -307,7 +315,149 @@ export function GamePlanScreen() {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// FUTURES #6: the pre-game WeatherCard. Reads the pure model only
+// (`forecastFor` for the week's range, `gameWeather` for the along-field
+// direction) and renders nothing when `getWeather()` is off.
+// ─────────────────────────────────────────────────────────────────────────────
 
+/** The precip / roof glyph shared by the weather read-outs. */
+function WxGlyph({ precip, closed, size = 15 }: { precip: GameWeather['precip']; closed: boolean; size?: number }) {
+  if (closed) return <Cloud size={size} aria-hidden />
+  if (precip === 'snow') return <CloudSnow size={size} aria-hidden />
+  if (precip === 'rain') return <CloudRain size={size} aria-hidden />
+  return <CloudSun size={size} aria-hidden />
+}
+
+/** A small arrow for the wind's along-field component (positive = one end). */
+function WindArrow({ along }: { along: number }) {
+  if (Math.abs(along) < 3) return null
+  return (
+    <span className="inline-flex items-center text-muted" title="Wind along the field">
+      {along > 0 ? <ArrowRight size={13} aria-hidden /> : <ArrowLeft size={13} aria-hidden />}
+      <span className="sr-only">wind along the field</span>
+    </span>
+  )
+}
+
+/** One plain-English sentence on what the conditions will change. */
+function weatherRead(w: GameWeather, onRoad: boolean): string {
+  if (w.closed) return 'Indoors — no weather.'
+  const bits: string[] = []
+  if (w.windMph >= 15) bits.push(`wind ${w.windMph} mph: long FGs and deep passes harder`)
+  else if (w.windMph >= 8) bits.push(`wind ${w.windMph} mph: kicks and deep balls a bit tougher`)
+  if (w.precip === 'snow') bits.push('snow: fumbles up, footing tricky')
+  else if (w.precip === 'rain') bits.push('rain: ball security and footing suffer')
+  if (w.tempF <= 32 && w.precip !== 'snow') bits.push('cold: the ball is harder to hold')
+  if (w.altitude >= 3000) bits.push('altitude: kicks carry farther')
+  if (onRoad && w.loud >= 0.75) bits.push(`crowd ${Math.round(w.loud * 100)}: expect false-start pressure`)
+  if (!bits.length) return 'Mild conditions — no real weather edge.'
+  const s = bits.join('; ')
+  return s.charAt(0).toUpperCase() + s.slice(1) + '.'
+}
+
+/** One weather stat tile (label + a big value + an optional sub-line). */
+function WxStat({ icon, label, value, sub, tone }: {
+  icon: ReactNode
+  label: string
+  value: ReactNode
+  sub?: ReactNode
+  tone?: 'warn'
+}) {
+  return (
+    <div className="min-w-0 rounded-[var(--r-md)] border border-line bg-surface-2 px-3 py-2">
+      <div className="label flex items-center gap-1.5">
+        <span className="text-muted" aria-hidden>{icon}</span>
+        <span className="truncate">{label}</span>
+      </div>
+      <div className={cn('mt-1 flex items-center gap-1 font-display text-lg font-700 tnum leading-none', tone === 'warn' ? 'text-warn' : 'text-ink')}>
+        {value}
+      </div>
+      {sub && <div className="mt-0.5 truncate text-micro text-muted">{sub}</div>}
+    </div>
+  )
+}
+
+/**
+ * This week's forecast for the user's game: venue and roof, temperature, wind
+ * (speed + along-field arrow), precipitation, crowd noise, and one line of what
+ * it does to the game. Beside the opponent card on wide screens.
+ */
+function WeatherCard({ teamId, week, home }: { teamId: string; week: number; home: boolean }) {
+  const league = useWorld()
+  if (!getWeather()) return null
+  const fc = forecastFor(league, teamId, week)
+  if (!fc) return null
+  const game = league.schedule.find((g) => g.week === week && (g.homeId === teamId || g.awayId === teamId))
+  const wx = game ? gameWeather(league, game) : null
+  const venue = game ? league.byId[game.homeId]?.stadium : undefined
+  const onRoad = !home
+
+  const roofLabel = fc.closed ? (fc.roof === 'dome' ? 'Indoors · fixed roof' : 'Roof closed') : fc.roof === 'retractable' ? 'Roof open' : 'Open air'
+  const tempLabel = `${fc.tempF.lo}–${fc.tempF.hi}°F`
+  const tempSub = fc.closed ? 'Indoors' : `${Math.round((fc.tempF.lo + fc.tempF.hi) / 2)}°F now`
+  const windLabel = fc.closed ? 'Calm' : fc.windMph.lo === fc.windMph.hi ? `${fc.windMph.hi} mph` : `${fc.windMph.lo}–${fc.windMph.hi} mph`
+  const precipLabel = fc.closed ? '—' : fc.precipChance < 0.15 ? 'None' : `${Math.round(fc.precipChance * 100)}%`
+  const precipSub = fc.closed ? 'Indoors' : fc.precip === 'snow' ? 'Snow' : fc.precip === 'rain' ? 'Rain' : 'Chance'
+  const crowdLabel = `${Math.round(fc.loud * 100)}`
+  // The read uses the forecast midpoints, not the game's actual draw, so it
+  // never gives away more than the (analytics-narrowed) range shows.
+  const read = wx
+    ? weatherRead({
+        ...wx,
+        tempF: Math.round((fc.tempF.lo + fc.tempF.hi) / 2),
+        windMph: Math.round((fc.windMph.lo + fc.windMph.hi) / 2),
+        precip: fc.precipChance < 0.15 ? 'none' : fc.precip,
+      }, onRoad)
+    : 'Forecast only.'
+
+  return (
+    <Card className="min-w-0">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-muted" aria-hidden><WxGlyph precip={fc.precip} closed={fc.closed} size={17} /></span>
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Kickoff Conditions</h3>
+        <Badge tone="neutral" className="ml-auto">{roofLabel}</Badge>
+        {fc.narrow && <Badge tone="info">Analytics</Badge>}
+      </div>
+
+      <div className="mb-3 truncate text-small text-muted" title={venue}>
+        {venue ? `${venue} · ` : ''}{roofLabel}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
+        <WxStat
+          icon={<Thermometer size={13} />}
+          label="Temp"
+          value={tempLabel}
+          sub={tempSub}
+        />
+        <WxStat
+          icon={<Wind size={13} />}
+          label="Wind"
+          value={<>{windLabel}{wx && !fc.closed && <WindArrow along={wx.windAlong} />}</>}
+          sub={fc.closed ? 'Roof closed' : 'Along the field'}
+        />
+        <WxStat
+          icon={<WxGlyph precip={fc.precip} closed={fc.closed} size={13} />}
+          label="Precip"
+          value={precipLabel}
+          sub={precipSub}
+        />
+        <WxStat
+          icon={<Volume2 size={13} />}
+          label="Crowd"
+          value={crowdLabel}
+          sub={onRoad ? 'On the road' : 'Home crowd'}
+          tone={onRoad && fc.loud >= 0.75 ? 'warn' : undefined}
+        />
+      </div>
+
+      <p className="mt-3 rounded-[var(--r-md)] bg-surface-2 px-3 py-2 text-small leading-snug text-ink-2">
+        {read}
+      </p>
+    </Card>
+  )
+}
 
 /** L12.9 H1: opponent film moved here from the removed weekly hours card. */
 function StudyOpponentCard({ oppId }: { oppId?: string }) {
