@@ -1526,7 +1526,7 @@ function passProtect(
   m: Record<string, Mover>,
   f: Formation,
   los: number,
-  opts: { rushers: string[]; blockers: string[]; winner?: string; qbTarget: Pt; arriveSec: number; holdTo?: number; seed?: number },
+  opts: { rushers: string[]; blockers: string[]; winner?: string; qbTarget: Pt; arriveSec: number; holdTo?: number; seed?: number; beaten?: string },
 ): { doubled: string[]; free: string[]; pairs: { r: string; bs: string[] }[]; wallX: number } {
   const R = opts.rushers.filter((k) => m[k] && f[k])
   const B = opts.blockers.filter((k, i, a) => m[k] && f[k] && a.indexOf(k) === i)
@@ -1562,6 +1562,29 @@ function passProtect(
     const b = avail.reduce((a, c) => (Math.abs(f[c].y - f[r].y) < Math.abs(f[a].y - f[r].y) ? c : a))
     usedB.add(b)
     pairs.push({ r, bs: [b] })
+  }
+  // animflow r6c2: the sim's own rep (J8b) names the blocker the credited
+  // rusher beat — he is the man on him (taken from whoever had him). A
+  // winner who starts so deep (a corner / safety blitz) that he could not reach
+  // the wall and still beat a block before the recorded moment comes free.
+  const wp = opts.winner ? pairs.find((p) => p.r === opts.winner) : undefined
+  // (Only when the drawn line puts that man across from him: the sim's blocker
+  // order need not match the drawn alignment, and a rusher must never cross
+  // the formation to reach "his" man.)
+  const nearB = wp ? [...B].sort((a, b) => Math.abs(f[a].y - f[wp.r].y) - Math.abs(f[b].y - f[wp.r].y)).slice(0, 2) : []
+  if (wp && opts.beaten && nearB.includes(opts.beaten) && !(wp.bs.length === 1 && wp.bs[0] === opts.beaten)) {
+    const had = pairs.find((p) => p !== wp && p.bs.includes(opts.beaten!))
+    const old = wp.bs
+    wp.bs = [opts.beaten]
+    if (had) {
+      had.bs = had.bs.filter((b) => b !== opts.beaten)
+      const give = old.find((b) => b !== opts.beaten && !had.bs.includes(b))
+      if (!had.bs.length && give) had.bs = [give]
+    }
+  }
+  if (wp && wp.bs.length && f[wp.r] && /^(cb|s)/.test(wp.r)) {
+    const reach = Math.hypot(f[wp.r].x - opts.qbTarget.x, f[wp.r].y - opts.qbTarget.y) / Math.max(4, m[wp.r].pace.top * 0.85) + 0.3
+    if (reach > opts.arriveSec - 0.7) wp.bs = []
   }
   // Record the protection matchups: a doubled rusher is a 'double' for each of
   // his two blockers, everyone else a single 'block'. finish() trims each to the
@@ -3236,7 +3259,7 @@ function angleChase(m: Record<string, Mover>, keys: string[], fromSec: number, c
     let v = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 0, y: 0 }
     const top = mv.pace.top
     const acc = Math.max(3, mv.pace.acc)
-    const gap = 1.3 + hash(seed + i * 1.7) * 0.6
+    const gap = 2.0 + hash(seed + i * 1.7) * 0.8
     const dt = 0.05
     let t = mv.t
     while (t + dt <= toSec + 1e-6) {
@@ -3690,6 +3713,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', ...stayIn],
     winner: pressureKey,
     qbTarget: posAt(m.qb.path, releaseSec),
+    beaten: play.beatenBlockerId ? [...(ctx.actors?.entries() ?? [])].find(([, p]) => p.id === play.beatenBlockerId)?.[0] : undefined,
     arriveSec: releaseSec,
     holdTo,
     seed,
@@ -3938,7 +3962,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // real pursuit angles (the fast men close, the rest angle at the pylon).
     if (isTD) runThroughGoal(m[tgt], 110, 1)
     const endSec = m[tgt].t
-    angleChase(m, pursuers, catchSec, m[tgt], endSec, seed)
+    // The chase is over at the goal line: they pull up as he crosses.
+    const chaseTo = isTD ? Math.min(endSec, (crossX(m[tgt], 110, catchSec, endSec, 1) ?? endSec) + 0.3) : endSec
+    angleChase(m, pursuers, catchSec, m[tgt], chaseTo, seed)
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
     recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
@@ -4018,6 +4044,7 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
     blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4'],
     winner: rusherKey,
     qbTarget: qbEnd,
+    beaten: play.beatenBlockerId ? [...(ctx.actors?.entries() ?? [])].find(([, p]) => p.id === play.beatenBlockerId)?.[0] : undefined,
     arriveSec: sackT,
     holdTo: sackT,
     seed,

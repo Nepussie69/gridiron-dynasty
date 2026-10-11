@@ -2191,6 +2191,10 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           const shot = d.shotAt(t)
           // Before the contact, outside the goal-line / sideline framings (those park on a line by design).
           if (shot.kind !== 'follow' || shot.rule === 'goalLine' || shot.rule === 'sideline') continue
+          // animflow r6c2: inside the goal-line framing zone (directorRules goalLine: carrier within 8 of a
+          // goal) the frame holds the goal line by design even when keepCarrier is the last rule applied; a
+          // score is now run through the line at speed instead of stopping on it.
+          if (p0.x >= 102 || p0.x <= 18) continue
           const lag = ((p0.x - shot.cx) * (p1.x - p0.x) + (p0.y - shot.cy) * (p1.y - p0.y)) * 60 / v
           lags.push(lag)
           spans.push(shot.span)
