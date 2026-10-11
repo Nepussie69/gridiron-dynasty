@@ -149,8 +149,12 @@ const deepShot: DirectorRule = {
   shape(ctx, desired) {
     const fl = ctx.anim.flights![0]
     if (ctx.t > fl.t1 + 0.02) {
-      // After the catch / incompletion: tighten back onto the carrier.
-      if (ctx.carrier) return { cx: ctx.carrier.x, cy: ctx.carrier.y, span: Math.min(desired.span, 32) }
+      // After the catch / incompletion: tighten back onto the carrier, leading
+      // his run like the base framing (animflow 6b-wx: no 0.4 s trail after the catch).
+      if (ctx.carrier) {
+        const v = velAt(ctx, ctx.carrier.key, ctx.t)
+        return { cx: clamp(ctx.carrier.x + v.x * 0.35, 3, 117), cy: clamp(ctx.carrier.y + v.y * 0.35, 3, FIELD_H - 3), span: Math.min(desired.span, 32) }
+      }
       return { ...desired, span: Math.min(desired.span, 34) }
     }
     // In flight: lead along the ball's path toward the catch spot.
@@ -323,7 +327,8 @@ const longReturn: DirectorRule = {
   shape(ctx) {
     const c = ctx.carrier!
     const v = velAt(ctx, c.key, ctx.t)
-    return { cx: clamp(c.x + v.x * 0.4, 3, 117), cy: clamp(c.y + v.y * 0.4, 3, FIELD_H - 3), span: 46 }
+    // animflow 6b-wx: open up less (46 → 38) so a long return keeps its speed on screen.
+    return { cx: clamp(c.x + v.x * 0.4, 3, 117), cy: clamp(c.y + v.y * 0.4, 3, FIELD_H - 3), span: 38 }
   },
   mustSee(ctx) {
     const c = ctx.carrier!
@@ -391,7 +396,15 @@ const goalLine: DirectorRule = {
     // Special teams have their own rules (kicks / fieldGoal); a kickoff's LOS is
     // the receiving 10, which must not drag the goal-line framing onto a punt.
     if (ctx.kind === 'kickoff' || ctx.kind === 'punt' || ctx.kind === 'fg' || ctx.kind === 'pat') return false
-    if (ctx.los >= 100 || ctx.los <= 20) return true
+    if (ctx.los >= 100 || ctx.los <= 20) {
+      // Goal to go / backed up: hold the goal-line framing only while the play
+      // is still near that goal line. animflow 6b-wx: a backed-up play broken
+      // for 40 yd used to keep the camera parked at the own goal line, aiming
+      // up after the runner (he crossed the top of the frame).
+      const gl = ctx.los >= 55 ? GOAL_LINE : OWN_GOAL_LINE
+      const x = ctx.carrier ? ctx.carrier.x : ctx.ball.x
+      return Math.abs(x - gl) <= 14
+    }
     const c = ctx.carrier
     if (!c) return false
     return c.x >= GOAL_LINE - 8 || c.x <= OWN_GOAL_LINE + 8

@@ -34,6 +34,8 @@ import { deviceKey, setAutoQState, useViewSettings } from './broadcast/viewSetti
 import { gameDayReplay, replayable, type ReplayPlan } from './broadcast/replay'
 import type { BroadcastAnim } from './broadcast/animData'
 import type { LivePlay, LiveReplayPhase } from './broadcast/liveView'
+import { fieldWeather } from './broadcast/weatherFx'
+import { getWeather, type GameWeather } from '../game/engine/weather'
 
 const CENTER_Y = 26.65
 const W = 120
@@ -414,6 +416,10 @@ export function MatchView() {
   const vsettings = useViewSettings()
   const homeId = match?.homeId
   const awayId = match?.awayId
+  // animflow 6b-wx: the game's recorded conditions on the 2.5D field (GameSim.weather,
+  // read-only). Null indoors / weather off / none recorded.
+  const simWx = (match as { weather?: GameWeather } | null)?.weather
+  const fieldWx = useMemo(() => fieldWeather(simWx, getWeather()), [simWx])
   // The live canvas element itself (callback ref -> state), so a remounted
   // canvas (new game over an old one, error-boundary reset) gets a fresh view.
   const [liveCanvas, setLiveCanvas] = useState<HTMLCanvasElement | null>(null)
@@ -429,7 +435,7 @@ export function MatchView() {
   useEffect(() => {
     liveFeedRef.current = (ctl) => {
       if (!homeId || !awayId || !play || !anim) return
-      ctl.setPlay(buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }))
+      ctl.setPlay(buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map(), weather: fieldWx }))
       ctl.setTime(clock.i === idx ? clock.t : 0)
     }
   })
@@ -479,9 +485,9 @@ export function MatchView() {
     const ctl = liveCtlRef.current
     if (!ctl || !homeId || !awayId || !play || !anim) return
     ctl.setPlay(
-      buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }),
+      buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map(), weather: fieldWx }),
     )
-  }, [broadcastLive, homeId, awayId, play, anim, actorMap, numbers])
+  }, [broadcastLive, homeId, awayId, play, anim, actorMap, numbers, fieldWx])
 
   // Feed the animation clock (identical play duration in Full and Lite).
   useEffect(() => {
@@ -520,7 +526,7 @@ export function MatchView() {
     if (!plan.replay) return false
     if (broadcastLive) return liveCtlRef.current?.startReplay(plan, lead) ?? false
     if (overlayCtlRef.current?.replaying) return false
-    pendingReplayRef.current = { plan, lead, lp: buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }) }
+    pendingReplayRef.current = { plan, lead, lp: buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map(), weather: fieldWx }) }
     setOverlayKey(`${matchSeq}:${idx}:${Date.now()}`)
     return true
   }

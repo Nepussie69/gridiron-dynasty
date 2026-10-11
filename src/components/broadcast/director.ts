@@ -69,6 +69,23 @@ const OMEGA_CENTER = 5 // rad/s, the centre spring
 const OMEGA_SPAN = 2.5 // rad/s, the slower span spring
 const OMEGA_CAM = 8 // rad/s-equivalent, the height / aim / heading springs
 const SAFE_INSET = 0.06
+// animflow 6b-wx (backlog 281): the 2.5D speed feel. While a ball carrier runs
+// in the open (before contact) the shot no longer zooms out on him (a wide shot
+// made a breakaway crawl), the camera rises a little with his along-field speed
+// (the skycam looks down the field, so along-field motion is foreshortened by
+// ~sin(pitch): a steeper look shows more of it) and the lead reads the speed
+// ~0.2 s ahead, so a burst is not trailed.
+/** Carrier speed (yd/s) from which the follow span is capped, and where the cap is fully on. */
+const FAST_SPAN_V0 = 4.5
+const FAST_SPAN_V1 = 7
+/** Widest follow span for a carrier at speed (yd). */
+export const FAST_SPAN_MAX = 34
+/** Extra camera height at full along-field speed, as a share of the rig height (14 → +5 yd live). */
+export const FAST_RISE = 5 / 14
+const FAST_RISE_V0 = 4.5
+const FAST_RISE_V1 = 8.5
+/** How far ahead the camera reads the carrier's / ball's velocity (s). */
+export const LEAD_LOOKAHEAD_SEC = 0.2
 /** animflow r6a: the pre-snap formation shot is a little wider (was 34..55). */
 const PRE_SPAN_MIN = 40
 const PRE_SPAN_MAX = 58 // 6% each side, incl. the top for the ball's height
@@ -589,17 +606,25 @@ export function createDirector(opts: DirectorOptions = {}): Director {
     // Reused per frame to keep the track build allocation-light.
     const watch: Pt3[] = []
     const spanPts: Pt2[] = []
+    // animflow 6b-wx: velocities are read over the next LEAD_LOOKAHEAD_SEC (the
+    // track is built offline, so the camera can anticipate a burst instead of
+    // trailing it by a spring's time constant).
+    const ahead = Math.max(1, Math.round(LEAD_LOOKAHEAD_SEC / FRAME_SEC))
     const ballVel = (k: number): Pt2 => {
       if (k <= 0) return { x: 0, y: 0 }
-      const dt = Math.max(1e-4, (times[k] - times[k - 1]) * duration)
-      return { x: (ball.x[k] - ball.x[k - 1]) / dt, y: (ball.y[k] - ball.y[k - 1]) / dt }
+      const k1 = Math.min(nFrames, k + ahead)
+      const k0 = k1 > k ? k : k - 1
+      const dt = Math.max(1e-4, (times[k1] - times[k0]) * duration)
+      return { x: (ball.x[k1] - ball.x[k0]) / dt, y: (ball.y[k1] - ball.y[k0]) / dt }
     }
     const carrierVel = (key: string, k: number): Pt2 => {
       if (k <= 0) return { x: 0, y: 0 }
       const s = ax.get(key)
       if (!s) return { x: 0, y: 0 }
-      const dt = Math.max(1e-4, (times[k] - times[k - 1]) * duration)
-      return { x: (s.x[k] - s.x[k - 1]) / dt, y: (s.y[k] - s.y[k - 1]) / dt }
+      const k1 = Math.min(nFrames, k + ahead)
+      const k0 = k1 > k ? k : k - 1
+      const dt = Math.max(1e-4, (times[k1] - times[k0]) * duration)
+      return { x: (s.x[k1] - s.x[k0]) / dt, y: (s.y[k1] - s.y[k0]) / dt }
     }
 
     for (let k = 0; k <= nFrames; k++) {
@@ -685,9 +710,23 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       } else if (brokenSec != null && sec >= brokenSec) {
         kindName = 'follow'
       }
+      // animflow 6b-wx: a carrier running in the open keeps the follow scale
+      // (no zoom-out on a breakaway) and the camera rises with his along-field
+      // speed; both bleed out with the lead from the contact on.
+      let wantZ = rig.height
+      let fastRun = 0
+      const runner = hKey != null && !flightActive[k] && !(hKey === 'qb' && (kind === 'pass' || kind === 'sack'))
+      if (runner && keepLead > 0) {
+        const cv = carrierVel(hKey!, k)
+        const sp = Math.hypot(cv.x, cv.y)
+        const fast = clamp01((sp - FAST_SPAN_V0) / (FAST_SPAN_V1 - FAST_SPAN_V0)) * keepLead
+        fastRun = fast
+        if (fast > 0) wantSpan = Math.min(wantSpan, lerp(wantSpan, FAST_SPAN_MAX, fast))
+        wantZ = rig.height * (1 + FAST_RISE * clamp01((Math.abs(cv.x) - FAST_RISE_V0) / (FAST_RISE_V1 - FAST_RISE_V0)) * keepLead)
+      }
       wantX = clamp(wantX, 3, 117)
       wantY = clamp(wantY, 3, FIELD_H - 3)
-      let desired: Shot = { cx: wantX, cy: wantY, span: wantSpan, z: rig.height, yaw: 0 }
+      let desired: Shot = { cx: wantX, cy: wantY, span: wantSpan, z: wantZ, yaw: 0 }
 
       // ── B5b rules (array order, after the base framing) ─────────────────
       let ruleId: string | undefined
@@ -731,7 +770,11 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       const dt = Math.max(1e-4, (times[k] - times[k - 1]) * duration)
       const sxp = smoothDamp(cx, desired.cx, vx, OMEGA_CENTER, dt)
       const syp = smoothDamp(cy, desired.cy, vy, OMEGA_CENTER, dt)
-      const ssp = smoothDamp(span, desired.span, vs, OMEGA_SPAN, dt)
+      // animflow 6b-wx: a fast carrier's shot closes in at the centre spring's
+      // rate (the slow span spring held a kick returner's burst in the wide
+      // hang shot for ~1.5 s).
+      const omSpan = fastRun > 0 && desired.span < span ? lerp(OMEGA_SPAN, OMEGA_CENTER, fastRun) : OMEGA_SPAN
+      const ssp = smoothDamp(span, desired.span, vs, omSpan, dt)
       // B5b: ease the rule-provided height / aim / heading, rate-limited like the
       // pan. A rule's `pitch` is the aim elevation (radians, negative looks down);
       // with none we look at the ground focus (B5a's framing) at the eased height.
