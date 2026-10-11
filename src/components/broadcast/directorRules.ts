@@ -390,6 +390,18 @@ const fieldGoal: DirectorRule = {
 const GOAL_LINE = 110
 const OWN_GOAL_LINE = 10
 
+/**
+ * Which goal line the framing is about. Goal to go / backed up: the one at the
+ * line of scrimmage. Otherwise the one the carrier is near (animflow 6c: an
+ * 86-yd catch-and-run from the own 24 framed the OWN goal line once he got
+ * inside the 8 — the camera ran 30 yd back up the field away from him).
+ */
+function goalOf(ctx: ShotContext): number {
+  if (ctx.los >= 100 || ctx.los <= 20) return ctx.los >= 55 ? GOAL_LINE : OWN_GOAL_LINE
+  const x = ctx.carrier ? ctx.carrier.x : ctx.ball.x
+  return x >= 60 ? GOAL_LINE : OWN_GOAL_LINE
+}
+
 const goalLine: DirectorRule = {
   id: 'goalLine',
   applies(ctx) {
@@ -401,7 +413,7 @@ const goalLine: DirectorRule = {
       // is still near that goal line. animflow 6b-wx: a backed-up play broken
       // for 40 yd used to keep the camera parked at the own goal line, aiming
       // up after the runner (he crossed the top of the frame).
-      const gl = ctx.los >= 55 ? GOAL_LINE : OWN_GOAL_LINE
+      const gl = goalOf(ctx)
       const x = ctx.carrier ? ctx.carrier.x : ctx.ball.x
       return Math.abs(x - gl) <= 14
     }
@@ -410,8 +422,8 @@ const goalLine: DirectorRule = {
     return c.x >= GOAL_LINE - 8 || c.x <= OWN_GOAL_LINE + 8
   },
   shape(ctx, desired) {
-    const scoring = ctx.los >= 55
-    const gl = scoring ? GOAL_LINE : OWN_GOAL_LINE
+    const gl = goalOf(ctx)
+    const scoring = gl === GOAL_LINE
     const scored = ctx.events.some((e) => e.kind === 'score')
     // The goal line sits ~1/3 in from the end-zone edge: frame ~30 yd, the back
     // line at one side, so the goal line lands a third of the way across.
@@ -423,8 +435,8 @@ const goalLine: DirectorRule = {
     return { cx, cy, span: clamp(desired.span, 24, 40) }
   },
   mustSee(ctx) {
-    const scoring = ctx.los >= 55
-    const gl = scoring ? GOAL_LINE : OWN_GOAL_LINE
+    const gl = goalOf(ctx)
+    const scoring = gl === GOAL_LINE
     const y = ctx.carrier ? ctx.carrier.y : MID_Y
     // Pin the goal line and the end zone AT THE CARRIER's lane, plus the nearest
     // pylon — pinning both corners 53 yd apart cannot fit the safe frame and

@@ -2210,6 +2210,76 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const spanMed = spans[Math.floor(spans.length / 2)]
     assert.ok(spanMed <= FAST_SPAN_MAX + 4, `fast-carrier follow span median ${spanMed.toFixed(1)} yd`)
   })
+
+  ok('animflow 6c: a credited sacker / pressure rusher / run tackler off a block visibly beats it (move recorded, clear of him before contact); other rushers stay engaged, no teleports', () => {
+    store.useGame.getState().startCareer({ name: 'S', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const BLK = new Set(['block', 'double', 'chip'])
+    let sacks = 0
+    let runs = 0
+    let rushers = 0
+    const bad: string[] = []
+    for (let g = 0; g < 6; g++) {
+      const home = nfl[(g * 5) % nfl.length].id
+      const away = nfl[(g * 5 + 2) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 29 + g * 131)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' && play.type !== 'run') continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const D = anim.duration / 1000
+        const keyOf = (id?: string) => (id ? [...actors.entries()].find(([, p]) => p.id === id)?.[0] : undefined)
+        const A = new Map(anim.actors.map((a) => [a.key, a]))
+        const engs = (anim.engagements ?? []).filter((e) => BLK.has(e.kind))
+        const ev = (k: string) => (anim.events ?? []).find((e) => e.kind === k)
+        let key: string | undefined
+        let tC: number | undefined
+        let minFree = 0
+        if (play.type === 'pass' && play.result.startsWith('Sack')) { key = keyOf(play.sackId); tC = ev('sack')?.t; minFree = 0.6 }
+        else if (play.type === 'pass' && (play.pressureType === 'hit' || play.pressureType === 'hurry')) { key = keyOf(play.pressureId); tC = ev('throw')?.t; minFree = -0.15 } // a hurry on a quick throw: he wins as the ball leaves
+        else if (play.type === 'run') {
+          const te = ev('tackle')
+          key = keyOf(play.tackleIds?.[0])
+          if (!key || !/^dl/.test(key) || !te || Math.abs(te.spot.x - (10 + play.startYard)) > 3) key = undefined
+          const c = (anim.events ?? []).find((e) => e.kind === 'contact' && e.keys[1] === key)
+          tC = c?.t ?? te?.t
+          minFree = 0.3
+        }
+        if (key && tC != null) {
+          const mine = engs.filter((e) => (e.a === key || e.b === key) && e.t0 < tC!)
+          if (mine.length) {
+            const last = Math.max(...mine.map((e) => e.t1))
+            const free = (tC - last) * D
+            const sh = (anim.sheds ?? []).find((x) => x.def === key)
+            if (play.type === 'pass' && play.result.startsWith('Sack')) sacks++
+            if (play.type === 'run') runs++
+            if (!sh) bad.push(`play ${i} ${play.type} ${key}: no shed move recorded`)
+            else if (free < minFree - 1e-6) bad.push(`play ${i} ${play.type} ${key}: still on his block ${free.toFixed(2)} s before contact (min ${minFree})`)
+            else if (sh.t0 > last + 0.05 / D) bad.push(`play ${i} ${play.type} ${key}: shed move after the block ended`)
+          }
+        }
+        if (play.type === 'pass') {
+          for (const r of ['dl0', 'dl1', 'dl2', 'dl3']) {
+            const a = A.get(r)
+            if (!a || r === key) continue
+            rushers++
+            let mx = 0
+            for (let s = 0.2; s < D - 0.05; s += 0.05) {
+              const p = posAt(a.path, s / D)
+              const q = posAt(a.path, (s + 0.05) / D)
+              mx = Math.max(mx, Math.hypot(q.x - p.x, q.y - p.y) / 0.05)
+            }
+            if (mx > 12) bad.push(`play ${i} ${r}: ${mx.toFixed(1)} yd/s jump (teleport)`)
+          }
+        }
+      }
+    }
+    assert.ok(sacks >= 8 && runs >= 10 && rushers > 500, `coverage: ${sacks} engaged sacks, ${runs} DL run stops, ${rushers} rushers`)
+    assert.ok(bad.length === 0, `${bad.length} bad sheds: ${bad.slice(0, 4).join('; ')}`)
+  })
 }
 
 console.log(`check-broadcast: PASS (${n} checks)`)
