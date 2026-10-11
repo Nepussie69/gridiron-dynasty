@@ -91,13 +91,17 @@ export const SITUATIONAL = {
   /** 'hurry' mode adds this much more pass on top of the script term. */
   hurryK: 0.15,
   /** Zone leans (logit), relative to the between-the-20s baseline. The table
-   *  already carries most of the shape, so these only nudge the extremes. */
+   *  already carries most of the shape, so these only nudge the extremes.
+   *  J1-fix: the goal-to-go lean is raised (zoneGtg 0.15 -> 0.22) so the most
+   *  TD-prone snaps (goal-to-go runs convert ~48%) become passes instead, pulling
+   *  Rushing TD back into band (J1 had left it high). zoneRz is nudged down to
+   *  hold the overall pass share, since red-zone runs almost never score. */
   zoneBacked: 0,
   zonePlus: 0.18,
   zoneMid: 0,
-  zoneRz: -0.05,
+  zoneRz: -0.09,
   zoneGl: 0.22,
-  zoneGtg: 0.15,
+  zoneGtg: 0.22,
   /** Returned probability is clamped here. */
   lo: 0.05,
   hi: 0.97,
