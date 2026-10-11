@@ -365,6 +365,30 @@ export type StaffRole =
   | 'General Manager'
   | 'Analytics'
 
+/**
+ * J9 (FUTURES #32): a coach's individual sub-ratings, 0–99, the staff equivalent
+ * of a player's attribute sheet. Each in-game coaching effect reads the specific
+ * sub for the seat, never the coach's single overall `rating`.
+ *   playCalling    OC — each snap's call vs the defence's look/tendencies
+ *   gameManagement HC — clock, timeouts, 4th-down / two-point decisions
+ *   adjustments    HC/coordinators — halftime and in-game fixes
+ *   disguise       DC — hiding the shell/pressure
+ *   reads          OC/DC — exploiting the opponent's tendencies
+ *   discipline     HC — penalties
+ *   motivation     HC
+ *   development    position coaches — used by progression (hook)
+ */
+export interface CoachSubs {
+  playCalling: number
+  gameManagement: number
+  adjustments: number
+  disguise: number
+  reads: number
+  discipline: number
+  motivation: number
+  development: number
+}
+
 export interface StaffMember {
   id: string
   name: string
@@ -373,6 +397,8 @@ export interface StaffMember {
   rating: number // 1-100
   specialty: string
   scheme: string
+  /** J9: individual sub-ratings. Absent on old saves — derive via coachSubs(). */
+  subs?: CoachSubs
   /** L11.5 Q8: front-office staff focus (Scout/DPP/GM) — replaces scheme for them. */
   focus?: string
   /** L11.5 Q8: season the focus was last changed (once per season for the user's staff). */

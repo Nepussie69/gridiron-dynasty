@@ -9,6 +9,7 @@
 import type { World } from './generate'
 import type { GamePlan } from './gameplan'
 import { clamp, hash32 } from './rng'
+import { J9, centeredSub, coachMeanRating, getCoachSubs } from './coachSubs'
 
 export type FourthStyle = 'conservative' | 'standard' | 'aggressive'
 
@@ -232,8 +233,20 @@ export function coachTendency(world: World, teamId: string): CoachTendency {
   const staff = world.staff[teamId] ?? []
   const hc = staff.find((s) => s.role === 'Head Coach')
   const oc = staff.find((s) => s.role === 'Offensive Coordinator')
-  const hcRating = hc?.rating ?? 74
-  const ocRating = oc?.rating ?? 74
+  // J9: the seat's own sub-ratings drive the personality, not the coach's overall
+  // rating. Centred on the league so the average club plays exactly as before.
+  const on = getCoachSubs()
+  // The sub drives the tendency, but its ±12 spread is wider than the old overall
+  // rating spread, so we deviate it about the league mean at `tendencyScale` to
+  // keep the hard aggression/timeout thresholds on the same aggregate band.
+  const hcMean = on ? coachMeanRating(world, 'Head Coach') : 0
+  const hcRating = on
+    ? hcMean + J9.tendencyScale * (centeredSub(world, 'Head Coach', 'gameManagement', hc) - hcMean)
+    : (hc?.rating ?? 74)
+  const ocRating = on
+    ? (centeredSub(world, 'Offensive Coordinator', 'playCalling', oc) +
+        centeredSub(world, 'Offensive Coordinator', 'reads', oc)) / 2
+    : (oc?.rating ?? 74)
   // Per-coach personality from a stable hash, centered on zero (−0.3..+0.3).
   const jitter = (hash32(hc?.id ?? teamId, 41) / 4294967296 - 0.5) * 0.6
   const aggro = (hcRating - 74) / 10 + (HC_AGGRO[hc?.specialty ?? ''] ?? 0) + jitter
