@@ -3080,8 +3080,14 @@ export const J12 = {
 // `setJ13(false)` is byte-identical to the base. The individual QB decides.
 export const J13 = {
   // ── the look the defence shows ────────────────────────────────────────────
-  boxUp: 0.25, // share of snaps the safety rotates into the box (a loaded look)
-  boxDown: 0.16, // share the defence walks a man out (a light look)
+  // Centring: the loaded look is shown a little more often than the light look
+  // (the league runs more than it throws into a light box, and passes more than it
+  // throws into a loaded one), so the checks the two looks trigger roughly cancel
+  // instead of adding net pass attempts. The pair sums to 0.41 of snaps, so the
+  // overall look frequency is unchanged; the values are the centred point of the
+  // paired OFF/ON drift measurement (see the verify file).
+  boxUp: 0.235, // share of snaps the safety rotates into the box (a loaded look)
+  boxDown: 0.175, // share the defence walks a man out (a light look)
   blitzBase: 0.05, // base share of snaps a league-average front flashes a blitz look
   // ── the QB's check ────────────────────────────────────────────────────────
   audBase: 0.34, // league-mean share of mismatched looks a QB checks out of
@@ -3092,9 +3098,17 @@ export const J13 = {
   expEq: 1.35, // per season over 22 → his read (a vet fixes far more bad calls)
   audW: 0.014, // read deviation (rating points) → the check probability
   readsW: 0.003, // the OC's centred `reads` sub → the check probability
+  // On 3rd/4th the situational guards below already keep the check honest, so the
+  // remaining checks are scaled back: the layer's 3rd-down deviation from the base
+  // play-caller shrinks toward zero, while 1st/2nd (where most of the individual
+  // spread lives) is untouched. Centring constant, tuned with the box shares above
+  // against the paired OFF/ON 6-seed drift (verify file has the numbers).
+  audThirdW: 0.7, // 3rd/4th-down multiplier on the check probability
   misread: 2, // box-count error (defenders) a fooled QB sees through the disguise
   misreadBlitz: 0.5, // chance a fooled QB sees a blitz look that is not there
   pickFrom: 3, // audibles come from the quickest N concepts of the target type
+  checkRunMax: 5, // on 3rd/4th a pass is only checked down to a run inside this distance
+  checkPassMin: 3, // on 3rd/4th a run is only checked up to a pass at or beyond this distance
   // ── protection slide (feeds J8b) ──────────────────────────────────────────
   slideBase: 0.5, // base chance the slide finds the extra rusher
   slideW: 0.02, // read deviation → the slide's chance
@@ -3103,8 +3117,13 @@ export const J13 = {
   slideWin: 0.85, // a slid blocker leaves the blitzer this share of a free rep
   whiffWin: 8, // a busted slide leaves the rusher cleaner than free
   whiffBase: 0.18, // base chance a poor-read slide whiffs entirely
-  // ── hot route ─────────────────────────────────────────────────────────────
+  // ── hot route / blitz recognition ─────────────────────────────────────────
   hotW: 0.12, // the hot route's quick throw trims the sack term (× read deviation)
+  // A QB who DIAGNOSES a blitz look gets the protection set and the ball out; a
+  // poor-read QB does not and the free rusher arrives. Scaled by his own read
+  // deviation, so the league sack rate (blitz-look and actual-blitz) is unchanged
+  // while the elite-vs-poor spread on blitz-look sacks opens up.
+  blitzSackW: 0.5, // recognizing the blitz look → the sack term (× read deviation)
 } as const
 
 /** J13: the QB's read (rating points) — his own AWR plus his experience. */
@@ -3150,6 +3169,8 @@ export interface J13Effect {
   audible?: { from: string; to: string }
   hotRoute?: string
   slide?: 'L' | 'R'
+  /** J13: the QB saw a blitz look on this snap (the protection/recognition term). */
+  sawBlitz?: boolean
 }
 /**
  * J13: one pre-snap check. Returns the (possibly changed) concept and the record
@@ -3214,26 +3235,39 @@ function j13PreSnap(world: World, s: GameState, offId: string, defId: string, co
   const { box, neutral, blitzLook } = j13Look(world, n, offId, defId, concept, qb)
   // The specific QB decides: his own read deviation, plus the OC's `reads` sub.
   const reads = j12Sub(world, 'Offensive Coordinator', 'reads', j12Coord(world, offId, 'Offensive Coordinator'))
-  const pAud = clamp(J13.audBase + j13ReadDev(world, qb) * J13.audW + reads * J13.readsW, J13.audLo, J13.audHi)
-  if (h01(`${n}:${offId}:j13aud`) >= pAud) return { concept }
-  // A check needs a disagreement between the called play and the look it sees.
-  const wantPass = concept.type === 'run' && box > neutral
-  const wantRun = concept.type === 'pass' && box < neutral
+  const pAudBase = clamp(J13.audBase + j13ReadDev(world, qb) * J13.audW + reads * J13.readsW, J13.audLo, J13.audHi)
+  // The blitz look is itself a J13 outcome term: a QB who SEES it sets the
+  // protection and gets the ball out (scaled by his own read in resolvePass), so
+  // record it even when he leaves the called play alone. OFF adds nothing.
+  const pAud = s.down >= 3 ? pAudBase * J13.audThirdW : pAudBase
+  if (h01(`${n}:${offId}:j13aud`) >= pAud) return { concept, effect: blitzLook ? { sawBlitz: true } : undefined }
+  // A check needs a disagreement between the called play and the look it sees. On
+  // 3rd/4th down the check keeps the run when it is short enough to convert and
+  // keeps the pass when the run would strand the drive (so a check never works
+  // against the situation). 1st/2nd keep the base behaviour.
+  const wantPass = concept.type === 'run' && box > neutral && !(s.down >= 3 && s.distance < J13.checkPassMin)
+  // A pass is checked DOWN to a run only when the run can actually convert. On
+  // 1st/2nd the check-down is fine; on 3rd/4th a long-yardage run would strand the
+  // drive, so the situational pass stands (the league-neutrality fix for the
+  // 3rd-down drift). 1st/2nd keep the base behaviour.
+  const wantRun = concept.type === 'pass' && box < neutral && !(s.down >= 3 && s.distance > J13.checkRunMax)
   const blitzCheck = concept.type === 'pass' && blitzLook
   const slide: 'L' | 'R' = h01(`${n}:${offId}:j13side`) < 0.5 ? 'L' : 'R'
   if (!wantPass && !wantRun && !blitzCheck) {
     // No audible, but a QB who sees pressure still slides the protection to it.
-    return blitzLook ? { concept, effect: { slide } } : { concept }
+    return blitzLook ? { concept, effect: { sawBlitz: true, slide } } : { concept }
   }
   const style = offStyle(world, offId)
   const type: 'run' | 'pass' = wantRun ? 'run' : 'pass'
   const pool = style.concepts.filter((c) => c.type === type && (c.personnel === concept.personnel || c.personnel === undefined))
   const anyOfType = style.concepts.filter((c) => c.type === type)
-  const from = (pool.length ? pool : anyOfType).sort((a, b) => a.depth - b.depth).slice(0, J13.pickFrom)
-  if (!from.length) return blitzLook ? { concept, effect: { slide } } : { concept }
+  const match = pool.length ? pool : anyOfType
+  const from = [...match].sort((a, b) => a.depth - b.depth).slice(0, J13.pickFrom)
+  if (!from.length) return blitzLook ? { concept, effect: { sawBlitz: true, slide } } : { concept }
   const next = from[hash32(`${n}:${offId}:j13pick`) % from.length]
   const effect: J13Effect = { audible: { from: concept.name, to: next.name } }
   if (blitzLook) {
+    effect.sawBlitz = true
     effect.slide = slide
     // The hot route goes to the quickest receiver the QB would throw to — the
     // specific man, picked by his own route ratings, never a unit.
@@ -3521,10 +3555,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
-  // J13: a hot route gets the ball out before the free rusher arrives — the sack
-  // term moves with the QB's read deviation (an elite read executes it, a poor
-  // one does not), so it is zero-mean across the league.
-  const j13Sack = j13?.hotRoute ? clamp(1 - clamp(j13Dev / 20, -1, 1) * J13.hotW, 0.5, 1.3) : 1
+  // J13: a QB who DIAGNOSED the blitz look — he set the protection slide and, on a
+  // check, signalled the hot route — gets the ball out before the free rusher
+  // arrives; a poor-read QB does not, and the free rusher gets home. The sack term
+  // moves with the QB's own read deviation (and the blitz look is snap-, not
+  // QB-, selected), so the league sack rate is held while elite vs poor separate.
+  const j13Read = clamp(j13Dev / 20, -1, 1)
+  const j13Sack = !j13 ? 1 : clamp(
+    1 - (j13.sawBlitz ? j13Read * J13.blitzSackW : 0) - (j13.hotRoute ? j13Read * J13.hotW : 0),
+    0.5, 1.4)
   // J12 #34: a fooled QB holds the ball — a higher share of pressures convert to
   // sacks; a QB who reads the disguise gets the ball out. Linear and zero-mean.
   const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * j13Sack, 0.02, 0.13)
