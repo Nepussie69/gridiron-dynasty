@@ -1270,6 +1270,265 @@ function hashPick<T>(list: T[], weight: (t: T) => number, key: number): T | unde
   return list[list.length - 1]
 }
 
+// ── J8a: individual defence vs the run + chase-downs ─────────────────────────
+// Every team/unit average in the run-front and pursuit path is replaced by the
+// specific players on the play. The point of attack is one deterministic hash
+// (`n:defId:gap`) of the gap: the blocker(s) and defender(s) at that gap carry
+// most of the weight and the rest of the front contributes as a faded sum of
+// their own individual matchups. Chase-downs compare the carrier's speed with
+// the 1–3 nearest pursuers (CB/S/LB, hash-picked) instead of a team PUR/SPD
+// mean, and the player who decides the play (the point-of-attack defender on a
+// short run, the pursuer who runs him down on a long one) is credited. Every
+// term is centred on POS_MEAN, so the league average holds and the league totals
+// are not shrunk. Picks are hashes: no rng() draw is added or removed.
+// `setJ8a(false)` restores the exact pre-J8a behaviour (byte-identical).
+let J8A_ON = true
+export function setJ8a(on: boolean) { J8A_ON = on }
+/** J8a: read the toggle so a probe can restore it exactly. */
+export function getJ8a(): boolean { return J8A_ON }
+
+export const J8A = {
+  /** Point-of-attack share of the front weight; the rest of the front splits the
+   *  remainder, fading with each gap away from the point of attack. */
+  poaWeight: 0.62,
+  /** Steepness of that fade (bigger = more concentrated on the point of attack). */
+  gapFade: 0.9,
+  /** mph per point of SPD. Sized so an RB's SPD p10–p90 maps to the NFL RB top
+   *  speed p10–p90 (14.7–18.0 mph) and a CB's to its p10–p90 (16.4–18.7) in
+   *  speed-separation-targets.json. Not shrunk: the individual speed spread is
+   *  the point of the job, so this is deliberately the full NFL rating→mph span. */
+  mphPerSpd: 0.26,
+  /** A pursuer's closing skill: PUR/AWR above the position mean add mph, so a
+   *  high-motor defender closes a slower carrier from behind. */
+  chasePur: 0.014,
+  chaseAwr: 0.010,
+  /** The carrier's ACC burst adds to his top speed. */
+  chaseAcc: 0.010,
+  /** Pursuer geometry by depth/side — the base yards a defender starts behind
+   *  the carrier plus a per-play hash jitter. Ordered by the NFL behind-tackler
+   *  data (S closest 1.50 yd, CB 2.04, LB furthest 2.52): the slow pursuer is
+   *  also the one who starts furthest behind, so his speed deficit is not
+   *  cancelled by a smaller head start. This is the head start, so it is NOT
+   *  tied to the sampled gain (that coupling was what exploded the tail). */
+  posDepth: { S: 1.5, CB: 2.5, LB: 4.0 } as Record<string, number>,
+  depthJitter: 3.5,
+  /** Chaser pick: the nearest defender is weighted toward the covering corner
+   *  (the NFL fastest-pursuer share CB 64 / S 19 / LB 17) but the second level
+   *  still wins sometimes, so a fast back on a slow pursuer gets a real edge. */
+  chaserWeight: { CB: 4.5, S: 1.0, LB: 0.8 } as Record<string, number>,
+  /** A corner closing from an angle covers ground slower than his top speed;
+   *  this offsets the edge so the league-mean chase gap stays near zero. */
+  posClose: { CB: 0.3, S: 0.2, LB: 0 } as Record<string, number>,
+  /** Per-play matchup jitter (mph) on the edge: two defenders of the same top
+   *  speed close differently by angle and lane, giving the gap the NFL spread. */
+  edgeJitter: 0.4,
+  /** Long-run tail multiplier: mph of carrier edge per unit, per head-start
+   *  yard, per pursuit degree, and the re-centre (so E[mult] = 1 and the league
+   *  tail holds). The clamp bounds a single back's breakaway. */
+  chasePerMph: 0.55,
+  headPerYd: 0.05,
+  anglePerDeg: -0.004,
+  chaseCenter: 0.31,
+  chaseLo: 0.4,
+  chaseHi: 2.0,
+  /** NFL open-field logit on P(TD) (chase-targets.json, with_yd_to_goal model),
+   *  edge = carrier mph − pursuer mph, so a faster carrier scores more. */
+  logitA: 0.2092,
+  logitEdge: 0.60,
+  logitHead: 0.1628,
+  logitAngle: -0.0087,
+  logitNp: -0.2128,
+  logitGoal: -0.0769,
+  /** The logit is the *unconditional* NFL open-field TD rate, but the sim's base
+   *  long-run tail already scores at ~13%; gate only the would-be scores and
+   *  scale so the league open-field TD rate lands near the NFL 11%. Raised with
+   *  logitEdge so the league-mean P(TD) is re-centred after the steeper speed
+   *  weight. */
+  tdScale: 2.2,
+  /** Run-down extra yards: a short edged tail (`base + tail·u² + edge`), no rng.
+   *  u comes from a per-play hash, so the caught-run spread stays heavy-tailed
+   *  but deterministic. */
+  catchBase: 2.0,
+  catchTail: 24,
+  catchEdge: 0.6,
+  /** Boost applied to the deciding player in the in-group tackler pick. */
+  deciderBoost: 2.2,
+  /** Credit the closest pursuer with the stop on a long pass (1 = on). */
+  passChaserCredit: 1,
+  /** Apply the chase to the pass-YAC *yardage* tail too (1 = on). The broadcast
+   *  fast-carrier camera gate is seed-sensitive: even a shrink-only pass-yard
+   *  change tips seed 33333's harness plays over the 4.5 yd lag bound, so the
+   *  yardage tail is left to the plan terms and J8c. The individual effect on a
+   *  pass stays in who is credited with the stop (passChaserCredit). */
+  passYac: 0,
+}
+
+/** J8a: per-play front weights — the point-of-attack man takes `poaWeight`, the
+ *  rest split by an exponential fade from his gap. Deterministic; sums to 1. */
+function gapWeights(n: number, poi: number, poaWeight: number, fade: number): number[] {
+  if (n <= 0) return []
+  if (n === 1) return [1]
+  const w = new Array<number>(n).fill(0)
+  let rest = 0
+  for (let i = 0; i < n; i++) {
+    if (i === poi) continue
+    w[i] = Math.exp(-fade * Math.abs(i - poi))
+    rest += w[i]
+  }
+  const scale = rest > 0 ? (1 - poaWeight) / rest : 0
+  for (let i = 0; i < n; i++) if (i !== poi) w[i] *= scale
+  w[poi] = poaWeight
+  return w
+}
+
+/** J8a: weighted sum of a per-player value over the front (weights sum to 1). */
+function gapValue(front: Player[], w: number[], value: (p: Player) => number): number {
+  let s = 0
+  const n = Math.min(front.length, w.length)
+  for (let i = 0; i < n; i++) s += w[i] * value(front[i])
+  return s
+}
+
+/** J8a: the point-of-attack index over a front of `n` gaps. */
+function gapIndex(key: string, n: number): number {
+  if (n <= 1) return 0
+  return hash32(key) % n
+}
+
+/** J8a: top-N distinct deterministic weighted picks (no rng() draw). */
+function hashPickN<T>(list: T[], weight: (t: T) => number, key: number, n: number): T[] {
+  const pool = [...list]
+  const out: T[] = []
+  let k = key >>> 0
+  while (out.length < n && pool.length) {
+    const p = hashPick(pool, weight, k)
+    if (p === undefined) break
+    const i = pool.indexOf(p)
+    if (i < 0) break
+    out.push(p)
+    pool.splice(i, 1)
+    k = (k * 1664525 + 1013904223) >>> 0
+  }
+  return out
+}
+
+/** J8a: a player's top speed in mph, from the 2018 tracking medians. Centred on
+ *  POS_MEAN SPD, so a league-average starter sits exactly at his position median. */
+const SPEED_MPH: Record<string, number> = {
+  WR: 18.29, TE: 16.41, RB: 16.32, CB: 17.55, S: 16.88, LB: 16.16,
+  QB: 16.0, FB: 15.6, DE: 15.4, DT: 14.6, K: 14.5, P: 14.6,
+}
+function speedMph(pos: string | undefined, spd: number): number {
+  const base = (pos ? SPEED_MPH[pos] : undefined) ?? 16.0
+  const mean = pos ? POS_MEAN[pos]?.SPD : undefined
+  return mean === undefined ? base : base + (spd - mean) * J8A.mphPerSpd
+}
+
+/** J8a: a pursuer's effective speed — top speed plus closing skill (PUR/AWR). */
+function pursuerMph(p: Player): number {
+  const a = mkAttrs(p)
+  return speedMph(p.pos, a.SPD ?? 70) + rmean(p.pos, 'PUR', a.PUR ?? 70) * J8A.chasePur + rmean(p.pos, 'AWR', a.AWR ?? 70) * J8A.chaseAwr
+}
+
+/** J8a: per-play chase geometry — the man who runs the carrier down. */
+type Chase = {
+  /** Carrier top speed minus the chaser's effective speed (mph); > 0 = faster. */
+  edge: number
+  /** The chaser's starting distance behind the carrier (yd) — the head start. */
+  headStart: number
+  /** Pursuit angle in degrees (0 = straight tail chase, 90 = across the field). */
+  angle: number
+  /** How many hash-picked pursuers are in the chase (1–3). */
+  nP: number
+  chaser?: Player
+}
+
+/** J8a: a carrier's top speed — SPD plus an ACC burst — in mph. */
+function carrierMph(p: Player): number {
+  const a = mkAttrs(p)
+  return speedMph(p.pos, a.SPD ?? 70) + rmean(p.pos, 'ACC', a.ACC ?? 70) * J8A.chaseAcc
+}
+
+/** J8a: the chaser is a hash-picked defender from the second/third level,
+ *  weighted toward the covering corner (the NFL fastest-pursuer share) but
+ *  letting a slow LB/S be the man in pursuit when the hash says so — which is
+ *  what opens the positive carrier-speed edge. His depth (head start) and the
+ *  pursuit angle are per-play hashes; the carrier's edge on him (carrier mph −
+ *  pursuer mph, plus the angle-covered corner offset `posClose`) is what the
+ *  chase logit is written on. */
+function chaseInfo(carrier: Player | undefined, pursuers: Player[], key: string): Chase {
+  if (!carrier || !pursuers.length) return { edge: 0, headStart: 0, angle: 0, nP: 0 }
+  const cmph = carrierMph(carrier)
+  const best = hashPick(pursuers, (p) => J8A.chaserWeight[p.pos] ?? 1, hash32(`${key}:pick`))
+  if (!best) return { edge: cmph, headStart: 0, angle: 0, nP: pursuers.length }
+  const depth = (J8A.posDepth[best.pos] ?? 8) + h01(`${key}:${best.id}:depth`) * J8A.depthJitter
+  return {
+    edge: cmph - pursuerMph(best) + (J8A.posClose[best.pos] ?? 0) + (h01(`${key}:jit`) * 2 - 1) * J8A.edgeJitter,
+    headStart: depth,
+    angle: h01(`${key}:angle`) * 90,
+    nP: pursuers.length,
+    chaser: best,
+  }
+}
+
+/** J8a: NFL open-field TD logit (chase-targets.json, with_yd_to_goal model). */
+function chaseTdProb(c: Chase, ydToGoal: number): number {
+  const x = clamp(
+    J8A.logitA + J8A.logitEdge * c.edge + J8A.logitHead * c.headStart
+      + J8A.logitAngle * c.angle + J8A.logitNp * c.nP + J8A.logitGoal * ydToGoal,
+    -12, 12,
+  )
+  return 1 / (1 + Math.exp(-x))
+}
+
+/** J8a: the long-run tail multiplier — the carrier's edge on the nearest pursuer
+ *  (and his head start / the pursuit angle) lengthen or shorten the run. Centred
+ *  by `chaseCenter` so the league-mean tail holds (mean-neutral by construction);
+ *  clamped so one fast back cannot explode the distribution. No rng() draw. */
+function chaseTailMult(c: Chase): number {
+  const m = 1 + J8A.chasePerMph * c.edge + J8A.headPerYd * c.headStart
+    + J8A.anglePerDeg * c.angle + J8A.chaseCenter
+  return clamp(m, J8A.chaseLo, J8A.chaseHi)
+}
+
+/** J8a: the extra yards when he is run down — a short edged tail (no rng). */
+function chaseCaughtExtra(c: Chase, u: number): number {
+  return Math.max(1, Math.round(J8A.catchBase + J8A.catchTail * u * u + J8A.catchEdge * c.edge))
+}
+
+/** J8a: the 1–3 pursuers for an open-field chase — hash-picked across the whole
+ *  second/third level (LB/S/CB) by speed and pursuit. The chaser's position mix
+ *  is set by geometry (posBonus/posDepth), not by picking CBs first. */
+function pickPursuers(key: string, lbs: Player[], saf: Player[], cbs: Player[]): Player[] {
+  const pool = [...lbs, ...saf, ...cbs]
+  return hashPickN(pool, (p) => {
+    const a = mkAttrs(p)
+    return Math.max(1, (a.SPD ?? 70) * 0.5 + (a.PUR ?? 70) * 0.3 + (a.AWR ?? 70) * 0.2)
+  }, hash32(key), 3)
+}
+
+/** J8a: short-yardage push from the two interior linemen at the point of attack
+ *  (the centre plus the guard nearest the POA), not the whole line's mean. */
+function interiorShortStrength(ol: Player[], key: string): number {
+  const c = ol.find((p) => p.pos === 'C')
+  const ogs = ol.filter((p) => p.pos === 'OG')
+  const g = ogs.length ? ogs[hash32(`${key}:og`) % ogs.length] : undefined
+  const picks = [c, g].filter((p): p is Player => !!p)
+  if (!picks.length) return 0
+  let s = 0
+  for (const p of picks) s += rmean(p.pos, 'STR', mkAttrs(p).STR ?? 70)
+  return clamp((s / picks.length) * 0.1 * E1_W, -6, 6)
+}
+
+/** J8a: a small individual STA term (Q4 fatigue decided by the men in the play). */
+function staRel(list: Array<Player | undefined>): number {
+  const ps = list.filter((p): p is Player => !!p)
+  if (!ps.length) return 0
+  let s = 0
+  for (const p of ps) s += rmean(p.pos, 'STA', mkAttrs(p).STA ?? 70)
+  return s / ps.length
+}
+
 function topGroup(world: World, teamId: string, positions: Position[], n: number, qbOverride?: Record<string, string>): Player[] {
   // G6: a halftime QB change replaces the starter until the game ends.
   if (qbOverride && positions.length === 1 && positions[0] === 'QB') {
@@ -2011,7 +2270,7 @@ export const TARGET_TUNE = { tau: 160, rbPrior: -34, readPenalty: 0, rbYds: 0.55
  * toward the secondary on big gains and the front on losses. Deterministic hash
  * of the play number — never an rng draw.
  */
-function runTackler(n: number, defId: string, gain: number, lbs: Player[], dl: Player[], saf: Player[], cbs: Player[]): string | undefined {
+function runTackler(n: number, defId: string, gain: number, lbs: Player[], dl: Player[], saf: Player[], cbs: Player[], decider?: Player): string | undefined {
   const w = { lb: 45, dl: 25, s: 20, cb: 10 }
   if (gain >= 10) { w.lb -= 10; w.s += 6; w.cb += 4 }
   else if (gain <= 0) { w.dl += 12; w.lb -= 12 }
@@ -2025,7 +2284,15 @@ function runTackler(n: number, defId: string, gain: number, lbs: Player[], dl: P
     if (roll < wt) { group = list; break }
     roll -= wt
   }
-  return group[hash32(`${n}:${defId}:runtackle`) % group.length]?.id
+  // J8a OFF: the exact pre-J8a uniform in-group pick (byte-identical).
+  if (!J8A_ON) return group[hash32(`${n}:${defId}:runtackle`) % group.length]?.id
+  // J8a ON: weight the in-group pick by tackling proximity (TAK/PUR/SPD) and let
+  // the man who decided the play (gap defender / catching pursuer) lead.
+  return hashPick(group, (p) => {
+    const a = mkAttrs(p)
+    const base = Math.max(1, (a.TAK ?? 70) * 0.5 + (a.PUR ?? 70) * 0.3 + (a.SPD ?? 70) * 0.2)
+    return p.id === decider?.id ? base * J8A.deciderBoost : base
+  }, hash32(`${n}:${defId}:runtackle`))?.id
 }
 
 /**
@@ -2146,9 +2413,14 @@ function finishTackler(key: string, first: string | undefined, lists: Player[][]
   // No alternative defender: never credit the man who just missed with the stop.
   if (!pool.length) return undefined
   // J8c: the finishing defender is the nearest able body — weighted by his own
-  // PUR/SPD/TAK — instead of a uniform pick from the group.
+  // PUR/SPD/TAK — instead of a uniform pick from the group. J8a (when J8c is off)
+  // weights the same pick by TAK/PUR/SPD; both off = the exact pre-J8 uniform pick.
   if (COVERAGE_INDIV_ON) return hashPick(pool, (p) => proximityWeight(p, undefined), hash32(key))?.id
-  return pool[hash32(key) % pool.length]?.id
+  if (!J8A_ON) return pool[hash32(key) % pool.length]?.id
+  return hashPick(pool, (p) => {
+    const a = mkAttrs(p)
+    return Math.max(1, (a.TAK ?? 70) * 0.5 + (a.PUR ?? 70) * 0.3 + (a.SPD ?? 70) * 0.2)
+  }, hash32(key))?.id
 }
 
 // ── J7: matchups & busts ─────────────────────────────────────────────────────
@@ -2761,6 +3033,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // caps explosives; third-down heat concedes more explosives on 3rd down.
   const compMult = planOverrides.compMult * (hasFix(env, defId, 'twoDeep') ? 1.04 : 1)
   let bigPlayRisk = planOverrides.bigPlayRisk * (hasFix(env, defId, 'twoDeep') ? 0.85 : 1) * (heat ? 1.1 : 1) * (1 + fatDiff * R15.fatBig)
+  // J8a: the open-field chase replaces the coverage averages. The nearest
+  // pursuers (CB/S/LB) are hash-picked and the carrier's speed is compared with
+  // each; the closest one (the man who runs him down) is credited on the stop.
+  // The pass-YAC *yardage* tail is left to the plan/J8c terms so the broadcast
+  // camera's fast-carrier bound is untouched; the individual speed shows in the
+  // deep-risk term and in who makes the tackle.
+  const passPursuers = J8A_ON ? pickPursuers(`${n}:${defId}:passchase`, lbs, saf, cbs) : []
+  const passClose = J8A_ON ? chaseInfo(target, passPursuers, `${n}:${defId}:passchase`) : { edge: 0, headStart: 0, angle: 0, nP: 0 } as Chase
   // L12 E2: press coverage risks a deep shot if the receiver wins; a fast safety
   // caps it. J8c: the covering corner's own press (PRS) and the help safety's own
   // speed (SPD) — range = ZCV+SPD — not the CB/safety unit means.
@@ -2921,6 +3201,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if (gain > 15) gain = 15 + Math.round((gain - 15) * bigPlayRisk)
     // R2: the long-TD rate is tuned separately from the short passing game.
     if (gain > 20) gain = Math.round(gain * R2.explosiveCal)
+    // J8a: the open-field chase decides the extra yards on a long catch — the
+    // carrier's speed (plus the head start from the catch) versus the nearest
+    // hash-picked pursuers (CB/S/LB), replacing the old team PUR/SPD mean that
+    // ignored the secondary. OFF (or passYac = 0) leaves the gain untouched.
+    if (gain > 20 && J8A_ON && J8A.passYac && passClose.chaser && yard < 80) {
+      const ydToGoal = Math.max(0, 100 - yard - 20)
+      const uTd = h01(`${n}:${defId}:passchase:td`)
+      gain = uTd < chaseTdProb(passClose, ydToGoal)
+        ? Math.max(gain, 100 - yard)
+        : Math.min(gain, 20 + chaseCaughtExtra(passClose, h01(`${n}:${defId}:passchase:ex`)))
+    }
     // Style-driven YAC: playmakers and elusive receivers add yards after the catch.
     if (gain > 0) gain += Math.round((tStyle.yacBias * 2.5 * (0.5 + rng()) + tStyle.elusiveness * (1 + rng() * 3)) * R2.yacCal)
     // R2: near the goal line the field is compressed — a would-be score can be
@@ -2997,7 +3288,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, tackleIds: stopper ? [stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
@@ -3115,8 +3406,25 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const cStyle = carrier ? styleProfile(carrier) : styleProfile({ traits: [''] } as Player)
   const cFit = carrier ? schemeFit(carrier, ocScheme, 'OFF') : 0.5
 
-  const runBlock = avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te) + (te2 ? teRunBlock(te2) * 0.6 : 0) + clamp(masteryRelAvg(ol, means) * 0.06, -3, 3)
-  const runDefBase = avg(dl.map((p) => (mkAttrs(p).BSH ?? 70) * 0.5 + (mkAttrs(p).TAK ?? 70) * 0.5)) * dStyle.runFit
+  // J8a: the point of attack and the chasers for this run (deterministic hashes).
+  const gKey = `${n}:${defId}:gap`
+  const wOl = gapWeights(ol.length, gapIndex(gKey, ol.length), J8A.poaWeight, J8A.gapFade)
+  const wDl = gapWeights(dl.length, gapIndex(gKey, dl.length), J8A.poaWeight, J8A.gapFade)
+  const wLb = gapWeights(lbs.length, gapIndex(`${gKey}:lb`, lbs.length), J8A.poaWeight, J8A.gapFade)
+  const poiOl = ol[gapIndex(gKey, ol.length)]
+  const poiDl = dl[gapIndex(gKey, dl.length)]
+  const poiLb = lbs[gapIndex(`${gKey}:lb`, lbs.length)]
+  const runPursuers = J8A_ON ? pickPursuers(`${gKey}:chase`, lbs, saf, cbs) : []
+  const runClose = J8A_ON ? chaseInfo(carrier, runPursuers, `${gKey}:chase`) : { edge: 0, headStart: 0, angle: 0, nP: 0 } as Chase
+  // J8a ON: the gap matchup replaces the unit means — the point-of-attack man
+  // carries most of the weight, the rest of the front a faded individual sum.
+  const runBlock = J8A_ON
+    ? gapValue(ol, wOl, (p) => { const a = mkAttrs(p); return (a.RBK ?? 70) * 0.7 + (a.IMP ?? 70) * 0.3 })
+      + teRunBlock(te) + (te2 ? teRunBlock(te2) * 0.6 : 0) + clamp((poiOl ? masteryOffset(poiOl, means) : 0) * 0.06, -3, 3)
+    : avg(ol.map((p) => (mkAttrs(p).RBK ?? 70) * 0.7 + (mkAttrs(p).IMP ?? 70) * 0.3)) + teRunBlock(te) + (te2 ? teRunBlock(te2) * 0.6 : 0) + clamp(masteryRelAvg(ol, means) * 0.06, -3, 3)
+  const runDefBase = (J8A_ON
+    ? gapValue(dl, wDl, (p) => { const a = mkAttrs(p); return (a.BSH ?? 70) * 0.5 + (a.TAK ?? 70) * 0.5 })
+    : avg(dl.map((p) => (mkAttrs(p).BSH ?? 70) * 0.5 + (mkAttrs(p).TAK ?? 70) * 0.5))) * dStyle.runFit
   // The live defensive plan moves the front: stacking the box stops the run,
   // a soft-zone light box gives a little back on the ground.
   const dp = planFor(defId, 'def')
@@ -3124,8 +3432,16 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const boxMult = hasFix(env, defId, 'loadTheBox') ? 1.08 : 1
   const runDef = ((dp
     ? runDefBase * (1 + (dp.aggression - 0.5) * 0.06 - (dp.coverage <= 0 ? 0.03 : 0))
-    : runDefBase) * boxMult) + relAvg('STR', dl) * 0.05 * E2_W + clamp(masteryRelAvg(dl, means) * 0.05, -3, 3) + clamp(masteryRelAvg([...cbs, ...saf], means) * 0.03, -2, 2)
-  const lbsDef = avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + lbRunExtras(lbs) * E2_W + clamp(masteryRelAvg(lbs, means) * 0.05, -3, 3)
+    : runDefBase) * boxMult)
+    + (J8A_ON ? (poiDl ? rmean(poiDl.pos, 'STR', mkAttrs(poiDl).STR ?? 70) : 0) * 0.05 * E2_W : relAvg('STR', dl) * 0.05 * E2_W)
+    + (J8A_ON
+      ? clamp((poiDl ? masteryOffset(poiDl, means) : 0) * 0.05, -3, 3) + clamp((runClose.chaser ? masteryOffset(runClose.chaser, means) : 0) * 0.03, -2, 2)
+      : clamp(masteryRelAvg(dl, means) * 0.05, -3, 3) + clamp(masteryRelAvg([...cbs, ...saf], means) * 0.03, -2, 2))
+  const lbsDef = J8A_ON
+    ? gapValue(lbs, wLb, (p) => { const a = mkAttrs(p); return (a.TAK ?? 70) * 0.6 + (a.PUR ?? 70) * 0.4 })
+      + gapValue(lbs, wLb, (p) => { const a = mkAttrs(p); return rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.16 + rmean(p.pos, 'BSH', a.BSH ?? 70) * 0.16 + rmean(p.pos, 'STR', a.STR ?? 70) * 0.08 + rmean(p.pos, 'ACC', a.ACC ?? 70) * 0.08 + rmean(p.pos, 'AGI', a.AGI ?? 70) * 0.08 }) * E2_W
+      + clamp((poiLb ? masteryOffset(poiLb, means) : 0) * 0.05, -3, 3)
+    : avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + lbRunExtras(lbs) * E2_W + clamp(masteryRelAvg(lbs, means) * 0.05, -3, 3)
   const elusiveness = carrier?.pos === 'QB'
     ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1 + rmean('QB', 'RUN', cA.RUN ?? 70) * 0.4 * E2_W
     : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
@@ -3139,8 +3455,8 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const quickRunCost = hasFix(env, offId, 'quickGame') ? -2 : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = userDef && defMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? 3 : 0
-  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
-    + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
+  const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + (J8A_ON ? interiorShortStrength(ol, gKey) : olShortStrength(ol, distance)) + fbLeadBlock(fb) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
+    + (isQ4 ? (J8A_ON ? staRel([poiOl, carrier]) - staRel([poiDl, runClose.chaser]) : relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25 * (env?.wx?.runVarianceMult ?? 1), gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -3157,12 +3473,32 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   gain = clamp(gain, -10, 90)
   // R2: on a money down a runner lowers his shoulder to the marker.
   if (gain > 0 && env?.down === 3) gain += R2.moneyYards
-  // L12 E2: pursuit (DL/LB PUR + SPD) caps the long-run tail.
-  if (gain > 20) gain = 20 + Math.round((gain - 20) * clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4) * (1 + fatDiff * R15.fatBig))
+  // L12 E2 / J8a: the long-run tail. OFF keeps the team DL/LB PUR+SPD mean cap;
+  // ON replaces it with the individual chase multiplier (carrier speed + head
+  // start vs the nearest hash-picked pursuer), centred so the mean tail holds.
+  if (gain > 20) {
+    const chaseF = J8A_ON
+      ? (runClose.chaser ? chaseTailMult(runClose) : 1)
+      : clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4)
+    gain = 20 + Math.round((gain - 20) * chaseF * (1 + fatDiff * R15.fatBig))
+  }
   // R2: the long-TD rate is tuned separately from the short run game.
   if (gain > 20) gain = Math.round(gain * R2.explosiveCal)
   // R2: near the goal line the compressed front can stand a runner up short.
   if (yard + gain >= 100 && gain > 0) gain = Math.round(gain * (1 - R2.rzRunDamp))
+  // J8a: the open-field chase decides whether a long gain reaches the house. The
+  // NFL chase-targets logit (edge = carrier mph − nearest pursuer mph, plus the
+  // pursuer's head start, the pursuit angle, how many pursuers and the yards to
+  // the goal) is his chance of NOT being run down. A faster carrier on a slower
+  // pursuer keeps the score; a slower carrier is dragged down short. Red-zone
+  // runs (yard >= 80) keep their existing tuned handling. No rng() draw, and OFF
+  // leaves the gain untouched (byte-identical).
+  if (J8A_ON && runClose.chaser && gain > 20 && yard < 80) {
+    const ydToGoal = Math.max(0, 100 - yard - 20)
+    const pTd = clamp(chaseTdProb(runClose, ydToGoal) * J8A.tdScale, 0, 1)
+    if (h01(`${n}:${defId}:chasetd`) < pTd) gain = Math.max(gain, Math.min(99, 100 - yard))
+    else gain = Math.min(gain, 100 - yard - 1)
+  }
   const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
   // squirts out. Threshold only, so no rng() draw is added or removed.
@@ -3180,7 +3516,10 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // defender's contact is what jars the ball loose, so the forcer is the real
   // stopping tackler just as the strip/pass path credits its stopper. The forcer
   // only ever comes from the actual defence on the field.
-  let tackler = oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs)
+  let tackler = oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs, J8A_ON ? (gain > 20 ? runClose.chaser : poiDl ?? poiLb) : undefined)
+  // J8a: on a long gain the man who ran him down (the fastest of the hash-picked
+  // pursuers) is the deciding player, so he takes the credit.
+  if (J8A_ON && !oob && gain > 20 && runClose.chaser) tackler = runClose.chaser.id
   let missedTackleIds: string[] | undefined
   let forcedMissedIds: string[] | undefined
   // R5: the first defender attempts the tackle. A deterministic miss adds yards
