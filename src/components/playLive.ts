@@ -52,6 +52,8 @@ export interface Want {
   speed: number
   /** Stay outside this ring around a scripted man (the carrier) this step. */
   ring?: { key: string; r: number }
+  /** animflow r6c: acceleration multiplier (a rip off a block is a burst). */
+  burst?: number
 }
 
 export type Brain = (t: number, me: Agent, field: LiveField) => Want | null
@@ -76,6 +78,8 @@ export interface Agent {
   recover: number
   /** Last time he left a pair (no immediate re-engage). */
   freedAt: number
+  /** animflow r6c: nobody blocks him again (the credited tackler, once he has shed). */
+  noBlock?: boolean
 }
 
 export interface PairPlan {
@@ -113,10 +117,10 @@ export interface LiveOpts {
   rec?: (a: string, b: string, t0: number, t1: number, kind: 'block' | 'double') => void
   /** Plan an engagement when a blocker reaches his man. */
   plan: (blk: string, def: string, t: number, field: LiveField) => PairPlan
-  /** Called when a defender sheds (to set his next brain). */
-  onShed?: (def: string, t: number, field: LiveField) => void
-  /** Called when a blocker is released (to set his next brain). */
-  onRelease?: (blk: string, t: number, field: LiveField) => void
+  /** Called when a defender sheds (to set his next brain). animflow r6c: `pair` is the block he beat. */
+  onShed?: (def: string, t: number, field: LiveField, pair: Pair) => void
+  /** Called when a blocker is released (to set his next brain). animflow r6c: `beaten` when his man shed him (not a climb). */
+  onRelease?: (blk: string, t: number, field: LiveField, pair: Pair, beaten: boolean) => void
 }
 
 export const LIVE_DT = 0.05
@@ -263,6 +267,10 @@ export class LiveField {
         continue
       }
       if (Math.hypot(d.x - a.x, d.y - a.y) > CONTACT_AT) continue
+      if (d.noBlock) {
+        a.target = null
+        continue
+      }
       if (d.pair) {
         if (d.pair.blk.length < 2 && t - d.freedAt > 0.3) this.join(d.pair, a, t)
         else a.target = null
@@ -335,7 +343,7 @@ export class LiveField {
 
   /** Accel-limited steering toward a wanted point (stops softly on arrival). */
   steer(a: Agent, want: Want | null, dt: number) {
-    const acc = Math.max(2, a.mv.pace.acc)
+    const acc = Math.max(2, a.mv.pace.acc) * (want?.burst ?? 1)
     let dvx = -a.vx
     let dvy = -a.vy
     if (want) {
@@ -482,7 +490,7 @@ export class LiveField {
       const a = this.agents.get(leave)
       p.blk = p.blk.filter((k2) => k2 !== leave)
       p.plan.climbAt = undefined
-      if (a) this.release(a, p, t, 'double')
+      if (a) this.release(a, p, t, 'double', false)
       // The remaining blocker squares up on the man alone (blend into the slot).
       for (const k2 of [p.def, ...p.blk]) {
         const b = this.agents.get(k2)
@@ -503,22 +511,22 @@ export class LiveField {
       const d = this.agents.get(p.def)
       for (const k2 of p.blk) {
         const b = this.agents.get(k2)
-        if (b) this.release(b, p, t, p.blk.length > 1 ? 'double' : 'block')
+        if (b) this.release(b, p, t, p.blk.length > 1 ? 'double' : 'block', true)
       }
       if (d) {
         d.pair = null
         d.freedAt = t
-        this.opts.onShed?.(d.key, t, this)
+        this.opts.onShed?.(d.key, t, this, p)
       }
     }
   }
 
-  private release(b: Agent, p: Pair, t: number, kind: 'block' | 'double') {
+  private release(b: Agent, p: Pair, t: number, kind: 'block' | 'double', beaten: boolean) {
     this.opts.rec?.(b.key, p.def, p.joined[b.key] ?? p.t0, t, kind)
     b.pair = null
     b.freedAt = t
     b.recover = 0.15
-    this.opts.onRelease?.(b.key, t, this)
+    this.opts.onRelease?.(b.key, t, this, p, beaten)
   }
 
   /** Close every pair still engaged at the end (records them up to `t`). */
