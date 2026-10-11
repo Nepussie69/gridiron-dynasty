@@ -120,6 +120,6 @@ Every game (user and AI, NFL and college) is played in a specific setting. That 
 | Spec | ✅ 2026-10-11 |
 | W1 data + model | ⏳ |
 | W2 engine wiring + calibration | ✅ merged (Claude Opus 5.5, 2026-10-11): OFF byte-identical, eq 20/20, smokes 0/0; ON 3 single-band grazes ≤0.3 (2222 pts 21.7, 33333 XP 96.3, 5150 rush 120.1), pooled 6-seed drift −0.017 pts. Snow slice −1.23 (n=31) below 1.5 floor; union −2.81 passes. Report ~/gridiron-work/logs/weather-w2-verify.out |
-| W3a Game Plan / Dashboard / Schedule | ⏳ |
+| W3a Game Plan / Dashboard / Schedule | ✅ merged 2026-10-11 (forecast-midpoint read) |
 | W3b MatchView | ⏳ |
 | W4 integration + browser check | ⏳ |
