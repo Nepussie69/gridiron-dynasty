@@ -21,6 +21,54 @@ export function getIndividual(): boolean {
   return INDIVIDUAL_ON
 }
 
+// ── J8a2: position-correct effective ratings for the individual pickers ───────
+// The pre-j8a2 pickers read `attrs.KEY ?? 70`, which gives a player who does not
+// carry a rating (a CB has no PUR in his attribute schema) the flat league 70 —
+// below a real defender's level. The pickers now use the player's own value when
+// he has it, else the mean for his POSITION (POS_MEAN) — the position-correct
+// effective rating — and only when the position carries no mean at all, a blend
+// of the nearest ratings that position does carry. Never a flat 70; the caller
+// keeps `?? 70` when the job is off (byte-identical OFF path).
+import { POS_MEAN } from './ratingMeans'
+
+/** J8a2: substitute blends for a rating a position genuinely does not carry. */
+export const LACK_BLEND: Record<string, [string, number][]> = {
+  PUR: [['SPD', 0.55], ['AWR', 0.45]],
+  BSH: [['STR', 0.6], ['TAK', 0.4]],
+  HPW: [['STR', 0.55], ['TAK', 0.45]],
+  TAK: [['PUR', 0.55], ['AWR', 0.45]],
+  PRC: [['AWR', 1]],
+  PMV: [['STR', 0.6], ['ACC', 0.4]],
+  FMV: [['ACC', 0.6], ['AGI', 0.4]],
+  RBK: [['STR', 0.6], ['IMP', 0.4]],
+  IMP: [['STR', 0.7], ['RBK', 0.3]],
+  ACC: [['SPD', 1]],
+  AGI: [['ACC', 1]],
+  STA: [['TGH', 1]],
+  ZCV: [['AWR', 0.6], ['PRC', 0.4]],
+  MCV: [['AWR', 0.6], ['PRC', 0.4]],
+}
+
+/** J8a2: a rating — the player's own, else his position's mean, else a blend of
+ *  the ratings the position does carry. Never a flat 70. */
+export function positionRating(pos: string, attrs: Record<string, number>, key: string): number {
+  const v = attrs[key]
+  if (v !== undefined) return v
+  const m = POS_MEAN[pos]?.[key]
+  if (m !== undefined) return m
+  const blend = LACK_BLEND[key]
+  if (blend) {
+    let s = 0
+    let w = 0
+    for (const [k, ww] of blend) {
+      const bv = attrs[k] ?? POS_MEAN[pos]?.[k]
+      if (bv !== undefined) { s += bv * ww; w += ww }
+    }
+    if (w > 0) return s / w
+  }
+  return 70
+}
+
 // ── J8d: fast-sim team strength config ────────────────────────────────────────
 // `teamStrength` (generate.ts) is called with a bare roster and no league context,
 // so the position weights and the normalisation that keeps the old league mean and
