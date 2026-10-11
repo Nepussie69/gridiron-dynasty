@@ -21,14 +21,18 @@
 
 import type { World } from './generate'
 import type { GameState, PlayOutcome, TeamGameStats } from './playsim'
+import { aiCallSheet, type CallSheet, type DefCall } from './decisions'
+import { analyticsRating } from './analytics'
 import { hash32 } from './rng'
 
 export type ReviewKind = 'spot' | 'catch' | 'fumble' | 'goalLine'
 
 /** What `Play.review` records about a reviewed play. */
 export interface PlayReview {
-  /** Who reviewed it: the booth, or the club that threw the flag. */
+  /** Who reviewed it: the booth, or 'challenge' for a club's red flag. */
   by: 'booth' | 'challenge'
+  /** The club that threw the flag on a challenge review (absent for the booth). */
+  club?: string
   kind: ReviewKind
   /** The on-field ruling, e.g. 'ruled down by contact'. */
   ruling: string
@@ -59,20 +63,41 @@ export interface ReviewSnapshot {
   manualTimeout?: string
   driveSnaps: number
   twoMinMode: GameState['twoMinMode']
+  twoMinChecked: boolean
+  /** C2: the play counter, so a reversal re-issues the same play number. */
+  n: number
+  /** C2: the user's drive counter, moved by a possession swap. */
+  userDrive: number
+  /** C2: in-game fatigue, rested by a possession swap (cloned after chargeSnaps). */
+  fat: Record<string, number>
   stats: { home: TeamGameStats; away: TeamGameStats }
 }
 
-/** A challenge-domain ruling awaiting the hurt club's decision (C2). */
+/**
+ * A challenge-domain close call awaiting the hurt club's decision (C2). The
+ * truth is kept so a reversal can re-apply it, and the snapshot is the
+ * post-chargeSnaps, pre-apply state the ruling was applied on top of.
+ */
 export interface PendingReview {
   /** The index of the ruled play in `s.plays`. */
   playIdx: number
   truth: PlayOutcome
   kind: ReviewKind
+  /** The on-field ruling was wrong (a challenge can only fix a mis-call). */
+  wrong: boolean
+  /** The club the on-field ruling went against (the only club that may throw). */
+  hurt: string
+  /** The on-field ruling text, e.g. 'ruled down by contact'. */
+  ruling: string
+  /** The 4th-down choice the ruled play was resolved with (for an exact re-apply). */
+  fourthChoice: 'go' | 'fg' | 'punt' | 'fake' | null
+  /** The defensive call recorded on the ruled play (for an exact re-apply). */
+  defCall?: DefCall
   snap: ReviewSnapshot
 }
 
-/** The minimal state a close-call hash reads (GameState satisfies it). */
-export interface CloseState { n: number; yard: number; distance: number; offId: string }
+/** The minimal state a close-call hash reads (GameState and Play satisfy it). */
+export interface CloseState { n: number; yard: number; distance: number; offId: string; defId: string }
 
 /**
  * The minimal outcome a close call reads. Both the sim's `PlayOutcome` and a
@@ -112,21 +137,38 @@ export const REVIEW = {
   boothSec: 120,
   /** Share of eligible plays each kind marks CLOSE (the truth's own bang-bang set). */
   closeRate: { spot: 0.14, catch: 0.09, fumble: 0.45, goalLine: 0.3 } as Record<ReviewKind, number>,
-  /** Among close plays, the share the on-field ruling gets WRONG. */
-  missRate: { spot: 0.12, catch: 0.18, fumble: 0.1, goalLine: 0.1 } as Record<ReviewKind, number>,
+  /** Among close plays, the share the on-field ruling gets WRONG. Kept low so
+   *  the challenge-domain drift (mis-calls that stand) stays inside the spec's
+   *  |Δ points| ≤ 0.15: the truth-first rule only drifts on a mis-call that is
+   *  never reversed. C2 calibration trimmed the spot and catch rates by ~15 %
+   *  (their two directions cancel, so this eases the drift); the fumble rate is
+   *  deliberately left the lowest, since a fumble mis-call that stands only ever
+   *  favours the offence (fewer giveaways). */
+  missRate: { spot: 0.051, catch: 0.0765, fumble: 0.05, goalLine: 0.05 } as Record<ReviewKind, number>,
   /** Booth-only reverse direction: the official invents a fumble / a touchdown on
    *  a play the truth says was down (per eligible play; rare). */
   reverseRate: { fumble: 0.004, goalLine: 0.02 } as Record<'fumble' | 'goalLine', number>,
   /** A challenged mis-call is reversed; the rest stand, inconclusive (C2). */
   challengeReverse: 0.85,
-  /** The replay read centres here on a wrong / right call (C2). */
-  readWrong: 0.72,
-  readRight: 0.32,
+  /**
+   * The replay read centres here on a wrong / right call (C2). Tuned with the
+   * probe against the spec's target ranges (0.3–0.6 challenges/game at 35–55 %
+   * success) and the calibration drift limit: the mis-call rate is low (so the
+   * drift is small) and the read gap is wide enough that the AI still throws at
+   * roughly half the wrong calls while rarely throwing on a correct one.
+   */
+  readWrong: 0.78,
+  readRight: 0.45,
   /** Read noise (±) at analyticsRating 40 / 90; linear between (C2). */
-  readNoiseLo: 0.25,
-  readNoiseHi: 0.1,
+  readNoiseLo: 0.3,
+  readNoiseHi: 0.12,
   /** Red-flag thresholds for the call-sheet styles (C2). */
-  threshold: { aggressive: 0.55, standard: 0.65, conservative: 0.78 } as Record<string, number>,
+  threshold: { aggressive: 0.66, standard: 0.72, conservative: 0.8 } as Record<string, number>,
+  /**
+   * C2: the hash-coin an AI club adds to its read, so clubs also throw on some
+   * calls that will stand. Centred on zero (± this / 2).
+   */
+  aiCoin: 0.15,
 }
 
 /** Deterministic uniform in [0,1) from a string key — mirrors playsim's h01. */
@@ -209,10 +251,15 @@ export interface AltRuling {
 /** The on-field ruling's text when it differs from the truth (a mis-call). */
 export function altRuling(kind: ReviewKind, s: CloseState, out: CloseOutcome): AltRuling {
   switch (kind) {
-    case 'spot':
+    case 'spot': {
+      // A ruling moved 1 yd across the line to gain can reach the end zone (the
+      // truth was short at the goal line). A ruling that is a score is the booth's.
+      const ruledYards = out.yards >= s.distance ? s.distance - 1 : s.distance
+      const score = s.yard + ruledYards >= 100
       return out.yards >= s.distance
-        ? { text: 'ruled short of the line to gain', score: false, turnover: false }
-        : { text: 'ruled a first down', score: false, turnover: false }
+        ? { text: score ? 'ruled a touchdown' : 'ruled short of the line to gain', score, turnover: false }
+        : { text: score ? 'ruled a touchdown' : 'ruled a first down', score, turnover: false }
+    }
     case 'catch':
       return out.result === 'Incomplete'
         ? { text: `ruled a catch at the ${Math.min(s.yard + (out.passDepth ?? 0), 99)}`, score: false, turnover: false }
@@ -252,19 +299,95 @@ export function closeCall(s: CloseState, out: CloseOutcome): CloseCall | null {
   return { kind, alt, wrong }
 }
 
-export interface Officiated {
-  /** The outcome to apply: the truth in C1 (the ruling in C2's challenge domain). */
-  applied: PlayOutcome
-  /** The resolved truth. */
-  truth: PlayOutcome
-  /** A booth review record, or null when the play is not reviewed. */
-  review: PlayReview | null
+/**
+ * C2: a fumble ruled "down by contact" inside the offence's own end zone is a
+ * safety — a score, so the booth owns it (the truth is applied). Kept pure so
+ * the probe can re-derive it from the play log.
+ */
+export function rulingSafety(s: CloseState, out: CloseOutcome, kind: ReviewKind, wrong: boolean): boolean {
+  if (kind !== 'fumble' || out.type !== 'run') return false
+  const ruled = onFieldRuling(kind, s, out, wrong)
+  if (ruled.turnover) return false
+  return s.yard <= 4 && s.yard + out.yards <= 0
 }
 
 /**
- * Mark the play close, produce the on-field ruling and, in the booth domain,
- * record the review. C1: `applied` is always the truth, so outcomes and the rng
- * stream are unchanged. Nothing here mutates `s` or `out`.
+ * C2: the club the on-field ruling went against — the only club that may throw
+ * the red flag. For a correct call this is still well-defined (the club that
+ * wanted the other ruling), which is why a wrong challenge is possible.
+ */
+export function rulingAgainst(s: CloseState, out: CloseOutcome, kind: ReviewKind, wrong: boolean): string {
+  switch (kind) {
+    case 'spot': {
+      const ruledShort = wrong ? out.yards >= s.distance : out.yards < s.distance
+      return ruledShort ? s.offId : s.defId
+    }
+    case 'catch': {
+      const ruledIncomplete = wrong ? !(out.result === 'Incomplete') : out.result === 'Incomplete'
+      return ruledIncomplete ? s.offId : s.defId
+    }
+    case 'fumble': {
+      const ruledFumble = wrong ? !out.turnover : out.turnover
+      return ruledFumble ? s.offId : s.defId
+    }
+    case 'goalLine': {
+      const ruledTD = wrong ? s.yard + out.yards < 100 : s.yard + out.yards >= 100
+      return ruledTD ? s.defId : s.offId
+    }
+  }
+}
+
+/**
+ * C2: the truth outcome rewritten as the on-field RULING, so applying it lands
+ * the game exactly where the officials put it. Only the stat-relevant fields
+ * change, and the result text stays one the box score understands. Pure.
+ */
+export function rulingOutcome(kind: ReviewKind, s: CloseState, out: PlayOutcome): PlayOutcome {
+  switch (kind) {
+    case 'spot': {
+      const first = out.yards >= s.distance
+      // Move the gain 1 yd across the line to gain in the ruled direction.
+      return { ...out, yards: first ? s.distance - 1 : s.distance }
+    }
+    case 'catch': {
+      if (out.result === 'Incomplete') {
+        // A contested incompletion ruled a catch, caught at passDepth, short of
+        // the goal line.
+        const yards = Math.max(0, Math.min(out.passDepth ?? 0, 99 - s.yard))
+        return { ...out, result: 'Complete', yards, reception: true }
+      }
+      // A contested completion ruled incomplete.
+      return { ...out, result: 'Incomplete', yards: 0, reception: false, fumbleId: undefined, muffedCatch: undefined, carrierId: undefined }
+    }
+    case 'fumble':
+      // A true lost fumble ruled down by contact: the gain stands, no takeaway.
+      // The result text is cleared so no toast/animation shows a fumble.
+      return { ...out, turnover: false, result: out.reception ? 'Complete' : 'Down by contact' }
+    case 'goalLine': {
+      // A true touchdown ruled down at the 1 (a completion, or a run stopped short).
+      const result = out.type === 'run' ? 'Down at the 1' : 'Complete'
+      return { ...out, yards: 99 - s.yard, result, turnover: false, scorerId: undefined, scorerName: undefined }
+    }
+  }
+}
+
+export interface Officiated {
+  /** The outcome to apply: the truth in the booth domain, the ruling otherwise. */
+  applied: PlayOutcome
+  /** The resolved truth. */
+  truth: PlayOutcome
+  /** A booth review record, or null when the play is not reviewed by the booth. */
+  review: PlayReview | null
+  /** Set on a challenge-domain close call, so the hurt club may throw a flag. */
+  challenge: { kind: ReviewKind; hurt: string; wrong: boolean; ruling: string } | null
+}
+
+/**
+ * Mark the play close, produce the on-field ruling and decide the domain.
+ * Booth domain (last 2:00 of Q2/Q4, all OT, a ruling that is a score or a
+ * turnover): the truth is applied and the review is recorded — display-only.
+ * Challenge domain: the RULING is applied and the hurt club may throw the flag
+ * at the start of the next step. Nothing here draws the rng or mutates `s`/`out`.
  */
 export function officiate(
   _world: World,
@@ -272,16 +395,84 @@ export function officiate(
   out: PlayOutcome,
   _fourthChoice?: 'go' | 'fg' | 'punt' | 'fake' | null,
 ): Officiated {
-  if (!REPLAY_REVIEW) return { applied: out, truth: out, review: null }
-  const st: CloseState = { n: s.n, yard: s.yard, distance: s.distance, offId: s.offId }
+  if (!REPLAY_REVIEW) return { applied: out, truth: out, review: null, challenge: null }
+  const st: CloseState = { n: s.n, yard: s.yard, distance: s.distance, offId: s.offId, defId: s.defId }
   const call = closeCall(st, out)
-  if (!call) return { applied: out, truth: out, review: null }
+  if (!call) return { applied: out, truth: out, review: null, challenge: null }
   const ruling = onFieldRuling(call.kind, st, out, call.wrong)
-  const booth = inBoothWindow(s) || ruling.score || ruling.turnover
-  if (!booth) return { applied: out, truth: out, review: null }
+  const booth = inBoothWindow(s) || ruling.score || ruling.turnover || rulingSafety(st, out, call.kind, call.wrong)
+  if (booth) {
+    return {
+      applied: out,
+      truth: out,
+      review: { by: 'booth', kind: call.kind, ruling: ruling.text, outcome: call.wrong ? 'reversed' : 'confirmed' },
+      challenge: null,
+    }
+  }
   return {
-    applied: out,
+    applied: call.wrong ? rulingOutcome(call.kind, st, out) : out,
     truth: out,
-    review: { by: 'booth', kind: call.kind, ruling: ruling.text, outcome: call.wrong ? 'reversed' : 'confirmed' },
+    review: null,
+    challenge: { kind: call.kind, hurt: rulingAgainst(st, out, call.kind, call.wrong), wrong: call.wrong, ruling: ruling.text },
+  }
+}
+
+// ── C2: the replay read, the standing policy and the resolution ──────────────
+
+/**
+ * The replay booth's read (0–1) that the on-field ruling was wrong. Centred on
+ * `readWrong` for a mis-call and `readRight` for a correct call, with hash noise
+ * that shrinks as the club's analytics rating rises. Never draws the rng.
+ */
+export function replayRead(world: World, teamId: string, wrong: boolean, key: string): number {
+  const rating = analyticsRating(world, teamId)
+  const t = Math.max(0, Math.min(1, (rating - 40) / 50))
+  const noise = REVIEW.readNoiseLo + (REVIEW.readNoiseHi - REVIEW.readNoiseLo) * t
+  const centre = wrong ? REVIEW.readWrong : REVIEW.readRight
+  const jitter = (h01(`${key}:read`) - 0.5) * 2 * noise
+  return Math.max(0.02, Math.min(0.98, centre + jitter))
+}
+
+/** The red-flag threshold for a club's call sheet (aggressive → throw sooner). */
+export function challengeThreshold(sheet: CallSheet): number {
+  const style = sheet.challenges ?? 'standard'
+  return REVIEW.threshold[style] ?? REVIEW.threshold.standard
+}
+
+/**
+ * C2: does an AI club throw the flag? Its call-sheet threshold from
+ * `coachTendency`, plus a hash coin so clubs also make some wrong challenges.
+ */
+export function aiThrows(world: World, s: { n: number }, club: string, read: number): boolean {
+  const thr = challengeThreshold(aiCallSheet(world, club))
+  const coin = (h01(`${s.n}:${club}:aicoin`) - 0.5) * REVIEW.aiCoin
+  return read + coin >= thr
+}
+
+/**
+ * C2: resolve a thrown flag. A mis-call is reversed with probability
+ * `challengeReverse`; a correct call always stands. Pure (hash only).
+ */
+export function resolveChallenge(pending: PendingReview, key: string): boolean {
+  if (!pending.wrong) return false
+  return h01(`${key}:reverse`) < REVIEW.challengeReverse
+}
+
+/** Challenges still available to a club (2 per game, +1 after two wins). */
+export function challengeLeft(chal: ChallengeState): number {
+  return Math.max(0, chal.left)
+}
+
+/**
+ * C2: apply the outcome of one thrown flag to the club's counter. Every throw
+ * consumes a challenge; a club that wins its first two is granted a third.
+ */
+export function spendChallenge(chal: ChallengeState, won: boolean): void {
+  chal.left = Math.max(0, chal.left - 1)
+  if (won) {
+    chal.won += 1
+    if (chal.won === 2 && chal.lost === 0) chal.left += 1
+  } else {
+    chal.lost += 1
   }
 }

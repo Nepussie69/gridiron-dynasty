@@ -265,6 +265,19 @@ export function gradeGame(world: World, sim: GameSim, userTeamId: string): FilmG
         bonus += 1
         lines.push(`Timeouts: got the ball back with ${fmtClock(sec)} (+1.0)`)
       }
+    } else if (d.kind === 'challenge') {
+      // FUTURES #5: a reversal earns a plus, a lost timeout a minus, and a user
+      // who lets a reversible call stand gives up a little.
+      if (d.outcome === 'reversed') {
+        bonus += 2
+        lines.push('Red flag: the call was reversed (+2.0)')
+      } else if (d.outcome === 'stands') {
+        bonus -= 2
+        lines.push('Red flag: the challenge failed, a timeout lost (−2.0)')
+      } else if (d.source === 'user' && (d.read ?? 0) >= 0.6) {
+        bonus -= 1
+        lines.push('Red flag: let a reversible call stand (−1.0)')
+      }
     } else if (d.kind === 'qbChange') {
       if (d.choiceId !== 'switch') continue
       const starter = topQb(plays, 1, 2)

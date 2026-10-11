@@ -21,7 +21,7 @@ import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } fro
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
-import { officiate } from './review'
+import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, spendChallenge, inBoothWindow, type ReviewSnapshot } from './review'
 import type { PlayReview, PendingReview, ChallengeState } from './review'
 
 // The user's own coaching skill, set once per game by the store when they hold a
@@ -2678,6 +2678,8 @@ export interface DecisionLog {
   margin: number
   outcome?: string
   ep?: number
+  /** FUTURES #5: the replay read (0–1) on a `challenge` decision, for the film grade. */
+  read?: number
   /** L10 G9: the opponent's call on a `call`/`defCall` snap, for the film grade. */
   vs?: string
 }
@@ -3631,14 +3633,162 @@ function applyScrimmageOutcome(
   return 'continue'
 }
 
+// ── FUTURES #5 C2: challenges ────────────────────────────────────────────────
+
+/** Capture the state a ruling was applied on top of (taken after chargeSnaps). */
+function snapshotFor(s: GameState): ReviewSnapshot {
+  return {
+    homeScore: s.homeScore,
+    awayScore: s.awayScore,
+    offId: s.offId,
+    defId: s.defId,
+    yard: s.yard,
+    down: s.down,
+    distance: s.distance,
+    phase: s.phase,
+    clock: s.clock,
+    timeouts: { ...s.timeouts },
+    timeoutsUsed: { ...s.timeoutsUsed },
+    manualTimeout: s.manualTimeout,
+    driveSnaps: s.driveSnaps,
+    twoMinMode: s.twoMinMode,
+    twoMinChecked: s.twoMinChecked,
+    n: s.n,
+    userDrive: s.userDrive,
+    fat: { ...s.fat },
+    stats: { home: { ...s.stats.home }, away: { ...s.stats.away } },
+  }
+}
+
+/** Undo a ruling so the truth can be re-applied (rng-free). */
+function restoreSnapshot(s: GameState, snap: ReviewSnapshot): void {
+  s.homeScore = snap.homeScore
+  s.awayScore = snap.awayScore
+  s.offId = snap.offId
+  s.defId = snap.defId
+  s.yard = snap.yard
+  s.down = snap.down
+  s.distance = snap.distance
+  s.phase = snap.phase
+  s.clock = snap.clock
+  s.timeouts = { ...snap.timeouts }
+  s.timeoutsUsed = { ...snap.timeoutsUsed }
+  s.manualTimeout = snap.manualTimeout
+  s.driveSnaps = snap.driveSnaps
+  s.twoMinMode = snap.twoMinMode
+  s.twoMinChecked = snap.twoMinChecked
+  s.n = snap.n
+  s.userDrive = snap.userDrive
+  s.fat = { ...snap.fat }
+  s.stats = { home: { ...snap.stats.home }, away: { ...snap.stats.away } }
+}
+
+/**
+ * C2: throw the flag. A reversed mis-call restores the snapshot, drops the ruled
+ * play and re-applies the truth through the shared apply function — so the state
+ * equals a forced-correct-call run and `plays.length` is unchanged. A flag that
+ * stands costs the club a timeout and a challenge. No rng is drawn.
+ */
+function applyChallenge(world: World, s: GameState, club: string, read: number): 'reversed' | 'stands' {
+  const rev = s.review
+  if (!rev) return 'stands'
+  const challenges = (s.challenges ??= {})
+  const chal = (challenges[club] ??= { left: 2, won: 0, lost: 0 })
+  const reversed = resolveChallenge(rev, `${rev.snap.n}:${club}:${rev.kind}`)
+  if (reversed) {
+    restoreSnapshot(s, rev.snap)
+    s.plays.pop()
+    applyScrimmageOutcome(world, s, rev.truth, rev.fourthChoice, rev.snap.offId, rev.snap.defId, rev.defCall)
+    const rec = s.plays[s.plays.length - 1]
+    if (rec) rec.review = { by: 'challenge', club, kind: rev.kind, ruling: rev.ruling, outcome: 'reversed', read }
+    spendChallenge(chal, true)
+  } else {
+    s.timeouts[club] = Math.max(0, (s.timeouts[club] ?? 0) - 1)
+    s.timeoutsUsed[club] = (s.timeoutsUsed[club] ?? 0) + 1
+    if (s.manualTimeout === club) s.manualTimeout = undefined
+    const rec = s.plays[rev.playIdx]
+    if (rec) rec.review = { by: 'challenge', club, kind: rev.kind, ruling: rev.ruling, outcome: 'stands', read }
+    spendChallenge(chal, false)
+  }
+  s.review = null
+  return reversed ? 'reversed' : 'stands'
+}
+
+/**
+ * C2: the hurt club's red-flag decision, at the start of a step and before any
+ * rng draw. The user's club is asked (a `challenge` moment, HC scope); an AI club
+ * decides with `aiThrows`. Only eligible when it has a timeout and a challenge
+ * left, and never inside the booth window or overtime.
+ */
+function checkChallenge(world: World, s: GameState): 'continue' | 'moment' {
+  const rev = s.review
+  if (!rev) return 'continue'
+  const club = rev.hurt
+  const chal = s.challenges?.[club]
+  const eligible = !!chal && chal.left > 0 && (s.timeouts[club] ?? 0) > 0 && !inBoothWindow(s) && s.qtr <= 4
+  if (!eligible) {
+    s.review = null
+    return 'continue'
+  }
+  const read = replayRead(world, club, rev.wrong, `${rev.snap.n}:${club}:${rev.kind}`)
+  const isUser = !!s.ctx && club === s.ctx.userTeamId
+  if (isUser) {
+    const standing = read >= challengeThreshold(s.ctx!.callSheet) ? 'throw' : 'letGo'
+    const choice = decide(s, {
+      kind: 'challenge', side: 'hc', teamId: club, qtr: s.qtr, clock: fmtClock(s.clock),
+      down: s.down, distance: s.distance, yard: s.yard,
+      title: `Review the call: ${rev.ruling}`,
+      options: [
+        { id: 'throw', label: 'Throw the red flag', hint: 'Overturn a bad call — costs a timeout if it stands.' },
+        { id: 'letGo', label: 'Let it go', hint: 'Play on; the ruling stands.' },
+      ],
+      defaultId: standing,
+      staffRead: `Replay booth: ${Math.round(read * 100)}% chance the ruling is overturned.`,
+      ask: true,
+      margin: club === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore,
+    })
+    if (choice === null) return 'moment'
+    const id = `challenge-${s.plays.length}`
+    const last = s.decisions[s.decisions.length - 1]
+    const mine = last && last.momentId === id ? last : null
+    if (choice === 'throw') {
+      const outcome = applyChallenge(world, s, club, read)
+      if (mine) { mine.outcome = outcome; mine.read = read }
+    } else {
+      s.review = null
+      if (mine) { mine.outcome = 'passed'; mine.read = read }
+    }
+    return 'continue'
+  }
+  if (aiThrows(world, s, club, read)) applyChallenge(world, s, club, read)
+  else s.review = null
+  return 'continue'
+}
+
+/** Phase dispatch for `step`: a non-play phase advances on its own. */
+function dispatchPhase(world: World, s: GameState): 'continue' | 'moment' | 'done' | null {
+  if (s.phase === 'try') return stepTry(world, s)
+  if (s.phase === 'kickoff') return stepKickoff(world, s)
+  if (s.phase === 'halftime') return stepHalftimePhase(world, s)
+  return null
+}
+
 /** One loop iteration of the old simulatePlayByPlay. */
 function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (s.done) return 'done'
   if (s.n >= MAX_PLAYS) return 'done'
 
-  if (s.phase === 'try') return stepTry(world, s)
-  if (s.phase === 'kickoff') return stepKickoff(world, s)
-  if (s.phase === 'halftime') return stepHalftimePhase(world, s)
+  const ph0 = dispatchPhase(world, s)
+  if (ph0) return ph0
+
+  // FUTURES #5 C2: a pending red-flag decision sits before any rng draw.
+  if (checkChallenge(world, s) === 'moment') return 'moment'
+  // A reversal re-applies the truth, which can change the phase (a ruled-down
+  // call that was really a touchdown goes to the try) or end the game. Re-dispatch
+  // so the step never resolves a scrimmage play from the corrected state.
+  if (s.done) return 'done'
+  const ph1 = dispatchPhase(world, s)
+  if (ph1) return ph1
 
   if (s.clock <= 0) return stepClock(world, s)
 
@@ -3913,6 +4063,21 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const off = officiate(world, s, out, fourthChoice)
   const playIdx = s.plays.length
   const defCall = userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined)
+  // C2: a challenge-domain close call keeps the truth plus a pre-apply snapshot,
+  // so the hurt club can throw the flag at the start of the next step.
+  if (off.challenge) {
+    s.review = {
+      playIdx,
+      truth: off.truth,
+      kind: off.challenge.kind,
+      wrong: off.challenge.wrong,
+      hurt: off.challenge.hurt,
+      ruling: off.challenge.ruling,
+      fourthChoice,
+      defCall,
+      snap: snapshotFor(s),
+    }
+  }
   const result = applyScrimmageOutcome(world, s, off.applied, fourthChoice, offId, defId, defCall)
   if (off.review) {
     const rec = s.plays[playIdx]
