@@ -281,6 +281,12 @@ export interface Player {
    * empty for every player the user has not given a focus.
    */
   devRatings?: Record<string, number>
+  /**
+   * FUTURES #8 (clutch): a season drift (±15) on the player's late-and-close
+   * clutch read, set by `seasonClutchAdjust` (P3). Optional and unused by the
+   * P2 engine beyond `clutchOf`, so an old save (which has none) is unchanged.
+   */
+  clutchAdj?: number
 }
 
 /**

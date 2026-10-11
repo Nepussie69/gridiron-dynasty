@@ -8,6 +8,13 @@
 // average starter adds 0 and league averages stay put.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * FUTURES #8 (clutch): the centre the clutch hash spread and the kicker term are
+ * measured from. A league-average player sits here; the value is fixed (not
+ * derived from the roster) so old saves and new seeds share the same reference.
+ */
+export const CLUTCH_CENTER = 50
+
 export const POS_MEAN: Record<string, Record<string, number>> = {
   QB: { SPD: 85, STR: 65, AGI: 82, ACC: 86, AWR: 79, JMP: 79, STA: 90, TGH: 92, COD: 80, CAR: 63, CTH: 42, THP: 91, SAC: 90, MAC: 85, DAC: 84, TOR: 86, TUP: 85, PAC: 85, RBK: 21, PBK: 16, IMP: 25, TAK: 28, PUR: 32, PRC: 18, MCV: 14, ZCV: 18, PRS: 12, PMV: 11, FMV: 11, BSH: 23, HPW: 19, KPW: 23, KAC: 21, RLS: 17, SPC: 25, BTK: 66, JKM: 69, SPM: 62, SFA: 51, TRK: 48, BCV: 82 },
   RB: { SPD: 90, STR: 76, AGI: 86, ACC: 91, AWR: 81, JMP: 85, STA: 87, TGH: 87, COD: 85, CAR: 90, CTH: 70, THP: 33, SAC: 27, MAC: 23, DAC: 18, TOR: 23, TUP: 19, PAC: 19, RBK: 42, PBK: 56, IMP: 43, TAK: 36, PUR: 39, PRC: 23, MCV: 18, ZCV: 23, PRS: 19, PMV: 17, FMV: 18, BSH: 32, HPW: 33, KPW: 20, KAC: 16, RLS: 55, SPC: 56, BTK: 83, JKM: 85, SPM: 78, SFA: 79, TRK: 80, BCV: 85 },

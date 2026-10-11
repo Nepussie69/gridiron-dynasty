@@ -24,6 +24,7 @@ import { mod, schemeFit, styleProfile } from './style'
 import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, spendChallenge, inBoothWindow, type ReviewSnapshot } from './review'
 import type { PlayReview, PendingReview, ChallengeState } from './review'
 import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
+import { clutchEdge, kickClutch } from './clutch'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -2316,7 +2317,11 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
     // FUTURES #6: the weather layer supplies a bounded, centred make-probability
     // offset (sign already fixed: a headwind lowers the chance). Exactly 0 when
     // weather is off or absent, so the base sim is byte-identical.
-    const made = rng() < fgProb(yard, power) + (env?.wx?.kickMakeAdd ?? 0)
+    // FUTURES #8: a clutch kicker in late-and-close moves the make chance by up
+    // to ±3 points. Exactly 0 outside late-and-close and when clutch is off, and
+    // it rides the existing probability comparison (no new rng draw).
+    const clutchFg = kickClutch(world, offId, { qtr: env?.qtr ?? 0, clock: env?.clock ?? 9999, margin })
+    const made = rng() < fgProb(yard, power) + (env?.wx?.kickMakeAdd ?? 0) + clutchFg
     const blocked = h01(`${n}:${offId}:fgblock`) < R17.blockFg
     const good = made && !blocked
     return {
@@ -3473,8 +3478,8 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
     const concept = pickConcept(s.rng, style, 4, 2, 0)
     const env = envFor(s)
     const out = concept.type === 'pass'
-      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n, s.mastery)
-      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98), env, undefined, s.n, s.mastery)
+      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98) + clutchEdge(world, s, offId, s.defId, 'pass'), env, undefined, s.n, s.mastery)
+      : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98) + clutchEdge(world, s, offId, s.defId, 'run'), env, undefined, s.n, s.mastery)
     s.clock -= out.timeUsed * s.pace
     const good = !out.turnover && out.yards >= 2
     if (good) {
@@ -4094,8 +4099,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     if (a !== 0) call = { edge: (call?.edge ?? 0) + a, sackMult: call?.sackMult ?? 1 }
   }
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
-    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard), env, call, s.n, s.mastery)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery)
+    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery)
   // R15: charge the snap (and its stamina cost) to the players actually on the field.
   chargeSnaps(s, out)
 
