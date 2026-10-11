@@ -16,7 +16,7 @@ import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../data/playbookData'
@@ -3003,7 +3003,21 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const sit: Situation = { yard: s.yard, down: 4, distance: s.distance, qtr: s.qtr, clockSec: s.clock, margin }
   const ev = fourthDownEV(sit, kickPower)
-  const chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  let chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  // J2: the actual call adds a per-play hash dither on the style's go
+  // propensity, so the league go-rate matches the NFL cells instead of every
+  // coach of a style making the identical call. Deterministic (no rng draw) and
+  // skipped for the user's own club (whose standing recommendation stays the
+  // deterministic fourthDownChoice) and for the last-two-minute Q4 override.
+  const q4Override = sit.qtr === 4 && sit.clockSec <= 120 && sit.margin <= -1 && sit.margin >= -8
+  if (getFourthRetune() && !isUser && !q4Override) {
+    const pGo = fourthGoPropensity(sheet.fourth, sit, kickPower)
+    // When the retuned model declines to go, the kick fallback is EV-ranked
+    // exactly as the OFF path ranks it: range alone would add long FGs the old
+    // rule correctly punted (that inflated FG attempts and scoring).
+    const kick: 'fg' | 'punt' = ev.fg != null && ev.fg >= ev.punt ? 'fg' : 'punt'
+    chosen = h01(`${s.n}:${s.offId}:4th`) < pGo ? 'go' : kick
+  }
   // R17: a fake is a rare, situational surprise from 4th & short in plus
   // territory — likelier for a trailing or aggressive club. In this sim the EV
   // already says "go" there, so the fake is that call executed from a kicking
