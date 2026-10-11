@@ -154,7 +154,11 @@ const deepShot: DirectorRule = {
       return { ...desired, span: Math.min(desired.span, 34) }
     }
     // In flight: lead along the ball's path toward the catch spot.
-    const u = clamp01((ctx.t - fl.t0) / Math.max(1e-6, fl.t1 - fl.t0))
+    // Track to the posts by the moment the ball reaches them (the kickGood /
+    // kickMiss beat), then hold the posts while it carries on past (animflow r4).
+    const at = ctx.events.find((e) => e.kind === 'kickGood' || e.kind === 'kickMiss')
+    const tEnd = at && at.t > fl.t0 ? at.t : fl.t1
+    const u = clamp01((ctx.t - fl.t0) / Math.max(1e-6, tEnd - fl.t0))
     const ahead = Math.min(1, u + 0.18)
     const lead = posAt(ctx.anim.ball, fl.t0 + (fl.t1 - fl.t0) * ahead)
     return { cx: clamp(lead.x, 3, 117), cy: clamp(lead.y, 3, FIELD_H - 3), span: 52 }
@@ -327,7 +331,8 @@ const longReturn: DirectorRule = {
 }
 
 // ── rule 5: fieldGoal — frame the kick and the uprights ──────────────────────
-const POST_X = 110
+// The uprights stand on the end line (x = 120), not the goal line (animflow r4).
+const POST_X = 120
 const POST_Y = MID_Y
 const UPRIGHT_HALF = 3.08 // 18'6" between the uprights
 const UPRIGHT_TOP = 13.3 // crossbar (10') + 30' uprights

@@ -195,6 +195,111 @@ function arcZ(z0: number, z1: number, T: number, s: number): number {
   return Math.max(0, chord + 0.8 * (raw - chord))
 }
 
+// ── field goal / PAT flight (animflow r4) ────────────────────────────────────
+export type KickMiss = 'none' | 'wide' | 'short' | 'doink' | 'blocked'
+const clampK = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
+const clampXk = (x: number) => clampK(x, 1, 119)
+const clampYk = (y: number) => clampK(y, 0.5, 52.8)
+/**
+ * The ball of a field goal / PAT from the kick (seconds; offense frame): its
+ * ground path, its height, the moment and spot it reaches the uprights' plane
+ * (the kickGood / kickMiss beat) and when it is down. Pure (playAnim builds the
+ * kick from it; check-broadcast asserts it).
+ */
+export function kickFlight(o: { los: number; kickT: number; good: boolean; blocked: boolean; kpw: number; seed: (k: number) => number }): {
+  ball: WP[]; kz: { t: number; z: number }[]; resT: number; resPt: Pt; endT: number; miss: KickMiss; tc: number
+} {
+  const { los, kickT, good, blocked, kpw, seed } = o
+  // ── the kick's flight (animflow r4) ───────────────────────────────────────
+  // A real ballistic arc: the ball reaches the plane of the uprights (the end
+  // line, x = 120; crossbar 10 ft, uprights 18'6" apart and 30 ft tall) and
+  // carries on past the end line into the net — or wide / short / off an
+  // upright on a miss. The recorded make / miss is unchanged; how a miss
+  // misses is a deterministic pick (long kicks fall short more often).
+  const K: Pt = { x: los - 7, y: MID_Y }
+  const PLANE = 120
+  const BAR = 10 / 3
+  const HALF = 3.08
+  const G = 10.7 // yd/s²
+  const d = PLANE - K.x
+  const vx = 18.5 + 0.06 * d + (kpw - 70) * 0.08
+  const tc = d / vx // seconds from the kick to the plane
+  const r1 = seed(5)
+  const r2 = seed(7)
+  const side = seed(0) < 0.5 ? -1 : 1
+  const miss: KickMiss = good ? 'none' : blocked ? 'blocked' : d >= 55 && r1 < 0.45 ? 'short' : r1 > 0.85 ? 'doink' : 'wide'
+  const ball: WP[] = [{ t: kickT, x: K.x, y: K.y }]
+  const kz: { t: number; z: number }[] = [{ t: kickT, z: 0.15 }]
+  let endT: number
+  let resT: number
+  let resPt: Pt
+  if (miss === 'blocked') {
+    // Off a rusher's hands at the line, then down behind it.
+    const hitT = kickT + 0.12
+    const hit = { x: los + 0.3, y: MID_Y + side * 0.6 }
+    ball.push({ t: hitT, ...hit })
+    kz.push({ t: hitT, z: 2.0 })
+    endT = hitT + 0.7
+    const land = { x: clampXk(los - 2.5 - r2 * 3), y: clampYk(MID_Y + side * (3 + r2 * 4)) }
+    for (let i = 1; i <= 8; i++) {
+      const u = i / 8
+      ball.push({ t: hitT + 0.7 * u, x: hit.x + (land.x - hit.x) * u, y: hit.y + (land.y - hit.y) * u })
+      kz.push({ t: hitT + 0.7 * u, z: Math.max(0.15, 2.0 + 1.6 * u - 3.45 * u * u) })
+    }
+    resT = hitT
+    resPt = hit
+  } else {
+    // Where it crosses the plane, and how high.
+    const cy = miss === 'none' ? MID_Y + side * r2 * 2.2 : miss === 'wide' ? MID_Y + side * (HALF + 0.6 + r2 * 3) : miss === 'doink' ? MID_Y + side * HALF : MID_Y + side * r2 * 2
+    const cz = miss === 'short' ? BAR - 0.6 - r2 * 1.6 : miss === 'doink' ? BAR + 2 + r2 * 4 : BAR + clampK(14 - 0.2 * d, 1.0, 9) + (r2 - 0.5)
+    const vz = (cz - 0.15 + 0.5 * G * tc * tc) / tc
+    const zAt = (s: number) => 0.15 + vz * s - 0.5 * G * s * s
+    const vy = (cy - K.y) / tc
+    const at = (s: number): Pt => ({ x: K.x + vx * s, y: K.y + vy * s })
+    // Flight to the plane, sampled.
+    const n = Math.max(10, Math.ceil(tc / 0.06))
+    for (let i = 1; i <= n; i++) {
+      const s = (tc * i) / n
+      ball.push({ t: kickT + s, ...at(s) })
+      kz.push({ t: kickT + s, z: Math.max(0, zAt(s)) })
+    }
+    resT = kickT + tc
+    resPt = { x: PLANE, y: cy }
+    if (miss === 'doink') {
+      // Off the upright: it kicks back and out and drops into the end zone.
+      const out = { x: PLANE - 3 - r2 * 2, y: clampYk(cy + side * (1.5 + r2 * 1.5)) }
+      const z0 = cz
+      for (let i = 1; i <= 12; i++) {
+        const u = i / 12
+        const s = 0.75 * u
+        ball.push({ t: resT + s, x: PLANE + (out.x - PLANE) * u, y: cy + (out.y - cy) * u })
+        kz.push({ t: resT + s, z: Math.max(0.15, z0 + 1.2 * s - 0.5 * G * s * s * 1.6) })
+      }
+      endT = resT + 0.75
+    } else {
+      // Past the plane: on until it comes down or reaches the net (3.5 yd behind the end line).
+      let s = tc
+      const step = 0.05
+      while (s < tc + 2.5) {
+        const ns = s + step
+        const p = at(ns)
+        const z = zAt(ns)
+        if (p.x > PLANE + 3.5 || z < (miss === "short" ? 0.15 : 1.0)) break
+        s = ns
+        ball.push({ t: kickT + s, ...p })
+        kz.push({ t: kickT + s, z })
+      }
+      // Into the net (or the turf on a short one): it drops straight down.
+      const last = at(s)
+      const zEnd = Math.max(0.15, zAt(s))
+      endT = kickT + s + 0.45
+      ball.push({ t: endT, x: last.x + vx * 0.05, y: last.y })
+      kz.push({ t: kickT + s + 0.2, z: Math.max(0.15, zEnd * 0.4) }, { t: endT, z: 0.15 })
+    }
+  }
+  return { ball, kz, resT, resPt, endT, miss, tc: resT - kickT }
+}
+
 // ── the derivation ───────────────────────────────────────────────────────────
 /**
  * Build the presentation for a finished animation. Returns `{ ...anim, ... }`;
@@ -679,6 +784,11 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const fh = flightHeights()
   for (let fi = 0; fi < anim.flights.length; fi++) {
     const fl = anim.flights[fi]
+    if (fi === 0 && fgPlay && anim.kickZ && anim.kickZ.length) {
+      // animflow r4: the kick's real arc (through the uprights, past the end line).
+      for (const k of anim.kickZ) pushZ(k.t, k.z)
+      continue
+    }
     const z0 = fi === 0 ? fh.z0 : fh.z1
     const z1 = fh.z1
     pushZ(fl.t0, z0)
