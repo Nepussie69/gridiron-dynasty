@@ -7,6 +7,7 @@
 
 import type { World } from './generate'
 import type { PlayerBoxScore } from './stats'
+import type { GameWeather } from './weather'
 
 export interface LeagueGameResult {
   id: string
@@ -67,7 +68,7 @@ function ensureWorker(): Worker | null {
  */
 export async function simLeagueGames(
   world: World,
-  games: { id: string; homeId: string; awayId: string; seed: number }[],
+  games: { id: string; homeId: string; awayId: string; seed: number; weather?: GameWeather }[],
 ): Promise<LeagueGameResult[] | null> {
   if (!games.length) return []
   const w = ensureWorker()

@@ -56,20 +56,22 @@ export const WX = {
 
   // Kicking. `kickHeadPerMph` mirrors R17.windPerMph (the fixed-sign version).
   kickHeadPerMph: 0.006,
-  kickAccPerMph: 0.0015,
+  kickAccPerMph: 0.005,
   kickRangePerMph: 0.3,
   coldKickYds: 2,
   puntPerMph: 0.3,
   kickoffPerMph: 0.5,
+  /** Touchback chance added per yard of extra kick depth (kickoffAdd). */
+  kickoffTbPerYd: 0.01,
 
   // Deep balls (depth >= 15): only the total wind matters, not its direction.
   deepWindStart: 10,
   deepWindSpan: 12,
-  deepCatchRel: 0.12,
+  deepCatchRel: 0.09,
   deepIntRel: 0.1,
 
   // Rain / snow ball security and footing.
-  fumbleWet: 0.25,
+  fumbleWet: 0.38,
   dropWet: 0.12,
   muffWet: 0.12,
   footingCut: 0.04,
@@ -81,6 +83,10 @@ export const WX = {
   // Crowd noise: the away offense's false-start weight, on top of the existing
   // 1.25 road mix. Kept as a fraction of that mix (`0.25 * loud`).
   crowd: 0.25,
+
+  // AI awareness (item 7): bad weather shifts the AI's class mix toward the run
+  // (a fraction of the run weight, bounded) and shortens the deep tree.
+  aiRunShift: 0.14,
 
   // Forecast. The actual value lands inside the (rounded) range ~80% of the
   // time, so the error is drawn at `half / forecastHitRate` (the divisor also
@@ -99,19 +105,21 @@ export const WX = {
  * baseline, bad weather below, and the league mean stays put.
  */
 export const WX_CENTER: Record<string, number> = {
-  kickMakeAdd: -0.008,
-  kickRangeYds: -0.048,
+  kickMakeAdd: -0.027,
+  kickRangeYds: -0.055,
   puntAdd: 0,
   kickoffAdd: 0,
-  deepCatchMult: 0.99,
+  deepCatchMult: 0.992,
   deepIntMult: 1.008,
-  fumbleMult: 1.022,
-  dropMult: 1.011,
-  muffMult: 1.011,
-  runVarianceMult: 0.997,
-  pressureMult: 0.997,
+  fumbleMult: 1.038,
+  dropMult: 1.014,
+  muffMult: 1.014,
+  runVarianceMult: 0.996,
+  pressureMult: 0.996,
   falseStartMult: 1,
   loud: 0.666,
+  /** Season mean of the aiTendency "bad weather" factor (wind >= 15 / snow). */
+  aiBad: 0.027,
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -290,7 +298,10 @@ export function gameWeather(world: World, game: WeatherGame, season: number = wo
 
   const pRain = precipProb(st, month)
   const wet = h01(`${key}:precip`) < pRain
-  const coldEnough = outdoorTemp <= WX.snowMaxF && (st.climate === 'cold' || st.windy >= 0.55)
+  // FUTURES #6: snow is a late-season phenomenon — the spec allows it only from
+  // week 12 on (cold/windy venues). Earlier cold snaps fall as rain, so the wet
+  // intensity (and every centered effect) is unchanged; only the label differs.
+  const coldEnough = game.week >= 12 && outdoorTemp <= WX.snowMaxF && (st.climate === 'cold' || st.windy >= 0.55)
   const precip: Precip = !wet ? 'none' : coldEnough ? 'snow' : 'rain'
 
   const closed =
@@ -409,7 +420,11 @@ function wxRaw(w: GameWeather, offIsHome: boolean, qtr: number): WxEffects {
     muffMult: 1 + WX.muffWet * wet + coldBall,
     runVarianceMult: 1 - WX.footingCut * wet,
     pressureMult: 1 - WX.footingCut * wet,
-    falseStartMult: offIsHome ? 1 - WX.crowd * WX_CENTER.loud : 1 + WX.crowd * w.loud,
+    // Crowd noise hurts the ROAD offence only. The home side stays exactly
+    // neutral; the road tilt is centered around the league's mean loudness
+    // (`WX_CENTER.loud`), so its season mean is 1.0 (and the base 1.25 road
+    // mix still makes the road team the louder-stadium victim).
+    falseStartMult: offIsHome ? 1 : 1 + WX.crowd * (w.loud - WX_CENTER.loud),
   }
 }
 

@@ -11,6 +11,7 @@ import { loadCalibration } from '../game/data/calibration'
 import { simulatePlayByPlay } from '../game/engine/playsim'
 import { boxScore, type PlayerBoxScore } from '../game/engine/stats'
 import type { World } from '../game/engine/generate'
+import type { GameWeather } from '../game/engine/weather'
 
 interface SlimWorld {
   byId: World['byId']
@@ -25,7 +26,7 @@ interface WeekRequest {
   id: number
   type: 'week'
   world: SlimWorld
-  games: { id: string; homeId: string; awayId: string; seed: number }[]
+  games: { id: string; homeId: string; awayId: string; seed: number; weather?: GameWeather }[]
 }
 
 interface WeekResult {
@@ -49,7 +50,7 @@ self.onmessage = async (e: MessageEvent) => {
 
     const results: WeekResult[] = []
     for (const g of msg.games) {
-      const sim = simulatePlayByPlay(world, g.homeId, g.awayId, g.seed)
+      const sim = simulatePlayByPlay(world, g.homeId, g.awayId, g.seed, undefined, g.weather)
       results.push({
         id: g.id,
         homeScore: sim.homeScore,
