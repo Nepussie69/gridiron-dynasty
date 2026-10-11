@@ -2414,28 +2414,55 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     }
   }
   // Defense: the front fires off, backers read and fill, the secondary reads and comes down.
+  // animflow r6d (J8a-2): the sim's per-defender reads. A man who BIT (biteIds) takes his first steps
+  // the wrong way (with the backfield's flow / the fake, away from the hole) and reads late; the READ
+  // KEY (readKeyId) diagnoses it fast and steps straight into the hole; the alley FILLER (fillId, a
+  // safety) comes downhill into the alley outside the hole at once instead of reading from depth.
+  const biteK = new Set((play.biteIds ?? []).map((id) => keyOf(ctx, id, DEF_KEYS)).filter((k): k is string => !!k))
+  const readK = keyOf(ctx, play.readKeyId, DEF_KEYS)
+  const fillK = keyOf(ctx, play.fillId, DEF_KEYS)
   DEF_KEYS.forEach((k, i) => {
     const p = rate(k)
     const start = { x: f[k].x, y: f[k].y }
     let brain: Brain
+    const bit = biteK.has(k) && k !== readK
     if (k.startsWith('dl')) {
       brain = phases([
-        { from: 0, brain: () => ({ x: los - 0.6, y: start.y + side * 0.3, speed: m[k].pace.top * 0.8 }) },
-        { from: 1.2, brain: pursueBrain(k, i) },
+        bit
+          // Bit: up the field and across the wrong shoulder, away from the play.
+          ? { from: 0, brain: () => ({ x: los + 0.2, y: start.y - side * 1.6, speed: m[k].pace.top * 0.75 }) }
+          : k === readK
+            // Read it: squeeze inside toward the hole off the snap.
+            ? { from: 0, brain: () => ({ x: los - 0.6, y: start.y + (holeY - start.y) * 0.45, speed: m[k].pace.top * 0.85 }) }
+            : { from: 0, brain: () => ({ x: los - 0.6, y: start.y + side * 0.3, speed: m[k].pace.top * 0.8 }) },
+        { from: bit ? 1.45 : k === readK ? 0.95 : 1.2, brain: pursueBrain(k, i) },
       ])
     } else if (k.startsWith('lb')) {
-      const rt = readTime(p, 0.35, seed + i)
+      const rt0 = readTime(p, 0.35, seed + i)
+      const rt = bit ? rt0 + 0.35 : k === readK ? Math.max(0.2, rt0 * 0.6) : rt0
       brain = phases([
-        // Read step: shuffle with the flow, eyes in the backfield.
-        { from: 0, brain: () => ({ x: start.x + 0.4, y: start.y + (holeY - start.y) * 0.25, speed: 2.2 }) },
+        bit
+          // False step: flows two yards with the fake before he recovers.
+          ? { from: 0, brain: () => ({ x: start.x + 0.6, y: start.y - side * 2.4, speed: 3.6 }) }
+          : k === readK
+            // Downhill into his gap from the first step.
+            ? { from: 0, brain: () => ({ x: Math.max(holeX + 1.2, start.x - 2.5), y: start.y + (holeY - start.y) * 0.6, speed: 4.2 }) }
+            // Read step: shuffle with the flow, eyes in the backfield.
+            : { from: 0, brain: () => ({ x: start.x + 0.4, y: start.y + (holeY - start.y) * 0.25, speed: 2.2 }) },
         { from: rt, brain: pursueBrain(k, i) },
       ])
     } else if (k.startsWith('s')) {
       const rt = readTime(p, 0.55, seed + i)
-      brain = phases([
-        { from: 0, brain: () => ({ x: start.x + 1.5, y: start.y + (holeY - start.y) * 0.1, speed: 2.4 }) },
-        { from: rt, brain: pursueBrain(k, i) },
-      ])
+      brain = k === fillK
+        ? phases([
+          // The alley: downhill outside the hole at a sprint, then he takes his angle on the ball.
+          { from: 0, brain: () => ({ x: holeX + 4.5, y: clampY(holeY + side * 3), speed: m[k].pace.top * 0.85 }) },
+          { from: Math.max(0.35, rt - 0.2), brain: pursueBrain(k, i) },
+        ])
+        : phases([
+          { from: 0, brain: () => ({ x: start.x + 1.5, y: start.y + (holeY - start.y) * 0.1, speed: 2.4 }) },
+          { from: rt, brain: pursueBrain(k, i) },
+        ])
     } else {
       const rt = readTime(p, 0.5, seed + i)
       brain = phases([
