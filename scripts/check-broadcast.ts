@@ -2151,7 +2151,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   ;(await import('../src/game/data/calibration.ts')).setCalibration(rj('calibration'))
   const store = await import('../src/store/gameStore.ts')
   const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
-  const { buildPlayAnim, holderAt, posAt } = await import('../src/components/playAnim.ts')
+  const { buildPlayAnim, holderAt, posAt, snapKindFor } = await import('../src/components/playAnim.ts')
   const { actorPlayers } = await import('../src/components/jersey.ts')
   const { createBroadcastDirector } = await import('../src/components/broadcast/directorRules.ts')
   const { FAST_SPAN_MAX } = await import('../src/components/broadcast/director.ts')
@@ -2191,6 +2191,10 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           const shot = d.shotAt(t)
           // Before the contact, outside the goal-line / sideline framings (those park on a line by design).
           if (shot.kind !== 'follow' || shot.rule === 'goalLine' || shot.rule === 'sideline') continue
+          // animflow r6c2: inside the goal-line framing zone (directorRules goalLine: carrier within 8 of a
+          // goal) the frame holds the goal line by design even when keepCarrier is the last rule applied; a
+          // score is now run through the line at speed instead of stopping on it.
+          if (p0.x >= 102 || p0.x <= 18) continue
           const lag = ((p0.x - shot.cx) * (p1.x - p0.x) + (p0.y - shot.cy) * (p1.y - p0.y)) * 60 / v
           lags.push(lag)
           spans.push(shot.span)
@@ -2279,6 +2283,155 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     }
     assert.ok(sacks >= 8 && runs >= 10 && rushers > 500, `coverage: ${sacks} engaged sacks, ${runs} DL run stops, ${rushers} rushers`)
     assert.ok(bad.length === 0, `${bad.length} bad sheds: ${bad.slice(0, 4).join('; ')}`)
+  })
+
+  ok('animflow 6c (297): a long run / catch-and-run ends with a defender on the carrier (credited tackler when he can get there), never the carrier stopping alone; a score is run through the goal line at speed', () => {
+    store.useGame.getState().startCareer({ name: 'B', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    let tackles = 0
+    let alone = 0
+    let cred = 0
+    let tds = 0
+    let slowTd = 0
+    const bad: string[] = []
+    for (let g = 0; g < 8; g++) {
+      const home = nfl[(g * 3) % nfl.length].id
+      const away = nfl[(g * 3 + 1) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 71 + g * 977)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if ((play.type !== 'pass' && play.type !== 'run') || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const D = anim.duration / 1000
+        const ev = anim.events ?? []
+        const end = ev.find((e) => e.kind === 'tackle' || e.kind === 'score')
+        if (!end) continue
+        const carrier = end.kind === 'tackle' ? end.keys[1] : end.keys[0]
+        const A = new Map(anim.actors.map((a) => [a.key, a]))
+        const ca = A.get(carrier)
+        if (!ca) continue
+        const from = play.type === 'pass' ? ev.find((e) => e.kind === 'catch')?.t : anim.holders.find((h) => h.key === carrier)?.t
+        if (from == null) continue
+        if (posAt(ca.path, end.t).x - posAt(ca.path, from).x < 10) continue
+        const cp = posAt(ca.path, end.t)
+        if (end.kind === 'tackle') {
+          tackles++
+          const near = Math.min(...anim.actors.filter((a) => a.side === 'def').map((a) => { const q = posAt(a.path, end.t); return Math.hypot(q.x - cp.x, q.y - cp.y) }))
+          if (near > 1.5) { alone++; bad.push(`play ${i} ${play.concept}: nearest defender ${near.toFixed(1)} yd at the tackle`) }
+          const ck = play.tackleIds?.[0] ? [...actors.entries()].find(([, pl]) => pl.id === play.tackleIds![0])?.[0] : undefined
+          if (!ck || end.keys[0] === ck) cred++
+        } else {
+          tds++
+          const a = posAt(ca.path, Math.max(0, end.t - 0.1 / D))
+          const v = Math.hypot(cp.x - a.x, cp.y - a.y) / 0.1
+          if (v < 4) { slowTd++; bad.push(`play ${i} ${play.concept}: crosses the goal line at ${v.toFixed(1)} yd/s`) }
+        }
+      }
+    }
+    assert.ok(tackles >= 40 && tds >= 5, `coverage: ${tackles} long tackles, ${tds} long scores`)
+    assert.ok(alone / tackles <= 0.1, `${alone}/${tackles} long plays end with nobody on the carrier: ${bad.slice(0, 3).join('; ')}`)
+    assert.ok(cred / tackles >= 0.7, `drawn tackler is the credited man on ${cred}/${tackles}`)
+    assert.ok(slowTd === 0, `${slowTd} scores stop on the line: ${bad.filter((b) => /goal/.test(b)).slice(0, 3).join('; ')}`)
+  })
+
+  ok('animflow 6c (302): crossers / slants / verticals are caught in stride (moving >= 3 yd/s at the catch); stop routes may be caught standing', () => {
+    store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const CROSS = /^(slant|quickSlant|cross|drag|shallow|meshIn|dig|in|whip|glance|angle|go|post|seam|corner|over|wheel|sluggo|chair|postCorner|outUp)$/
+    let n = 0
+    let moving = 0
+    for (let g = 0; g < 6; g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 4) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 53 + g * 211)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const c = (anim.events ?? []).find((e) => e.kind === 'catch')
+        if (!c || !CROSS.test(anim.catchRoute ?? '')) continue
+        const a = anim.actors.find((x) => x.key === c.keys[0])
+        if (!a) continue
+        const D = anim.duration / 1000
+        const p0 = posAt(a.path, Math.max(0, c.t - 0.05 / D))
+        const p1 = posAt(a.path, Math.min(1, c.t + 0.05 / D))
+        n++
+        if (Math.hypot(p1.x - p0.x, p1.y - p0.y) / 0.1 >= 3) moving++
+      }
+    }
+    assert.ok(n >= 60, `coverage: ${n} crossing / vertical catches`)
+    assert.ok(moving / n >= 0.7, `only ${moving}/${n} crossing / vertical catches made in stride`)
+  })
+
+  ok('animflow 6c (295): the snap follows the play\'s formation — shotgun 5 yd, pistol 4, under centre at the ball with a real 3/5/7-step drop and a reverse-pivot handoff', () => {
+    store.useGame.getState().startCareer({ name: 'U', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const seen: Record<string, number> = {}
+    const bad: string[] = []
+    for (let g = 0; g < 4; g++) {
+      const home = nfl[(g * 9) % nfl.length].id
+      const away = nfl[(g * 9 + 5) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 17 + g * 389)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if ((play.type !== 'pass' && play.type !== 'run') || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const q = anim.actors.find((a) => a.key === 'qb')
+        if (!q) continue
+        const los = 10 + play.startYard
+        const kind = snapKindFor(play.concept)
+        const depth = los - q.path[0].x
+        seen[`${play.type}:${kind}`] = (seen[`${play.type}:${kind}`] ?? 0) + 1
+        const want = kind === 'under' ? 1.0 : kind === 'pistol' ? 4 : 5
+        if (Math.abs(depth - want) > 0.05) bad.push(`play ${i} ${play.concept}: QB ${depth.toFixed(1)} yd deep (${kind})`)
+        const th = (anim.events ?? []).find((e) => e.kind === 'throw')
+        if (play.type === 'pass' && kind === 'under' && th) {
+          let deep = 0
+          for (let t = 0; t <= th.t; t += 0.01) deep = Math.max(deep, los - posAt(q.path, t).x)
+          if (deep < 4.5) bad.push(`play ${i} ${play.concept}: under-centre drop only ${deep.toFixed(1)} yd`)
+        }
+      }
+    }
+    assert.ok((seen['pass:under'] ?? 0) >= 10 && (seen['run:under'] ?? 0) >= 20 && (seen['run:pistol'] ?? 0) >= 5 && (seen['pass:gun'] ?? 0) >= 50, `coverage ${JSON.stringify(seen)}`)
+    assert.ok(bad.length === 0, `${bad.length} bad snaps: ${bad.slice(0, 4).join('; ')}`)
+  })
+
+  ok('animflow 6c (J7): the recorded cover defender stands the recorded separation (separationYd) off the target at the catch', () => {
+    store.useGame.getState().startCareer({ name: 'J', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const errs: number[] = []
+    for (let g = 0; g < 4; g++) {
+      const home = nfl[(g * 11) % nfl.length].id
+      const away = nfl[(g * 11 + 3) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 41 + g * 613)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' || play.separationYd == null || !play.coverId || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const c = (anim.events ?? []).find((e) => e.kind === 'catch')
+        const ck = [...actors.entries()].find(([, p]) => p.id === play.coverId)?.[0]
+        const a = c && anim.actors.find((x) => x.key === c.keys[0])
+        const d = ck && anim.actors.find((x) => x.key === ck)
+        if (!c || !a || !d) continue
+        const p = posAt(a.path, c.t)
+        const q = posAt(d.path, c.t)
+        errs.push(Math.abs(Math.hypot(p.x - q.x, p.y - q.y) - Math.min(12, Math.max(0.6, play.separationYd))))
+      }
+    }
+    errs.sort((x, y) => x - y)
+    assert.ok(errs.length >= 80, `coverage: ${errs.length} catches with a separation`)
+    const p75 = errs[Math.floor(errs.length * 0.75)]
+    assert.ok(p75 <= 0.5, `drawn separation off the recorded one by ${p75.toFixed(2)} yd p75`)
   })
 }
 

@@ -68,6 +68,8 @@ export interface PlayAnim {
   throwStyle?: ThrowStyle
   /** animflow r6c: a defender beating his block (the move, his blocker(s), the window). Times 0..1. */
   sheds?: Shed[]
+  /** animflow r6c2 (302): the route the pass target runs (the catch is in stride unless it is a stop route). */
+  catchRoute?: string
 }
 
 /**
@@ -418,6 +420,12 @@ function hash(n: number): number {
 const clampN = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const clampY = (y: number) => clampN(y, 1.2, FIELD_H - 1.2)
 const clampX = (x: number) => clampN(x, 1, FIELD_W - 1)
+/** animflow r6c2: one time step, kept on the field without snapping a man who starts outside the clamp (a deep safety behind the end line) back in a frame. */
+const stepIn = (p: Pt, v: Pt, dt: number): Pt => {
+  const x = p.x + v.x * dt
+  const y = p.y + v.y * dt
+  return { x: clampN(x, Math.min(1, p.x), Math.max(FIELD_W - 1, p.x)), y: clampN(y, Math.min(1.2, p.y), Math.max(FIELD_H - 1.2, p.y)) }
+}
 /** The snap beat: the ball leaves the LOS for the QB. */
 const SNAP = 0.14
 
@@ -837,12 +845,27 @@ interface Formation {
   [key: string]: { x: number; y: number; side: 'off' | 'def'; role: string }
 }
 
-function formation(los: number, fb = false): Formation {
+/**
+ * animflow r6c2 (295): how the ball is snapped, from the play's formation in
+ * the playbook — shotgun (QB 5 yd deep), pistol (4 yd, back behind him) or
+ * under centre (singleback, I-form, goal line, jumbo).
+ */
+export type SnapKind = 'gun' | 'pistol' | 'under'
+export function snapKindFor(concept: string): SnapKind {
+  const fm = formationForConcept(concept)
+  if (/^Gun/.test(fm)) return 'gun'
+  if (fm === 'Pistol') return 'pistol'
+  return 'under'
+}
+
+function formation(los: number, fb = false, snap: SnapKind = 'gun'): Formation {
   const f: Formation = {}
   ;[-2.6, -1.3, 0, 1.3, 2.6].forEach((d, i) => (f[`ol${i}`] = { x: los - 0.6, y: MID_Y + d, side: 'off', role: 'OL' }))
-  f.qb = { x: los - 5, y: MID_Y, side: 'off', role: 'QB' }
-  f.rb = { x: los - 7, y: MID_Y + 2.5, side: 'off', role: 'RB' }
-  if (fb) f.fb = { x: los - 8.5, y: MID_Y + 0.8, side: 'off', role: 'FB' }
+  f.qb = { x: snap === 'under' ? los - 1.0 : snap === 'pistol' ? los - 4 : los - 5, y: MID_Y, side: 'off', role: 'QB' }
+  // Shotgun: the back offset beside / behind the passer; pistol and under
+  // centre: straight behind him (an I with a fullback in front of him).
+  f.rb = snap === 'gun' ? { x: los - 7, y: MID_Y + 2.5, side: 'off', role: 'RB' } : { x: los - 7, y: MID_Y, side: 'off', role: 'RB' }
+  if (fb) f.fb = snap === 'under' ? { x: los - 4.3, y: MID_Y, side: 'off', role: 'FB' } : { x: los - 8.5, y: MID_Y + 0.8, side: 'off', role: 'FB' }
   f.wr0 = { x: los - 0.6, y: 5, side: 'off', role: 'WR' }
   f.wr1 = { x: los - 0.6, y: 48.3, side: 'off', role: 'WR' }
   // animflow r6b: eleven on offense — a fullback set trades the slot for the FB.
@@ -1157,6 +1180,13 @@ function gangPursuit(m: Record<string, Mover>, keys: string[], fromSec: number, 
       const want = { x: c.x + (dx / dn) * gap, y: c.y + (dy / dn) * gap }
       let dvx = (want.x - p.x) / 0.4 + cv.x
       let dvy = (want.y - p.y) / 0.4 + cv.y
+      if (d > gap + 3) {
+        // animflow r6c2 (297): still well off him — run the pursuit angle.
+        const I = interceptPt(carrier.path, p, t, top, toSec, gap)
+        const il = Math.hypot(I.x - p.x, I.y - p.y) || 1e-6
+        dvx = ((I.x - p.x) / il) * top
+        dvy = ((I.y - p.y) / il) * top
+      }
       const dl = Math.hypot(dvx, dvy)
       if (dl > top) { dvx *= top / dl; dvy *= top / dl }
       let ax = (dvx - v.x) / dt
@@ -1164,7 +1194,7 @@ function gangPursuit(m: Record<string, Mover>, keys: string[], fromSec: number, 
       const al = Math.hypot(ax, ay)
       if (al > acc) { ax *= acc / al; ay *= acc / al }
       v = { x: v.x + ax * dt, y: v.y + ay * dt }
-      p = { x: clampX(p.x + v.x * dt), y: clampY(p.y + v.y * dt) }
+      p = stepIn(p, v, dt)
       mv.path.push({ t, x: p.x, y: p.y })
     }
     mv.t = t
@@ -1247,7 +1277,7 @@ function capAt(mv: Mover, t: number) {
         for (let i = 0; i <= n; i++) {
           const u = i / n
           const d = vStart * span * (u - (u * u) / 2)
-          mv.path.push({ t: tStart + span * u, x: clampX(pStart.x + (h.x / hl) * d), y: clampY(pStart.y + (h.y / hl) * d) })
+          mv.path.push({ t: tStart + span * u, x: clampN(pStart.x + (h.x / hl) * d, Math.min(1, pStart.x), Math.max(FIELD_W - 1, pStart.x)), y: clampN(pStart.y + (h.y / hl) * d, Math.min(1.2, pStart.y), Math.max(FIELD_H - 1.2, pStart.y)) })
         }
         const last = mv.path[mv.path.length - 1]
         mv.t = last.t
@@ -1368,6 +1398,7 @@ function applyBlockEngagements(
 // ── plays ────────────────────────────────────────────────────────────────────
 /** buildPass's throw style (the builders return finish()'s PlayAnim). */
 let LAST_THROW_STYLE: ThrowStyle | undefined
+let LAST_CATCH_ROUTE: string | undefined
 export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim {
   // animflow r6b: the sim's fatigue at the snap rides along (tired gait / poses).
   const fat = ctx0.fat ?? fatigueMap(play)
@@ -1381,7 +1412,9 @@ export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim
         LAST_THROW_STYLE = undefined
         {
           const a = buildPass(play, ctx)
-          return LAST_THROW_STYLE ? { ...a, throwStyle: LAST_THROW_STYLE } : a
+          const r = LAST_CATCH_ROUTE
+          LAST_CATCH_ROUTE = undefined
+          return LAST_THROW_STYLE || r ? { ...a, ...(LAST_THROW_STYLE ? { throwStyle: LAST_THROW_STYLE } : {}), ...(r ? { catchRoute: r } : {}) } : a
         }
       case 'punt':
         return buildPunt(play, ctx)
@@ -1434,7 +1467,7 @@ function bestAttr(p: Player | undefined, keys: string[], fallback = 70): number 
 /** animflow r6c: how long a run defender's rip off the block takes (s). */
 const RIP_SEC = 0.3
 /** animflow r6c: a pass rusher's speed coming out of his move (yd/s; BDB 2023 pressures: 3.6 at the shed). */
-const SHED_V0 = 3
+const SHED_V0 = 3.6
 const CONTACT = 0.9 // yd between a blocker's and his rusher's centres (hands on, leaning in)
 /**
  * animflow r6a: pass-set depth behind the ball (yd) by time after the snap (s),
@@ -1519,7 +1552,7 @@ function passProtect(
   m: Record<string, Mover>,
   f: Formation,
   los: number,
-  opts: { rushers: string[]; blockers: string[]; winner?: string; qbTarget: Pt; arriveSec: number; holdTo?: number; seed?: number },
+  opts: { rushers: string[]; blockers: string[]; winner?: string; qbTarget: Pt; arriveSec: number; holdTo?: number; seed?: number; beaten?: string },
 ): { doubled: string[]; free: string[]; pairs: { r: string; bs: string[] }[]; wallX: number } {
   const R = opts.rushers.filter((k) => m[k] && f[k])
   const B = opts.blockers.filter((k, i, a) => m[k] && f[k] && a.indexOf(k) === i)
@@ -1555,6 +1588,29 @@ function passProtect(
     const b = avail.reduce((a, c) => (Math.abs(f[c].y - f[r].y) < Math.abs(f[a].y - f[r].y) ? c : a))
     usedB.add(b)
     pairs.push({ r, bs: [b] })
+  }
+  // animflow r6c2: the sim's own rep (J8b) names the blocker the credited
+  // rusher beat — he is the man on him (taken from whoever had him). A
+  // winner who starts so deep (a corner / safety blitz) that he could not reach
+  // the wall and still beat a block before the recorded moment comes free.
+  const wp = opts.winner ? pairs.find((p) => p.r === opts.winner) : undefined
+  // (Only when the drawn line puts that man across from him: the sim's blocker
+  // order need not match the drawn alignment, and a rusher must never cross
+  // the formation to reach "his" man.)
+  const nearB = wp ? [...B].sort((a, b) => Math.abs(f[a].y - f[wp.r].y) - Math.abs(f[b].y - f[wp.r].y)).slice(0, 2) : []
+  if (wp && opts.beaten && nearB.includes(opts.beaten) && !(wp.bs.length === 1 && wp.bs[0] === opts.beaten)) {
+    const had = pairs.find((p) => p !== wp && p.bs.includes(opts.beaten!))
+    const old = wp.bs
+    wp.bs = [opts.beaten]
+    if (had) {
+      had.bs = had.bs.filter((b) => b !== opts.beaten)
+      const give = old.find((b) => b !== opts.beaten && !had.bs.includes(b))
+      if (!had.bs.length && give) had.bs = [give]
+    }
+  }
+  if (wp && wp.bs.length && f[wp.r] && /^(cb|s)/.test(wp.r)) {
+    const reach = Math.hypot(f[wp.r].x - opts.qbTarget.x, f[wp.r].y - opts.qbTarget.y) / Math.max(4, m[wp.r].pace.top * 0.85) + 0.3
+    if (reach > opts.arriveSec - 0.7) wp.bs = []
   }
   // Record the protection matchups: a doubled rusher is a 'double' for each of
   // his two blockers, everyone else a single 'block'. finish() trims each to the
@@ -1789,7 +1845,10 @@ function passProtect(
     const headY = dbl ? pl.pts[0].y : lane[bs[0]]
     runTimed(m[r], [{ x: pl.pts[0].x, y: headY }], m[r].t, pl.teP, false, true)
     pocketPair(m, r, bs, pl.teP, engage, pushOf(r, bs), pseed + pi * 7, undefined, drift)
-    const t0 = Math.max(m[r].t, engage)
+    // animflow r6c2: never later than the move needs to get him off the block
+    // before the recorded moment, whatever the pocket did (a long hand-fight).
+    const t0 = Math.min(Math.max(m[r].t, engage), Math.max(pl.teP + 0.05, opts.arriveSec - 0.35))
+    if (m[r].t > t0) seek(m[r], t0)
     const bm = bs.reduce((a, b) => ({ x: a.x + m[b].x / bs.length, y: a.y + m[b].y / bs.length }), { x: 0, y: 0 })
     let leg = legFrom({ x: Math.min(bm.x, m[r].x - 0.5), y: bm.y })
     if (mv === 'spin') {
@@ -1813,6 +1872,7 @@ function passProtect(
     bs.forEach((b, i) => {
       const mb = m[b]
       if (mb.t < t0) mb.hold(t0 - mb.t)
+      else if (mb.t > t0) seek(mb, t0)
       const away = dbl ? (mb.y >= bm.y ? 1 : -1) : -s
       const lurch: Pt = mv === 'bull' || dbl ? { x: mb.x - 0.2, y: mb.y + away * 0.75 } // shoved aside, off balance
         : mv === 'speed' ? { x: mb.x - 0.25, y: mb.y - s * 0.2 } // turned, his hips open: the edge is gone
@@ -1824,6 +1884,14 @@ function passProtect(
     })
   }
   plan.forEach((pl, pi) => {
+    // animflow r6c2: the recorded winner whose block could only start in the
+    // last half-second before the moment (a quick throw, a long walk to the
+    // wall) has no time to beat it with a move: he is the man the protection
+    // never got a hand on — straight past the blocker's shoulder, untouched.
+    if (pl.r === opts.winner && pl.bs.length && pl.teP + 0.5 > opts.arriveSec) {
+      runTimed(m[pl.r], pl.burst.length ? pl.burst : pl.after, m[pl.r].t, opts.arriveSec, false, true, 1.6)
+      return
+    }
     for (const b of pl.bs) busy.add(b)
     const final = pl.r === opts.winner ? pl.burst : pl.after
     if (!final.length) {
@@ -2011,11 +2079,12 @@ function readTime(p: Player | undefined, base: number, seed: number): number {
   return clampN(base + (85 - prc) * 0.011 + hash(seed) * 0.15, base - 0.1, base + 0.75)
 }
 
-function buildRun(play: Play, ctx: AnimContext): PlayAnim {
+function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   recStart()
   const los = 10 + play.startYard
   const hasFb = formationHasFullback(formationForConcept(play.concept))
-  const f = formation(los, hasFb)
+  const snapK = snapKindFor(play.concept)
+  const f = formation(los, hasFb, snapK)
   const m = startMovers(f, ctx)
   recSnap(los)
   const seed = play.n * 7 + play.startYard
@@ -2049,7 +2118,8 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     : clampY(lane + driftDir * drift)
   const carrier = qbRun ? 'qb' : 'rb'
   const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
-  const meshX = qbRun ? f.qb.x - 1 : f.qb.x + 0.7
+  // Under centre the QB opens and gets back to the mesh ~3.5 yd deep (animflow r6c2).
+  const meshX = snapK === 'under' ? (qbRun ? f.qb.x - 0.6 : los - 3.4) : qbRun ? f.qb.x - 1 : f.qb.x + 0.7
   const meshY = qbRun ? MID_Y : MID_Y + side * 1.4
 
   // The run after the hole: one arc toward the end spot, bowed (a little) only
@@ -2110,14 +2180,14 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
     }
     handoffT = m.rb.t
     m.qb.hold(handoffT - m.qb.t)
-    m.qb.run([{ x: f.qb.x - 1.5, y: MID_Y - side * 4 }], { stop: false })
+    m.qb.run([{ x: (snapK === 'under' ? meshX : f.qb.x) - 1.5, y: MID_Y - side * 4 }], { stop: false })
   }
   // Press and cut: he presses the play side under control (vision, ~3/4 pace),
   // brakes into his one cut and comes out of it into the lane.
   // The carry pace: inside runs are run at a modest speed (NFL R6: inside peak
   // ~4 yd/s, outside ~6, breakaways 8-9), long gains open up to full speed,
   // and a back builds speed at ~4 yd/s² (E1), not in a few steps.
-  const carryK = clampN(0.6 + 0.012 * Math.max(0, gain) + (wide ? 0.1 : 0), 0.6, 1)
+  const carryK = clampN(0.6 + 0.012 * Math.max(0, gain) + (wide ? 0.1 : 0), 0.6, 1) * slow
   // Burst by rating: ~3.2 yd/s² (ACC 65) to ~4.6 (ACC 99), the NFL band.
   const accCap = (mv: Mover) => clampN(3.4 + (attrNum(mv.player, 'ACC', 75) - 70) * 0.045, 3.0, 4.8)
   const press = (mv: Mover) => {
@@ -2169,8 +2239,10 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const scoreRun = endX >= 110
   let contactT: number
   if (fumble || scoreRun) {
-    m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: true, cut: true })
+    m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: !scoreRun, cut: true })
     contactT = m[carrier].t
+    // animflow r6c2 (297): a score is run through the line, not stopped on it.
+    if (scoreRun) runThroughGoal(m[carrier], 110, 1)
   } else {
     const ac = yardsAfterContact(m[carrier].player, polyLen(curve[0], curve.slice(1)), seed)
     const { pre, post } = splitPolyline(curve[0], curve.slice(1), Math.max(0, polyLen(curve[0], curve.slice(1)) - ac))
@@ -2212,7 +2284,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   }
   const credFree = clampN(0.2 + (bestAttr(rate(creditedKey ?? ''), ['BSH']) - 65) * 0.008 + hash(seed + 41) * 0.15, 0.1, 0.45)
   let credShed: number | null = null
-  const pursueBrain = (k: string, i: number) => pursue(carrier, { keep: keepFor(k), lead: 0.8 + clampN((attrNum(rate(k), 'PUR') - 60) * 0.01, 0, 0.4), side: (hash(seed + i * 4.1) - 0.5) * 1.6 })
+  const pursueBrain = (k: string, i: number) => pursue(carrier, { keep: keepFor(k), lead: 0.8 + clampN((attrNum(rate(k), 'PUR') - 60) * 0.01, 0, 0.4), side: (hash(seed + i * 4.1) - 0.5) * 1.6, intercept: true })
   const hasCarrier = (t: number) => t >= (qbRun ? SNAP : handoffT)
   const field = new LiveField(0, {
     rec: (a, b, t0, t1, kind) => recEng(a, b, t0, t1, kind),
@@ -2285,7 +2357,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
       const rip = { x: a.x + (dx / dl) * 6, y: a.y + (dy / dl) * 6 }
       const close = pursueBrain(def, DEF_KEYS.indexOf(def))
       const t1 = t + RIP_SEC
-      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(4, me.mv.pace.top * 0.6), burst: 2.6 } : close(tt, me, f2))
+      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(5, me.mv.pace.top * 0.85), burst: 4.2 } : close(tt, me, f2))
       if (def === creditedKey) {
         credShed = t
         a.noBlock = true
@@ -2421,10 +2493,45 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   const cPt = posAt(m[carrier].path, contactT)
   // animflow r5: with real acceleration caps the credited man is often a beat
   // late; on a run he still makes it (hitAndRide meets the pile where it is).
-  const tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2)
+  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2)
   // A touchdown is chased, never forced: the closest man just runs with him.
   // animflow r6c: a credited man who shed inside the tackle phase closes from his rip.
-  const hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
+  let hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
+  if (!scoreRun && contactT - holeT > 0.6) {
+    // animflow r6c2 (297): on a longer run the tackler has to be able to get
+    // there. He leaves on his pursuit angle as early as he must (once off any
+    // block); when even that is too late the carrier is drawn picking his way
+    // a little slower (re-run, same result), so the credited man explains the
+    // spot instead of the carrier stopping on his own.
+    const busy = (k: string, t: number) => (REC?.eng ?? []).some((e) => (e.a === k || e.b === k) && (e.kind === 'block' || e.kind === 'double') && t >= e.t0 && t <= e.t1)
+    const late = Math.min(contactT + 0.45, endSec - 0.15)
+    const leave = (k: string, from: number): { s: number | null; best: number } => {
+      let best = Infinity
+      for (let s0 = from; s0 >= Math.max(holeT * 0.6, from - 2.6) - 1e-6; s0 -= 0.2) {
+        if (busy(k, s0)) break
+        const d = catchDist(m[k], m[carrier].path, s0, late)
+        best = Math.min(best, d)
+        if (d <= 2.0) return { s: s0, best: d }
+      }
+      return { s: null, best }
+    }
+    const mine = leave(tackler, hitFrom)
+    if (mine.s != null) hitFrom = mine.s
+    else if (slow > 0.75 && mine.best < Infinity) return buildRun(play, ctx, slow - 0.14)
+    else {
+      // Nobody credited can get there: the man who can makes the hit.
+      let alt: { k: string; s: number; d: number } | null = null
+      for (const k of tacklers) {
+        if (k === tackler || !m[k] || missKeys.includes(k)) continue
+        const r = leave(k, tackleFrom)
+        if (r.s != null && (!alt || r.best < alt.d)) alt = { k, s: r.s, d: r.best }
+      }
+      if (alt) {
+        tackler = alt.k
+        hitFrom = alt.s
+      }
+    }
+  }
   if (!scoreRun) hitAndRide(m[tackler], m[carrier], hitFrom, contactT, endSec)
   const res = { tackler, endSec }
   capAll(m, ALL_KEYS(f), res.endSec)
@@ -2490,15 +2597,33 @@ function routeRunRating(p: Player | undefined, depth: number): number {
 }
 
 /** Run a route: high route running = a crisp near-stop cut, low = a rounded drift. */
-function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1) {
+function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1, through = 0, flat = false) {
   const v0 = 0
   const saved = mv.pace
   // The stem can be run under control (animflow round 2: timed to the drop);
   // out of the break he is at full speed again.
   const stem = () => { if (stemPace < 1) mv.pace = { top: saved.top * stemPace, acc: saved.acc * Math.min(1, stemPace + 0.1) } }
+  // animflow r6c2 (302): a route the ball meets in stride is run on through
+  // its last point (`through` yd more along the final leg), not braked onto it.
+  const ext = (seg: Pt[], from: Pt): Pt[] => {
+    if (!through || !seg.length) return seg
+    const b = seg[seg.length - 1]
+    const a = seg.length >= 2 ? seg[seg.length - 2] : from
+    // `flat`: no room left before the recorded spot — he carries on across, not upfield.
+    const ax = flat ? (b.x - a.x) * 0.15 : b.x - a.x
+    const L = Math.hypot(ax, b.y - a.y) || 1
+    const e = { x: clampX(b.x + (ax / L) * through), y: clampY(b.y + ((b.y - a.y) / L) * through) }
+    const got = Math.hypot(e.x - b.x, e.y - b.y)
+    // Running out of field (an out at the sideline): he turns up it.
+    if (got < through * 0.5) {
+      const c = { x: clampX(b.x + (ax / L) * Math.min(got, 1.2)), y: clampY(b.y + ((b.y - a.y) / L) * Math.min(got, 1.2)) }
+      return [...seg, c, { x: clampX(c.x + 1.6), y: clampY(c.y + (MID_Y - c.y) * 0.05) }, { x: clampX(c.x + through * 0.8), y: c.y }]
+    }
+    return [...seg, e]
+  }
   if (breakIdx <= 0 || breakIdx >= pts.length - 1) {
     stem()
-    mv.run(pts, { v0, stop: true })
+    mv.run(ext(pts, { x: mv.x, y: mv.y }), { v0, stop: true })
     mv.pace = saved
     return
   }
@@ -2510,7 +2635,7 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
   mv.run(pts.slice(0, breakIdx + 1), { v0, stop: true })
   mv.pace = saved
   if (crisp) mv.hold(clampN(0.04 + (rr - CRISP_RR) * 0.0055, 0.04, 0.12))
-  mv.run(pts.slice(breakIdx + 1), { v0: 0, stop: true })
+  mv.run(ext(pts.slice(breakIdx + 1), pts[breakIdx]), { v0: 0, stop: true })
 }
 
 // ── coverage look (backlog 151) ───────────────────────────────────────────────
@@ -2963,12 +3088,35 @@ function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string 
  * carrier through the pile to the spot.
  */
 function hitAndRide(tk: Mover, carrier: Mover, fromSec: number, contactT: number, endSec: number, vHit = 2.2) {
-  const v0 = seek(tk, fromSec)
+  let v0 = seek(tk, fromSec)
+  let direct = false
+  // animflow r6c2 (297): a man still well off the carrier runs his pursuit
+  // angle at full speed first; the squared-up hit is only the last step.
+  {
+    const c0 = posAt(carrier.path, contactT)
+    const until = contactT - 0.35
+    if (until - fromSec > 0.2 && Math.hypot(c0.x - tk.x, c0.y - tk.y) > 3.5) {
+      pursuitLeg(tk, carrier.path, until, 2.0, contactT)
+      // Still not there: he keeps chasing into the pile (it is slowing).
+      const cNow = posAt(carrier.path, tk.t)
+      if (Math.hypot(cNow.x - tk.x, cNow.y - tk.y) > 2.6 && endSec - 0.12 > tk.t + 0.1) {
+        // He runs him down in the pile: straight into the ride, no break-down step.
+        pursuitLeg(tk, carrier.path, endSec - 0.12, 0.75, endSec)
+        const cE = posAt(carrier.path, tk.t)
+        if (Math.hypot(cE.x - tk.x, cE.y - tk.y) <= 1.1) direct = true
+      }
+      fromSec = tk.t
+      const sv = speedVec(tk.path, tk.t)
+      v0 = Math.min(tk.pace.top, Math.hypot(sv.x, sv.y))
+      // Arriving from a chase he hits at speed (a closing tackle), not broken down.
+      vHit = Math.max(vHit, v0 - 2)
+    }
+  }
   const start = { x: tk.x, y: tk.y }
   // A tackler who can't be there at the planned contact meets the carrier
   // where the carrier is when he does get there (the pile is already moving).
-  let hitT = contactT
-  for (let i = 0; i < 3; i++) {
+  let hitT = direct ? Math.max(contactT, tk.t) : contactT
+  for (let i = 0; i < 3 && !direct; i++) {
     const cc = posAt(carrier.path, hitT)
     const nat = straightTime(tk.pace, Math.max(0, Math.hypot(cc.x - start.x, cc.y - start.y) - 0.6), Math.min(tk.pace.top, v0))
     hitT = clampN(Math.max(contactT, fromSec + nat), contactT, Math.max(contactT, endSec - 0.12))
@@ -2988,13 +3136,45 @@ function hitAndRide(tk: Mover, carrier: Mover, fromSec: number, contactT: number
   uy /= ul
   const gap = 0.62
   const P = { x: clampX(c.x + ux * gap), y: clampY(c.y + uy * gap) }
-  glideTo(tk, P, Math.max(0.08, contactT - fromSec), vHit)
+  if (!direct) glideTo(tk, P, Math.max(0.08, contactT - fromSec), vHit)
+  if (tk.t > endSec) {
+    // animflow r6c2 (297): a beat late — he is into the pile as the whistle
+    // goes (cut there, not braked back off it by the end-of-play cap).
+    const q = posAt(tk.path, endSec)
+    tk.path = tk.path.filter((w) => w.t < endSec)
+    tk.path.push({ t: endSec, x: q.x, y: q.y })
+    tk.t = endSec
+    tk.x = q.x
+    tk.y = q.y
+    tk.lastStop = true
+    tk.inHeading = undefined
+    return
+  }
   if (tk.t < contactT) tk.hold(contactT - tk.t)
+  // animflow r6c2: the glide came up short of a carrier who kept going — he
+  // chases him down into the pile instead of sliding the gap in a frame.
+  {
+    const cc = posAt(carrier.path, tk.t)
+    if (Math.hypot(cc.x - tk.x, cc.y - tk.y) > 1.5 && endSec - tk.t > 0.12) {
+      pursuitLeg(tk, carrier.path, endSec - 0.04, 0.75, endSec)
+      const ce = posAt(carrier.path, tk.t)
+      let vx = tk.x - ce.x
+      let vy = tk.y - ce.y
+      const vl = Math.hypot(vx, vy)
+      if (vl > 0.3) {
+        vx /= vl
+        vy /= vl
+        ux = vx
+        uy = vy
+      }
+    }
+  }
   // Ride the carrier to the spot (blend in over the first beat, no snap).
   const t0 = tk.t
   const from = { x: tk.x, y: tk.y }
+  const tooFar = Math.hypot(posAt(carrier.path, t0).x + ux * gap - from.x, posAt(carrier.path, t0).y + uy * gap - from.y) > 1.5
   const dt = 0.04
-  for (let t = t0 + dt; t < endSec + 1e-6; t += dt) {
+  for (let t = t0 + dt; t < endSec + 1e-6 && !tooFar; t += dt) {
     const cp = posAt(carrier.path, t)
     const g = gap - 0.14 * clampN((t - t0) / 0.6, 0, 1)
     const want = { x: cp.x + ux * g, y: cp.y + uy * g }
@@ -3066,7 +3246,7 @@ function glideTo(mv: Mover, P: Pt, T: number, vEnd: number) {
     const t = (Tg * i) / n
     const sdist = Math.min(L, sp * t + ((v1 - sp) * t * t) / (2 * Tg))
     const q = at(sdist)
-    mv.path.push({ t: mv.t + t, x: clampX(q.x), y: clampY(q.y) })
+    mv.path.push({ t: mv.t + t, x: clampN(q.x, Math.min(1, s0.x), Math.max(FIELD_W - 1, s0.x)), y: clampN(q.y, Math.min(1.2, s0.y), Math.max(FIELD_H - 1.2, s0.y)) })
   }
   mv.t += Tg
   mv.x = P.x
@@ -3082,6 +3262,166 @@ function speedVec(path: WP[], t: number): Pt {
   const a = posAt(path, Math.max(0, t - dt))
   const b = posAt(path, t)
   return { x: (b.x - a.x) / dt, y: (b.y - a.y) / dt }
+}
+
+/**
+ * animflow r6c2 (backlog 297): the pursuit angle. The earliest point on the
+ * carrier's (already scripted) path that a man at `p` running at `top` can
+ * reach by the time the carrier gets there — not where the carrier is now (a
+ * tail chase). When nobody could get there before `tMax` he runs at the end of
+ * the path (the spot, the pylon).
+ */
+function interceptPt(carrierPath: WP[], p: Pt, t: number, top: number, tMax: number, reach = 0.8): Pt {
+  for (let tau = t; tau <= tMax + 1e-6; tau += 0.05) {
+    const c = posAt(carrierPath, tau)
+    if (Math.hypot(c.x - p.x, c.y - p.y) - reach <= top * (tau - t)) return c
+  }
+  return posAt(carrierPath, tMax)
+}
+
+/**
+ * animflow r6c2 (297): a full-speed pursuit leg on the intercept angle (time
+ * stepped, his own top speed and acceleration) until he is `near` the carrier
+ * or `untilSec`. A far-off tackler used to glide in at a breaking-down pace and
+ * arrive after the whistle, leaving the carrier to stop on his own.
+ */
+function pursuitLeg(mv: Mover, carrierPath: WP[], untilSec: number, near: number, tAim: number) {
+  let p = { x: mv.x, y: mv.y }
+  let v = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 0, y: 0 }
+  const top = mv.pace.top
+  const acc = Math.max(3, mv.pace.acc)
+  const dt = 0.05
+  let t = mv.t
+  while (t + dt <= untilSec + 1e-6) {
+    const c = posAt(carrierPath, t)
+    const d = Math.hypot(c.x - p.x, c.y - p.y)
+    let want: Pt
+    if (d <= near) {
+      // Closed: run with him a step off on his own side until the hit.
+      const cv = speedVec(carrierPath, t)
+      const ux = d > 1e-6 ? (p.x - c.x) / d : 0
+      const uy = d > 1e-6 ? (p.y - c.y) / d : 1
+      want = { x: (c.x + ux * near - p.x) / 0.3 + cv.x, y: (c.y + uy * near - p.y) / 0.3 + cv.y }
+      const wl = Math.hypot(want.x, want.y)
+      if (wl > top) { want.x *= top / wl; want.y *= top / wl }
+    } else {
+      // The meeting point: the earliest spot on the carrier's line he can
+      // reach, but no earlier than just before the planned hit (he does not
+      // arrive early and brush the carrier — no phantom contact); he runs to
+      // it at the pace that gets him there on time, flat out when he must.
+      let aT = tAim
+      for (let tau = t; tau <= tAim + 1e-6; tau += 0.05) {
+        const q = posAt(carrierPath, tau)
+        if (Math.hypot(q.x - p.x, q.y - p.y) - 0.8 <= top * (tau - t)) { aT = tau; break }
+      }
+      aT = Math.max(aT, tAim - 0.35)
+      const aim = posAt(carrierPath, aT)
+      const dx = aim.x - p.x
+      const dy = aim.y - p.y
+      const dl = Math.hypot(dx, dy) || 1e-6
+      const sp = Math.min(top, Math.max(dl / Math.max(0.1, aT - t), 2.5))
+      want = { x: (dx / dl) * sp, y: (dy / dl) * sp }
+    }
+    let ax = (want.x - v.x) / dt
+    let ay = (want.y - v.y) / dt
+    const al = Math.hypot(ax, ay)
+    if (al > acc) { ax *= acc / al; ay *= acc / al }
+    v = { x: v.x + ax * dt, y: v.y + ay * dt }
+    t += dt
+    p = stepIn(p, v, dt)
+    mv.path.push({ t, x: p.x, y: p.y })
+  }
+  mv.t = t
+  mv.x = p.x
+  mv.y = p.y
+  mv.lastStop = Math.hypot(v.x, v.y) < 1
+  mv.inHeading = undefined
+}
+
+/** How far off the carrier a man still is at `byT` if he leaves on his pursuit angle at `s0` (dry run). */
+function catchDist(mv: Mover, carrierPath: WP[], s0: number, byT: number): number {
+  const c = new Mover(mv.key, mv.role, mv.pace, mv.x, mv.y, mv.player)
+  c.path = mv.path.filter((w) => w.t <= s0 + 1e-9)
+  if (!c.path.length) return Infinity
+  const last = posAt(mv.path, s0)
+  if (c.path[c.path.length - 1].t < s0 - 1e-9) c.path.push({ t: s0, x: last.x, y: last.y })
+  c.t = s0
+  c.x = last.x
+  c.y = last.y
+  pursuitLeg(c, carrierPath, byT, 1.0, byT)
+  const cp = posAt(carrierPath, c.t)
+  return Math.hypot(cp.x - c.x, cp.y - c.y)
+}
+
+/**
+ * animflow r6c2 (297): coverage chasing a carrier nobody tackles (a score, a
+ * step out of bounds). Each man runs his pursuit angle at his own speed — the
+ * fast ones close and run alongside a body's width off, the slow ones angle at
+ * the pylon / the spot and give up the ground they cannot make.
+ */
+function angleChase(m: Record<string, Mover>, keys: string[], fromSec: number, carrier: Mover, toSec: number, seed: number) {
+  keys.forEach((k, i) => {
+    const mv = m[k]
+    if (!mv || mv === carrier) return
+    seek(mv, fromSec)
+    let p = { x: mv.x, y: mv.y }
+    let v = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 0, y: 0 }
+    const top = mv.pace.top
+    const acc = Math.max(3, mv.pace.acc)
+    const gap = 2.0 + hash(seed + i * 1.7) * 0.8
+    const dt = 0.05
+    let t = mv.t
+    while (t + dt <= toSec + 1e-6) {
+      const c = posAt(carrier.path, t)
+      const cv = speedVec(carrier.path, t)
+      const d = Math.hypot(c.x - p.x, c.y - p.y)
+      let want: Pt
+      if (d < gap + 1.2) {
+        // Alongside: a body's width off on his own side, matching the carrier.
+        const ux = d > 1e-6 ? (p.x - c.x) / d : 0
+        const uy = d > 1e-6 ? (p.y - c.y) / d : 1
+        const tgt = { x: c.x + ux * gap, y: c.y + uy * gap }
+        want = { x: (tgt.x - p.x) / 0.3 + cv.x, y: (tgt.y - p.y) / 0.3 + cv.y }
+      } else {
+        const aim = interceptPt(carrier.path, p, t, top, toSec, gap)
+        const dx = aim.x - p.x
+        const dy = aim.y - p.y
+        const dl = Math.hypot(dx, dy) || 1e-6
+        const sp = dl < 1 ? dl * top : top
+        want = { x: (dx / dl) * sp, y: (dy / dl) * sp }
+      }
+      const wl = Math.hypot(want.x, want.y)
+      if (wl > top) { want.x *= top / wl; want.y *= top / wl }
+      let ax = (want.x - v.x) / dt
+      let ay = (want.y - v.y) / dt
+      const al = Math.hypot(ax, ay)
+      if (al > acc) { ax *= acc / al; ay *= acc / al }
+      v = { x: v.x + ax * dt, y: v.y + ay * dt }
+      t += dt
+      p = stepIn(p, v, dt)
+      mv.path.push({ t, x: p.x, y: p.y })
+    }
+    mv.t = t
+    mv.x = p.x
+    mv.y = p.y
+    mv.lastStop = Math.hypot(v.x, v.y) < 1
+    mv.inHeading = undefined
+  })
+}
+
+/**
+ * animflow r6c2 (297): a score is run through the goal line at speed, then he
+ * eases up in the end zone (never a stop on the line, never a fall).
+ */
+function runThroughGoal(mv: Mover, goalX: number, dir: 1 | -1) {
+  const h = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: dir, y: 0 }
+  const v = Math.min(mv.pace.top, Math.hypot(h.x, h.y))
+  const hl = Math.hypot(h.x, h.y) || 1
+  const d = clampN((v * v) / (2 * 4.5), 1.5, 7.5)
+  const ux = Math.abs(h.x / hl) > 0.3 ? h.x / hl : dir * 0.7
+  const uy = Math.abs(h.x / hl) > 0.3 ? h.y / hl : 0.7 * Math.sign(h.y || 1)
+  const end = { x: clampN(mv.x + ux * d, dir > 0 ? goalX + 1 : 1, dir > 0 ? FIELD_W - 1 : goalX - 1), y: clampY(mv.y + uy * d) }
+  mv.run([end], { v0: v, stop: true, cut: true })
 }
 
 /**
@@ -3137,7 +3477,11 @@ function resolveCarry(opts: {
   pileDrive(carrier, post, carrySpeed(carrier))
   const endSec = carrier.t
   gangPursuit(m, tacklerKeys, fromSec, carrier, endSec, contactT, tk, seed)
-  hitAndRide(m[tk], carrier, Math.max(fromSec, contactT - 0.8), contactT, endSec, 4.5)
+  // animflow r6c2 (297): a tackler who starts well off the ball carrier runs
+  // his pursuit angle from the catch, not a late burst from where the pack left him.
+  const tk0 = posAt(m[tk].path, fromSec)
+  const far = Math.hypot(tk0.x - c.x, tk0.y - c.y) > 6
+  hitAndRide(m[tk], carrier, far ? fromSec : Math.max(fromSec, contactT - 0.8), contactT, endSec, 4.5)
   return { tackler: tk, endSec }
 }
 
@@ -3175,7 +3519,8 @@ export function yacTarget(conceptDepth: number, gain: number, u: number): number
 function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   recStart()
   const los = 10 + play.startYard
-  const f = formation(los, formationHasFullback(formationForConcept(play.concept)))
+  const snapK = snapKindFor(play.concept)
+  const f = formation(los, formationHasFullback(formationForConcept(play.concept)), snapK)
   const m = startMovers(f, ctx)
   recSnap(los)
   const seed = play.n * 11 + play.startYard
@@ -3218,15 +3563,27 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // Drop depth (yd behind the shotgun spot) and its duration (s).
   // animflow r6a: screens come out fast (BDB 2021 n 1.2k screens: snap to
   // release median 1.7 s, p25 1.3): a short, quick drop, then the dump-off.
-  const drop = { screen: 2.4, quick: 1.0, dropback: 2.6, deep: 3.8, pa: 2.8 }[bucket]
-  const dropT = { screen: 0.85, quick: 0.62, dropback: 1.2, deep: 1.5, pa: 1.55 }[bucket]
+  // animflow r6c2 (295): from under centre a real 3- / 5- / 7-step drop (QB
+  // ~5 / 7 / 8.5 yd deep at ~1.0 / 1.35 / 1.7 s); from the gun a 1- / 3- / 5-
+  // step (the old values); the pistol in between.
+  const drop = snapK === 'under'
+    ? { screen: 5.0, quick: 4.0, dropback: 6.0, deep: 7.5, pa: 6.5 }[bucket]
+    : snapK === 'pistol'
+      ? { screen: 3.0, quick: 1.6, dropback: 3.4, deep: 4.6, pa: 3.6 }[bucket]
+      : { screen: 2.4, quick: 1.0, dropback: 2.6, deep: 3.8, pa: 2.8 }[bucket]
+  const dropT = snapK === 'under'
+    ? { screen: 1.0, quick: 0.95, dropback: 1.35, deep: 1.7, pa: 1.75 }[bucket]
+    : snapK === 'pistol'
+      ? { screen: 0.9, quick: 0.7, dropback: 1.25, deep: 1.55, pa: 1.6 }[bucket]
+      : { screen: 0.85, quick: 0.62, dropback: 1.2, deep: 1.5, pa: 1.55 }[bucket]
   // When the ball should come out (s after the snap), with a little spread.
   // animflow r6a: all dropbacks 0.1 s quicker (BDB snap to release median 2.6-2.7 s, n 13.4k / 7.6k).
   let wantRel = SNAP + { screen: 1.75, quick: 1.65, dropback: 2.45, deep: 2.7, pa: 2.65 }[bucket] + (hash(seed + 61) - 0.5) * 0.4
   // Run fake (play-action / RPO / bootleg): QB and back mesh before the drop.
   const qbPts: Pt[] = []
-  if (pa) qbPts.push({ x: f.qb.x + 0.5, y: MID_Y + side * 1.2 })
-  if (boot) qbPts.push({ x: f.qb.x - 1.2, y: MID_Y - rollSide * 1.2 })
+  // Under centre the fake is a reverse pivot back to the back at the mesh.
+  if (pa) qbPts.push({ x: snapK === 'under' ? f.qb.x - 3.2 : snapK === 'pistol' ? f.qb.x - 0.3 : f.qb.x + 0.5, y: MID_Y + side * 1.2 })
+  if (boot) qbPts.push({ x: snapK === 'under' ? f.qb.x - 3.6 : f.qb.x - 1.2, y: MID_Y - rollSide * 1.2 })
   // Under pressure the pocket movement comes from the QB's legs (animflow r5;
   // NFL tracking: escape ~4.7 yd wide at ~7 yd deep, ~5 yd/s, throw ~1.1 s
   // later; mobile QBs p90 ~10 yd wide): a mobile QB breaks the pocket early and
@@ -3289,6 +3646,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     if (short) routeMap[tgt] = short
   }
 
+  LAST_CATCH_ROUTE = routeMap[tgt]
   const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb'].filter((k) => m[k])
   // Only a tight end / back assigned to pass-protect (block/passBlock) stays in
   // (backlog 152); a screen "stalk" or a play-action "runFake" is a route, not
@@ -3321,7 +3679,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     return clampN(base - (rls - 75) * 0.006 + hash(seed + k.length * 13 + 7) * 0.18, 0.05, 0.65)
   }
   /** Run receiver k: the release at the line, then his route at `pace` of his speed. */
-  const runRecv = (k: string, pace: number) => {
+  const runRecv = (k: string, pace: number, through = 0, flat = false) => {
     const pts = routePts(k)
     if (!(k === 'rb' && chipped)) m[k].reset(f[k].x, f[k].y)
     const rel = releaseOf(k)
@@ -3332,32 +3690,65 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     }
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const breakIdx = pts.length >= 3 ? pts.length - 2 : -1
-    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace)
+    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace, through, flat)
     return { pts, breakIdx }
   }
   const endX0 = clampX(10 + play.endYard)
+  // animflow r6c2 (302): the ball meets a receiver in stride (crossers, slants,
+  // verticals, outs: he keeps his speed through the catch); only a stop route
+  // (hitch, curl, comeback, stick / sit, a back's check-down) or a back-shoulder
+  // fade is caught standing.
+  const tgtRoute = routeMap[tgt] ?? ''
+  const backShoulder = tgtRoute === 'fade' && hash(seed + 83) < 0.3
+  const stride = !screen && !backShoulder && !/^(hitch|curl|comeback|stick|sit|check|stalk|runFake|block|passBlock)$/.test(tgtRoute)
   /** The target at a stem pace: where and when the ball meets him, and when it must leave. */
   const planTarget = (pace: number) => {
-    const { pts, breakIdx } = runRecv(tgt, pace)
+    const room = !inc && !int ? endX0 - Math.min(yacT, Math.max(0, endX0 - los - 0.5)) - (routePts(tgt).slice(-1)[0]?.x ?? 0) : Infinity
+    const { pts, breakIdx } = runRecv(tgt, pace, stride ? 16 : 0, room < 4)
     let cPt = pts[pts.length - 1]
-    let cSec = m[tgt].t
+    let cSec = stride ? timeNearest(m[tgt], cPt, 0, m[tgt].t) : m[tgt].t
     let v0 = 0
+    let fixed = false
     // A completion that gains less than the route's depth: the ball arrives
     // earlier on the route, short of the end spot, so the run after the catch
     // goes forward (or across), never back toward the line like a real NFL catch.
+    let xMax = Infinity
     if (!inc && !int) {
       const gain = endX0 - los
       const yacMin = gain > 0 ? Math.min(yacT, Math.max(0, gain - 0.5)) : 0
+      xMax = endX0 - yacMin
       if (cPt.x > endX0 - yacMin) {
         for (let t = cSec; t >= 0.35; t -= 0.02) {
           if (posAt(m[tgt].path, t).x <= endX0 - yacMin) {
+            // In stride: not in his brake into the break.
+            if (stride) while (t > 0.6 && speedAtTime(m[tgt].path, t) < 3.5) t -= 0.04
             cPt = posAt(m[tgt].path, t)
             v0 = seek(m[tgt], t)
+            cSec = t
+            fixed = true
+            break
+          }
+        }
+      }
+    }
+    if (stride && !fixed) {
+      // Too early for the QB: the ball meets him further along his line (still
+      // running), as long as that stays short of the recorded spot.
+      const goal = Math.max(minRel, wantRel - 0.3)
+      const airAt = (p: Pt) => Math.hypot(p.x - (f.qb.x - drop), p.y - MID_Y)
+      if (cSec - flightFor(airAt(cPt)) < goal) {
+        // (never in the slow-down at the end of his line)
+        for (let t = cSec; t <= m[tgt].t - 1.0; t += 0.04) {
+          const p = posAt(m[tgt].path, t)
+          if (p.x > xMax + 0.3) break
+          if (t - flightFor(airAt(p)) >= goal) {
+            cPt = p
             cSec = t
             break
           }
         }
       }
+      v0 = seek(m[tgt], cSec)
     }
     cSec = Math.max(cSec, 0.35)
     if (screen) {
@@ -3392,7 +3783,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // target open when the QB wants to throw.
   let bestPace = 1
   let bestErr = Infinity
-  for (let pace = 1; pace >= 0.5 - 1e-9; pace -= 0.04) {
+  for (let pace = 1; pace >= (stride ? 0.36 : 0.5) - 1e-9; pace -= 0.04) {
     const r = planTarget(pace).rel
     const err = Math.abs(r - Math.max(wantRel, minRel)) + (r < minRel ? 5 + (minRel - r) : 0)
     if (err < bestErr) {
@@ -3411,11 +3802,42 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const relGoal = Math.max(minRel, wantRel - 0.3)
   if (tp.rel < relGoal) {
     const late = relGoal + flightFor(Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y))
-    seek(m[tgt], catchSec)
-    pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
-    catchSec = m[tgt].t
-    catchPt = { x: m[tgt].x, y: m[tgt].y }
-    catchV0 = 0
+    const v = seek(m[tgt], catchSec)
+    if (stride && late - catchSec > 0.2) {
+      // animflow r6c2 (302): a crosser / vertical early for the QB throttles
+      // down and keeps working across (no stop in the open): the ball meets him
+      // on the move. Across, not upfield, so the catch stays short of the spot.
+      const h = m[tgt].path.length > 1 ? speedVec(m[tgt].path, m[tgt].t) : { x: 0, y: 1 }
+      let hx = h.x * 0.2
+      let hy = Math.abs(h.y) > 0.3 ? h.y : (m[tgt].y < MID_Y ? 1 : -1)
+      const hl = Math.hypot(hx, hy) || 1
+      hx /= hl
+      hy /= hl
+      const jog = 3.6
+      let d = jog * (late - catchSec)
+      // Room before the sideline: turn back inside rather than run out.
+      const yRoom = hy > 0 ? FIELD_H - 2 - m[tgt].y : m[tgt].y - 2
+      if (d * Math.abs(hy) > yRoom) d = Math.max(0.5, yRoom / Math.max(0.2, Math.abs(hy)))
+      const saved = m[tgt].pace
+      m[tgt].pace = { top: Math.min(saved.top, Math.max(jog, v * 0.8)), acc: Math.min(saved.acc, 5) }
+      m[tgt].run([{ x: clampX(m[tgt].x + hx * d), y: clampY(m[tgt].y + hy * d) }], { v0: Math.min(v, m[tgt].pace.top), stop: false })
+      m[tgt].pace = saved
+      const tEnd = Math.min(m[tgt].t, late)
+      catchV0 = seek(m[tgt], tEnd)
+      catchSec = m[tgt].t
+      catchPt = { x: m[tgt].x, y: m[tgt].y }
+      if (late - catchSec > 0.05) {
+        pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
+        catchSec = m[tgt].t
+        catchPt = { x: m[tgt].x, y: m[tgt].y }
+        catchV0 = 0
+      }
+    } else {
+      pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
+      catchSec = m[tgt].t
+      catchPt = { x: m[tgt].x, y: m[tgt].y }
+      catchV0 = 0
+    }
   }
   for (const k of receivers) {
     if (stayIn.has(k) || k === tgt) continue
@@ -3468,7 +3890,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // The front plus any blitzers rush; the line (and a back/tight end staying
   // in) slides and doubles the best rusher. The recorded pressure rusher beats
   // his block home; anyone the slide does not pick up comes free.
-  const blitzK = play.blitz ? blitzKeys(seed) : []
+  // animflow r6c2 (J7): the man the sim says covered the target is in coverage, not on the blitz.
+  const coverK0 = play.coverId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.coverId) : undefined
+  const blitzK = (play.blitz ? blitzKeys(seed) : []).filter((k) => k !== coverK0 || play.pressureId === play.coverId)
   const pressureKey = play.pressureId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.pressureId) : undefined
   // The recorded pressure rusher always rushes, even when the sim credited a
   // linebacker the slide never sent (backlog 152 follow-up).
@@ -3482,6 +3906,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', ...stayIn],
     winner: pressureKey,
     qbTarget: posAt(m.qb.path, releaseSec),
+    beaten: play.beatenBlockerId ? [...(ctx.actors?.entries() ?? [])].find(([, p]) => p.id === play.beatenBlockerId)?.[0] : undefined,
     arriveSec: releaseSec,
     holdTo,
     seed,
@@ -3656,6 +4081,53 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     else zoneDrop(m[dk], { fromSec: 0.1, toSec: trailEnd, releaseSec, landmark: { x: los + 8, y: dk === 'cb0' ? 8 : dk === 'cb1' ? FIELD_H - 8 : MID_Y + (dk === 'lb0' ? -8 : dk === 'lb2' ? 8 : 0) }, zcv: attrOf(m[dk].player, 'ZCV'), threat: m[deepKey], catchPt })
   }
 
+  // animflow r6c2 (J7): the sim's matchup decides how open he is. The recorded
+  // cover defender (coverDefenderId / coverId) is eased, over the last beat of
+  // the route, to the recorded separation at the catch (separationYd: blanket
+  // ~0.3, tight ~1.3, open ~2.5, wide ~5, a bust 9-12 yd) on the side he was
+  // already playing — a trailing man trails further, a tight one closes.
+  const sepYd = play.separationYd
+  if (sepYd != null && !int && coverKey && m[coverKey] && !isBlitzer(coverKey) && coverKey !== tgt) {
+    const mv = m[coverKey]
+    const want = clampN(sepYd, 0.6, 12)
+    const R = posAt(m[tgt].path, catchSec)
+    const Dp = posAt(mv.path, catchSec)
+    let ux = Dp.x - R.x
+    let uy = Dp.y - R.y
+    let ul = Math.hypot(ux, uy)
+    if (ul < 0.3) {
+      ux = -1
+      uy = 0
+      ul = 1
+    }
+    ux /= ul
+    uy /= ul
+    const P = { x: clampX(R.x + ux * want), y: clampY(R.y + uy * want) }
+    const sx = P.x - Dp.x
+    const sy = P.y - Dp.y
+    const shift = Math.hypot(sx, sy)
+    if (shift > 0.15) {
+      const tA = Math.max(SNAP + 0.5, catchSec - clampN(shift / 2.2, 0.5, 2.2))
+      if (catchSec - tA > 0.2) {
+        const old = mv.path
+        const out = old.filter((w) => w.t < tA - 1e-9)
+        for (let t = tA; t < catchSec - 1e-6; t += 0.04) {
+          const q = posAt(old, t)
+          const u = (t - tA) / (catchSec - tA)
+          const e = u * u * (3 - 2 * u)
+          out.push({ t, x: clampX(q.x + sx * e), y: clampY(q.y + sy * e) })
+        }
+        out.push({ t: catchSec, x: P.x, y: P.y })
+        for (const w of old) if (w.t > catchSec + 1e-6) out.push({ t: w.t, x: clampX(w.x + sx), y: clampY(w.y + sy) })
+        mv.path = out
+        const last = out[out.length - 1]
+        mv.t = last.t
+        mv.x = last.x
+        mv.y = last.y
+      }
+    }
+  }
+
   if (inc) {
     // A drop or a bang-bang miss: the ball skips off the receiver's hands.
     const cth = attrOf(m[tgt].player, 'CTH')
@@ -3725,9 +4197,14 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   if (isTD || play.outOfBounds) {
     // A score or a step out of bounds: he keeps the ball to the spot and the
     // coverage chases, but nothing forces a tackle.
-    m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: true })
+    m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: !isTD })
+    // animflow r6c2 (297): through the goal line at speed; the coverage takes
+    // real pursuit angles (the fast men close, the rest angle at the pylon).
+    if (isTD) runThroughGoal(m[tgt], 110, 1)
     const endSec = m[tgt].t
-    chaseCarrier(m, pursuers, catchSec, m[tgt], endSec, seed)
+    // The chase is over at the goal line: they pull up as he crosses.
+    const chaseTo = isTD ? Math.min(endSec, (crossX(m[tgt], 110, catchSec, endSec, 1) ?? endSec) + 0.3) : endSec
+    angleChase(m, pursuers, catchSec, m[tgt], chaseTo, seed)
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
     recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
@@ -3766,7 +4243,8 @@ function blitzKeys(seed: number): string[] {
 function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   recStart()
   const los = 10 + play.startYard
-  const f = formation(los)
+  const snapK = snapKindFor(play.concept)
+  const f = formation(los, false, snapK)
   const m = startMovers(f, ctx)
   recSnap(los)
   const seed = play.n * 17 + play.startYard
@@ -3796,7 +4274,7 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   const pocketT = clampN(2.3 + (los - endX) * 0.09, 2.3, 3.5)
   // animflow round 2: a real drop first (done ~1.2 s), a set with his feet
   // alive while he looks downfield, then the escape attempt into the sack spot.
-  const dropPt: Pt = { x: f.qb.x - 2.6, y: MID_Y }
+  const dropPt: Pt = { x: f.qb.x - (snapK === 'under' ? 6 : snapK === 'pistol' ? 3.2 : 2.6), y: MID_Y }
   const dropT = Math.min(1.25, pocketT - 0.9)
   runTimed(m.qb, [dropPt], 0, dropT, false, true)
   pocketPair(m, null, ['qb'], m.qb.t, pocketT - 0.55, -0.4, seed + 77)
@@ -3807,6 +4285,7 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
     blockers: ['ol0', 'ol1', 'ol2', 'ol3', 'ol4'],
     winner: rusherKey,
     qbTarget: qbEnd,
+    beaten: play.beatenBlockerId ? [...(ctx.actors?.entries() ?? [])].find(([, p]) => p.id === play.beatenBlockerId)?.[0] : undefined,
     arriveSec: sackT,
     holdTo: sackT,
     seed,
