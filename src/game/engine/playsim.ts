@@ -19,7 +19,7 @@ import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
-import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../data/playbookData'
+import { SCHEME_MENUS, SCHEME_MENUS_REALISM, MENU_REALISM, PLAYBOOK, conceptFromPlaybook, formationForConcept, type Personnel } from '../data/playbookData'
 import { mod, schemeFit, styleProfile } from './style'
 import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, spendChallenge, inBoothWindow, type ReviewSnapshot } from './review'
 import type { PlayReview, PendingReview, ChallengeState } from './review'
@@ -42,6 +42,18 @@ export function setStamina(on: boolean) {
 /** R15: read the current stamina toggle so a probe can restore it exactly. */
 export function getStamina(): boolean {
   return STAMINA_ON
+}
+// J5: dev-only toggle for the realistic scheme menus / formations / motion flag.
+// Default on; the shipped sim always leaves it on. With it off the sim uses the
+// original SCHEME_MENUS and sets no motion flag, so its rng stream and every
+// resolved play are byte-identical to the pre-J5 engine.
+let MENU_REALISM_ON = true
+export function setMenuRealism(on: boolean) {
+  MENU_REALISM_ON = on
+}
+/** J5: read the current menu-realism toggle so a probe can restore it exactly. */
+export function getMenuRealism(): boolean {
+  return MENU_REALISM_ON
 }
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
@@ -448,6 +460,8 @@ export interface Play {
   blitz?: boolean
   bigPlay?: boolean
   timeUsed?: number
+  /** J5: this snap used pre-snap motion (animation use is a later job). */
+  motion?: boolean
   /** L10 G8: offensive class of this snap (run / short / deep), for the tendency book. */
   offClass?: OffClass
   /** L10 G8: the defensive call used on this snap, for the tendency book. */
@@ -1124,11 +1138,19 @@ const DEF_STYLES: Record<string, DefenseStyle> = {
 
 export function offStyle(world: World, teamId: string): OffenseStyle {
   const oc = (world.staff[teamId] ?? []).find((s) => s.role === 'Offensive Coordinator')
-  const base = OFF_STYLES[oc?.scheme ?? ''] ?? OFF_STYLES['Pro Style']
+  const scheme = oc?.scheme ?? ''
+  const base = OFF_STYLES[scheme] ?? OFF_STYLES['Pro Style']
+  // J5: the ONE place the scheme menu is chosen. Toggle on → the realistic menu;
+  // off → the original SCHEME_MENUS, byte-identical to the pre-J5 engine. The
+  // pass:run split is untouched either way: pickConcept still rolls the pass rate
+  // first and only then picks a concept of that type from this list.
+  const concepts = MENU_REALISM_ON
+    ? (SCHEME_MENUS_REALISM[scheme] ?? SCHEME_MENUS_REALISM['Pro Style'])
+    : base.concepts
   // R18.2: the widening pivots on the league's own mean identity, so the scheme's
   // pass-rate identity is spread out club-to-club without moving the league average.
   const passRate = offPassRate(world, teamId, oc?.scheme)
-  return passRate === base.passRate ? base : { ...base, passRate }
+  return passRate === base.passRate && concepts === base.concepts ? base : { ...base, passRate, concepts }
 }
 function defStyle(world: World, teamId: string): DefenseStyle {
   const dc = (world.staff[teamId] ?? []).find((s) => s.role === 'Defensive Coordinator')
@@ -1162,6 +1184,8 @@ export interface PlayOutcome {
   /** The defense sent extra rushers on this pass (animation only). */
   blitz?: boolean
   bigPlay?: boolean
+  /** J5: this snap used pre-snap motion (set when the play is pushed). */
+  motion?: boolean
   timeUsed: number
   // attribution for individual stats
   qbId?: string
@@ -3594,7 +3618,18 @@ function applyScrimmageOutcome(
     offS.firstDowns += 1
     if (s.down === 3) offS.thirdDownConv += 1
   }
-  pushPlay(s, { ...out, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(out.type === 'run' ? 'run' : 'pass', out.passDepth ?? 0), defCall })
+  // J5: pre-snap motion — a deterministic hash flag (no rng() draw), so the seed
+  // stream and coached/sim equivalence are unchanged. Gated on the toggle so OFF
+  // pushes exactly the pre-J5 play record (no `motion` key at all).
+  let motion: boolean | undefined
+  if (MENU_REALISM_ON) {
+    const pers = conceptFromPlaybook(out.concept)?.personnel
+    const gun = formationForConcept(out.concept).startsWith('Gun')
+    const rate = pers === '11' && gun ? MENU_REALISM.motionRate + MENU_REALISM.motionGun11Bump : MENU_REALISM.motionRate
+    motion = h01(`${s.n}:${offId}:motion`) < rate
+  }
+  const motionFields = motion === undefined ? {} : { motion }
+  pushPlay(s, { ...out, ...motionFields, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(out.type === 'run' ? 'run' : 'pass', out.passDepth ?? 0), defCall })
 
   if (out.defTD) {
     // R6: a takeaway returned for a touchdown (pick-six / fumble return).
