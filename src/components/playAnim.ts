@@ -1467,7 +1467,7 @@ function bestAttr(p: Player | undefined, keys: string[], fallback = 70): number 
 /** animflow r6c: how long a run defender's rip off the block takes (s). */
 const RIP_SEC = 0.3
 /** animflow r6c: a pass rusher's speed coming out of his move (yd/s; BDB 2023 pressures: 3.6 at the shed). */
-const SHED_V0 = 3
+const SHED_V0 = 3.6
 const CONTACT = 0.9 // yd between a blocker's and his rusher's centres (hands on, leaning in)
 /**
  * animflow r6a: pass-set depth behind the ball (yd) by time after the snap (s),
@@ -2357,7 +2357,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       const rip = { x: a.x + (dx / dl) * 6, y: a.y + (dy / dl) * 6 }
       const close = pursueBrain(def, DEF_KEYS.indexOf(def))
       const t1 = t + RIP_SEC
-      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(4, me.mv.pace.top * 0.6), burst: 2.6 } : close(tt, me, f2))
+      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(5, me.mv.pace.top * 0.85), burst: 4.2 } : close(tt, me, f2))
       if (def === creditedKey) {
         credShed = t
         a.noBlock = true
