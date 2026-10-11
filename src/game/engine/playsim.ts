@@ -110,13 +110,22 @@ export const CLOCK_REALISM = {
   scrambleGainSpread: 9,
   scrambleSpdEdge: 0.06,
   /** DEF_STYLES overrides applied only while CLOCK_ON: manCoverage/blitz lowered
-   *  to the NFL mix, coverage multiplier shifted to hold completion % / YPA. */
+   *  to the NFL mix (the load-bearing share fix), coverage multiplier recentred to
+   *  hold completion % / gross pass yards.
+   *
+   *  try-5: the >1.0 coverage values were tuned on the PRE-merge base. On the
+   *  merged J1/J5/J7/J8b base the pass game is already leaner, so the same
+   *  multipliers over-suppressed comp% (−1.9 pts) and gross pass yards (−7) at the
+   *  36% man share. A 1-seed × 600-game probe (logs/realism-j6-cov2.out) showed the
+   *  coverage values must drop by ~0.10 (a ≈0.90 scale) to centre comp% 64.3 vs the
+   *  OFF 64.4 and gross 240.4 vs 239.9, with points/pass TD/3rd-down/first downs
+   *  all equal or better — i.e. set them back toward/slightly below 1.0. */
   defStyles: {
-    '4-3 Base': { blitz: 0.19, manCoverage: 0.32, runFit: 1.0, coverage: 1.02 },
-    '3-4 Base': { blitz: 0.27, manCoverage: 0.24, runFit: 1.06, coverage: 1.02 },
-    '4-2-5 Nickel': { blitz: 0.21, manCoverage: 0.40, runFit: 0.9, coverage: 1.1 },
-    Multiple: { blitz: 0.26, manCoverage: 0.34, runFit: 1.0, coverage: 1.05 },
-    'Blitz Heavy': { blitz: 0.47, manCoverage: 0.53, runFit: 0.94, coverage: 1.0 },
+    '4-3 Base': { blitz: 0.19, manCoverage: 0.32, runFit: 1.0, coverage: 0.92 },
+    '3-4 Base': { blitz: 0.27, manCoverage: 0.24, runFit: 1.06, coverage: 0.92 },
+    '4-2-5 Nickel': { blitz: 0.21, manCoverage: 0.40, runFit: 0.9, coverage: 1.0 },
+    Multiple: { blitz: 0.26, manCoverage: 0.34, runFit: 1.0, coverage: 0.95 },
+    'Blitz Heavy': { blitz: 0.47, manCoverage: 0.53, runFit: 0.94, coverage: 0.9 },
   } as Record<string, DefenseStyle>,
   /** Two-point chart: analytics-aggressive early aggression. */
   twoAggroMin: 0.3,
@@ -2027,19 +2036,42 @@ function oobSituation(env: SimEnv | undefined): boolean {
 // T2M: the concepts that get the ball on the edge — an outside run can reach the
 // sideline; an inside hand-off cannot.
 const OUTSIDE_RUNS = new Set(['Toss', 'Outside Zone', 'Pin-Pull', 'Jet Sweep', 'RPO Run', 'Read Option'])
+// J6 try-5: even a between-the-tackles hand-off can be strung out and pushed out
+// near the boundary, so with clock-realism ON every run carries a small sideline
+// chance — part of widening the ELIGIBLE play set (never the rate multiplier).
+const INSIDE_RUN_OOB = 0.05
+// J6 try-5: the sideline-route family. The base list is the T2M set (OFF path,
+// byte-identical to before2); the widened list adds the rest of the short/
+// intermediate sideline family and is used only while clock-realism is ON.
+const OOB_ROUTE_BASE = /out|flat|screen|bubble|swing|check|wheel|angle|texas|snag|whip|corner/i
+const OOB_ROUTE_WIDE = /out|flat|screen|bubble|swing|check|wheel|angle|texas|snag|whip|corner|comeback|hitch|curl|smash|sail|level|bench|flood|hank|spacing|mesh/i
 
 /**
  * T2M: the chance a sideline carry goes out of bounds. Outside runs and short
  * completions (outs, flats, screens, checkdowns) only; more for WR/RB on those
  * routes. Purely a probability fed to a per-play hash — never an rng() draw.
+ *
+ * J6 try-5 widens the ELIGIBLE set toward the NFL 10.8% share while the toggle is
+ * ON: every inside run can reach the boundary, the sideline-route list covers the
+ * full short/intermediate sideline family (comebacks, hitches, curls, sails,
+ * benches, …), and the per-position weights are raised. The `oobWiden` multiplier
+ * is UNCHANGED. With the toggle OFF every branch returns the exact pre-J6 value,
+ * so the OFF path (incl. the two-minute window) stays byte-identical.
  */
 function oobChance(concept: Concept, pos: string | undefined): number {
-  if (concept.type === 'run') return OUTSIDE_RUNS.has(concept.name) ? 0.4 : 0
+  if (concept.type === 'run') {
+    if (OUTSIDE_RUNS.has(concept.name)) return 0.4
+    return CLOCK_ON ? INSIDE_RUN_OOB : 0
+  }
   const short = concept.depth <= 8 || concept.yac >= 0.8
   if (!short) return 0
-  const route = /out|flat|screen|bubble|swing|check|wheel|angle|texas|snag|whip|corner/i.test(concept.name) ? 0.1 : 0
-  const byPos = pos === 'WR' ? 0.16 : pos === 'RB' || pos === 'FB' ? 0.12 : pos === 'TE' ? 0.05 : 0
-  return clamp(0.2 + route + byPos, 0, 0.6)
+  const route = CLOCK_ON
+    ? (OOB_ROUTE_WIDE.test(concept.name) ? 0.12 : 0)
+    : (OOB_ROUTE_BASE.test(concept.name) ? 0.1 : 0)
+  const byPos = CLOCK_ON
+    ? (pos === 'WR' ? 0.19 : pos === 'RB' || pos === 'FB' ? 0.15 : pos === 'TE' ? 0.08 : 0)
+    : (pos === 'WR' ? 0.16 : pos === 'RB' || pos === 'FB' ? 0.12 : pos === 'TE' ? 0.05 : 0)
+  return clamp(0.2 + route + byPos, 0, CLOCK_ON ? 0.62 : 0.6)
 }
 
 /**
@@ -4145,6 +4177,13 @@ function shouldKneel(world: World, s: GameState): boolean {
   if (h01(`${s.n}:${s.offId}:kneelgateD`) >= CLOCK_REALISM.kneelGate) return false
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   if (margin <= 0) return false
+  // J6 try-5: a kneel is a RUN, so it must only ever replace a snap the leader
+  // would otherwise RUN (a clock-kill, 'protect'), never a snap it would throw.
+  // The engine's two-minute model puts a LEADING club in 'protect' and only a
+  // trailing/tied club in 'hurry' (pass-first), so a club in 'hurry' is never the
+  // one running the clock — the kneel is skipped and the trailing club keeps the
+  // clock-stop a real incompletion would have given it (no extra lost pass plays).
+  if (s.twoMinMode === 'hurry') return false
   const kneelsLeft = 4 - s.down // downs 1..3 → 3..1
   const stops = wantsTimeout(world, s, s.defId) ? (s.timeouts[s.defId] ?? 0) : 0
   const stopped = Math.min(kneelsLeft, stops)
