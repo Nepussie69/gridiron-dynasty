@@ -556,6 +556,14 @@ export function MatchView() {
       setIdx(i)
       setPlaying(false)
     }
+    // Freeze play `i` at animation time `t` (0..1) for frame-exact screenshots.
+    ;(window as unknown as Record<string, unknown>).__gdFreezeAt = (i: number, t: number) => {
+      tRef.current = { i, t }
+      setClock({ i, t })
+      setFrozen(true)
+      setPlaying(false)
+    }
+    ;(window as unknown as Record<string, unknown>).__gdClock = () => ({ ...tRef.current })
   }, [])
   const canReplay = !!play && !!anim && replayable(play, (anim as BroadcastAnim).events ?? [])
 
