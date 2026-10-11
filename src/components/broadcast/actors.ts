@@ -109,7 +109,25 @@ export interface ActorPlay {
   offHome: boolean
   /** Jersey number per actor key (fallback: a number from the role's range). */
   numbers?: Record<string, number>
+  /**
+   * animflow r6b (item 4): the substitutions before the next snap (recorded
+   * personnel, Play.onFieldOff / onFieldDef). Once the whistle has gone the men
+   * coming off jog to their bench and the men coming on jog in from it.
+   */
+  subs?: SubPlan
 }
+
+/** animflow r6b: who comes off (actor keys) and who comes on (jersey numbers) after this play. */
+export interface SubPlan {
+  out: string[]
+  in: { side: 'off' | 'def'; number: number }[]
+  /** World y of each club's bench (home near / away far, SL1). */
+  benchY: { off: number; def: number }
+}
+
+/** Jog pace (yd/s) and the beat before the subs move after the whistle. */
+export const SUB_JOG = 3.3
+export const SUB_DELAY = 0.35
 
 /** One visible actor on screen after a frame (canvas pixels). */
 export interface ActorScreen {
@@ -322,6 +340,8 @@ interface Item extends SceneItem {
 export class ActorLayer {
   /** Play time 0..1. */
   t = 0
+  /** animflow r6b: seconds the live play has sat on its last frame (the subs jog). */
+  post = 0
   /** Draw the placeholder ball (B4 turns this off and draws its own). */
   drawBall = true
   /** Use pre-rendered sprite parts (off = paint every part directly; for comparison). */
@@ -355,6 +375,8 @@ export class ActorLayer {
   private clubKey = ''
   private items: Item[] = []
   private figs: Figure[] = []
+  /** animflow r6b: the men coming on (one figure each, built per play). */
+  private subFigs: Figure[] = []
   /** Blend sources per recursion depth (no per-frame allocation). */
   private scratch: PoseParams[] = Array.from({ length: BLEND_DEPTH }, () => newPose())
   private ballPose = newPose()
@@ -388,7 +410,28 @@ export class ActorLayer {
     this.kits = { off, def }
     this.sprites.refreshFont()
     for (const tr of this.tracks) tr.fig.kit = tr.side === 'off' ? off : def
+    this.subFigs = (p.subs?.in ?? []).map((s, i) => ({
+      key: `sub${i}`,
+      side: s.side,
+      x: 0,
+      y: 0,
+      heading: 0,
+      speed: 0,
+      phase: 0,
+      pose: newPose(),
+      fallDir: null,
+      kit: s.side === 'off' ? off : def,
+      number: s.number,
+      skin: skinFor(`sub${i}`, s.number),
+      alpha: 1,
+      order: 60 + i,
+    }))
     this.screen.clear()
+  }
+
+  /** animflow r6b: how far (yd) a sub has jogged `post` seconds after the whistle. */
+  static jogDist(post: number): number {
+    return Math.max(0, post - SUB_DELAY) * SUB_JOG
   }
 
   get anim(): BroadcastAnim | null {
@@ -582,8 +625,22 @@ export class ActorLayer {
       f.speed = s.v
       f.phase = s.ph
       f.heading = dir === 1 ? s.hd : s.hd + Math.PI
-      const st = this.poseFor(tr, t, f)
+      let st = this.poseFor(tr, t, f)
       if (f.fallDir != null && dir === -1) f.fallDir += Math.PI
+      // animflow r6b (item 4): a man coming off jogs to his bench after the whistle.
+      const subs = play.subs
+      if (subs && this.post > SUB_DELAY && t >= 1 && subs.out.includes(tr.key) && st !== 'down' && st !== 'fall' && st !== 'dive') {
+        const by = tr.side === 'off' ? subs.benchY.off : subs.benchY.def
+        const d = Math.min(ActorLayer.jogDist(this.post), Math.abs(by - f.y))
+        const sg = by > f.y ? 1 : -1
+        f.y += sg * d
+        f.speed = SUB_JOG
+        f.phase = s.ph + (d / cycleLength(SUB_JOG)) * TAU
+        f.heading = sg > 0 ? Math.PI / 2 : -Math.PI / 2
+        poseParams('run', 0, 0, f.pose)
+        f.fallDir = null
+        st = 'run'
+      }
       figs.push(f)
       const scr = figureScreen(cam, f.x, f.y)
       tr.scr = null
@@ -615,6 +672,26 @@ export class ActorLayer {
           drawFigure(g, cam, f, scr, opts)
           drawn++
         },
+      })
+    }
+    // animflow r6b (item 4): the men coming on jog in from their bench after the whistle.
+    if (play.subs && this.post > SUB_DELAY && t >= 1 && this.subFigs.length) {
+      const d = ActorLayer.jogDist(this.post)
+      const bw = this.ballCore(1, dir)
+      this.subFigs.forEach((f, i) => {
+        const by = f.side === 'off' ? play.subs!.benchY.off : play.subs!.benchY.def
+        const sg = by < MID_WIDTH ? 1 : -1
+        f.x = bw.x + (i - (this.subFigs.length - 1) / 2) * 2.2 + (f.side === 'off' ? -3 : 3) * dir
+        f.y = by + sg * Math.min(d, Math.abs(MID_WIDTH - by) - 6)
+        f.speed = SUB_JOG
+        f.phase = (d / cycleLength(SUB_JOG)) * TAU + i
+        f.heading = sg > 0 ? Math.PI / 2 : -Math.PI / 2
+        poseParams('run', 0, 0, f.pose)
+        figs.push(f)
+        const scr = figureScreen(cam, f.x, f.y)
+        if (!scr || scr.h < 2) return
+        if (scr.x + scr.h < 0 || scr.x - scr.h > W || scr.y - scr.h > H || scr.y + scr.h * 0.3 < 0) return
+        items.push({ kind: 'fig', key: f.key, depth: scr.depth, order: 100 + f.order, draw: (g) => { drawFigure(g, cam, f, scr, opts); drawn++ } })
       })
     }
     // The ball: one rule for the placeholder and B4 (clamped height; carried →

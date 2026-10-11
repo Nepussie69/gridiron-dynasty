@@ -14,6 +14,7 @@
 
 import type { PlayAnim, AnimContext, Actor } from '../playAnim'
 import type { Play } from '../../game/engine/playsim'
+import { carrierMove, effRating, tackleStyle, tiredness, type CarrierMove } from '../animRatings'
 
 // Geometry constant (copied: no value import from playAnim.ts).
 const MID_Y = 26.65
@@ -37,6 +38,7 @@ export type PoseState =
   | 'stance3' | 'stance2' | 'stand' | 'run' | 'pedal' | 'block' | 'fake' | 'throw'
   | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold' | 'tackle'
   | 'set' | 'throwQuick' | 'throwDeep' | 'throwRun' | 'throwHurry'
+  | 'juke' | 'spin' | 'stiffArm' | 'truck' | 'tackleHit' | 'tackleArm' | 'hips'
 
 /**
  * animflow round 3: how the quarterback throws. playAnim picks it (it knows the
@@ -93,6 +95,8 @@ export type FacingWindow = { t0: number; t1: number } & (
   | { mode: 'angle'; angle: number }
   | { mode: 'actor'; key: string }
   | { mode: 'backpedal' }
+  // animflow r6b: a spin move — one full turn over the window, on top of the run direction.
+  | { mode: 'spin'; dir: 1 | -1; s0: number; s1: number }
 )
 
 /** The ball's height above the turf, in yards. */
@@ -110,6 +114,8 @@ export interface AnimPresentation {
   facing: Record<string, FacingWindow[]>
   ballZ: BallZKey[]
   camera: CameraHint
+  /** animflow r6b: the broken-tackle moves and tackle styles drawn (checks / probes). */
+  skill?: { moves: { key: string; move: CarrierMove; t: number; missed: string | null }[]; tackles: Record<string, string> }
 }
 
 export type BroadcastAnim = PlayAnim & AnimPresentation
@@ -479,12 +485,33 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   if (koPlay && flight && returnerKey && !touchback) addCatch(returnerKey, flight.t1)
 
   const stumbleBy: Record<string, { t0: number; t1: number }> = {}
+  // animflow r6b (item 5): a broken tackle is the carrier's best move (juke /
+  // spin / stiff arm / truck, animRatings.carrierMove), and the man he beat
+  // reacts to it (lunges past a juke, is shoved off by the stiff arm, knocked
+  // back by the truck, grabs air on the spin). One move per missed tackle.
+  const moveBy: Record<string, { t0: number; t1: number; state: PoseState }[]> = {}
+  const spinBy: Record<string, { t0: number; t1: number; dir: 1 | -1 }> = {}
+  const moves: { key: string; move: CarrierMove; t: number; missed: string | null }[] = []
   if (carrierKey && (play.missedTackleIds?.length ?? 0) > 0) {
     const stop = lastT(carrierKey)
-    let c = carrierStartT + 0.65 * Math.max(0, stop - carrierStartT)
-    const ev = events.find((e) => e.kind === 'brokenTackle')
-    if (ev) c = ev.t
-    stumbleBy[carrierKey] = { t0: Math.max(0, c - 0.15 / D), t1: Math.min(1, c + 0.15 / D) }
+    const carrierPl = ctx.actors?.get(carrierKey)
+    const evs = events.filter((e) => e.kind === 'brokenTackle')
+    const list = evs.length ? evs.map((e) => ({ t: e.t, missed: e.keys[1] ?? null })) : [{ t: carrierStartT + 0.65 * Math.max(0, stop - carrierStartT), missed: null }]
+    list.forEach((ev, i) => {
+      const move = carrierMove(carrierPl, (play.n ?? 0) * 7.31 + i * 3.7 + (play.startYard ?? 0))
+      moves.push({ key: carrierKey, move, t: ev.t, missed: ev.missed })
+      const half = (move === 'spin' ? 0.22 : move === 'juke' ? 0.16 : 0.18) / D
+      const w = { t0: Math.max(0, ev.t - half), t1: Math.min(stop, ev.t + half) }
+      if (w.t1 - w.t0 < 1e-6) return
+      ;(moveBy[carrierKey] ??= []).push({ ...w, state: move === 'stiffArm' ? 'stiffArm' : move })
+      if (move === 'spin') spinBy[carrierKey] = { ...w, dir: hashSide(play.n ?? 0, i) }
+      const mk = ev.missed
+      if (mk && keySet[mk] && mk !== carrierKey) {
+        const st: PoseState = move === 'juke' ? 'tackleArm' : move === 'truck' ? 'fall' : 'stumble'
+        const len = (move === 'truck' ? 0.3 : 0.32) / D
+        ;(moveBy[mk] ??= []).push({ t0: Math.max(0, ev.t - 0.08 / D), t1: Math.min(1, ev.t + len), state: st })
+      }
+    })
   }
 
   // animflow: the carrier is jolted (a stumble) at first contact before he goes
@@ -502,6 +529,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     ;(tackleBy[e.a] ??= []).push({ t0: clamp01(e.t0), t1: clamp01(e.t1) })
   }
   const diveBy: Record<string, { t0: number; t1: number }> = {}
+  const tackleStyles: Record<string, string> = {}
   const fallBy: Record<string, { t0: number; t1: number }> = {}
   const downBy: Record<string, { t0: number; t1: number }> = {}
   const tackleT = carrierKey && tackled ? Math.min(lastT(carrierKey), 1 - 1e-4) : null
@@ -531,10 +559,19 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
         ? Math.abs(((Math.atan2(tv.y, tv.x) - Math.atan2(cv.y, cv.x) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * (180 / Math.PI)
         : 90
       const fromBehind = ang < 50
-      if (fromBehind && cs > 3) {
+      // animflow r6b (item 5): the tackle by the tackler's TAK / HPW (animRatings.tackleStyle).
+      const style = tackleStyle(ctx.actors?.get(tk), { fromBehind, carrierSpeed: cs, tacklerSpeed: Math.hypot(tv.x, tv.y), seed: (play.n ?? 0) * 3.1 + (play.startYard ?? 0) })
+      tackleStyles[tk] = style
+      if (style === 'dive') {
         diveBy[tk] = { t0: Math.max(0, tackleT - 0.25 / D), t1: tackleT }
       } else {
-        ;(tackleBy[tk] ??= []).push({ t0: clamp01(Math.min(ht, tackleT - 0.2 / D)), t1: tackleT })
+        const w = { t0: clamp01(Math.min(ht, tackleT - 0.2 / D)), t1: tackleT }
+        if (style === 'wrap') (tackleBy[tk] ??= []).push(w)
+        else (moveBy[tk] ??= []).push({ ...w, state: style === 'hit' ? 'tackleHit' : 'tackleArm' })
+        // A big hit puts him down at once (a short, hard fall); an arm tackle
+        // drags him down slowly (a longer fall as he keeps his legs going).
+        if (style === 'hit' && fallBy[carrierKey]) fallBy[carrierKey].t0 = Math.max(ht, tackleT - 0.09 / D)
+        if (style === 'arm' && fallBy[carrierKey]) fallBy[carrierKey].t0 = Math.max(0, tackleT - 0.3 / D)
       }
       downBy[tk] = { t0: tackleT, t1: 1 }
     }
@@ -662,7 +699,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   keys.forEach((k, i) => {
     if (sides[k] !== 'def') return
     const pl = ctx.actors?.get(k)
-    const cov = Math.max(pl?.attrs?.MCV ?? pl?.ovr ?? 70, pl?.attrs?.ZCV ?? 0)
+    // animflow r6b: the sim's effective ratings (playerAttrs), not raw attrs.
+    const cov = pl ? Math.max(effRating(pl, 'MCV', pl.ovr ?? 70), effRating(pl, 'ZCV', 0)) : 70
     const u = r6Hash((play.n ?? 0) * 31 + i * 7.1)
     const hip = 2.1 + (70 - cov) * 0.02 + (u - 0.5) * 1.6 + (u > 0.8 ? 1.8 : 0)
     pedalEnd[k] = SNAP_T + Math.max(0.9, Math.min(4.5, hip)) / D
@@ -671,6 +709,18 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   })
 
   // ── per-t state ────────────────────────────────────────────────────────────
+  // animflow r6b (item 4): the sim's fatigue at the snap (Play.fatOn via ctx.fat).
+  const tiredK: Record<string, boolean> = {}
+  for (const k of keys) {
+    const pl = ctx.actors?.get(k)
+    tiredK[k] = !!pl && tiredness(ctx.fat?.get(pl.id)) >= 0.25
+  }
+  const tired = (k: string) => tiredK[k]
+  const whistleT = (() => {
+    let w: number | null = null
+    for (const e of events) if (e.kind === 'tackle' || e.kind === 'sack' || e.kind === 'outOfBounds' || e.kind === 'down' || e.kind === 'score' || e.kind === 'incomplete' || e.kind === 'safety' || e.kind === 'fairCatch' || e.kind === 'touchback') w = w == null ? e.t : Math.min(w, e.t)
+    return w
+  })()
   const preSnap = (k: string): PoseState => {
     if (k === fgHolderKey) return 'hold'
     if (k === returnerKey) return 'stand'
@@ -687,6 +737,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (qbKey && k === qbKey && fakeWin && t >= fakeWin.t0 && t <= fakeWin.t1) return 'fake'
     const cw = catchBy[k]
     if (cw && t >= cw.t0 && t <= cw.t1) return 'catch'
+    const mw = moveBy[k]?.find((w) => t >= w.t0 && t <= w.t1)
+    if (mw) return mw.state
     const sw = stumbleBy[k]
     if (sw && t >= sw.t0 && t <= sw.t1) return 'stumble'
     const dw = diveBy[k]
@@ -697,7 +749,10 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (dn && t >= dn.t0 && t <= dn.t1) return 'down'
     const tw = tackleBy[k]
     if (tw && tw.some((w) => t >= w.t0 && t <= w.t1)) return 'tackle'
-    if (t < SNAP_T) return preSnap(k)
+    if (t < SNAP_T) {
+      const ps = preSnap(k)
+      return ps === 'stand' && k !== returnerKey && k !== kickerKey && tired(k) ? 'hips' : ps
+    }
     if (hKey === k) {
       if (roles[k] === 'H') return 'hold'
       // animflow round 3: the passer, drop done, is set (ball high at the chest,
@@ -708,6 +763,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     }
     if (blockOther(k, t)) return 'block'
     if (k === returnerKey && flight && t < flight.t1) return 'stand'
+    // animflow r6b (item 4): a tired man stands with his hands on his hips once the whistle has gone.
+    if (spd <= RUN_SPEED && whistleT != null && t >= whistleT && tired(k)) return 'hips'
     if (spd > RUN_SPEED) {
       if (sides[k] === 'def' && vx > 0.2 && !nearCar) {
         // animflow r6a: the backpedal ends at the hip turn (and on the throw).
@@ -724,6 +781,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     | { mode: 'angle'; angle: number }
     | { mode: 'actor'; key: string }
     | { mode: 'backpedal' }
+    | { mode: 'spin'; dir: 1 | -1; s0: number; s1: number }
 
   const facingFor = (k: string, t: number, st: PoseState, hKey: string | null, pos: Pt, hPos: Pt | null, nearCar: boolean, vx = 0, vy = 0): FMode => {
     if (kickerKey && k === kickerKey && kickDir != null && (st === 'kick' || fgPlay || puntPlay)) {
@@ -735,6 +793,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       return { mode: 'angle', angle: Number.isFinite(a) ? a : 0 }
     }
     if (st === 'pedal') return { mode: 'backpedal' }
+    const sp = spinBy[k]
+    if (sp && t >= sp.t0 && t <= sp.t1) return { mode: 'spin', dir: sp.dir, s0: sp.t0, s1: sp.t1 }
     // animflow r6a: eyes to the ball once it is in the air (coverage defenders
     // near the throw), after a short head-turn lag for some.
     if (scrimmage && flight && type === 'pass' && sides[k] === 'def' && !k.startsWith('dl') && st !== 'tackle' && !blockOther(k, t) &&
@@ -781,9 +841,11 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   if (fakeWin) { addCut(fakeWin.t0); addCut(fakeWin.t1) }
   if (kickWin) { addCut(kickWin.t0); addCut(kickWin.t1) }
   if (flight) { addCut(flight.t0); addCut(flight.t1) }
-  for (const m of [catchBy, stumbleBy, diveBy, fallBy]) {
+  for (const m of [catchBy, stumbleBy, diveBy, fallBy, spinBy]) {
     for (const k of Object.keys(m)) { addCut(m[k].t0); addCut(m[k].t1) }
   }
+  for (const k of Object.keys(moveBy)) for (const w of moveBy[k]) { addCut(w.t0); addCut(w.t1) }
+  if (whistleT != null) addCut(whistleT)
   for (const k of Object.keys(downBy)) { addCut(downBy[k].t0); addCut(downBy[k].t1) }
   for (const k of Object.keys(blockBy)) for (const w of blockBy[k]) { addCut(w.t0); addCut(w.t1) }
   for (const h of holders) addCut(h.t)
@@ -802,6 +864,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (a.mode !== b.mode) return false
     if (a.mode === 'angle' && b.mode === 'angle') return Math.abs(a.angle - b.angle) < 1e-6
     if (a.mode === 'actor' && b.mode === 'actor') return a.key === b.key
+    if (a.mode === 'spin' && b.mode === 'spin') return a.s0 === b.s0 && a.dir === b.dir
     return true
   }
 
@@ -922,7 +985,16 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     kind: cameraKind,
   }
 
-  return { ...anim, poses, facing, ballZ, camera }
+  const skill = moves.length || Object.keys(tackleStyles).length
+    ? { moves: moves.map((m) => ({ key: m.key, move: m.move, t: m.t, missed: m.missed })), tackles: tackleStyles }
+    : undefined
+  return { ...anim, poses, facing, ballZ, camera, ...(skill ? { skill } : {}) }
+}
+
+/** animflow r6b: left / right for a spin, from the play number. */
+function hashSide(n: number, i: number): 1 | -1 {
+  const x = Math.sin((n * 5.3 + i * 1.7) * 12.9898 + 78.233) * 43758.5453
+  return x - Math.floor(x) < 0.5 ? 1 : -1
 }
 
 // ── sampling helpers the renderer uses ────────────────────────────────────────
@@ -955,6 +1027,10 @@ function facingAngleAt(a: BroadcastAnim, key: string, w: FacingWindow, t: number
     const q = posAt(other, t)
     const ang = Math.atan2(q.y - p.y, q.x - p.x)
     return Number.isFinite(ang) ? norm(ang) : moveAngle(a, key, t)
+  }
+  if (w.mode === 'spin') {
+    const u = w.s1 > w.s0 ? clamp01((t - w.s0) / (w.s1 - w.s0)) : 1
+    return norm(moveAngle(a, key, t) + w.dir * 2 * Math.PI * (u * u * (3 - 2 * u)))
   }
   if (w.mode === 'backpedal') {
     const p = animPath(a, key)

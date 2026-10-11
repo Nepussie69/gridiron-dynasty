@@ -12,6 +12,7 @@ import type { World } from '../game/engine/generate'
 import type { Play } from '../game/engine/playsim'
 import { depthAt, depthGroup } from '../game/engine/depth'
 import { hash32 } from '../game/engine/rng'
+import { formationForConcept, formationHasFullback } from '../game/data/playbookData'
 import type { Player, Position } from '../game/types'
 
 const RANGES: Record<Position, [number, number][]> = {
@@ -71,7 +72,7 @@ const RETURN_POS: Position[] = ['FB', 'TE', 'LB', 'RB', 'OT', 'OG', 'C', 'S', 'C
  * unit, then healthy starters, then an injured body as a last resort — all
  * distinct. Returns fewer than 11 only if the club cannot field them.
  */
-function stUnit(world: World, teamId: string, role: 'coverage' | 'return', specialistId?: string): Player[] {
+function stUnit(world: World, teamId: string, role: 'coverage' | 'return', specialistId?: string, must: string[] = []): Player[] {
   const out: Player[] = []
   const used = new Set<string>()
   const add = (p: Player | undefined) => {
@@ -81,6 +82,10 @@ function stUnit(world: World, teamId: string, role: 'coverage' | 'return', speci
     }
   }
   if (specialistId) add(world.players.find((p) => p.id === specialistId))
+  // animflow r6b: every credited player of this club (tackler, missed tackler,
+  // forced fumble, recovery) is in the drawn unit.
+  const roster = world.roster[teamId] ?? []
+  for (const id of must) add(roster.find((p) => p.id === id))
   const priority = role === 'coverage' ? COVER_POS : RETURN_POS
   const groups = priority.map((pos) => depthAt(world, teamId, pos))
   for (let pass = 0; pass < 3 && out.length < 11; pass++) {
@@ -124,8 +129,9 @@ export function actorPlayers(
   if (play.type === 'kickoff' || play.type === 'punt') {
     const recvId = play.type === 'kickoff' ? off : defId
     const kickId = play.type === 'kickoff' ? defId : off
-    const ret = stUnit(world, recvId, 'return', play.returnerId)
-    const spec = stUnit(world, kickId, 'coverage', one(kickId, play.type === 'kickoff' ? 'K' : 'P', 1)[0]?.id)
+    const must = creditedIds(play)
+    const ret = stUnit(world, recvId, 'return', play.returnerId, must)
+    const spec = stUnit(world, kickId, 'coverage', one(kickId, play.type === 'kickoff' ? 'K' : 'P', 1)[0]?.id, must)
     const offKeys = ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'qb', 'rb', 'wr0', 'wr1', 'wr2', 'te']
     const defKeys = ['dl0', 'dl1', 'dl2', 'dl3', 'lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']
     if (play.type === 'kickoff') {
@@ -143,6 +149,16 @@ export function actorPlayers(
       if (ret[0]) map.set('s0', ret[0])
       ret.slice(1, 11).forEach((p, i) => { const k = defKeys.filter((x) => x !== 's0')[i]; if (k) map.set(k, p) })
     }
+    return map
+  }
+
+  // animflow r6b (ratings audit item 2): the recorded on-field eleven of this
+  // snap (fatigue subs, nickel/dime, 12/13/21 personnel, the user's packages),
+  // not a fixed depth-chart 11v11. Old saves without it use the depth chart.
+  const rec = (globalThis as { __noRec?: boolean }).__noRec ? null : recordedEleven(world, play, defId)
+  if (rec) {
+    for (const [k, p] of rec) map.set(k, p)
+    placeCredited(world, play, map, targetKey)
     return map
   }
 
@@ -166,6 +182,12 @@ export function actorPlayers(
     put(['qb'], one(off, 'P', 1))
   }
 
+  placeCredited(world, play, map, targetKey)
+  return map
+}
+
+/** Move the play's QB, ball carrier and target onto the dots the animation gives them. */
+function placeCredited(world: World, play: Play, map: Map<string, Player>, targetKey: string | null): void {
   // Move a specific player onto a key, swapping with whoever had it.
   const place = (key: string, id: string | undefined) => {
     if (!id) return
@@ -186,5 +208,68 @@ export function actorPlayers(
     else if (c) place('rb', c.id)
   }
   if (play.type === 'pass' && play.targetId && targetKey) place(targetKey, play.targetId)
-  return map
+}
+
+/** Every player a play credits (tackler, coverage man, returner…), for the cast audit. */
+export function creditedIds(play: Play): string[] {
+  const out = [
+    play.qbId, play.carrierId, play.targetId, play.sackId, play.intId, play.coverId, play.fumbleId, play.returnerId,
+    play.pressureId, play.tipId, play.dropId, ...(play.tackleIds ?? []), ...(play.missedTackleIds ?? []), ...(play.forcedMissedIds ?? []),
+  ]
+  return [...new Set(out.filter((x): x is string => !!x))]
+}
+
+/** The offence's dots in a formation (FB sets trade the slot for the fullback). */
+export function offenseKeys(play: Play): string[] {
+  const fb = formationHasFullback(formationForConcept(play.concept))
+  return ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'qb', 'rb', 'wr0', 'wr1', ...(fb ? ['fb'] : ['wr2']), 'te']
+}
+
+const DEF_DOTS = ['dl0', 'dl1', 'dl2', 'dl3', 'lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']
+
+/**
+ * The recorded eleven per side mapped onto the animation's dots by position:
+ * the natural spot first (OT/OG/C on the line, DE on the edges …), then the
+ * nearest equivalent (a 12-personnel second TE in the slot, a nickel corner on
+ * a linebacker dot, a 3-4 outside backer on an edge). Null when the play has
+ * no recorded personnel.
+ */
+export function recordedEleven(world: World, play: Play, defId: string): Map<string, Player> | null {
+  const offIds = play.onFieldOff
+  const defIds = play.onFieldDef
+  if (!offIds?.length || !defIds?.length) return null
+  if (play.type !== 'run' && play.type !== 'pass') return null
+  const byId = (id: string) => (world.roster[play.offId] ?? []).find((p) => p.id === id) ?? (world.roster[defId] ?? []).find((p) => p.id === id) ?? world.players.find((p) => p.id === id)
+  const out = new Map<string, Player>()
+  const fill = (ids: string[], keys: string[], natural: Partial<Record<Position, string[]>>, pref: Partial<Record<Position, string[]>>) => {
+    const ps = ids.map(byId).filter((p): p is Player => !!p)
+    const left: Player[] = []
+    for (const p of ps) {
+      const k = (natural[p.pos] ?? []).find((x) => keys.includes(x) && !out.has(x))
+      if (k) out.set(k, p)
+      else left.push(p)
+    }
+    const rest: Player[] = []
+    for (const p of left) {
+      const k = (pref[p.pos] ?? []).find((x) => keys.includes(x) && !out.has(x))
+      if (k) out.set(k, p)
+      else rest.push(p)
+    }
+    for (const p of rest) {
+      const k = keys.find((x) => !out.has(x))
+      if (k) out.set(k, p)
+    }
+  }
+  fill(offIds, offenseKeys(play), {
+    QB: ['qb'], OT: ['ol0', 'ol4'], OG: ['ol1', 'ol3'], C: ['ol2'], RB: ['rb'], FB: ['fb'], TE: ['te'], WR: ['wr0', 'wr1', 'wr2'],
+  }, {
+    OT: ['ol1', 'ol3', 'ol2', 'te'], OG: ['ol2', 'ol0', 'ol4', 'te'], C: ['ol1', 'ol3'], RB: ['fb', 'wr2', 'te'], FB: ['rb', 'te', 'wr2'],
+    TE: ['wr2', 'fb', 'wr1', 'wr0'], WR: ['te', 'fb'], QB: ['wr2'],
+  })
+  fill(defIds, DEF_DOTS, {
+    DE: ['dl0', 'dl3'], DT: ['dl1', 'dl2'], LB: ['lb1', 'lb0', 'lb2'], CB: ['cb0', 'cb1'], S: ['s0', 's1'],
+  }, {
+    DE: ['dl1', 'dl2', 'lb0', 'lb2'], DT: ['dl0', 'dl3', 'lb1'], LB: ['dl3', 'dl0', 'dl2', 'dl1'], CB: ['lb2', 'lb0', 'lb1', 's1', 's0'], S: ['lb2', 'lb0', 'lb1', 'cb1', 'cb0'],
+  })
+  return out
 }
