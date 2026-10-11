@@ -332,6 +332,8 @@ export class ActorLayer {
   addItems?: (scene: Scene, out: SceneItem[]) => void
   /** B4: turf-level drawing under every body, after the shadows. */
   ground?: (scene: Scene) => void
+  /** SL1: sideline people (team areas, officials, chain crew), depth-sorted with the figures. */
+  people?: (scene: Scene, out: SceneItem[]) => void
   /** B6: visible actors after the last frame (canvas px). */
   readonly screen = new Map<string, ActorScreen>()
   lastDpr = 1
@@ -640,6 +642,11 @@ export class ActorLayer {
       this.addItems(scene, extra)
       let k = 0
       for (const e of extra) items.push({ kind: 'extra', key: `extra${k++}`, depth: e.depth, order: 2000 + e.order, draw: (g) => e.draw(g) })
+    }
+    if (this.people) {
+      const extra: SceneItem[] = []
+      this.people(scene, extra)
+      for (const e of extra) items.push({ kind: 'extra', key: 'people', depth: e.depth, order: 3000 + e.order, draw: (g) => e.draw(g) })
     }
     this.paint(ctx, items)
     this.stats = {

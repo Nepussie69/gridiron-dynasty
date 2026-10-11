@@ -21,6 +21,7 @@ import { effectiveQuality, QUALITY, AUTO_TOO_SLOW_P95, AutoQuality, FramePacer, 
 import { CAMERA_PROFILES, createProfileApplier, type ProfileCtx } from './phoneCamera.ts'
 import { BroadcastRenderer, FrameWindow, type BroadcastFrame, type FrameStats, type LayerHook } from './renderer'
 import { ActorLayer, type ActorPlay } from './actors'
+import { SidelineLayer } from './sideline'
 import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from './graphics'
 import { type Director, type DirectorProfile } from './director'
@@ -284,6 +285,8 @@ export class LiveBroadcast {
   readonly renderer: BroadcastRenderer
   readonly layer: ActorLayer
   readonly gfx: GraphicsLayer
+  /** SL1: team areas, officials and the chain crew. */
+  readonly sideline: SidelineLayer
 
   private opts: LiveBroadcastOptions
   private director: Director | null = null
@@ -330,6 +333,9 @@ export class LiveBroadcast {
     // GraphicsLayer paints the vignette (B6a); the renderer's own stays off.
     this.renderer = new BroadcastRenderer(canvas, { goalposts: false, vignette: false })
     this.layer = new ActorLayer()
+    this.sideline = new SidelineLayer()
+    this.sideline.quality = this.quality
+    this.layer.people = (scene, out) => this.sideline.items(scene, out)
     this.gfx = new GraphicsLayer(this.layer, readGfxTokens(canvas))
     this.gfx.bottomInset = opts.hudBottomInset ?? 0
     this.renderer.hooks.actors = this.layer.hook
@@ -449,6 +455,17 @@ export class LiveBroadcast {
     if (this.rp) this.endReplay()
     this.play = lp
     this.layer.setPlay(lp.actorPlay)
+    const club = (id: string) => NFL_TEAMS.find((c) => c.id === id) ?? NFL_TEAMS[0]
+    this.sideline.setPlay({
+      play: lp.play,
+      anim: lp.anim,
+      dir: lp.dir,
+      los: lp.los,
+      firstDown: lp.firstDown,
+      homeClub: club(this.opts.homeTeamId),
+      awayClub: club(this.opts.awayTeamId),
+      homeId: this.opts.homeTeamId,
+    })
     this.gfx.setTimeline(lp.tl)
     // B5 director with B5b's special-teams rules (kicks, returns, FG/PAT).
     this.director = createBroadcastDirector({ profile: this.directorProfile(), viewport: this.viewport() })
@@ -489,6 +506,7 @@ export class LiveBroadcast {
     if (q === this.quality && this.pacer) return
     this.quality = q
     this.renderer.setQuality(q)
+    this.sideline.quality = q
     this.renderer.setDprCap(QUALITY[q].dprCap)
     this.tele.vignette = QUALITY[q].vignette
     this.pacer = new FramePacer(QUALITY[q].fps)
@@ -519,6 +537,7 @@ export class LiveBroadcast {
     // Live: once the play ends, the graphics clock runs on into the result
     // toast's hold (the toast enters at the whistle and holds `post` seconds).
     this.gfx.sec = lp ? t * Math.max(0.05, lp.anim.duration / 1000) + (inReplay ? 0 : this.endHold) : 0
+    this.sideline.sec = this.gfx.sec
     // The replay: chip only (no live callouts / toast over the telestrations).
     this.gfx.mode = inReplay ? 'fast' : 'full'
     this.gfx.reducedMotion = !!this.opts.reducedMotion
@@ -618,6 +637,7 @@ export class LiveBroadcast {
       replaySec: this.rp ? Math.round(this.rp.sec * 100) / 100 : null,
       teleMs: Math.round(this.tele.stats.ms * 1000) / 1000,
       teleLabels: this.tele.stats.labels,
+      sideline: { ...this.sideline.stats, ms: Math.round(this.sideline.stats.ms * 1000) / 1000 },
       lastMs: Math.round((this.win.count ? this.lastMs : 0) * 1000) / 1000,
       intervals: this.drawStamps.slice(-300),
     }
