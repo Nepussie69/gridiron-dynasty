@@ -109,6 +109,6 @@ Close plays sometimes get the wrong call on the field. Booth reviews fix these a
 |---|---|
 | Spec | ✅ 2026-10-11 |
 | C1 engine core | ⏳ waits for passid2 merge |
-| C2 challenges | ⏳ |
+| C2 challenges | ✅ 2026-10-11 merged (mis-calls .051/.0765/.05; probe OK; reviews OFF identical; reviews ON pooled 6-seed drift −0.03 pts / +0.003 giveaways / −0.05 3rd-down) |
 | C3 UI | ⏳ |
 | C4 dock flag (optional) | ⏳ |
