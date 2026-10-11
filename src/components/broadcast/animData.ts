@@ -373,6 +373,9 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       const bk = sides[e.a] === 'off' ? e.a : sides[e.b] === 'off' ? e.b : e.a
       const other = bk === e.a ? e.b : e.a
       addBlock(bk, other, e.t0, e.t1)
+      // animflow: the man being blocked is engaged too — hands on, leaning
+      // into his blocker and facing him (not standing upright beside him).
+      addBlock(other, bk, e.t0, e.t1)
     }
   }
   // Fallback: an off/def pair within 1.2 yd for >= 0.15 s at near-zero relative speed.

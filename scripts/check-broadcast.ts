@@ -14,6 +14,10 @@
 // telestrations only reference actors that exist, the freeze inside the play,
 // skip ends the replay at once, nothing draws in 'fast' (sim to end), reduced
 // motion cuts (no wipe, no draw-on) and every label >= 12 CSS px.
+// animflow: the live field — engaged pairs are drawn touching and keep moving,
+// a double team is shoulder to shoulder and one blocker climbs, pursuers never
+// get inside the keep-out ring before the tackle phase, and a blocked defender
+// takes the block pose facing his blocker.
 // Run: node --experimental-strip-types scripts/check-broadcast.ts
 import assert from 'node:assert/strict'
 import { NFL_TEAMS } from '../src/game/data/nflTeams.ts'
@@ -50,7 +54,8 @@ import {
   type PoseParams,
 } from '../src/components/broadcast/figures.ts'
 import { ActorLayer } from '../src/components/broadcast/actors.ts'
-import type { BroadcastAnim } from '../src/components/broadcast/animData.ts'
+import { presentAnim, type BroadcastAnim } from '../src/components/broadcast/animData.ts'
+import { LiveField, livePos, pursue, PAIR_GAP, type LiveMover } from '../src/components/playLive.ts'
 import type { BroadcastFrame } from '../src/components/broadcast/renderer.ts'
 import { readFileSync } from 'node:fs'
 import type { ActorScreen } from '../src/components/broadcast/actors.ts'
@@ -1291,6 +1296,125 @@ ok('B8: goalposts right by the lens are not drawn (a camera behind its own end l
   assert.ok(!near.keys.includes('left'), `left posts drawn at ${near.cam.px.toFixed(1)}`)
   // Midfield: the far posts still join the depth sort.
   assert.ok(posts(60).keys.includes('right'))
+})
+
+// ── animflow: the live field (playLive.ts) ──────────────────────────────────
+const liveMover = (key: string, x: number, y: number, top = 6.5): LiveMover => ({ key, t: 0, x, y, path: [{ t: 0, x, y }], pace: { top, acc: top / 0.6 }, lastStop: true })
+const pathSpeed = (mv: LiveMover, t: number) => {
+  const a = livePos(mv.path, t - 0.05)
+  const b = livePos(mv.path, t)
+  return Math.hypot(b.x - a.x, b.y - a.y) / 0.05
+}
+
+ok('animflow: an engaged pair is drawn touching (~0.9 yd) and keeps moving until the shed', () => {
+  const recs: { a: string; b: string; t0: number; t1: number }[] = []
+  const f = new LiveField(0, {
+    rec: (a, b, t0, t1) => recs.push({ a, b, t0, t1 }),
+    plan: (_b, _d, t) => ({ shedAt: t + 1.8, drive: () => ({ x: 0.6, y: 0.4 }) }),
+  }, 7)
+  const ol = liveMover('ol0', 50, 26)
+  const dl = liveMover('dl0', 52.2, 26.3, 7)
+  f.add(ol, 'off', () => null, 'dl0')
+  f.add(dl, 'def', () => ({ x: 48, y: 26, speed: 5 }))
+  f.run(3)
+  assert.equal(recs.length, 1, 'one block recorded')
+  const e = recs[0]
+  assert.ok(e.t0 < 0.6, `contact at ${e.t0.toFixed(2)} s`)
+  let moving = 0
+  let total = 0
+  for (let t = e.t0 + 0.25; t <= e.t1 - 0.05; t += 0.05) {
+    const a = livePos(ol.path, t)
+    const b = livePos(dl.path, t)
+    const d = Math.hypot(a.x - b.x, a.y - b.y)
+    assert.ok(d >= PAIR_GAP - 0.12 && d <= 1.0, `pair ${d.toFixed(2)} yd apart at ${t.toFixed(2)}`)
+    total++
+    if (pathSpeed(ol, t) > 0.3 && pathSpeed(dl, t) > 0.3) moving++
+  }
+  assert.ok(moving / total >= 0.9, `engaged pair moving ${moving}/${total}`)
+  // The block drives: the pair ends up downfield of the contact point.
+  assert.ok(livePos(dl.path, e.t1).x > livePos(dl.path, e.t0).x + 0.5, 'the drive block moved the man')
+})
+
+ok('animflow: a double team is two blockers shoulder to shoulder on one man, then one climbs', () => {
+  const recs: { a: string; b: string; t0: number; t1: number }[] = []
+  const f = new LiveField(0, {
+    rec: (a, b, t0, t1) => recs.push({ a, b, t0, t1 }),
+    plan: (blk, _d, t) => (blk === 'lb' ? { shedAt: t + 5, drive: () => ({ x: 0, y: 0 }) } : { shedAt: t + 3, climbAt: t + 0.8, drive: () => ({ x: 0.3, y: 0 }) }),
+  }, 3)
+  const a = liveMover('ol1', 50, 25)
+  const b = liveMover('ol2', 50, 26.4)
+  const d = liveMover('dl1', 51.6, 25.7)
+  const lb = liveMover('lb1', 56, 25.8)
+  f.add(a, 'off', () => null, 'dl1')
+  f.add(b, 'off', () => null, 'dl1').climb = 'lb1'
+  f.add(d, 'def', () => ({ x: 49, y: 25.7, speed: 3 }))
+  f.add(lb, 'def', () => ({ x: 54, y: 25.8, speed: 2 }))
+  f.run(2.5)
+  f.closeAll(2.5)
+  const dbl = recs.filter((r) => r.b === 'dl1')
+  assert.equal(dbl.length, 2, `both blockers on dl1: ${JSON.stringify(recs)}`)
+  const both0 = Math.max(...dbl.map((r) => r.t0)) + 0.25
+  const both1 = Math.min(...dbl.map((r) => r.t1))
+  assert.ok(both1 > both0, `a real double-team window: ${JSON.stringify(recs)}`)
+  for (let t = both0; t <= both1; t += 0.05) {
+    for (const mv of [a, b]) {
+      const p = livePos(mv.path, t)
+      const q = livePos(d.path, t)
+      assert.ok(Math.hypot(p.x - q.x, p.y - q.y) <= 1.0, `${mv.key} off the double at ${t.toFixed(2)}`)
+    }
+    const pa = livePos(a.path, t)
+    const pb = livePos(b.path, t)
+    assert.ok(Math.hypot(pa.x - pb.x, pa.y - pb.y) >= 0.8, 'the two blockers do not overlap')
+  }
+  assert.ok(recs.some((r) => r.a === 'ol2' && r.b === 'lb1'), `the climber reached the backer: ${JSON.stringify(recs)}`)
+})
+
+ok('animflow: pursuers close on the carrier but stay outside the keep-out ring until the tackle phase', () => {
+  const carrier = liveMover('rb', 40, 26, 8)
+  carrier.path = []
+  for (let t = 0; t <= 4.001; t += 0.05) carrier.path.push({ t, x: 40 + t * 6, y: 26 + Math.sin(t) * 2 })
+  const f = new LiveField(0, { plan: (_b, _d, t) => ({ shedAt: t + 1, drive: () => ({ x: 0, y: 0 }) }) }, 1)
+  f.script(carrier)
+  const keep = (t: number) => 1.3 + 2.4 * Math.max(0, Math.min(1, (3.5 - t) / 1.8))
+  const men = [liveMover('lb0', 50, 20, 7.5), liveMover('s0', 60, 33, 8.5), liveMover('cb1', 45, 40, 9)]
+  for (const mv of men) f.add(mv, 'def', pursue('rb', { keep }))
+  f.run(3.5)
+  for (const mv of men) {
+    let closest = Infinity
+    for (let t = 0.2; t <= 3.5; t += 0.05) {
+      const p = livePos(mv.path, t)
+      const c = livePos(carrier.path, t)
+      const d = Math.hypot(p.x - c.x, p.y - c.y)
+      // Never in contact (the recorded contact is <= 1 yd) and at most a step inside the ring.
+      assert.ok(d >= 1.1 && d >= keep(t) - 0.45, `${mv.key} inside the ring (${d.toFixed(2)} < ${keep(t).toFixed(2)}) at ${t.toFixed(2)}`)
+      closest = Math.min(closest, d)
+    }
+    assert.ok(closest < 3.0, `${mv.key} never closed on the carrier (closest ${closest.toFixed(2)})`)
+  }
+})
+
+ok('animflow: a blocked defender takes the block pose and faces his blocker (both views read the same pair)', () => {
+  const anim = {
+    duration: 4000,
+    actors: [
+      { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26.65 }, { t: 1, x: 27, y: 26.65 }] },
+      { key: 'ol0', side: 'off', role: 'OL', path: [{ t: 0, x: 34.4, y: 24 }, { t: 0.2, x: 34.6, y: 24 }, { t: 1, x: 35.6, y: 24.5 }] },
+      { key: 'dl0', side: 'def', role: 'DL', path: [{ t: 0, x: 36.2, y: 24 }, { t: 0.2, x: 35.5, y: 24 }, { t: 1, x: 36.5, y: 24.5 }] },
+    ],
+    ball: [{ t: 0, x: 35, y: 26.65 }, { t: 0.05, x: 30, y: 26.65 }, { t: 1, x: 27, y: 26.65 }],
+    holders: [{ t: 0, key: null }, { t: 0.04, key: 'qb' }],
+    flights: [],
+    engagements: [{ a: 'ol0', b: 'dl0', t0: 0.2, t1: 0.9, kind: 'block' }],
+    events: [{ t: 0.04, kind: 'snap', keys: ['ol2', 'qb'], spot: { x: 35, y: 26.65 } }],
+  } as unknown as BroadcastAnim
+  const play = { type: 'run', concept: 'Inside Zone', result: 'Rush', startYard: 25, endYard: 25, yards: 0 } as unknown as Play
+  const pa = presentAnim(anim, play)
+  for (const k of ['ol0', 'dl0']) {
+    const w = pa.poses[k].find((x) => x.state === 'block')
+    assert.ok(w && w.t0 <= 0.25 && w.t1 >= 0.85, `${k} block pose ${JSON.stringify(pa.poses[k])}`)
+  }
+  const fw = pa.facing.dl0.find((x) => x.t0 <= 0.5 && x.t1 >= 0.5)
+  assert.ok(fw && fw.mode === 'actor' && fw.key === 'ol0', `dl0 faces his blocker: ${JSON.stringify(fw)}`)
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)
