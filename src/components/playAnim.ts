@@ -3151,11 +3151,30 @@ function hitAndRide(tk: Mover, carrier: Mover, fromSec: number, contactT: number
     return
   }
   if (tk.t < contactT) tk.hold(contactT - tk.t)
+  // animflow r6c2: the glide came up short of a carrier who kept going — he
+  // chases him down into the pile instead of sliding the gap in a frame.
+  {
+    const cc = posAt(carrier.path, tk.t)
+    if (Math.hypot(cc.x - tk.x, cc.y - tk.y) > 1.5 && endSec - tk.t > 0.12) {
+      pursuitLeg(tk, carrier.path, endSec - 0.04, 0.75, endSec)
+      const ce = posAt(carrier.path, tk.t)
+      let vx = tk.x - ce.x
+      let vy = tk.y - ce.y
+      const vl = Math.hypot(vx, vy)
+      if (vl > 0.3) {
+        vx /= vl
+        vy /= vl
+        ux = vx
+        uy = vy
+      }
+    }
+  }
   // Ride the carrier to the spot (blend in over the first beat, no snap).
   const t0 = tk.t
   const from = { x: tk.x, y: tk.y }
+  const tooFar = Math.hypot(posAt(carrier.path, t0).x + ux * gap - from.x, posAt(carrier.path, t0).y + uy * gap - from.y) > 1.5
   const dt = 0.04
-  for (let t = t0 + dt; t < endSec + 1e-6; t += dt) {
+  for (let t = t0 + dt; t < endSec + 1e-6 && !tooFar; t += dt) {
     const cp = posAt(carrier.path, t)
     const g = gap - 0.14 * clampN((t - t0) / 0.6, 0, 1)
     const want = { x: cp.x + ux * g, y: cp.y + uy * g }
