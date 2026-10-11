@@ -12,6 +12,7 @@ Orchestrate the FUTURES queue and playtest fixes; main thrust is NFL-realistic p
 - Pushed 510efc9 to GitHub + Pages (user ok). Save slots MERGED + PUSHED c9444bb (Pages index-BaD3tWEH.js); push ok consumed. **Ratings audit** (Sonnet, read-only) → RATINGS_BROADCAST_AUDIT.pdf in project folder.
 - Clutch P2 MERGED bfc3949. DeepSeek running: **J1** (wt/realismj1, logs/realismj1.log) and **W3a** weather screens (wt/weatherw3a, prompt prompts/weather-w3a.txt). Next sim job after J1: J2, J3, J5, J6.
 - **Round 6b = ratings-audit gaps** (user priority) → prompts/animflow-round6b-audit.txt, launch in wt/animflow after 6a merges; then 6c (orig items 4–6), 6d (7–10).
+- **J7 matchups & busts** (USER PRIORITY, DeepSeek) running in wt/realismj7 → logs/j7-verify.out; merge BEFORE J1 (both edit playsim; rebase J1 after). Targets: Sonnet agent → logs/separation-targets.json. W3a FINISHED (logs/weather-w3a-verify.out) — review + merge. Round 6b also has the user's '2.5D speed feel like top view' addendum.
 - Round 6a MERGED (sim identical, broadcast 56). **Round 6b audit gaps** (Opus) running in wt/animflow; relaunch brief prompts/animflow-round6b-audit.txt.
 
 ## Current state (main a2aaab0, 15 commits NOT pushed; 4173 HELD at 0f898f0)
