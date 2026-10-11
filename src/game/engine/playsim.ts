@@ -59,6 +59,18 @@ export function setMenuRealism(on: boolean) {
 export function getMenuRealism(): boolean {
   return MENU_REALISM_ON
 }
+// J8b: dev-only toggle for the individual pass rush / protection model (the
+// setStamina pattern). Default on; the shipped sim always leaves it on. With it
+// off the sim uses the original unit-average pressure / protection, so its rng
+// stream and every resolved play are byte-identical to the pre-J8b engine.
+let PROT_ON = true
+export function setJ8b(on: boolean) {
+  PROT_ON = on
+}
+/** J8b: read the current rush/protection toggle so a probe can restore it exactly. */
+export function getJ8b(): boolean {
+  return PROT_ON
+}
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
     // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
@@ -516,6 +528,12 @@ export interface Play {
   pressureId?: string
   /** R7: how the pressure is classified. A sack is always a pressure. */
   pressureType?: 'sack' | 'hit' | 'hurry'
+  // ── J8b: pass rush & protection ────────────────────────────────────────────
+  /** J8b: the blocker who lost the rep that produced the pressure (a per-player
+   *  "pressures / sacks allowed" record; undefined when the layer is off). */
+  beatenBlockerId?: string
+  /** J8b: modelled time from the snap until the pressure arrives (animation). */
+  timeToPressureS?: number
   // ── R14: typed penalties ───────────────────────────────────────────────────
   /** R14: the specific foul (holding, false start, DPI, …). */
   penaltyKind?: PenaltyKind
@@ -829,6 +847,180 @@ function lbBlitzRush(lbs: Player[]): number {
     const a = mkAttrs(p)
     return Math.max(rmean(p.pos, 'PMV', a.PMV ?? 70), rmean(p.pos, 'FMV', a.FMV ?? 70))
   }))
+}
+
+// ── J8b: pass rush & protection, one matchup at a time ───────────────────────
+// Protection is decided rep by rep, never by a starting-OL average: every pass
+// rusher is matched to the blocker actually assigned to him (an edge rusher to a
+// tackle, an interior rusher to a guard/centre, a blitzer to the back), and each
+// rep is the rusher's chosen move (PMV or FMV) and his counter, get-off (ACC),
+// STR and SPD — read through his PRC pass/run read — against that blocker's PBK,
+// STR, AGI and AWR, with the rusher's and the blocker's OWN in-game fatigue. The
+// team result is the union of those reps: the weakest link (the max win) drives
+// the pressure edge, so one weak LT gives up the blind-side hit while a strong
+// interior holds, and a blitzer only counts when he actually rushes. Every pick
+// is a deterministic hash — no rng() draw — and the whole term is centred on its
+// measured league mean (`PB_CENTER`), so `setJ8b(false)` is byte-identical to
+// the base and leaving it ON widens the distribution without moving league means.
+export const PB = {
+  // per-rep weights (all rating-relative via rmean, so an average rep is 0)
+  moveW: 1.0, // the rusher's chosen move (the better of PMV / FMV)
+  counterW: 0.35, // his counter move, if the first is stoned
+  getoffW: 0.28, // ACC get-off
+  rushStrW: 0.14, // rusher STR (bull)
+  rushSpdW: 0.10, // rusher SPD (edge)
+  readW: 0.10, // rusher PRC (run/pass read — a poor reader is a step late)
+  pbkW: 1.0, // blocker PBK
+  blockStrW: 0.20, // blocker STR (anchor)
+  mirrorW: 0.14, // blocker AGI (mirror)
+  awrW: 0.12, // blocker AWR (recognition / pass-off)
+  styleW: 0.9, // a speed/finesse rusher's burst, a power rusher's push
+  // twists & miss-pickups (the two blockers pass off with their OWN AWR)
+  twistRate: 0.28, // share of reps that are a twist / stunt
+  passOffW: 0.02, // blocker AWR rel → the exchange is clean
+  missPick: 0.7, // a missed pickup lets the rusher through (× freeWin)
+  freeWin: 16, // a runner no one is assigned to block
+  // fatigue, per on-field player (replaces the R15 unit fatDiff pressure term)
+  fatW: 7.0,
+  staW: 0.06, // the player's STA rating softens his own fatigue
+  // team blend: the weakest rep leads; the other reps add a little
+  unionW: 1.0,
+  blendW: 0.36,
+  // the pressure clock (animation): a bigger win arrives sooner
+  baseTime: 3.3,
+  secPerUnit: 0.05,
+  minTime: 0.7,
+  maxTime: 4.4,
+  lossLine: 0, // a rep with a win above this is lost
+} as const
+
+/**
+ * J8b: precomputed by `protectionProbe` — the raw rush edge's league mean minus
+ * the replaced player terms' league mean. Subtracted from every pass (the
+ * `WX_CENTER` pattern) so the individual reps only widen the distribution; the
+ * league pressure and sack rates do not move.
+ */
+export const PB_CENTER = { edge: 17.25 }
+
+/** Dev accumulator (turned on by `protectionProbe`): the two league means. */
+export const PB_STAT = { on: false, n: 0, raw: 0, old: 0 }
+
+/** J8b: one rusher-vs-blocker rep. An average rusher vs an average blocker is 0. */
+function rushRepWin(r: Player, b: Player | undefined, key: string, fat: Record<string, number> | undefined): number {
+  const ra = mkAttrs(r)
+  const pmv = rmean(r.pos, 'PMV', ra.PMV ?? 70)
+  const fmv = rmean(r.pos, 'FMV', ra.FMV ?? 70)
+  const speed = clamp(styleProfile(r).rush, -0.5, 1)
+  const primary = Math.max(pmv, fmv) + speed * PB.styleW
+  const counter = Math.min(pmv, fmv)
+  const rsta = clamp(rmean(r.pos, 'STA', ra.STA ?? 70) * PB.staW, -0.35, 0.35)
+  let rush = primary * PB.moveW + counter * PB.counterW +
+    rmean(r.pos, 'ACC', ra.ACC ?? 70) * PB.getoffW +
+    rmean(r.pos, 'STR', ra.STR ?? 70) * PB.rushStrW +
+    rmean(r.pos, 'SPD', ra.SPD ?? 70) * PB.rushSpdW +
+    rmean(r.pos, 'PRC', ra.PRC ?? 70) * PB.readW
+  rush -= (fat?.[r.id] ?? 0) * PB.fatW * (1 - rsta)
+  let block = 0
+  let passOff = 0.55
+  if (b) {
+    const ba = mkAttrs(b)
+    block = rmean(b.pos, 'PBK', ba.PBK ?? 70) * PB.pbkW +
+      rmean(b.pos, 'STR', ba.STR ?? 70) * PB.blockStrW +
+      rmean(b.pos, 'AGI', ba.AGI ?? 70) * PB.mirrorW +
+      rmean(b.pos, 'AWR', ba.AWR ?? 70) * PB.awrW
+    const bsta = clamp(rmean(b.pos, 'STA', ba.STA ?? 70) * PB.staW, -0.35, 0.35)
+    block -= (fat?.[b.id] ?? 0) * PB.fatW * (1 - bsta)
+    passOff = clamp(0.55 + rmean(b.pos, 'AWR', ba.AWR ?? 70) * PB.passOffW, 0.2, 0.9)
+  }
+  let win = rush - block
+  if (!b) return win + PB.freeWin
+  // A twist / stunt: the two blockers must pass off, each on his OWN AWR.
+  if (h01(`${key}:tw`) < PB.twistRate && h01(`${key}:pk`) > passOff) win += PB.freeWin * PB.missPick
+  return win
+}
+
+interface RushRep { id: string; pos: string; blockerId?: string; win: number; blitz: boolean; free: boolean }
+export interface RushResult {
+  edge: number
+  reps: RushRep[]
+  credit?: RushRep
+  maxWin: number
+  freeRusher: boolean
+  lost: number
+  time: number
+}
+
+/** J8b: assign every rusher a blocker and score the reps (deterministic only). */
+function rushMatchups(
+  n: number, defId: string,
+  dl: Player[], lbs: Player[], cbs: Player[],
+  ol: Player[], rb: Player | undefined, te: Player | undefined, fb: Player | undefined,
+  blitz: boolean, fat: Record<string, number> | undefined,
+  offMove: string | undefined, defMove: string | undefined,
+  dlUsage: 'starters' | 'rotate' | undefined, q4: boolean,
+): RushResult {
+  const rushers: { p: Player; blitz: boolean }[] = dl.map((p) => ({ p, blitz: false }))
+  // Only the linebackers / defensive backs who actually blitz rush — never the
+  // whole LB room averaged together. One or two extra rushers, hash-picked by
+  // their pass rush, and only on a blitz call.
+  if (blitz) {
+    const k = 1 + (hash32(`${n}:${defId}:blitzk`) % 2)
+    const pool = [...lbs, ...cbs]
+    const used = new Set<string>()
+    for (let i = 0; i < k; i++) {
+      const cand = hashPick(pool.filter((p) => !used.has(p.id)), (p) => {
+        const a = mkAttrs(p)
+        return Math.max(1, Math.max(a.PMV ?? 70, a.FMV ?? 70) + styleProfile(p).rush * 12)
+      }, hash32(`${n}:${defId}:blitzer${i}`))
+      if (cand) { used.add(cand.id); rushers.push({ p: cand, blitz: true }) }
+    }
+  }
+  // Alignment: edge rushers take the tackles, interior rushers the guards/centre,
+  // a blitzer is picked up by the back (RB, then TE, then FB).
+  const edges = rushers.filter((r) => !r.blitz && r.p.pos === 'DE')
+  const interior = rushers.filter((r) => !r.blitz && r.p.pos !== 'DE')
+  const blitzers = rushers.filter((r) => r.blitz)
+  const tackles = ol.filter((p) => p.pos === 'OT')
+  const inside = ol.filter((p) => p.pos === 'OG' || p.pos === 'C')
+  const helpers = [rb, te, fb].filter((p): p is Player => !!p)
+  const reps: RushRep[] = []
+  const addReps = (group: { p: Player; blitz: boolean }[], blockers: Player[], tag: string) => {
+    const order = group.map((_, i) => i).sort((a, b) => (hash32(`${n}:${defId}:${tag}o${a}`) % 100000) - (hash32(`${n}:${defId}:${tag}o${b}`) % 100000))
+    group.forEach((r, i) => {
+      const b = i < blockers.length ? blockers[order[i]] : undefined
+      reps.push({ id: r.p.id, pos: r.p.pos, blockerId: b?.id, win: rushRepWin(r.p, b, `${n}:${defId}:${tag}${i}`, fat), blitz: r.blitz, free: !b })
+    })
+  }
+  addReps(edges, tackles, 'edge')
+  addReps(interior, inside, 'int')
+  addReps(blitzers, helpers, 'blitz')
+  if (!reps.length) addReps(lbs.map((p) => ({ p, blitz: false })), [...tackles, ...inside], 'lbfb')
+  // G11 doubleRusher: chipping their best rusher halves him.
+  if (offMove === 'doubleRusher') {
+    let best = -1
+    let bestR = -1
+    for (let i = 0; i < reps.length; i++) {
+      const p = rushers.find((r) => r.p.id === reps[i].id)?.p
+      if (!p) continue
+      const a = mkAttrs(p)
+      const rv = Math.max(a.PMV ?? 70, a.FMV ?? 70)
+      if (rv > bestR) { bestR = rv; best = i }
+    }
+    if (best >= 0) reps[best].win *= 0.5
+  }
+  const wins = reps.map((r) => r.win)
+  const maxWin = wins.length ? Math.max(...wins) : 0
+  const meanWin = wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : 0
+  let edge = PB.unionW * maxWin + PB.blendW * meanWin
+  // Workload: a spy takes a rusher out (−4); starter-heavy use tires in Q4, a
+  // rotating front is fresher late (the R15 G11/G12 coach inputs).
+  if (defMove === 'spyQB') edge -= 4
+  if (dlUsage === 'starters') { if (q4) edge -= 3 }
+  else if (dlUsage === 'rotate') edge += q4 ? 1.5 : -1.5
+  const credit = reps[wins.indexOf(maxWin)]
+  const lost = wins.filter((w) => w > PB.lossLine).length
+  const time = clamp(PB.baseTime - maxWin * PB.secPerUnit, PB.minTime, PB.maxTime)
+  return { edge, reps, credit, maxWin, freeRusher: !!credit?.free, lost, time }
 }
 /** E2: pursuit (DL/LB PUR + SPD) shrinks the run's big-play tail. */
 function runPursuit(dl: Player[], lbs: Player[]): number {
@@ -1237,6 +1429,12 @@ export interface PlayOutcome {
   pressureId?: string
   /** R7: how the pressure is classified. A sack is always a pressure. */
   pressureType?: 'sack' | 'hit' | 'hurry'
+  // ── J8b: pass rush & protection ────────────────────────────────────────────
+  /** J8b: the blocker who lost the rep that produced the pressure (a per-player
+   *  "pressures / sacks allowed" record; undefined when the layer is off). */
+  beatenBlockerId?: string
+  /** J8b: modelled time from the snap until the pressure arrives (animation). */
+  timeToPressureS?: number
   /** T2M: a sideline carry/reception went out of bounds (stops the clock). */
   outOfBounds?: boolean
   // ── R16: turnover variety ──────────────────────────────────────────────────
@@ -1928,11 +2126,26 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const blitz = blitzRoll < clamp(dStyle.blitz + (defPlan ? planEffects(defPlan, true).blitz : 0) + heat, 0, 0.8)
   // L12 E2: a blitz brings the linebackers' rush into the pressure.
   if (blitz) pressure += lbBlitzRush(lbs) * 0.3 * E2_W
+  // ── J8b: the individual rep model ──────────────────────────────────────────
+  // Every rusher faces the blocker assigned to him; the weakest rep leads. Only
+  // when the layer is on (the OFF branch below is the untouched base it replaces).
+  const teOff = offEleven.find((p) => p.pos === 'TE')
+  const pb: RushResult | undefined = PROT_ON
+    ? rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, offMove, defMove, usage && userDef ? usage.dl : undefined, isQ4)
+    : undefined
+  if (pb && PB_STAT.on) {
+    PB_STAT.n++
+    PB_STAT.raw += pb.edge
+    PB_STAT.old += (pressure - protection) + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) - fatDiff * R15.fatPress
+  }
   // A pass-heavy plan is predictable: the defense pins its ears back and sits
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
-  const pressureEdge = (pressure - protection + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
-    + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE - fatDiff * R15.fatPress) * (env?.wx?.pressureMult ?? 1)
+  const pressureEdge = (pb
+    ? (pb.edge - PB_CENTER.edge + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
+      + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE)
+    : (pressure - protection + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
+      + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE - fatDiff * R15.fatPress)) * (env?.wx?.pressureMult ?? 1)
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
@@ -1952,8 +2165,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const pool = dl.length ? dl : lbs
     return hashPick(pool, (p) => Math.max(1, Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70)), hash32(`${n}:${defId}:presspick`))?.id
   }
-  const pressureFields = (type: 'sack' | 'hit' | 'hurry', id?: string): Pick<PlayOutcome, 'pressure' | 'pressureType' | 'pressureId'> =>
-    ({ pressure: true, pressureType: type, pressureId: id })
+  // J8b: with the layer on the rusher who WON the rep (the max win) takes the
+  // credit; the base weighted pick is the fallback.
+  const creditRusherId = (): string | undefined => (pb ? pb.credit?.id : pressureRusherId())
+  const pressureFields = (type: 'sack' | 'hit' | 'hurry', id?: string): Pick<PlayOutcome, 'pressure' | 'pressureType' | 'pressureId' | 'beatenBlockerId' | 'timeToPressureS'> =>
+    ({ pressure: true, pressureType: type, pressureId: id, ...(pb ? { beatenBlockerId: pb.credit?.blockerId, timeToPressureS: pb.time } : {}) })
 
   // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
   // more looks, but the ball is spread by a softmax draw over those scores rather
@@ -2009,13 +2225,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R2: a sack costs ≈ 7 yards (real 2015–2024).
     const y = -Math.round(5 + rng() * 5)
     // Always consume the DL pick draw so the rng stream is unchanged.
-    const dlPick = dl[rng() < 0.5 ? 0 : Math.min(1, dl.length - 1)]?.id
+    const pickDraw = rng()
+    const dlPick = dl[pickDraw < 0.5 ? 0 : Math.min(1, dl.length - 1)]?.id
     // L12 S3: on a blitz sack, 30% of the time a linebacker gets the credit
     // (deterministic hash of the play number).
     const blitzLb = blitz && lbs.length && hash32(`${n}:${defId}:blitzsack`) % 100 < 55
       ? lbs[hash32(`${n}:${defId}:blitzlb`) % lbs.length]?.id
       : undefined
-    const sackId = blitzLb ?? dlPick
+    // J8b: with the layer on, the sack goes to the rusher who won his rep.
+    const sackId = pb ? pb.credit?.id : blitzLb ?? dlPick
     // R16: a strip sack forces a fumble. A proximity hash decides who falls on it
     // (the rusher is usually on top of the ball, so the defence recovers more).
     // The result keeps the "Sack" prefix so it is still counted as a sack.
@@ -2252,7 +2470,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -2338,14 +2556,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleId: strip ? stopper : undefined, muffedCatch: muff || undefined,
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
-      ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}),
+      ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
       timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, tackleIds: stopper ? [stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -4624,6 +4842,45 @@ export function matchupProbe(world: World, opts: MatchupProbeOptions = {}) {
       centerSuggested: { sep: rawMeanSep, comp: rawMeanComp },
     },
     target: MU_TARGET,
+  }
+}
+
+// ── J8b: rush/protection probe (DEV) ─────────────────────────────────────────
+// Measures the RAW league means of the new individual rush edge and of the player
+// terms it replaces, so `PB_CENTER.edge` can be set once (the `WX_CENTER` pattern)
+// and the layer stays league-neutral. Pure (no React/DOM).
+export interface ProtectionProbeOptions { games?: number; seeds?: number[] }
+
+export function protectionProbe(world: World, opts: ProtectionProbeOptions = {}) {
+  const games = opts.games ?? 40
+  const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+  if (nfl.length < 2) return { error: 'no NFL teams' }
+  PB_STAT.on = true
+  PB_STAT.n = 0
+  PB_STAT.raw = 0
+  PB_STAT.old = 0
+  const done = new Set<number>()
+  let played = 0
+  for (let g = 0; g < games; g++) {
+    const home = nfl[g % nfl.length]
+    const away = nfl[(g + 1) % nfl.length]
+    if (!home || !away || home.id === away.id) continue
+    const seed = opts.seeds?.[g] ?? world.seed + g * 7919 + 13
+    if (done.has(seed)) continue
+    done.add(seed)
+    simulatePlayByPlay(world, home.id, away.id, seed)
+    played++
+  }
+  PB_STAT.on = false
+  const n = PB_STAT.n
+  const rawMean = n ? PB_STAT.raw / n : 0
+  const oldMean = n ? PB_STAT.old / n : 0
+  return {
+    games: played,
+    dropbacks: n,
+    rawEdgeMean: +rawMean.toFixed(4),
+    oldTermMean: +oldMean.toFixed(4),
+    centerSuggested: { edge: +(rawMean - oldMean).toFixed(4) },
   }
 }
 
