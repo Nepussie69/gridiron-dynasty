@@ -1,38 +1,36 @@
-# Claude handover — Gridiron Dynasty (2026-10-11 ~19:00 AEDT)
+# Claude handover — Gridiron Dynasty (2026-10-11 ~19:00 AEDT, chat 2)
 
-Read AGENTS.md first. Backlog rows 261–267 in `PLAYTEST_BACKLOG.md` are this chat's requests. Only ONE orchestrator chat at a time. Give the user status as a table with ✅ done · 🔄 running · ⏳ queued · ⏸️ on hold.
+Read AGENTS.md first. Backlog rows 268–270 are this chat's new requests. Only ONE orchestrator chat at a time. Status to the user as a table: ✅ done · 🔄 running · ⏳ queued · ⏸️ on hold.
 
 ## Goal
 Orchestrate the FUTURES queue and playtest fixes; main thrust is NFL-realistic play animation (tracking data) and realistic play calling. DeepSeek implements engine/UI jobs; Claude sub-agents do animation (Opus) and analysis/checks (Sonnet, `model: "sonnet"`).
 
-## Current state (main 5e27073)
-- Pushed with the user's ok: origin/main + Pages at 0acd31c (index-BzwGXlhm.js live). Since then 4 local commits (backlog + PRS column a511a69) NOT pushed. 4173 still HELD at 0f898f0.
-- Merged this chat: C3 challenge UI, animflow round 4, Custom replays, PRS column in the box-score Defense table.
-- **Claude sub-agents DIE when this chat clears — check and relaunch from the brief:**
-  1. Animflow round 5 in `~/gridiron-work/wt/animflow` (uncommitted edits). Done when "Round 5" is in `logs/animflow-report.out`. Brief: `prompts/animflow-round5.txt` (items 1–6; returns first; item 6 = YAC/downfield fix).
-  2. NFL motion v2 → `logs/nfl-motion-reference-v2.{out,json}`. Brief: `prompts/nfl-motion-v2.txt`.
-  3. C3 blank-field check in `wt/c3fix` → `logs/c3-blankfield.out`. Brief: `prompts/c3-blankfield.txt`. (Demo showed the 2.5D field is blank ~3 s after any `__gdJump`; likely the cause.)
-- DeepSeek running: **W2** weather (`wt/weatherw2`, weather-on calibration; OFF already identical 20/20 + all bands) → `logs/weather-w2-verify.out`; **FP3** Future classes UI (`wt/futureprospects3`) → `logs/fp3-verify.out`.
-- A background quick calib (post-push check, 33333×200 --eq) may still be waiting behind W2; if it never reported, rerun: `nice -n 15 env REPO="$PWD" ~/.local/node/bin/node --import ~/gridiron-work/loader.mjs ~/gridiron-work/calib.mjs 33333 200 --eq`.
-- Done data: CMU mocap 227 BVH in `~/gridiron-work/nfl-tracking/cmu_mocap/` (INDEX.csv); play-realism analysis `logs/play-realism.{out,json}`.
+## Current state (main a2aaab0, 15 commits NOT pushed; 4173 HELD at 0f898f0)
+- Merged this chat: FP3 Future classes UI (I hid the header List/Cards on future tabs), animflow round 5 (returns, QB mobility, YAC, camera at tackle; accel caps 1.5× NFL by decision). Gates on main: build, lint 4, hex, contrast, broadcast 53 all pass.
+- **Claude sub-agents DIE on clear — check output, relaunch from brief if no result:**
+  1. **SL1 sideline personnel + officials + chain crew** (Opus) in `~/gridiron-work/wt/sideline` (branch wt-sideline, uncommitted: broadcast/sideline.ts, sidelinePaint.ts, actors/field/liveView, check-broadcast). Done when `logs/sideline-verify.out` exists. Brief (incl. ADDENDUM for officials/chain crew): `prompts/sideline-personnel.txt`. Tell the relaunch to continue from the uncommitted edits.
+  2. **C3 blank-field check** (Sonnet) in `wt/c3fix` → `logs/c3-blankfield.out`. Brief `prompts/c3-blankfield.txt`. (Also seen this chat: 2.5D field blank on first open of a match until stepping a play.)
+- DeepSeek running: **W2** weather (`wt/weatherw2`) → `logs/weather-w2-verify.out`. Check `tail logs/weatherw2.log` for RETRY after it finishes (memory opencode-orphan-sessions).
+- Done this chat: NFL motion v2 (`logs/nfl-motion-reference-v2.{out,json}`), J-job briefs `prompts/realism-j{1,2,3,5,6}.txt` (J6 now includes 2-pt tries, backlog 270).
+- **BDB data** (user accepted Kaggle rules for 2021/2022/2023/2025): `~/gridiron-work/nfl-tracking/bdb/2022` (special teams 2018–20, 4.7 GB) and `bdb/2023` (OL/DL pass plays 2021 wk1–8, 928 MB) unzipped. 2025 and 2024 data REMOVED from Kaggle. **2021** (all pass plays 2018, 2.33 GB) was downloading to `~/Downloads/nfl-big-data-bowl-2021.zip` (first try stalled at 18 MB). Verify with `unzip -tq`, move to `bdb/`, unzip to `bdb/2021` (nice). If it stalled again, ask the user to download it in their browser.
+- Sideline preview server `sideline-ui` (vite 4478, .claude/launch.json) may still be running; stop when done.
 
 ## Decisions and why
-- Model split (memory `subagent-model-split`): Opus orchestrator + animation rounds; Sonnet for analysis/downloads/browser checks.
-- Clutch P2 waits for W2 to merge (both edit playsim.ts; calibration baselines).
-- Sim realism jobs J1–J6 (backlog 266) are calibrated sim jobs, one at a time after Clutch P2. J4 (YAC animation) folded into round 5.
-- Round-4 global accel caps were reverted (TTT 2.53→4.13 s); round 5 item 5 retimes first.
-- Kickoffs stay classic; presentation never changes recorded results.
+- Round 5 accel caps shipped at 1.5× NFL (real caps gave TTT 3.65 s, run tackler 56/195); real caps + route retiming in round 6.
+- J5 may add new plays to the user's play-call card list (accepted). 2-pt tries added to J6 (user ask).
+- Use `logs/animflow-yac.mjs` for animation YAC, not play-realism's formula column.
+- Clutch P2 waits for W2 merge (both edit playsim.ts). J-jobs one at a time after Clutch P2, order J1, J2, J3, J5, J6.
 
 ## Next steps
-1. Check/relaunch the 3 sub-agents above (Agent tool + brief file; round 5 on Opus, the others `model: "sonnet"`).
-2. When W2 verify lands: review, merge (gates: build, lint exactly 4, check-hex, check-contrast, check-broadcast), update `NEXT_PHASE_FUT_WEATHER.md`; then launch Clutch P2: `~/gridiron-work/ds-wt clutchp2 ~/gridiron-work/prompts/clutch-p2.txt`.
-3. FP3: review `logs/fp3-verify.out` + `logs/fp3-shots/`, merge, update `NEXT_PHASE_FUT_FUTUREPROSPECTS.md` FP3 row.
-4. Round 5 lands: gates + strips, merge, then send round 6 = `prompts/animflow-round6.txt` (6a/6b/6c, all ten realism items, every tracking source).
-5. Write DeepSeek briefs for J1 (down×distance×score×clock pass rate) … J6 from `logs/play-realism.out`; run after Clutch P2, one at a time.
-6. Queue after: Clutch P3/P5, C4, Halftime H1, Weather W3 UI.
+1. Check SL1 / C3 / W2 / BDB-2021 status; relaunch dead sub-agents from briefs.
+2. W2 lands: review, merge (gates), update `NEXT_PHASE_FUT_WEATHER.md`, then `~/gridiron-work/ds-wt clutchp2 ~/gridiron-work/prompts/clutch-p2.txt`.
+3. SL1 lands: review shots `logs/sideline-shots/`, gates, merge, mark backlog 268/269 ✅.
+4. Update `prompts/animflow-round6.txt` to use BDB 2021/2022/2023 (+ v2 targets; real accel caps; playtest side effects from round 5: screen TTT 2.31 s, contact-to-whistle p90 3.28 s, slow KR players), then launch round 6 (Opus) in wt/animflow after SL1 merges (both touch broadcast/).
+5. Then Clutch P2 → J1…J6; queue after: Clutch P3/P5, C4, Halftime H1, Weather W3 UI.
 
 ## Gotchas
-- `window.__game` / `__gdJump` hooks are dev-only (use `main-check` vite 4436, not preview). Set `localStorage['gd.view.game']='broadcast'` for 2.5D; the pane resets to phone width at turn end — resize to 1280 first.
-- Box score only counts plays up to the one on screen (`__gdJump(last)` first).
-- Push procedure: build, lint 4, secret scan, `git push origin main`, `scripts/publish-pages.sh main`, confirm live `index-*.js`. Only with the user's ok, one ok per push.
-- Keep the chat lean: sub-agents for big reads; only read verify files and strips.
+- `__game` / `__gdJump` dev-only. Quick game: in the page, `import('/src/store/gameStore.ts')` → `startCareer({name:'AF',path:'coach',archetype:'off',teamId:'CLE',seed:33333,startLevel:7})`, `advanceWeek()`, `openMatch(id)`; `localStorage['gd.view.game']='broadcast'`; viewport 1280.
+- `pkill -f <name>` also kills Monitors whose command contains that name.
+- ds-wt prompt path must be absolute (relative path gave "You must provide a message").
+- Keep the chat lean: sub-agents for big reads; read only verify files and strips.
+- Push procedure only with the user's ok (one ok per push): build, lint 4, secret scan, `git push origin main`, `scripts/publish-pages.sh main`, confirm live index-*.js.
