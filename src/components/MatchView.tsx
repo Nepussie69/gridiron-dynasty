@@ -22,6 +22,7 @@ import { RouteDiagram } from './RouteDiagram'
 import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
+import { effRating } from './animRatings'
 import { TeamHoverCard } from './TeamHoverCard'
 import { Badge, BroadcastScope, Button, ConfirmSheet, DivergingMeter, IconButton, OptionCard, OptionGroup, OverflowMenu, ScoreBlock, TeamCrest, VerdictChip, type MenuItem } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
@@ -429,7 +430,7 @@ export function MatchView() {
   useEffect(() => {
     liveFeedRef.current = (ctl) => {
       if (!homeId || !awayId || !play || !anim) return
-      ctl.setPlay(buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }))
+      ctl.setPlay(buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map(), next: nextForAnim }))
       ctl.setTime(clock.i === idx ? clock.t : 0)
     }
   })
@@ -479,9 +480,9 @@ export function MatchView() {
     const ctl = liveCtlRef.current
     if (!ctl || !homeId || !awayId || !play || !anim) return
     ctl.setPlay(
-      buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }),
+      buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map(), next: nextForAnim }),
     )
-  }, [broadcastLive, homeId, awayId, play, anim, actorMap, numbers])
+  }, [broadcastLive, homeId, awayId, play, anim, actorMap, numbers, nextForAnim])
 
   // Feed the animation clock (identical play duration in Full and Lite).
   useEffect(() => {
@@ -520,7 +521,7 @@ export function MatchView() {
     if (!plan.replay) return false
     if (broadcastLive) return liveCtlRef.current?.startReplay(plan, lead) ?? false
     if (overlayCtlRef.current?.replaying) return false
-    pendingReplayRef.current = { plan, lead, lp: buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map() }) }
+    pendingReplayRef.current = { plan, lead, lp: buildLivePlay({ play, anim, homeId, awayId, actors: actorMap ?? new Map(), numbers: numbers ?? new Map(), next: nextForAnim }) }
     setOverlayKey(`${matchSeq}:${idx}:${Date.now()}`)
     return true
   }
@@ -971,7 +972,7 @@ export function MatchView() {
                     {who && (
                       <title>
                         {`#${num ?? ''} ${who.name} (${who.pos})`}
-                        {frozen ? ` · SPD ${Math.round(who.attrs?.SPD ?? who.ovr)} · ${actorWhy(play, a.key, who)}` : ''}
+                        {frozen ? ` · SPD ${Math.round(effRating(who, 'SPD', who.ovr))} · ${actorWhy(play, a.key, who)}` : ''}
                       </title>
                     )}
                     {carrying && !frozen && !reduced && (

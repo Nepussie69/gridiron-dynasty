@@ -29,6 +29,7 @@ import { formationForConcept, formationHasFullback, playbookPlay, treeFor } from
 import { kickFlight, presentAnim, throwHand, THROW_TIMING, type BroadcastAnim, type ThrowStyle } from './broadcast/animData'
 import { LiveField, pursue, phases, holdSpot, livePos, type Brain, type PairPlan } from './playLive'
 import { runReturnField, returnLine, returnScheme } from './playReturn.ts'
+import { carrierMove, effAttrs, effRating, fatigueMap, fatiguePace } from './animRatings'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
@@ -76,6 +77,8 @@ export interface AnimContext {
   carrierIsQB?: boolean
   /** The real player each animation key (qb, rb, wr0…, s1) stands for. */
   actors?: Map<string, Player>
+  /** animflow r6b: in-game fatigue at the snap per player id (from Play.fatOn). */
+  fat?: Map<string, number>
 }
 
 // ── recorded engagements and events (B1) ─────────────────────────────────────
@@ -520,7 +523,8 @@ function compact(path: WP[]): void {
 /** Read an attribute, falling back to overall (league average when no player). */
 export function attrOf(p: Player | undefined, key: string, fallback = 70): number {
   if (!p) return fallback
-  const v = p.attrs?.[key]
+  // animflow r6b: the sim's effective rating (playerAttrs), not the raw attrs.
+  const v = effAttrs(p)[key]
   if (typeof v === 'number') return v
   return typeof p.ovr === 'number' ? p.ovr : fallback
 }
@@ -818,7 +822,8 @@ function formation(los: number, fb = false): Formation {
   if (fb) f.fb = { x: los - 8.5, y: MID_Y + 0.8, side: 'off', role: 'FB' }
   f.wr0 = { x: los - 0.6, y: 5, side: 'off', role: 'WR' }
   f.wr1 = { x: los - 0.6, y: 48.3, side: 'off', role: 'WR' }
-  f.wr2 = { x: los - 1.2, y: 13, side: 'off', role: 'SLOT' }
+  // animflow r6b: eleven on offense — a fullback set trades the slot for the FB.
+  if (!fb) f.wr2 = { x: los - 1.2, y: 13, side: 'off', role: 'SLOT' }
   f.te = { x: los - 0.8, y: MID_Y + 4.4, side: 'off', role: 'TE' }
   ;[-4.3, -1.4, 1.4, 4.3].forEach((d, i) => (f[`dl${i}`] = { x: los + 1.2, y: MID_Y + d, side: 'def', role: 'DL' }))
   ;[-6, 0, 6].forEach((d, i) => (f[`lb${i}`] = { x: los + 5.5, y: MID_Y + d, side: 'def', role: 'LB' }))
@@ -831,12 +836,17 @@ function formation(los: number, fb = false): Formation {
 
 const OFF_KEYS = ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'qb', 'rb', 'wr0', 'wr1', 'wr2', 'te']
 const DEF_KEYS = ['dl0', 'dl1', 'dl2', 'dl3', 'lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']
-const ALL_KEYS = (f: Formation) => [...OFF_KEYS, ...(f.fb ? ['fb'] : []), ...DEF_KEYS]
+const ALL_KEYS = (f: Formation) => [...OFF_KEYS.filter((k) => f[k]), ...(f.fb ? ['fb'] : []), ...DEF_KEYS]
 
 function startMovers(f: Formation, ctx: AnimContext): Record<string, Mover> {
   const out: Record<string, Mover> = {}
   for (const [k, v] of Object.entries(f)) {
-    out[k] = new Mover(k, v.role, paceFor(ctx.actors?.get(k), v.role), v.x, v.y, ctx.actors?.get(k))
+    const pl = ctx.actors?.get(k)
+    const pace = paceFor(pl, v.role)
+    // animflow r6b (item 4): a tired man (sim fatigue at the snap) has less top
+    // speed and less burst.
+    const fp = fatiguePace(pl ? ctx.fat?.get(pl.id) : undefined)
+    out[k] = new Mover(k, v.role, fp.top < 1 ? { top: pace.top * fp.top, acc: pace.acc * fp.acc } : pace, v.x, v.y, pl)
   }
   return out
 }
@@ -1333,7 +1343,10 @@ function applyBlockEngagements(
 // ── plays ────────────────────────────────────────────────────────────────────
 /** buildPass's throw style (the builders return finish()'s PlayAnim). */
 let LAST_THROW_STYLE: ThrowStyle | undefined
-export function buildPlayAnim(play: Play, ctx: AnimContext = {}): BroadcastAnim {
+export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim {
+  // animflow r6b: the sim's fatigue at the snap rides along (tired gait / poses).
+  const fat = ctx0.fat ?? fatigueMap(play)
+  const ctx: AnimContext = fat.size ? { ...ctx0, fat } : ctx0
   const buildRaw = (): PlayAnim => {
     switch (play.type) {
       case 'run':
@@ -1364,16 +1377,16 @@ export function buildPlayAnim(play: Play, ctx: AnimContext = {}): BroadcastAnim 
 /** A numeric attribute, or `fallback` when the player does not carry it (never
  *  the overall: a missing route/block rating is league average, as in the sim). */
 function attrNum(p: Player | undefined, key: string, fallback = 70): number {
-  const v = p?.attrs?.[key]
-  return typeof v === 'number' ? v : fallback
+  return effRating(p, key, fallback)
 }
 
 /** Best of a set of attributes (a rusher's best move, a blocker's protection). */
 function bestAttr(p: Player | undefined, keys: string[], fallback = 70): number {
   let best = fallback
   let any = false
+  const a = p ? effAttrs(p) : undefined
   for (const k of keys) {
-    const v = p?.attrs?.[k]
+    const v = a?.[k]
     if (typeof v === 'number') {
       best = any ? Math.max(best, v) : v
       any = true
@@ -1851,7 +1864,10 @@ function runAssignments(power: boolean, side: number, fb: boolean): RunAssign {
   const climb: Record<string, string> = {}
   const psLB = side > 0 ? 'lb2' : 'lb0'
   const bsLB = side > 0 ? 'lb0' : 'lb2'
-  if (fb) first.fb = psLB
+  if (fb) {
+    first.fb = psLB
+    delete first.wr2 // animflow r6b: no slot in a fullback set
+  }
   if (!power) {
     // Zone: a combo on the play-side interior man; the centre climbs to the mike.
     if (side > 0) {
@@ -1950,7 +1966,11 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   // R5: a broken tackle is one sidestep away from the man (a jump cut that
   // carries on in the new lane), not a swerve that comes back.
   if ((play.missedTackleIds?.length ?? 0) > 0) {
-    const jd = driftDir * 1.1
+    // animflow r6b (item 5): the cut's size follows the move he makes (same
+    // pick as the broadcast pose): a juke steps well across, a spin a little, a
+    // stiff arm / truck goes through the man nearly straight.
+    const mv = carrierMove(ctx.actors?.get(carrier), (play.n ?? 0) * 7.31 + (play.startYard ?? 0))
+    const jd = driftDir * (mv === 'juke' ? 1.3 : mv === 'spin' ? 0.6 : mv === 'stiffArm' ? 0.35 : 0.15)
     for (let i = 0; i < curve.length; i++) {
       const u = i / (curve.length - 1)
       if (u > 0.6) curve[i].y = clampY(curve[i].y + jd * clampN((u - 0.6) / 0.16, 0, 1) ** 2 * (3 - 2 * clampN((u - 0.6) / 0.16, 0, 1)))
@@ -2142,7 +2162,7 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
   field.avoid = { key: carrier, r: 1.3, from: qbRun ? SNAP : Math.max(SNAP, handoffT - 0.3) }
 
   // Offense: the line, tight end, fullback and receivers block.
-  for (const k of ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'te', 'wr0', 'wr1', 'wr2', ...(m.fb ? ['fb'] : [])]) {
+  for (const k of ['ol0', 'ol1', 'ol2', 'ol3', 'ol4', 'te', 'wr0', 'wr1', 'wr2', 'fb'].filter((x) => m[x])) {
     const target = as.first[k] ?? as.climb[k] ?? null
     const firstIsClimb = !as.first[k] && !!as.climb[k]
     const brain: Brain = pursue(carrier, { keep: () => 3.2, speed: 0.55, lead: 0.3 })
@@ -2284,6 +2304,8 @@ export function targetKey(play: Play, ctx: AnimContext): string {
   if (ctx.targetPos === 'RB') return 'rb'
   if (ctx.targetPos === 'TE') return 'te'
   if (/Screen/.test(play.concept)) return 'rb'
+  // animflow r6b: a fullback set has no slot receiver (eleven on offense).
+  if (formationHasFullback(formationForConcept(play.concept))) return ['wr0', 'wr1'][Math.floor(hash(play.n * 13 + play.startYard) * 2)]
   return ['wr0', 'wr1', 'wr2'][Math.floor(hash(play.n * 13 + play.startYard) * 3)]
 }
 
@@ -2305,6 +2327,9 @@ function conceptTree(concept: string, rollSide: number): Record<string, string> 
   return Object.keys(tree).length ? { ...fallback, ...tree } : fallback
 }
 
+/** animflow r6b: route rating at which a break is a crisp plant (effective-rating median). */
+export const CRISP_RR = 75
+
 /** Route running by depth: the same split the sim uses (SRR short, MRR 8–14, DRR 15+). */
 function routeRunRating(p: Player | undefined, depth: number): number {
   return attrNum(p, depth > 14 ? 'DRR' : depth > 7 ? 'MRR' : 'SRR', 70)
@@ -2323,11 +2348,14 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
     mv.pace = saved
     return
   }
-  const crisp = rr >= 76
+  // animflow r6b: re-tuned on the sim's effective ratings (WR SRR/MRR/DRR p10/50/90
+  // 66/75/87; before every real WR read 70 and never cut crisp): the upper half
+  // of the league plants and snaps, the lower half rounds the break.
+  const crisp = rr >= CRISP_RR
   stem()
   mv.run(pts.slice(0, breakIdx + 1), { v0, stop: true })
   mv.pace = saved
-  if (crisp) mv.hold(clampN(0.04 + (rr - 76) * 0.002, 0.04, 0.12))
+  if (crisp) mv.hold(clampN(0.04 + (rr - CRISP_RR) * 0.0055, 0.04, 0.12))
   mv.run(pts.slice(breakIdx + 1), { v0: 0, stop: true })
 }
 
@@ -3107,7 +3135,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     if (short) routeMap[tgt] = short
   }
 
-  const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb']
+  const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb'].filter((k) => m[k])
   // Only a tight end / back assigned to pass-protect (block/passBlock) stays in
   // (backlog 152); a screen "stalk" or a play-action "runFake" is a route, not
   // protection, and runs like everyone else (backlog 152 follow-up).

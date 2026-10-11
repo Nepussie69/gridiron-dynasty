@@ -87,6 +87,12 @@ import { holderAt as r6HolderAt, posAt as r6PosAt } from '../src/components/broa
 import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
+import { carrierMove, effAttrs, effRating, fatigueMap, tackleStyle, tiredness } from '../src/components/animRatings.ts'
+import { attrOf, CRISP_RR } from '../src/components/playAnim.ts'
+import { creditedIds, offenseKeys, recordedEleven } from '../src/components/jersey.ts'
+import { playerAttrs } from '../src/game/data/ratings.ts'
+import type { Player } from '../src/game/types.ts'
+import type { World } from '../src/game/engine/generate.ts'
 import { BENCHES, buildTeamArea, officialsAt, OFFICIAL_ROLES, readPlay, sideY } from '../src/components/broadcast/sideline.ts'
 import { TEAM_BOX } from '../src/components/broadcast/field.ts'
 
@@ -1917,6 +1923,143 @@ ok('SL1 sideline: team areas between the 32s, behind the border, home near / awa
   assert.ok(td.td && td.cheer === 'home' && near(td.tScore, 0.8), 'a home TD: signal + home sideline cheers')
   const fdR = readPlay({ ...play, type: 'run', down: 3, distance: 4, yards: 6, endYard: 36, result: '6-yd run' } as Play, { duration: 4000, events: [{ t: 0.7, kind: 'tackle', keys: [], spot: { x: 46, y: 20 } }] } as unknown as BroadcastAnim, 'B')
   assert.ok(fdR.firstDown && !fdR.td && near(fdR.tEnd, 0.7), 'a conversion signals a first down')
+})
+
+// ── animflow r6b: ratings audit gaps ────────────────────────────────────────
+const r6bPlayer = (id: string, pos: string, ovr: number, attrs?: Record<string, number>, devRatings?: Record<string, number>) =>
+  ({ id, pos, ovr, attrs, devRatings, name: id, teamId: 'A', age: 25 }) as unknown as Player
+
+ok('animflow r6b (item 1): the animation reads the sim\'s effective ratings (playerAttrs: generated + real + dev-plan gains), never raw attrs', () => {
+  // A real WR carries SPD but no route ratings: the sim generates them; the
+  // animation must read the same numbers (before: every real WR read SRR 70).
+  const wr = r6bPlayer('wr-x', 'WR', 84, { SPD: 93 })
+  const eff = playerAttrs(wr)
+  assert.equal(effRating(wr, 'SRR'), eff.SRR)
+  assert.equal(attrOf(wr, 'DRR'), eff.DRR)
+  assert.equal(attrOf(wr, 'SPD'), 93, 'real rating wins')
+  // A generated player (no attrs at all) is not 70 across the board.
+  const gen = r6bPlayer('gen-x', 'CB', 77)
+  assert.deepEqual(effAttrs(gen), playerAttrs(gen))
+  assert.ok(Object.values(effAttrs(gen)).some((v) => v !== 70), 'generated ratings, not a flat 70')
+  // L15 dev-plan gains count, and a new gains object is seen (cache keyed on it).
+  const dev = r6bPlayer('wr-x', 'WR', 84, { SPD: 93, SRR: 70 }, { SRR: 6 })
+  assert.equal(effRating(dev, 'SRR'), 76)
+  const dev2 = { ...dev, devRatings: { SRR: 9 } } as Player
+  assert.equal(effRating(dev2, 'SRR'), 79)
+  // Missing player / key: the fallback.
+  assert.equal(effRating(undefined, 'SRR', 70), 70)
+  assert.equal(effRating(gen, 'NOPE', 61), 61)
+  // The crisp-cut threshold sits at the effective-rating median (WR SRR p50 75).
+  assert.equal(CRISP_RR, 75)
+})
+
+ok('animflow r6b (item 2): the recorded on-field eleven is drawn (12 personnel, nickel), every credited player among them', () => {
+  const off = ['qb1', 'rb1', 'te1', 'te2', 'wr1', 'wr2', 'ot1', 'ot2', 'og1', 'og2', 'c1']
+  const offPos = ['QB', 'RB', 'TE', 'TE', 'WR', 'WR', 'OT', 'OT', 'OG', 'OG', 'C']
+  const def = ['de1', 'de2', 'dt1', 'dt2', 'lb1', 'lb2', 'cb1', 'cb2', 'cb3', 's1', 's2']
+  const defPos = ['DE', 'DE', 'DT', 'DT', 'LB', 'LB', 'CB', 'CB', 'CB', 'S', 'S']
+  const A = off.map((id, i) => r6bPlayer(id, offPos[i], 75))
+  const B = def.map((id, i) => r6bPlayer(id, defPos[i], 75))
+  const world = { roster: { A, B }, players: [...A, ...B] } as unknown as World
+  const play = { n: 4, type: 'run', concept: 'Inside Zone', offId: 'A', defId: 'B', startYard: 30, carrierId: 'rb1', qbId: 'qb1', tackleIds: ['cb3'], missedTackleIds: ['lb2'], onFieldOff: off, onFieldDef: def } as unknown as Play
+  const m = recordedEleven(world, play, 'B')
+  assert.ok(m, 'recorded personnel used')
+  const ids = [...m!.values()].map((p) => p.id)
+  assert.equal(ids.length, 22, `22 drawn: ${ids.length}`)
+  assert.deepEqual([...ids].sort(), [...off, ...def].sort(), 'exactly the recorded 22')
+  for (const id of creditedIds(play)) assert.ok(ids.includes(id), `credited ${id} drawn`)
+  const keys = [...m!.keys()]
+  for (const k of offenseKeys(play)) assert.ok(keys.includes(k), `offence dot ${k} filled`)
+  assert.equal(m!.get('ol2')?.pos, 'C')
+  assert.equal(m!.get('rb')?.id, 'rb1')
+  assert.ok(['te', 'wr2'].includes([...m!.entries()].find(([, p]) => p.id === 'te2')![0]), 'second TE in the slot')
+  assert.equal(recordedEleven(world, { ...play, onFieldOff: undefined } as unknown as Play, 'B'), null, 'old saves: depth chart')
+  // Fatigue at the snap rides along aligned to the eleven.
+  const fm = fatigueMap({ onFieldOff: off, onFieldDef: def, fatOn: [...off, ...def].map((_, i) => i) })
+  assert.equal(fm.get('c1'), 0.1)
+  assert.equal(fatigueMap({ onFieldOff: off, onFieldDef: def, fatOn: [1, 2] }).size, 0, 'misaligned record ignored')
+})
+
+ok('animflow r6b (item 5): the broken-tackle move follows the carrier\'s best skill; the tackle follows TAK / HPW; both are drawn', () => {
+  const back = (o: Record<string, number>) => r6bPlayer(`rb-${JSON.stringify(o)}`, 'RB', 85, { JKM: 80, SPM: 74, SFA: 74, TRK: 77, ...o })
+  for (let s = 0; s < 20; s++) {
+    assert.equal(carrierMove(back({ JKM: 96 }), s), 'juke')
+    assert.equal(carrierMove(back({ SPM: 92 }), s), 'spin')
+    assert.equal(carrierMove(back({ SFA: 92 }), s), 'stiffArm')
+    assert.equal(carrierMove(back({ TRK: 95 }), s), 'truck')
+  }
+  const mixed = new Set(Array.from({ length: 40 }, (_, s) => carrierMove(back({}), s)))
+  assert.ok(mixed.size >= 3, `a balanced back mixes his moves: ${[...mixed]}`)
+  // Tackles.
+  const cb = r6bPlayer('cb-weak', 'CB', 74, { TAK: 48, HPW: 50 })
+  const lb = r6bPlayer('lb-hit', 'LB', 88, { TAK: 85, HPW: 96 })
+  const n = 60
+  const arm = Array.from({ length: n }, (_, s) => tackleStyle(cb, { fromBehind: false, carrierSpeed: 5, tacklerSpeed: 5, seed: s })).filter((x) => x === 'arm').length
+  const hit = Array.from({ length: n }, (_, s) => tackleStyle(lb, { fromBehind: false, carrierSpeed: 5, tacklerSpeed: 5, seed: s })).filter((x) => x === 'hit').length
+  assert.ok(arm > n * 0.6, `a poor tackler mostly gets an arm on him: ${arm}/${n}`)
+  assert.ok(hit > n * 0.5 && Array.from({ length: n }, (_, s) => tackleStyle(lb, { fromBehind: false, carrierSpeed: 5, tacklerSpeed: 5, seed: s })).every((x) => x !== 'arm'), `a big hitter lays hits: ${hit}/${n}`)
+  assert.equal(tackleStyle(lb, { fromBehind: true, carrierSpeed: 6, tacklerSpeed: 6, seed: 1 }), 'dive', 'chase from behind: a dive at the legs')
+  assert.equal(tackleStyle(undefined, { fromBehind: false, carrierSpeed: 5, tacklerSpeed: 5, seed: 1 }), 'wrap')
+  // Drawn: a run with a recorded missed tackle — the carrier's move pose, the beaten man's reaction, a spin turns him round.
+  const mk = (rb: Player) => {
+    const anim = {
+      duration: 5000,
+      actors: [
+        { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26.65 }, { t: 1, x: 29, y: 26.65 }] },
+        { key: 'rb', side: 'off', role: 'RB', path: [{ t: 0, x: 28, y: 28 }, { t: 0.5, x: 36, y: 27 }, { t: 0.8, x: 42, y: 27 }, { t: 1, x: 44, y: 27 }] },
+        { key: 'lb0', side: 'def', role: 'LB', path: [{ t: 0, x: 38, y: 22 }, { t: 0.5, x: 36.5, y: 26 }, { t: 1, x: 40, y: 26 }] },
+        { key: 'lb1', side: 'def', role: 'LB', path: [{ t: 0, x: 44, y: 22 }, { t: 0.8, x: 42.5, y: 26.6 }, { t: 1, x: 44.5, y: 26.6 }] },
+      ],
+      ball: [{ t: 0, x: 30, y: 26.65 }, { t: 0.2, x: 30, y: 27 }, { t: 1, x: 44, y: 27 }],
+      holders: [{ t: 0, key: null }, { t: 0.03, key: 'qb' }, { t: 0.2, key: 'rb' }],
+      flights: [],
+      engagements: [{ a: 'lb0', b: 'rb', t0: 0.46, t1: 0.52, kind: 'missedTackle' }, { a: 'lb1', b: 'rb', t0: 0.8, t1: 1, kind: 'tackle' }],
+      events: [
+        { t: 0.03, kind: 'snap', keys: ['ol2', 'qb'], spot: { x: 30, y: 26.65 } },
+        { t: 0.5, kind: 'brokenTackle', keys: ['rb', 'lb0'], spot: { x: 36, y: 27 } },
+        { t: 0.8, kind: 'contact', keys: ['rb', 'lb1'], spot: { x: 42, y: 27 } },
+        { t: 1, kind: 'tackle', keys: ['lb1', 'rb'], spot: { x: 44, y: 27 } },
+      ],
+    } as unknown as BroadcastAnim
+    const play = { n: 9, type: 'run', concept: 'Inside Zone', result: 'Rush', startYard: 18, endYard: 34, yards: 16, missedTackleIds: ['L0'], tackleIds: ['L1'] } as unknown as Play
+    const actors = new Map<string, Player>([['rb', rb], ['lb0', r6bPlayer('L0', 'LB', 80)], ['lb1', r6bPlayer('L1', 'LB', 80, { TAK: 85, HPW: 70 })]])
+    return presentAnim(anim, play, { actors })
+  }
+  for (const [o, move, react] of [[{ JKM: 97 }, 'juke', 'tackleArm'], [{ SPM: 95 }, 'spin', 'stumble'], [{ SFA: 95 }, 'stiffArm', 'stumble'], [{ TRK: 97 }, 'truck', 'fall']] as const) {
+    const pa = mk(back(o))
+    assert.ok(pa.poses.rb.some((w) => w.state === move && w.t0 <= 0.5 && w.t1 >= 0.5), `${move}: ${JSON.stringify(pa.poses.rb)}`)
+    assert.ok(pa.poses.lb0.some((w) => w.state === react && w.t0 <= 0.5 && w.t1 >= 0.5), `${move} → beaten man ${react}: ${JSON.stringify(pa.poses.lb0)}`)
+    assert.equal(pa.skill?.moves[0]?.move, move)
+    if (move === 'spin') {
+      const fw = pa.facing.rb.find((w) => w.mode === 'spin')
+      assert.ok(fw && fw.t0 < 0.5 && fw.t1 > 0.5, 'a spin turns him round (facing)')
+    }
+  }
+  assert.ok(mk(back({})).poses.lb1.some((w) => w.state === 'tackle'), 'an ordinary tackler wraps up')
+})
+
+ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hips after the whistle; fresh men do not', () => {
+  assert.equal(tiredness(0.05), 0)
+  assert.ok(tiredness(0.15) > 0.25 && tiredness(0.3) === 1)
+  const anim = {
+    duration: 4000,
+    actors: [
+      { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26.65 }, { t: 0.2, x: 27, y: 26.65 }, { t: 1, x: 27, y: 26.65 }] },
+      { key: 'wr0', side: 'off', role: 'WR', path: [{ t: 0, x: 30, y: 5 }, { t: 0.6, x: 45, y: 8 }, { t: 1, x: 45, y: 8 }] },
+      { key: 'cb0', side: 'def', role: 'CB', path: [{ t: 0, x: 37, y: 5 }, { t: 0.6, x: 46, y: 8 }, { t: 1, x: 46, y: 8 }] },
+    ],
+    ball: [{ t: 0, x: 30, y: 26.65 }, { t: 0.2, x: 27, y: 26.65 }, { t: 0.4, x: 27, y: 26.65 }, { t: 0.6, x: 44, y: 8 }, { t: 1, x: 44, y: 8 }],
+    holders: [{ t: 0, key: null }, { t: 0.03, key: 'qb' }, { t: 0.4, key: null }],
+    flights: [{ t0: 0.4, t1: 0.6, height: 1 }],
+    engagements: [],
+    events: [{ t: 0.6, kind: 'incomplete', keys: ['wr0'], spot: { x: 44, y: 8 } }],
+  } as unknown as BroadcastAnim
+  const play = { n: 3, type: 'pass', concept: 'Curl', result: 'Incomplete', startYard: 20, endYard: 20, yards: 0 } as unknown as Play
+  const actors = new Map<string, Player>([['qb', r6bPlayer('Q', 'QB', 80)], ['wr0', r6bPlayer('W', 'WR', 80)], ['cb0', r6bPlayer('C', 'CB', 80)]])
+  const pa = presentAnim(anim, play, { actors, fat: new Map([['W', 0.2], ['C', 0.02], ['Q', 0.2]]) })
+  assert.ok(pa.poses.wr0.some((w) => w.state === 'hips' && w.t0 >= 0.6 - 1e-6), `tired receiver: ${JSON.stringify(pa.poses.wr0)}`)
+  assert.ok(!pa.poses.cb0.some((w) => w.state === 'hips'), 'fresh corner never')
+  assert.ok(!pa.poses.wr0.some((w) => w.state === 'hips' && w.t1 <= 0.6 && w.t0 > 0.05), 'not during the play')
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)

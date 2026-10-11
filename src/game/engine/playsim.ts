@@ -526,6 +526,10 @@ export interface Play {
   /** R15: the scrimmage players on the field for this snap (offence / defence ids). */
   onFieldOff?: string[]
   onFieldDef?: string[]
+  /** animflow r6b: each on-field man's in-game fatigue at the snap (x100, rounded),
+   *  aligned to onFieldOff then onFieldDef. Presentation only (the broadcast's
+   *  tired gait / hands on hips); recorded read-only, no rng. */
+  fatOn?: number[]
   // ── FUTURES #5: replay review ──────────────────────────────────────────────
   /** A booth or challenge review of this play (display-only in the booth domain). */
   review?: PlayReview
@@ -570,6 +574,8 @@ export interface GameSim {
   specialists?: Record<string, { K?: string; P?: string }>
   /** Final in-game fatigue per player (probe/reporting only). */
   fatigue?: Record<string, number>
+  /** animflow r6b: the game's weather (read-only, for the broadcast's rain / snow / wind). */
+  weather?: GameWeather
 }
 
 /** L11.5 Q3: one mid-game change to the user's live plan. */
@@ -1204,6 +1210,8 @@ export interface PlayOutcome {
   onFieldOff?: string[]
   /** R15: the scrimmage defenders actually on the field for this snap (ids). */
   onFieldDef?: string[]
+  /** animflow r6b: fatigue at the snap per on-field man (see Play.fatOn). */
+  fatOn?: number[]
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -4101,6 +4109,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const out = concept.type === 'pass'
     ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery)
     : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery)
+  // animflow r6b: record (read-only) how tired each man was at the snap, for the broadcast.
+  if (out.onFieldOff && out.onFieldDef) out.fatOn = [...out.onFieldOff, ...out.onFieldDef].map((id) => Math.round((s.fat[id] ?? 0) * 100))
   // R15: charge the snap (and its stamina cost) to the players actually on the field.
   chargeSnaps(s, out)
 
@@ -4193,6 +4203,7 @@ export function finishGame(s: GameState): GameSim {
     snapSide: s.snapSide,
     specialists: s.specialists,
     fatigue: s.fat,
+    weather: s.weather,
   }
 }
 

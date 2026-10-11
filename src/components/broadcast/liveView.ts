@@ -20,7 +20,7 @@ import { posAt, snapYard } from '../playAnim'
 import { effectiveQuality, QUALITY, AUTO_TOO_SLOW_P95, AutoQuality, FramePacer, type AutoQualityState, type QualityLevel } from './quality.ts'
 import { CAMERA_PROFILES, createProfileApplier, type ProfileCtx } from './phoneCamera.ts'
 import { BroadcastRenderer, FrameWindow, type BroadcastFrame, type FrameStats, type LayerHook } from './renderer'
-import { ActorLayer, type ActorPlay } from './actors'
+import { ActorLayer, type ActorPlay, type SubPlan } from './actors'
 import { SidelineLayer } from './sideline'
 import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from './graphics'
@@ -187,6 +187,47 @@ export interface LivePlayInput {
   awayId: string
   actors: Map<string, Player>
   numbers: Map<string, number>
+  /** animflow r6b: the next play (its recorded personnel drives the substitutions). */
+  next?: Play
+}
+
+/**
+ * animflow r6b (item 4): the substitutions between this snap and the next
+ * (same possession, both scrimmage snaps with recorded personnel): the drawn
+ * men who are not on the field next play jog off, the men who come in jog on
+ * (at most four per side). Benches: home near sideline, visitors far (SL1).
+ */
+export function subPlan(play: Play, next: Play | undefined, actors: Map<string, Player>, numbers: Map<string, number>, offHome: boolean): SubPlan | undefined {
+  if (!next || next.offId !== play.offId) return undefined
+  const scrim = (p: Play) => (p.type === 'run' || p.type === 'pass') && !!p.onFieldOff?.length && !!p.onFieldDef?.length
+  if (!scrim(play) || !scrim(next)) return undefined
+  const nowOff = new Set(play.onFieldOff)
+  const nowDef = new Set(play.onFieldDef)
+  const nextOff = new Set(next.onFieldOff)
+  const nextDef = new Set(next.onFieldDef)
+  const out: string[] = []
+  const counts = { off: 0, def: 0 }
+  for (const [key, p] of actors) {
+    const side = nowOff.has(p.id) ? 'off' : nowDef.has(p.id) ? 'def' : null
+    if (!side) continue
+    const stays = side === 'off' ? nextOff.has(p.id) : nextDef.has(p.id)
+    if (!stays && counts[side] < 4) { out.push(key); counts[side]++ }
+  }
+  const inn: SubPlan['in'] = []
+  for (const [side, ids, now] of [['off', next.onFieldOff!, nowOff], ['def', next.onFieldDef!, nowDef]] as const) {
+    let c = 0
+    for (const id of ids) {
+      if (now.has(id) || c >= 4) continue
+      const n = numbers.get(id)
+      if (n == null) continue
+      inn.push({ side, number: n })
+      c++
+    }
+  }
+  if (!out.length && !inn.length) return undefined
+  const near = -3
+  const far = FIELD_WIDTH + 3
+  return { out: out.sort(), in: inn, benchY: { off: offHome ? near : far, def: offHome ? far : near } }
 }
 
 /** Strong side: the B1 camera hint, else the side with more eligible receivers. */
@@ -237,7 +278,7 @@ export function buildLivePlay(input: LivePlayInput): LivePlay {
   return {
     play,
     anim,
-    actorPlay: { anim, offClub: club(offId), defClub: club(defId), offHome, numbers: nums },
+    actorPlay: { anim, offClub: club(offId), defClub: club(defId), offHome, numbers: nums, subs: subPlan(play, input.next, input.actors, input.numbers, offHome) },
     tl,
     dir,
     los,
@@ -536,6 +577,8 @@ export class LiveBroadcast {
     const t = inReplay && rf ? rf.t : this.t
     const phase: 'live' | 'replay' = inReplay ? 'replay' : this.opts.phase
     this.layer.t = t
+    // animflow r6b: the live end frame's hold drives the substitutions' jog.
+    this.layer.post = inReplay ? 0 : this.endHold
     // Live: once the play ends, the graphics clock runs on into the result
     // toast's hold (the toast enters at the whistle and holds `post` seconds).
     this.gfx.sec = lp ? t * Math.max(0.05, lp.anim.duration / 1000) + (inReplay ? 0 : this.endHold) : 0

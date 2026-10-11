@@ -242,11 +242,15 @@ export interface PoseParams {
   sp: number
   /** How much of the run cycle shows (multiplies the speed-driven amplitude). */
   run: number
+  /** animflow r6b: hands on the hips, elbows out (a tired man between plays). */
+  hp: number
+  /** animflow r6b: stiff arm — the free arm locked out straight ahead. */
+  sa: number
 }
 
-const PKEYS = ['cr', 'af', 'au', 'ln', 'hd', 'tk', 'jos', 'thr', 'rel', 'thf', 'oa', 'stp', 'qtr', 'hi', 'fall', 'kk', 'kn', 'sp', 'run'] as const
+const PKEYS = ['cr', 'af', 'au', 'ln', 'hd', 'tk', 'jos', 'thr', 'rel', 'thf', 'oa', 'stp', 'qtr', 'hi', 'fall', 'kk', 'kn', 'sp', 'run', 'hp', 'sa'] as const
 
-export const ZERO_POSE: Readonly<PoseParams> = Object.freeze({ cr: 0, af: 0, au: 0, ln: 0, hd: 0, tk: 0, jos: 0, thr: 0, rel: 0, thf: 0, oa: 0, stp: 0, qtr: 0, hi: 0, fall: 0, kk: 0, kn: 0, sp: 0, run: 1 })
+export const ZERO_POSE: Readonly<PoseParams> = Object.freeze({ cr: 0, af: 0, au: 0, ln: 0, hd: 0, tk: 0, jos: 0, thr: 0, rel: 0, thf: 0, oa: 0, stp: 0, qtr: 0, hi: 0, fall: 0, kk: 0, kn: 0, sp: 0, run: 1, hp: 0, sa: 0 })
 
 export interface PoseDef {
   base: Partial<PoseParams>
@@ -340,6 +344,44 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
     },
   },
   hold: { base: { cr: 1, kn: 1, af: 0.7, ln: 0.15, run: 0 } },
+  // animflow r6b (item 5): the carrier's broken-tackle moves and the tackle styles.
+  // Juke: plant, sink the hips and lean away, the free arm out for balance.
+  juke: {
+    base: { tk: 1, cr: 0.3, ln: 0.22, sp: 0.3, run: 0.55 },
+    dyn: (age, len, p) => {
+      const u = clamp01(age / Math.max(0.1, len))
+      p.cr = 0.45 * Math.sin(u * Math.PI)
+      p.sp = 0.38 * Math.sin(u * Math.PI)
+    },
+  },
+  // Spin: ball tucked, arms in, low and compact while he turns (facing 'spin').
+  spin: { base: { tk: 1, cr: 0.32, ln: 0.12, af: 0.3, run: 0.4 } },
+  // Stiff arm: the free arm locked out at the tackler, ball tucked away from him.
+  stiffArm: {
+    base: { tk: 1, ln: 0.32, cr: 0.15, run: 0.85 },
+    dyn: (age, len, p) => {
+      const u = clamp01(age / Math.max(0.1, len))
+      p.sa = ease(clamp01(u / 0.3)) * (1 - ease(clamp01((u - 0.75) / 0.25)))
+    },
+  },
+  // Truck: shoulder lowered, driving through contact.
+  truck: { base: { tk: 1, ln: 0.78, cr: 0.36, af: 0.35, jos: 0.55, run: 0.8 } },
+  // Big hit: launching through the carrier, arms thrown forward.
+  tackleHit: {
+    base: { af: 1, ln: 0.8, cr: 0.2, jos: 1, run: 0.9 },
+    dyn: (age, _len, p) => {
+      p.ln = 0.55 + 0.35 * easeOut(clamp01(age / 0.18))
+    },
+  },
+  // Arm tackle: reaching from the side, one arm across, body trailing.
+  tackleArm: { base: { af: 0.45, sp: 0.55, ln: 0.48, cr: 0.18, run: 0.75 } },
+  // animflow r6b (item 4): hands on the hips, slightly bent over (a tired man).
+  hips: {
+    base: { hp: 1, ln: 0.1, cr: 0.05, run: 0.3 },
+    dyn: (age, _len, p) => {
+      p.ln = 0.1 + 0.05 * Math.sin(age * 2.4) // heavy breathing
+    },
+  },
 }
 
 /** Every pose state the library covers. */
@@ -840,6 +882,16 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
       hx = lerp(hx, sdx * 0.07 + L * 0.02, P.tk)
       hy = lerp(hy, -0.17, P.tk)
     }
+    if (P.hp > 0) {
+      // animflow r6b: hands on the hips (elbows flare out in drawArms).
+      hx = lerp(hx, L * 0.15 * bw, P.hp)
+      hy = lerp(hy, -0.05, P.hp)
+    }
+    if (P.sa > 0 && L === -tl) {
+      // animflow r6b: the stiff arm, locked out straight ahead at shoulder height.
+      hx = lerp(hx, sdx * 0.44 + L * 0.03, P.sa)
+      hy = lerp(hy, -0.3, P.sa)
+    }
     HANDS[i][0] = L
     HANDS[i][1] = hx
     HANDS[i][2] = hy
@@ -848,8 +900,8 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
     for (const [L, hx, hy] of HANDS) {
       const sx = L * 0.175 * bw
       const sy = -0.27
-      const ex = (sx + hx) / 2 + L * 0.035 * (1 - 0.5 * ad)
-      const ey = (sy + hy) / 2 + 0.02
+      const ex = (sx + hx) / 2 + L * (0.035 + 0.09 * P.hp) * (1 - 0.5 * ad)
+      const ey = (sy + hy) / 2 + 0.02 - 0.03 * P.hp
       limb(g, sx, sy, ex, ey, 0.088, kit.jersey, outline)
       if (detail) {
         g.strokeStyle = kit.trim
