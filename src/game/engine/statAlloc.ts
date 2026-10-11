@@ -1,6 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // League-wide stat allocation.
 //
+// J7 (matchups & busts): this fast path does NOT resolve individual passes — it
+// allocates a game's team totals across the roster — so the per-pass matchup
+// model (covering defender, separation, busts) in `playsim.ts` applies only to
+// the play-by-play path. The fast allocator is unchanged and league-neutral.
+//
 // Simulating play-by-play for all ~2,000 games a season would be far too slow.
 // Instead we give every game a score (fast sim) and then distribute that game's
 // realistic team totals across the roster, weighted by talent, role, scheme fit,
