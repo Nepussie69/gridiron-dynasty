@@ -464,6 +464,17 @@ export interface Play {
   intId?: string
   /** L11.5 Q7: the defender in coverage on the target (derived, never an rng draw). */
   coverId?: string
+  // ── J7: matchups & busts ────────────────────────────────────────────────────
+  /** J7: the covering defender chosen at target time (mirrors `coverId`); the
+   *  matchup record. Undefined when the matchups layer is off. */
+  coverDefenderId?: string
+  /** J7: modelled separation to the nearest defender at the catch point (yards, 1 dp). */
+  separationYd?: number
+  /** J7: how tight the coverage was — `bust`/`miscall` are breakdowns. */
+  coverTag?: CoverTag
+  /** J7: the air depth the matchup model used (so a probe can bucket by depth
+   *  even on a completion, where `passDepth` is not otherwise set). */
+  muAirDepth?: number
   /** L12 E2: the defender who forced a fumble on a catch (bookkeeping only). */
   fumbleId?: string
   /** R5: defenders who failed to bring the carrier down on this play. */
@@ -1175,6 +1186,15 @@ export interface PlayOutcome {
   intId?: string
   /** L11.5 Q7: coverage defender on the target. */
   coverId?: string
+  // ── J7: matchups & busts ────────────────────────────────────────────────────
+  /** J7: the covering defender (mirrors `coverId`); only set when matchups are on. */
+  coverDefenderId?: string
+  /** J7: modelled separation at the catch point (yards, 1 dp). */
+  separationYd?: number
+  /** J7: the coverage tier for the target. */
+  coverTag?: CoverTag
+  /** J7: the air depth the matchup model used (probe bucketing only). */
+  muAirDepth?: number
   /** L12 E2: the defender who forced a fumble on a catch (bookkeeping only). */
   fumbleId?: string
   /** R5: defenders who missed the tackle on this play (a second tackler finishes). */
@@ -1691,6 +1711,115 @@ function finishTackler(key: string, first: string | undefined, lists: Player[][]
   return pool[hash32(key) % pool.length]?.id
 }
 
+// ── J7: matchups & busts ─────────────────────────────────────────────────────
+// The defender ACTUALLY covering the target (`coverId`, chosen at target time)
+// decides the matchup — not the team's average corner. An elite DB blankets his
+// man; an LB or safety on a receiver is a mismatch; and a small share of snaps
+// break down entirely (a coverage bust or a defensive mis-call) and leave a
+// receiver wide open. Every decision here is DETERMINISTIC (hash32 / h01 only,
+// never an rng() draw) and every term is centred on its league mean, so
+// `setMatchups(false)` is byte-identical to the base and leaving it ON does not
+// move the league averages — it only widens the distribution.
+let MATCHUPS_ON = true
+/** Like `setWeather`: off makes every matchup term exactly zero. */
+export function setMatchups(on: boolean) {
+  MATCHUPS_ON = on
+}
+export function getMatchups(): boolean {
+  return MATCHUPS_ON
+}
+
+/** J7: how tight the coverage was on a pass. */
+export type CoverTag = 'blanket' | 'tight' | 'open' | 'wide' | 'bust' | 'miscall'
+
+export const MU = {
+  // ── separation at arrival ──────────────────────────────────────────────────
+  // The covering defender's own cover rating is read against the level the
+  // position that SHOULD cover this target averages (a CB on a receiver, an LB
+  // on a back): an elite DB sits above it (tighter), an LB/S on a receiver sits
+  // well below (a mismatch). The BDB 2018 OLS says the nearest defender's
+  // *position* moves separation far more than raw speed does (LB +0.83 yd,
+  // S +0.42 yd vs CB; speed gap ≈ -0.004 yd/mph), so cover ability carries the
+  // matchup and SPD/ACC/AGI are a modest extra.
+  coverSep: 0.33,
+  spdSep: 0.06, // receiver SPD rel − defender SPD rel (modest by design)
+  accSep: 0.03, // ACC rel
+  agiSep: 0.03, // AGI rel
+  safAwr: 0.06, // safety help over the top (AWR rel)
+  safZcv: 0.06, // safety help (ZCV rel)
+  rzCatchSep: 0.06, // red-zone contested catch (CIT rel)
+  // Per-play variation in how the route and coverage play out (a deterministic,
+  // centred hash) — the spread of the real at-arrival separation distribution.
+  jitter: 15, // 1σ in rating units
+  // Separation at arrival (yards) by air depth, from BDB 2018 tracking
+  // (bdb2021_2018): screens ~6.0, short ~2.8, intermediate ~1.9, deep ~1.2.
+  baseScreen: 5.98,
+  baseShort: 2.80,
+  baseMid: 1.87,
+  baseDeep: 1.24,
+  yardsPerUnit: 0.16, // rating units → yards
+  // The real at-arrival distribution is right-skewed (median 3.0, mean 3.8,
+  // p90 8.0): tighten the left half and stretch the right half. Applied only to
+  // the recorded separation, not to `separation`, so the sim's calibration is
+  // untouched.
+  skewLo: 0.60,
+  skewHi: 1.36,
+  // The at-arrival spread itself is depth-dependent: screens separate unevenly
+  // (some blown up, some bottled), while deep coverage is tight for everyone.
+  // Multipliers on skewLo/skewHi, keyed by the same air bucket as baseScreen….
+  spreadLo: { screen: 1.70, short: 1.00, mid: 0.76, deep: 0.55 } as Record<string, number>,
+  spreadHi: { screen: 0.95, short: 0.87, mid: 0.80, deep: 0.77 } as Record<string, number>,
+  sepMin: -2.0, // clamp the displayed separation
+  sepMax: 12.0,
+  blanket: 0.8, // separationYd <= this = blanket
+  tight: 1.7, // <= this = tight
+  open: 3.4, // <= this = open, above = wide
+  // ── completion ────────────────────────────────────────────────────────────
+  // The separation gap moves the completion window (an open receiver completes
+  // more) and the covering defender's *individual* ability moves it again: an
+  // elite CB closes the window, a poor one throws it open. Both use the same
+  // raw term and are centred by MU_CENTER.comp, so the league completion rate
+  // is unchanged — only the spread widens. `compW` is what gives individual
+  // ratings their big involvement (elite vs poor allowed-comp%).
+  sepToRating: 0.15, // how much of the raw gap joins the sim's route-vs-coverage
+  sepToComp: 0.0070, // per rating unit of raw matchup separation (gives comp its
+  // separation gradient — an open receiver completes more, a bust completes a lot
+  // more; centred by MU_CENTER.comp so the league rate is held)
+  compW: 0.0140, // per rating point of (covering defender − reference cover)
+  compMin: 0.20, // outer completion clamp (the base clamp is 0.42–0.74)
+  compMax: 0.95,
+  // ── busts / mis-calls ─────────────────────────────────────────────────────
+  bustBase: 0.013, // raw per-pass bust chance (the rest of this block scales it)
+  bustAwr: 0.0016, // down: secondary AWR rel
+  bustPrc: 0.0012, // down: secondary PRC rel
+  bustExp: 0.0012, // down: experience (years over 22)
+  bustDc: 0.0012, // down: DC quality (defEdge)
+  bustComplex: 0.008, // up: complex concept / pre-snap movement
+  bustFat: 0.04, // up: defensive fatigue (fatDiff)
+  bustSep: 38, // extra separation on a bust (≈6 yd — wide open)
+  miscallEdge: 2, // a call edge >= this is a defensive mis-call candidate
+  miscallRate: 0.35, // chance the mis-call actually breaks the coverage
+  miscallSep: 26, // extra separation on a mis-call
+  // An elite covering defender takes the ball away more often (naturally centred
+  // — it uses position-relative ratings, so an average DB is exactly 1.0).
+  intW: 0.004,
+} as const
+
+/**
+ * Precomputed by `matchupProbe`: the league mean of the RAW matchup terms. They
+ * are subtracted from every pass (the `WX_CENTER` pattern), so the league means
+ * do not move and the model only widens the distribution.
+ */
+export const MU_CENTER = { sep: 1.0684, comp: 0.0499 }
+
+/** Dev accumulator (turned on by `matchupProbe`): how the centre is measured. */
+export const MU_STAT = { on: false, n: 0, rawSep: 0, rawSep2: 0, rawComp: 0, busts: 0, miscalls: 0, raw: [] as number[] }
+
+/** J7: the league separation baseline (yards) for a concept's air depth. */
+function muBaseSep(depth: number): number {
+  return depth <= 2 ? MU.baseScreen : depth <= 9 ? MU.baseShort : depth <= 19 ? MU.baseMid : MU.baseDeep
+}
+
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
@@ -1882,6 +2011,95 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
   // E1: the coverage defender, for the release-vs-press term (no rng draw).
   const coverPlayer = coverId ? [...cbs, ...saf, ...lbs].find((p) => p.id === coverId) : undefined
+  const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
+  const zoneCov = avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
+  // ── J7: MATCHUPS & BUSTS ────────────────────────────────────────────────────
+  // The covering defender (never an rng draw). Off → every value is zero and no
+  // Play field is added, so the base sim is untouched.
+  const coverA = coverPlayer ? mkAttrs(coverPlayer) : undefined
+  const covPos = coverPlayer?.pos
+  const manW = dStyle.manCoverage
+  let muSep = 0
+  let coverRel = 0
+  let compRaw = 0
+  let bust = false
+  let miscall = false
+  if (MATCHUPS_ON && target) {
+    // The reference cover level is the league mean at the position that *should*
+    // cover this target (a CB on a WR/TE, an LB on a back). An elite covering
+    // defender sits above it (negative separation); an LB or safety on a
+    // receiver sits well below it (a mismatch in the receiver's favour).
+    const refPos = target.pos === 'WR' || target.pos === 'TE' ? 'CB' : 'LB'
+    const refMcv = POS_MEAN[refPos]?.MCV ?? 70
+    const refZcv = POS_MEAN[refPos]?.ZCV ?? 70
+    coverRel = coverA ? manW * ((coverA.MCV ?? 70) - refMcv) + (1 - manW) * ((coverA.ZCV ?? 70) - refZcv) : 0
+    muSep -= coverRel * MU.coverSep
+    if (coverA && covPos) {
+      muSep += (rmean(target.pos, 'SPD', tA.SPD ?? 70) - rmean(covPos, 'SPD', coverA.SPD ?? 70)) * MU.spdSep
+      muSep += (rmean(target.pos, 'ACC', tA.ACC ?? 70) - rmean(covPos, 'ACC', coverA.ACC ?? 70)) * MU.accSep
+      muSep += (rmean(target.pos, 'AGI', tA.AGI ?? 70) - rmean(covPos, 'AGI', coverA.AGI ?? 70)) * MU.agiSep
+      // A big receiver's contested-catch edge in the red zone.
+      if (yard >= 80) muSep += rmean(target.pos, 'CIT', tA.CIT ?? tA.CTH ?? 70) * MU.rzCatchSep
+    }
+    // Safety help over the top closes the window a little.
+    muSep -= avg(saf.map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70))) * MU.safAwr
+    muSep -= avg(saf.map((p) => rmean(p.pos, 'ZCV', mkAttrs(p).ZCV ?? 70))) * MU.safZcv
+    // Per-play variation (deterministic hash, centred): the route/coverage
+    // does not play out the same way every snap. This is what gives the
+    // separation distribution its spread. No rng draw.
+    // NB: the varying token must sit at the FRONT of the key — FNV-1a leaves
+    // hashes of strings that differ only in the last character ~0.95 correlated.
+    const z = (h01(`sj1:${n}:${defId}`) + h01(`sj2:${n}:${defId}`) + h01(`sj3:${n}:${defId}`) + h01(`sj4:${n}:${defId}`) - 2) / 0.5774
+    muSep += clamp(z, -2.5, 2.5) * MU.jitter
+    // Bust (a communication breakdown): rarer for smart, experienced secondaries
+    // and a good DC; likelier with pre-snap movement and a tired defence.
+    const secAwr = avg([...cbs, ...saf, ...lbs].map((p) => rmean(p.pos, 'AWR', mkAttrs(p).AWR ?? 70)))
+    const secPrc = avg([...cbs, ...saf].map((p) => rmean(p.pos, 'PRC', mkAttrs(p).PRC ?? 70)))
+    const secExp = avg([...cbs, ...saf, ...lbs].map((p) => Math.max(0, p.age - 22)))
+    const complex = concept.depth >= 15 || !!offMove || concept.name.startsWith('PA ')
+    const bustP = clamp(
+      MU.bustBase - secAwr * MU.bustAwr - secPrc * MU.bustPrc - secExp * MU.bustExp
+        - dcEff.defEdge * MU.bustDc + (complex ? MU.bustComplex : 0) + clamp(fatDiff, 0, 2) * MU.bustFat,
+      0.001, 0.1,
+    )
+    bust = h01(`${n}:${defId}:bust`) < bustP
+    // A mis-call: the defensive call was the wrong answer to the concept (the
+    // call matrix already gives the offence a big edge), and the coverage breaks.
+    miscall = !bust && !!call && call.edge >= MU.miscallEdge && h01(`${n}:${defId}:miscall`) < MU.miscallRate
+    if (bust) muSep += MU.bustSep
+    if (miscall) muSep += MU.miscallSep
+    // The completion effect: the separation gap, plus the covering defender's
+    // individual ability (elite DB → tighter window, poor DB → open window).
+    compRaw = muSep * MU.sepToComp - coverRel * MU.compW
+    if (MU_STAT.on) {
+      MU_STAT.n++
+      MU_STAT.rawSep += muSep
+      MU_STAT.rawSep2 += muSep * muSep
+      MU_STAT.rawComp += compRaw
+      MU_STAT.raw.push(muSep)
+      if (bust) MU_STAT.busts++
+      if (miscall) MU_STAT.miscalls++
+    }
+  }
+  // Centred so the league mean is unchanged (the `WX_CENTER` pattern).
+  const muSepNet = MATCHUPS_ON && target ? muSep - MU_CENTER.sep : 0
+  const muOff = muSepNet * MU.yardsPerUnit
+  const muBucket = concept.depth <= 2 ? 'screen' : concept.depth <= 9 ? 'short' : concept.depth <= 19 ? 'mid' : 'deep'
+  const sepYd = MATCHUPS_ON && target
+    ? +clamp(muBaseSep(concept.depth) + (muOff >= 0 ? muOff * MU.skewHi * (MU.spreadHi[muBucket] ?? 1) : muOff * MU.skewLo * (MU.spreadLo[muBucket] ?? 1)), MU.sepMin, MU.sepMax).toFixed(1)
+    : undefined
+  const coverTag: CoverTag | undefined = !(MATCHUPS_ON && target) ? undefined
+    : bust ? 'bust' : miscall ? 'miscall'
+      : (sepYd ?? 0) <= MU.blanket ? 'blanket'
+        : (sepYd ?? 0) <= MU.tight ? 'tight'
+          : (sepYd ?? 0) <= MU.open ? 'open' : 'wide'
+  const matchupFields: Pick<PlayOutcome, 'coverDefenderId' | 'separationYd' | 'coverTag' | 'muAirDepth'> =
+    MATCHUPS_ON && target ? { coverDefenderId: coverId, separationYd: sepYd, coverTag, muAirDepth: concept.depth } : {}
+  // J7: an elite covering defender takes the ball away more often (position-
+  // relative, so an average DB is exactly 1.0 — no centring needed).
+  const coverIntMult = MATCHUPS_ON && coverA && covPos
+    ? clamp(1 + (manW * rmean(covPos, 'MCV', coverA.MCV ?? 70) + (1 - manW) * rmean(covPos, 'ZCV', coverA.ZCV ?? 70)) * MU.intW, 0.85, 1.3)
+    : 1
   const separation =
     (concept.depth > 14 ? (tA.DRR ?? 70) : concept.depth > 7 ? (tA.MRR ?? 70) : (tA.SRR ?? 70)) * 0.5 +
     (tA.SPD ?? 70) * 0.3 +
@@ -1894,9 +2112,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // L13: a favourable personnel matchup shows up as separation.
     (pEdge ? pEdge.pass : 0) +
     // L12.13 M3: a receiver's mastery of the system shows in his separation.
-    (target && (target.pos === 'WR' || target.pos === 'TE') ? clamp(masteryOffset(target, means) * 0.06, -3, 3) : 0)
-  const cbMcv = cbs.map((p) => mkAttrs(p).MCV ?? 70)
-  const zoneCov = avg([...cbs, ...lbs, ...saf].map((p) => mkAttrs(p).ZCV ?? 70))
+    (target && (target.pos === 'WR' || target.pos === 'TE') ? clamp(masteryOffset(target, means) * 0.06, -3, 3) : 0) +
+    // J7: the covering defender, mismatches and coverage busts.
+    muSepNet * MU.sepToRating
   // G11 targetWeakCB: on 35% of passes the coverage keys their weakest corner
   // (and the safety help raises the interception risk on those throws).
   let manCov = avg(cbMcv)
@@ -1923,6 +2141,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   if (concept.depth >= 15) {
     bigPlayRisk *= clamp(1 + (relAvg('PRS', cbs) * 0.004 - relAvg('SPD', saf) * 0.003) * E2_W, 0.6, 1.5)
   }
+  // J7: a coverage bust means the receiver is already gone — a big-play chance.
+  if (bust) bigPlayRisk *= 1.3
   let coverage = coverSkill * dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) + avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
   // L12 E2: secondary athleticism joins coverage; good recognition covers screens;
   // a tired defense loses a step in Q4.
@@ -1964,13 +2184,19 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // FUTURES #6: a deep ball (depth >= 15) in the wind is harder to complete.
   // Centred multiplier (exactly 1 when weather is off); no rng draw is added.
   if (concept.depth >= 15) compProb = clamp(compProb * (env?.wx?.deepCatchMult ?? 1), 0.42, 0.74)
+  // J7: the individual covering defender (and the LB/S-on-receiver mismatch)
+  // moves the completion window directly; centred by MU_CENTER.comp so the
+  // league completion rate is unchanged. The outer clamp only widens the range
+  // (the base clamp is 0.42–0.74), so an elite CB closes the window and a poor
+  // one opens it — individual ratings get a big say.
+  if (MATCHUPS_ON && target) compProb = clamp(compProb + compRaw - MU_CENTER.comp, MU.compMin, MU.compMax)
   // G7 hurry: a faster offense forces riskier throws.
   // L12 E2: JMP/PRC replace part of the trait-only ball-hawk in the pick rate.
   const ratingHawk = avg([...cbs, ...saf].map((p) => {
     const a = mkAttrs(p)
     return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
   }))
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1), 0.005, 0.06)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult, 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -2002,7 +2228,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), qbId: qb?.id, intId, coverId,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -2089,13 +2315,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, tackleIds: stopper ? [stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, tackleIds: stopper ? [stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', pressureRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -4239,3 +4465,130 @@ export function simulatePlayByPlay(world: World, homeId: string, awayId: string,
   for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId, 'standing')
   return finishGame(s)
 }
+
+// ── J7: matchup probe (DEV) ───────────────────────────────────────────────────
+// Measures the matchups & busts layer against the BDB 2018 tracking targets:
+// separation at arrival by air depth, completion % by separation tier, the
+// elite-vs-poor covering-defender spread, the mismatch and bust rates — and the
+// RAW mean of the matchup separation term, which is hard-coded into
+// `MU_CENTER.sep` so the layer is league-neutral. Pure (no React/DOM) so the
+// offline verification script can import it.
+export interface MatchupProbeOptions { games?: number; seeds?: number[] }
+
+const MU_TARGET = {
+  // bdb2021_2018 (NFL 2018), overall and by air depth.
+  overall: { p50: 3.01, ge5: 0.2832, ge7: 0.1457, le1: 0.155 },
+  air: {
+    screen: { p50: 5.979, ge5: 0.6237, ge7: 0.3739, le1: 0.0199 },
+    short: { p50: 2.796, ge5: 0.2191, ge7: 0.0968, le1: 0.1401 },
+    mid: { p50: 1.874, ge5: 0.1188, ge7: 0.0386, le1: 0.2377 },
+    deep: { p50: 1.239, ge5: 0.0671, ge7: 0.0214, le1: 0.3876 },
+  },
+  // Completion % by separation bucket (bdb2021_2018, selected attempts).
+  comp: { le1: 0.408, '1-2': 0.665, '2-3': 0.795, '3-5': 0.865, '5-7': 0.903, ge7: 0.905 },
+  // Completion % allowed by the nearest defender's position.
+  posComp: { CB: 0.713, S: 0.748, LB: 0.827 } as Record<string, number>,
+  mismComp: { WR_LB: 0.847, TE_LB: 0.807, RB_LB: 0.826, WR_CB: 0.702 },
+  bust: { share_of_all: 0.0101, comp: 0.8416 },
+  // Per-defender spread (min 30 targets): p10/p50/p90 completion % allowed.
+  perDef: { p10: 0.617, p50: 0.735, p90: 0.86 },
+}
+
+function q(sorted: number[], f: number): number {
+  if (!sorted.length) return 0
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * f)))]
+}
+
+export function matchupProbe(world: World, opts: MatchupProbeOptions = {}) {
+  const games = opts.games ?? 40
+  const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+  if (nfl.length < 2) return { error: 'no NFL teams' }
+  const byId = new Map(world.players.map((p) => [p.id, p]))
+  MU_STAT.on = true; MU_STAT.n = 0; MU_STAT.rawSep = 0; MU_STAT.rawSep2 = 0; MU_STAT.rawComp = 0; MU_STAT.busts = 0; MU_STAT.miscalls = 0; MU_STAT.raw = []
+
+  interface Rec { yd: number; depth: number; tag: string; comp: boolean; covPos: string; tgtPos: string; covId: string; covMcv: number }
+  const recs: Rec[] = []
+  const done = new Set<number>()
+  for (let g = 0; g < games; g++) {
+    const home = nfl[g % nfl.length]
+    const away = nfl[(g + 1) % nfl.length]
+    if (!home || !away || home.id === away.id) continue
+    const seed = opts.seeds?.[g] ?? world.seed + g * 7919 + 13
+    if (done.has(seed)) continue
+    done.add(seed)
+    const sim = simulatePlayByPlay(world, home.id, away.id, seed)
+    for (const play of sim.plays) {
+      if (play.type !== 'pass' || play.separationYd == null || !play.coverTag) continue
+      if (play.result.startsWith('Sack')) continue
+      const comp = play.reception ?? (!play.intId && (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId || !!play.muffedCatch))
+      const cov = play.coverDefenderId ? byId.get(play.coverDefenderId) : undefined
+      const tgt = play.targetId ? byId.get(play.targetId) : undefined
+      recs.push({
+        yd: play.separationYd, depth: play.muAirDepth ?? play.passDepth ?? 0, tag: play.coverTag, comp: !!comp,
+        covPos: cov?.pos ?? '', tgtPos: tgt?.pos ?? '',
+        covId: play.coverDefenderId ?? '', covMcv: cov ? (mkAttrs(cov).MCV ?? 70) : 70,
+      })
+    }
+  }
+  MU_STAT.on = false
+
+  const bucketOf = (d: number) => (d <= 2 ? 'screen' : d <= 9 ? 'short' : d <= 19 ? 'mid' : 'deep')
+  const n = recs.length
+  const comp = (a: Rec[]) => (a.length ? +(a.filter((r) => r.comp).length / a.length).toFixed(3) : 0)
+  const dist = (a: Rec[]) => {
+    const s = a.map((r) => r.yd).sort((x, y) => x - y)
+    return {
+      n: s.length, mean: +(s.reduce((x, y) => x + y, 0) / (s.length || 1)).toFixed(2),
+      p10: q(s, 0.1), p25: q(s, 0.25), p50: q(s, 0.5), p75: q(s, 0.75), p90: q(s, 0.9),
+      ge5: +(a.filter((r) => r.yd >= 5).length / (a.length || 1)).toFixed(3),
+      ge7: +(a.filter((r) => r.yd >= 7).length / (a.length || 1)).toFixed(3),
+      le1: +(a.filter((r) => r.yd <= 1).length / (a.length || 1)).toFixed(3),
+      comp: comp(a),
+    }
+  }
+  const byAir: Record<string, ReturnType<typeof dist>> = {}
+  for (const b of ['screen', 'short', 'mid', 'deep']) byAir[b] = dist(recs.filter((r) => bucketOf(r.depth) === b))
+  const tagNames = ['blanket', 'tight', 'open', 'wide', 'bust', 'miscall']
+  const tags = tagNames.map((t) => { const a = recs.filter((r) => r.tag === t); return { tag: t, n: a.length, share: +(a.length / (n || 1)).toFixed(3), sep: dist(a).mean, comp: comp(a) } })
+  const sepBuckets: [string, (r: Rec) => boolean][] = [
+    ['<=1', (r) => r.yd <= 1], ['1-2', (r) => r.yd > 1 && r.yd <= 2], ['2-3', (r) => r.yd > 2 && r.yd <= 3],
+    ['3-5', (r) => r.yd > 3 && r.yd <= 5], ['5-7', (r) => r.yd > 5 && r.yd <= 7], ['>=7', (r) => r.yd > 7],
+  ]
+  const compByBucket = sepBuckets.map(([k, f]) => ({ bucket: k, n: recs.filter(f).length, comp: comp(recs.filter(f)) }))
+  // Covering defender: elite vs poor CB, and the position mismatch.
+  const cb = recs.filter((r) => r.covPos === 'CB')
+  const elite = cb.filter((r) => r.covMcv >= 85)
+  const poor = cb.filter((r) => r.covMcv < 70)
+  const byCovPos = ['CB', 'S', 'LB'].map((p) => { const a = recs.filter((r) => r.covPos === p); return { pos: p, n: a.length, comp: comp(a), sep: dist(a).mean } })
+  const isMismatch = (r: Rec) => (r.covPos === 'LB' || r.covPos === 'S') && (r.tgtPos === 'WR' || r.tgtPos === 'TE' || r.tgtPos === 'RB')
+  const mm = recs.filter(isMismatch)
+  // Per-defender spread (>= 10 targets).
+  const byDef = new Map<string, Rec[]>()
+  for (const r of recs) if (r.covId) { const a = byDef.get(r.covId); if (a) a.push(r); else byDef.set(r.covId, [r]) }
+  const defComps = [...byDef.values()].filter((a) => a.length >= 10).map((a) => comp(a)).sort((x, y) => x - y)
+  const bustRecs = recs.filter((r) => r.tag === 'bust' || r.tag === 'miscall')
+  const rawMeanSep = MU_STAT.n ? +(MU_STAT.rawSep / MU_STAT.n).toFixed(4) : 0
+  const rawMeanComp = MU_STAT.n ? +(MU_STAT.rawComp / MU_STAT.n).toFixed(4) : 0
+  const rawVar = MU_STAT.n ? MU_STAT.rawSep2 / MU_STAT.n - rawMeanSep * rawMeanSep : 0
+  const rawSorted = [...MU_STAT.raw].sort((x, y) => x - y)
+
+  return {
+    games, passes: n, overall: dist(recs),
+    byAir,
+    tags, compByBucket,
+    compByPos: byCovPos,
+    eliteCb: { n: elite.length, comp: comp(elite), sep: dist(elite).mean },
+    poorCb: { n: poor.length, comp: comp(poor), sep: dist(poor).mean },
+    mismatch: { n: mm.length, share: +(mm.length / (n || 1)).toFixed(3), comp: comp(mm), sep: dist(mm).mean },
+    bust: { n: bustRecs.length, share: +(bustRecs.length / (n || 1)).toFixed(4), comp: comp(bustRecs) },
+    perDefenderComp: { n: defComps.length, p10: +q(defComps, 0.1).toFixed(3), p50: +q(defComps, 0.5).toFixed(3), p90: +q(defComps, 0.9).toFixed(3) },
+    raw: {
+      n: MU_STAT.n, meanSep: rawMeanSep, sdSep: +Math.sqrt(Math.max(0, rawVar)).toFixed(2),
+      p10: q(rawSorted, 0.1), p50: q(rawSorted, 0.5), p90: q(rawSorted, 0.9),
+      meanComp: rawMeanComp, busts: MU_STAT.busts, miscalls: MU_STAT.miscalls,
+      centerSuggested: { sep: rawMeanSep, comp: rawMeanComp },
+    },
+    target: MU_TARGET,
+  }
+}
+
