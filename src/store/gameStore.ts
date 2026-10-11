@@ -255,6 +255,12 @@ import { COMBINE_HOURS, applyCombine, combineOpen, type CombineKind } from '../g
 import { applyTravel, autoTravel, travelOpen, coverageOf, travelState, TRAVEL_BUDGET, type TravelKind } from '../game/engine/scoutTravel'
 import { readProspect } from '../game/engine/evaluation'
 import {
+  MAX_PROSPECT_WATCH,
+  futureClass,
+  runDeclareDeadline,
+  scoutFutureProspect,
+} from '../game/engine/futureClasses'
+import {
   weeklyActions,
   currentSetPiece,
   resolveSetPiece as applySetPiece,
@@ -620,6 +626,10 @@ interface GameStore {
   closeMatch: () => void
 
   scoutProspect: (id: string) => void
+  /** FUTURES #29: scout a not-yet-current class prospect (1 pt; yearsOut 1 or 2). */
+  scoutFuture: (id: string, yearsOut?: number) => void
+  /** FUTURES #29: watch/unwatch a future prospect (max 30, no season scope). */
+  toggleWatch: (prospectId: string) => void
   setRecommendation: (id: string, rec: 'Blue Chip' | 'Starter' | 'Depth' | 'Pass') => void
   /** Advise mode: add/remove a prospect from your ranked board for the draft. */
   toggleUserBoard: (id: string) => void
@@ -1932,7 +1942,9 @@ export const useGame = create<GameStore>((set, get) => ({
       }
     }
     set({
-      career: seasonCareer,
+      // FUTURES #29: watched prospects whose class just turned current land on
+      // the board; ids that have left the league fall off the watch list.
+      career: applyProspectPromotion(seasonCareer, world),
       scoutingPoints: MAX_SCOUT_POINTS,
       modal: 'none',
       summary: null,
@@ -1990,6 +2002,44 @@ export const useGame = create<GameStore>((set, get) => ({
     p.scoutConfidence = Math.min(100, p.scoutConfidence + 20)
     const c = get().career
     set({ scoutingPoints: get().scoutingPoints - 1, career: c ? withFlag(c, 'scout') : c, tick: get().tick + 1 })
+    get().save()
+  },
+
+  scoutFuture: (id, yearsOut = 1) => {
+    const career = get().career
+    if (!career) return
+    if (get().scoutingPoints <= 0) {
+      get().showToast('No scouting points left this week. Advance the week to reset.')
+      return
+    }
+    // FUTURES #29: closes 20% of the gap (next year) or 10% (two out) and adds
+    // +12 / +6 confidence, capped at 60 / 35 until the class turns current. It
+    // draws no rng, so the sim and the calibration are untouched. `yearsOut` 2
+    // reads the thin top-60 class.
+    const read = scoutFutureProspect(world, id, yearsOut)
+    if (!read) {
+      get().showToast('He is not in that future class.')
+      return
+    }
+    set({ scoutingPoints: get().scoutingPoints - 1, career: withFlag(career, 'scout'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  toggleWatch: (prospectId) => {
+    const career = get().career
+    if (!career) return
+    const watch = [...(career.prospectWatch ?? [])]
+    const i = watch.indexOf(prospectId)
+    if (i >= 0) {
+      watch.splice(i, 1)
+    } else {
+      if (watch.length >= MAX_PROSPECT_WATCH) {
+        get().showToast(`Watch list is full — ${MAX_PROSPECT_WATCH} prospects max.`)
+        return
+      }
+      watch.push(prospectId)
+    }
+    set({ career: { ...career, prospectWatch: watch }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -4208,6 +4258,44 @@ function relinkPlayers(w: World): void {
   }
 }
 
+/** Parse the class season out of a generated prospect id (`d2027_4` → 2027). */
+function classSeasonOf(id: string): number | undefined {
+  const m = /^d(\d+)_/.exec(id)
+  return m ? Number(m[1]) : undefined
+}
+
+/**
+ * FUTURES #29: at the season rollover, watched prospects whose class just turned
+ * current land on the user's board, and watched ids that have left the league
+ * (drafted or aged out of the two-year window) fall off quietly. A still-future
+ * id and a newly promoted id are both kept, so the watch list carries over.
+ */
+function applyProspectPromotion(career: CareerState, world: World): CareerState {
+  const watch = career.prospectWatch
+  if (!watch?.length) return career
+  const inClass = new Set(world.draft.map((p) => p.id))
+  const kept: string[] = []
+  const promoted: string[] = []
+  for (const id of watch) {
+    const cls = classSeasonOf(id)
+    if (inClass.has(id)) {
+      kept.push(id)
+      promoted.push(id)
+    } else if (cls === undefined || cls > world.season) {
+      // Still ahead of the current class, so he stays on the watch list. A class
+      // whose label equals the new season was the one just drafted — it drops.
+      kept.push(id)
+    }
+  }
+  const next: CareerState = { ...career, prospectWatch: kept.slice(0, MAX_PROSPECT_WATCH) }
+  if (promoted.length && career.userBoard) {
+    const board = new Set(career.userBoard)
+    for (const id of promoted) board.add(id)
+    next.userBoard = [...board]
+  }
+  return next
+}
+
 /** Bring a legacy save up to the current world shape (new fields + pick ownership). */
 export function migrateWorld(w: World): World {
   relinkPlayers(w)
@@ -4245,6 +4333,10 @@ export function migrateWorld(w: World): World {
   w.staffTenureRef ??= {}
   // FUTURES 19: legacy saves get the deterministic analyst market (no rng draw).
   w.analyticsPool ??= generateAnalyticsPool(w.seed)
+  // FUTURES #29: the future-classes overlay is optional; an empty one is dropped
+  // so a legacy save and a modern one behave identically. Real overlays are
+  // consumed by `promoteNextClass` at the next rollover.
+  if (w.futureClasses && !w.futureClasses.scout && !w.futureClasses.returners) w.futureClasses = undefined
   w.draft ??= []
   w.draftPicks ??= []
   w.draftRounds ??= []
@@ -4403,6 +4495,8 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   // L10 G11/G12: matchup and workload defaults (optional on legacy saves).
   base.matchups ??= {}
   base.usage ??= { rb: 'normal', dl: 'starters' }
+  // FUTURES #29: the unscoped prospect watch list is optional on legacy saves.
+  base.prospectWatch ??= []
   // L13: personnel packages stay optional (no packages = the old behaviour). Guard
   // an unknown value from a hand-edited save.
   if (base.personnel) {
@@ -4560,6 +4654,13 @@ function runEndOfRegularSeason(
   get: () => GameStore,
 ) {
   const career = get().career
+  // FUTURES #29: the mid-January underclassman declare deadline runs once per
+  // season at the regular season → playoffs edge, before the re-sign window
+  // opens. Deterministic and grade-preserving (no rng draws), so the NFL sim
+  // bands and `--eq` are untouched. NOTE the returner swap does reshuffle a
+  // class's positions, which can shift a 4-season career's trajectory (the
+  // personnel `--smoke` finalLevel moves 5→4) — see logs/fp2-verify.out.
+  runDeclareDeadline(world, career ?? undefined)
   const playoffs = simulatePlayoffs(world)
   const mvp = computeMVP()
   world.awards = { mvp: mvp ?? undefined }
@@ -7567,6 +7668,194 @@ export async function careerSmoke(
     violations,
     featuresExercised,
   }
+}
+
+export interface FutureProbeCheck {
+  name: string
+  pass: boolean
+  detail: string
+}
+export interface FutureProbeResult {
+  seed: number
+  seasons: number
+  passed: number
+  failed: number
+  checks: FutureProbeCheck[]
+}
+
+/**
+ * FUTURES #29 FP2 dev probe: drives the real store actions (`scoutFuture`,
+ * `toggleWatch`, the season rollover, the declare deadline, save/import) and
+ * checks acceptance (a)–(f). Runnable from the browser (`__futureProbe`) and from
+ * node via `logs/fp2-probe.mjs` (boots with real data + calibration, like
+ * `passid.mjs`).
+ */
+export async function futureProbe(seed = 33333, seasons = 2): Promise<FutureProbeResult> {
+  const get = () => useGame.getState()
+  const checks: FutureProbeCheck[] = []
+  const ok = (name: string, pass: boolean, detail = '') => checks.push({ name, pass: !!pass, detail })
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+  get().startCareer({ name: 'FP2 Probe', path: 'personnel', archetype: 'scout', teamId: 'CLE', seed, startLevel: 4 })
+  if (!get().career) {
+    return { seed, seasons, passed: 0, failed: 1, checks: [{ name: 'startCareer', pass: false, detail: 'no career' }] }
+  }
+
+  // (a) The preview is exactly what the NEXT rollover will promote with empty
+  // overlays. The real rollover bumps the season first, then refreshes.
+  const preview = futureClass(world, 1)
+  const cloneForRefresh = structuredClone(world) as World
+  cloneForRefresh.futureClasses = undefined
+  cloneForRefresh.season += 1
+  refreshProspectClass(cloneForRefresh)
+  ok('a: futureClass(world,1) deep-equals the next rollover promotion (empty overlays)', eq(preview, cloneForRefresh.draft), `n=${preview.length}`)
+
+  // The user keeps a board, so a promoted watched id has somewhere to land.
+  const boardSeed = world.draft.find((p) => !p.draftedBy)?.id
+  if (boardSeed) get().toggleUserBoard(boardSeed)
+  ok('c: the user keeps a board', Array.isArray(get().career?.userBoard))
+
+  // The horizon lines up with the real rollover: `futureClass(world,1)` is the
+  // class the next refresh promotes (label season+2) and `futureClass(world,2)`
+  // is the class two rollovers out (label season+3). Pin both against the actual
+  // promotion path so the engine and the store can never drift.
+  const upcoming = structuredClone(world) as World
+  upcoming.season += 1
+  refreshProspectClass(upcoming)
+  const twoOut = structuredClone(world) as World
+  twoOut.season += 2
+  refreshProspectClass(twoOut)
+  ok('a: futureClass(world,1) is the class the next rollover promotes', eq(futureClass(world, 1).map((p) => p.id), upcoming.draft.map((p) => p.id)))
+  ok('a: futureClass(world,2) is the class two rollovers out', futureClass(world, 2).every((p) => twoOut.draft.some((q) => q.id === p.id)))
+
+  // (b)/(c) Scout and watch several prospects in the class the next refresh
+  // promotes. Returners replace entries from the front of that class, so take
+  // the latest-indexed seniors — at least one survives to prove the wiring.
+  const nextHorizon = futureClass(world, 1)
+  const upcomingIndex = (id: string) => upcoming.draft.findIndex((q) => q.id === id)
+  const scouted = [...nextHorizon.filter((p) => p.classYear === 'SR')]
+    .sort((a, b) => upcomingIndex(a.id) - upcomingIndex(b.id))
+    .slice(-3)
+  const points0 = get().scoutingPoints
+  for (const p of scouted) get().scoutFuture(p.id, 1)
+  const overlays = new Map(scouted.map((p) => [p.id, world.futureClasses?.scout?.[p.id]]))
+  ok('b: a future scout spends one point', get().scoutingPoints === points0 - scouted.length, `${points0} → ${get().scoutingPoints}`)
+  ok('b: the scouted prospects are in the class the next refresh promotes', scouted.every((p) => upcoming.draft.some((q) => q.id === p.id)))
+  ok('b: the overlay is recorded, confidence capped at 60', scouted.every((p) => { const o = overlays.get(p.id); return !!o && o.confidence <= 60 && o.scoutConfidence <= 60 }), JSON.stringify(overlays.get(scouted.at(-1)!.id)))
+
+  // (c) Watch the scouted prospects and three far-out seniors (two rollovers out).
+  for (const p of scouted) get().toggleWatch(p.id)
+  const farSet = twoOut.draft.filter((p) => p.classYear === 'SR').slice(-3)
+  for (const p of farSet) get().toggleWatch(p.id)
+  const watch0 = get().career?.prospectWatch ?? []
+  ok('c: the watch list holds every horizon', [...scouted, ...farSet].every((p) => watch0.includes(p.id)), JSON.stringify(watch0))
+
+  // (d) Snapshot the class and seed the board with every underclassman, so the
+  // deadline's returner filter has something to drop.
+  const gradesBefore = world.draft.map((p) => p.trueGrade).sort((a, b) => a - b)
+  for (const p of world.draft.filter((d) => d.classYear === 'JR' || d.classYear === 'SO')) get().toggleUserBoard(p.id)
+
+  let observedReturners = false
+  for (let s = 0; s < seasons; s++) {
+    let weeks = 0
+    while (world.phase === 'regular' && weeks < 30) {
+      weeks++
+      await get().advanceWeek()
+      if (get().modal !== 'none') get().dismissModal()
+    }
+    ok(`d: season ${s + 1} reached the playoffs edge`, world.phase === 'offseason')
+    // The deadline ran at the edge. Every underclassman is now decided.
+    const underclass = world.draft.filter((p) => p.classYear === 'JR' || p.classYear === 'SO')
+    ok(`d: season ${s + 1} every underclassman decided`, underclass.every((p) => p.declare === 'declared' || p.declare === 'returning'))
+    // Re-running the deadline is a no-op → it ran exactly once this season.
+    const before = world.draft.map((p) => `${p.id}:${p.declare}`)
+    const again = runDeclareDeadline(world, get().career ?? undefined)
+    const after = world.draft.map((p) => `${p.id}:${p.declare}`)
+    ok(`d: season ${s + 1} deadline ran exactly once (re-run is a no-op)`, again.declared.length === 0 && again.returning.length === 0 && eq(before, after))
+    if (s === 0) {
+      const returners = world.futureClasses?.returners ?? []
+      observedReturners = returners.length > 0
+      ok('e: returners are season-tagged with returnedFrom', returners.every((r) => r.returnedFrom === world.season), `n=${returners.length}`)
+      const gradesAfter = world.draft.map((p) => p.trueGrade).sort((a, b) => a - b)
+      ok('d: the deadline keeps the class size', world.draft.length === gradesBefore.length, `${gradesBefore.length} → ${world.draft.length}`)
+      ok('d: the deadline keeps the sorted trueGrade multiset', eq(gradesBefore, gradesAfter))
+      const retIds = new Set(returners.map((r) => r.id))
+      const board = get().career?.userBoard ?? []
+      ok('d: no board id points at a returner', !board.some((id) => retIds.has(id)), `${retIds.size} returners`)
+      const high = underclass.filter((p) => p.trueGrade >= 72)
+      const low = underclass.filter((p) => p.trueGrade < 72)
+      const rate = (arr: typeof underclass) => (arr.length ? arr.filter((p) => p.declare === 'declared').length / arr.length : 0)
+      ok('d: declare rate is monotone in grade', rate(high) >= rate(low), `high=${rate(high).toFixed(2)} low=${rate(low).toFixed(2)}`)
+    }
+    // Roll the season over: refresh promotes the class and applies the overlays.
+    if (world.phase === 'offseason') await get().advanceWeek()
+    if (s === 0) {
+      const keptOverlay = scouted.filter((p) => {
+        const q = world.draft.find((x) => x.id === p.id)
+        const ov = overlays.get(p.id)
+        return !!q && !!ov && q.myGrade === ov.myGrade && q.confidence === ov.confidence
+      })
+      const landed = scouted.filter((p) => (get().career?.userBoard ?? []).includes(p.id))
+      ok('b: a scouted grade survives promotion', keptOverlay.length > 0, `${keptOverlay.length}/${scouted.length} kept their overlay`)
+      ok('c: a promoted watched id lands on the board', landed.length > 0, `${landed.length}/${scouted.length} landed`)
+      ok('c: a two-rollovers-out watch id is still watched', farSet.some((p) => (get().career?.prospectWatch ?? []).includes(p.id)))
+    }
+  }
+  ok('e: at least one returner was observed', observedReturners)
+
+  // (c) After two rollovers the two-rollovers-out watch ids are current: they
+  // stayed on the list throughout and now sit on the board.
+  const watchEnd = get().career?.prospectWatch ?? []
+  ok('c: the watch list survives two rollovers', farSet.some((p) => watchEnd.includes(p.id)), JSON.stringify(watchEnd))
+  ok('c: the promoted two-rollovers-out id lands on the board', farSet.some((p) => (get().career?.userBoard ?? []).includes(p.id)))
+  ok('c: a drafted watched id falls off the list', scouted.every((p) => !watchEnd.includes(p.id)))
+
+  // (c) Save/reload round trip through the app's own path: IndexedDB when the
+  // host has it, else the export/import JSON envelope the app writes.
+  try {
+    const live = { world, career: get().career, activeTeamId: get().activeTeamId, screen: get().screen, readNews: get().readNews, statDb, awards }
+    const hasIdb = typeof indexedDB !== 'undefined'
+    let loaded: SaveData | null = null
+    if (hasIdb) {
+      get().save()
+      loaded = (await loadGame<SaveData>())?.data ?? null
+    } else {
+      const env = { schemaVersion: 2, savedAt: Date.now(), data: live }
+      loaded = await importSave<SaveData>(JSON.stringify(env))
+    }
+    ok('c: the watch list survives a save/reload round trip', eq(loaded?.career?.prospectWatch ?? [], get().career?.prospectWatch ?? []), `via ${hasIdb ? 'idb' : 'json'}`)
+  } catch (e) {
+    ok('c: the watch list survives a save/reload round trip', false, e instanceof Error ? e.message : String(e))
+  }
+
+  // (f) A legacy save without the FUTURES #29 fields loads and advances a season.
+  try {
+    const legacyWorld = structuredClone(world) as World
+    if ('futureClasses' in legacyWorld) delete (legacyWorld as { futureClasses?: unknown }).futureClasses
+    const legacyCareer = structuredClone(get().career!) as CareerState
+    if ('prospectWatch' in legacyCareer) delete (legacyCareer as { prospectWatch?: unknown }).prospectWatch
+    const env = {
+      schemaVersion: 2,
+      savedAt: Date.now(),
+      data: { world: legacyWorld, career: legacyCareer, activeTeamId: get().activeTeamId, screen: get().screen, readNews: {}, statDb, awards },
+    }
+    await get().importSaveText(JSON.stringify(env))
+    ok('f: an old save without the new fields loads', !!get().career && world.futureClasses === undefined && Array.isArray(get().career?.prospectWatch))
+    const seasonBefore = world.season
+    let fWeeks = 0
+    while (world.phase === 'regular' && fWeeks < 30) {
+      fWeeks++
+      await get().advanceWeek()
+      if (get().modal !== 'none') get().dismissModal()
+    }
+    if (world.phase === 'offseason') await get().advanceWeek()
+    ok('f: the old save advances a season', world.season === seasonBefore + 1, `season ${seasonBefore} → ${world.season}`)
+  } catch (e) {
+    ok('f: an old save without the new fields loads', false, e instanceof Error ? e.message : String(e))
+  }
+
+  const passed = checks.filter((c) => c.pass).length
+  return { seed, seasons, passed, failed: checks.length - passed, checks }
 }
 
 /** One year of the Hall of Fame probe. */
