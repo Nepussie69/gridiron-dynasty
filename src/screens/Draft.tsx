@@ -17,11 +17,13 @@ import { draftPickValue } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { DraftTradePanel } from '../components/DraftTradePanel'
 import { DataTable, type Column } from '../components/DataTable'
+import { FutureClasses } from './draft/FutureClasses'
 import {
   AccessBanner,
   Badge,
   Button,
   Card,
+  Chip,
   ConfirmSheet,
   FilterChip,
   KpiStrip,
@@ -32,6 +34,7 @@ import {
   SectionTitle,
   SegmentedControl,
   Sheet,
+  Tabs,
   TeamCrest,
   TierLegend,
 } from '../ui/kit'
@@ -58,6 +61,7 @@ export function Draft() {
   const simToMyPick = useGame((s) => s.simToMyPick)
   const finishDraft = useGame((s) => s.finishDraft)
   const phone = usePhone()
+  const [tab, setTab] = useState<'this' | 'next' | 'two'>('this')
   const [boardView, setBoardView] = useState<'list' | 'cards'>('list')
   const [posFilter, setPosFilter] = useState<Position | 'ALL'>('ALL')
   const [filtersOpen, setFiltersOpen] = useState(false)
@@ -92,6 +96,7 @@ export function Draft() {
 
   const myPicks = league.draft.filter((p) => p.draftedBy === career.teamId)
   const board = career.userBoard ?? []
+  const watched = career.prospectWatch ?? []
   const capital = myPicks.reduce((s, p) => s + draftPickValue(p.draftPick ?? 250), 0)
 
   const readOf = (p: DraftProspect) => readProspect(career, p)
@@ -106,11 +111,14 @@ export function Draft() {
       render: (p) => {
         const read = readOf(p)
         const rank = board.indexOf(p.id)
+        const declarePending = (p.classYear === 'JR' || p.classYear === 'SO') && (p.declare ?? 'undecided') === 'undecided'
         return (
           <span className="block min-w-0">
-            <span className="flex min-w-0 items-center gap-2">
+            <span className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="min-w-0 truncate font-600 text-ink">{p.name}</span>
               {rank >= 0 && <NeutralChip>#{rank + 1} your board</NeutralChip>}
+              {watched.includes(p.id) && <Chip>Watched</Chip>}
+              {declarePending && <Badge tone="neutral">Declare?</Badge>}
             </span>
             <span className="block text-small text-muted">
               {p.college} · {read.bandLabel}
@@ -213,15 +221,17 @@ export function Draft() {
         }
         right={
           <div className="flex flex-wrap items-center gap-2">
-            <SegmentedControl
-              label="Board view"
-              value={boardView}
-              onChange={setBoardView}
-              options={[
-                { id: 'list', label: 'List', icon: <List size={14} aria-hidden /> },
-                { id: 'cards', label: 'Cards', icon: <LayoutGrid size={14} aria-hidden /> },
-              ]}
-            />
+            {tab === 'this' && (
+              <SegmentedControl
+                label="Board view"
+                value={boardView}
+                onChange={setBoardView}
+                options={[
+                  { id: 'list', label: 'List', icon: <List size={14} aria-hidden /> },
+                  { id: 'cards', label: 'Cards', icon: <LayoutGrid size={14} aria-hidden /> },
+                ]}
+              />
+            )}
             {!draftIsOpen ? (
               <Badge tone="warn"><CalendarClock size={12} /> April</Badge>
             ) : !complete ? (
@@ -238,6 +248,20 @@ export function Draft() {
         }
       />
 
+      <Tabs
+        label="Draft classes"
+        value={tab}
+        onChange={setTab}
+        className="mb-4"
+        tabs={[
+          { id: 'this', label: 'This class' },
+          { id: 'next', label: 'Next year' },
+          { id: 'two', label: '2 years out' },
+        ]}
+      />
+
+      {tab === 'this' ? (
+        <>
       <AccessBanner
         area="draft"
         className="mb-4"
@@ -479,6 +503,10 @@ export function Draft() {
           setFinishOpen(false)
         }}
       />
+        </>
+      ) : (
+        <FutureClasses yearsOut={tab === 'next' ? 1 : 2} />
+      )}
     </div>
   )
 }
