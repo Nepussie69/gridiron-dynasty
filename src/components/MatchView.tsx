@@ -1975,7 +1975,7 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' },
-        { k: 'defInts', l: 'INT' }, { k: 'defTD', l: 'TD', title: 'Defensive touchdowns (pick-six, fumble return)' },
+        { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'defInts', l: 'INT' }, { k: 'defTD', l: 'TD', title: 'Defensive touchdowns (pick-six, fumble return)' },
       ]} />}
       {defense.some((b) => (b.line.prs ?? 0) > 0) && <BoxBlock title="Pass rush" rows={defense.filter((b) => (b.line.prs ?? 0) > 0)} fp={fp} cols={[
         { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'defSacks', l: 'SCK' }, { k: 'qbHits', l: 'QBH', title: 'QB hits' }, { k: 'hurries', l: 'HUR', title: 'Hurries' },
