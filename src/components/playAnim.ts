@@ -420,6 +420,12 @@ function hash(n: number): number {
 const clampN = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const clampY = (y: number) => clampN(y, 1.2, FIELD_H - 1.2)
 const clampX = (x: number) => clampN(x, 1, FIELD_W - 1)
+/** animflow r6c2: one time step, kept on the field without snapping a man who starts outside the clamp (a deep safety behind the end line) back in a frame. */
+const stepIn = (p: Pt, v: Pt, dt: number): Pt => {
+  const x = p.x + v.x * dt
+  const y = p.y + v.y * dt
+  return { x: clampN(x, Math.min(1, p.x), Math.max(FIELD_W - 1, p.x)), y: clampN(y, Math.min(1.2, p.y), Math.max(FIELD_H - 1.2, p.y)) }
+}
 /** The snap beat: the ball leaves the LOS for the QB. */
 const SNAP = 0.14
 
@@ -1188,7 +1194,7 @@ function gangPursuit(m: Record<string, Mover>, keys: string[], fromSec: number, 
       const al = Math.hypot(ax, ay)
       if (al > acc) { ax *= acc / al; ay *= acc / al }
       v = { x: v.x + ax * dt, y: v.y + ay * dt }
-      p = { x: clampX(p.x + v.x * dt), y: clampY(p.y + v.y * dt) }
+      p = stepIn(p, v, dt)
       mv.path.push({ t, x: p.x, y: p.y })
     }
     mv.t = t
@@ -1271,7 +1277,7 @@ function capAt(mv: Mover, t: number) {
         for (let i = 0; i <= n; i++) {
           const u = i / n
           const d = vStart * span * (u - (u * u) / 2)
-          mv.path.push({ t: tStart + span * u, x: clampX(pStart.x + (h.x / hl) * d), y: clampY(pStart.y + (h.y / hl) * d) })
+          mv.path.push({ t: tStart + span * u, x: clampN(pStart.x + (h.x / hl) * d, Math.min(1, pStart.x), Math.max(FIELD_W - 1, pStart.x)), y: clampN(pStart.y + (h.y / hl) * d, Math.min(1.2, pStart.y), Math.max(FIELD_H - 1.2, pStart.y)) })
         }
         const last = mv.path[mv.path.length - 1]
         mv.t = last.t
@@ -1839,7 +1845,10 @@ function passProtect(
     const headY = dbl ? pl.pts[0].y : lane[bs[0]]
     runTimed(m[r], [{ x: pl.pts[0].x, y: headY }], m[r].t, pl.teP, false, true)
     pocketPair(m, r, bs, pl.teP, engage, pushOf(r, bs), pseed + pi * 7, undefined, drift)
-    const t0 = Math.max(m[r].t, engage)
+    // animflow r6c2: never later than the move needs to get him off the block
+    // before the recorded moment, whatever the pocket did (a long hand-fight).
+    const t0 = Math.min(Math.max(m[r].t, engage), Math.max(pl.teP + 0.05, opts.arriveSec - 0.35))
+    if (m[r].t > t0) seek(m[r], t0)
     const bm = bs.reduce((a, b) => ({ x: a.x + m[b].x / bs.length, y: a.y + m[b].y / bs.length }), { x: 0, y: 0 })
     let leg = legFrom({ x: Math.min(bm.x, m[r].x - 0.5), y: bm.y })
     if (mv === 'spin') {
@@ -1863,6 +1872,7 @@ function passProtect(
     bs.forEach((b, i) => {
       const mb = m[b]
       if (mb.t < t0) mb.hold(t0 - mb.t)
+      else if (mb.t > t0) seek(mb, t0)
       const away = dbl ? (mb.y >= bm.y ? 1 : -1) : -s
       const lurch: Pt = mv === 'bull' || dbl ? { x: mb.x - 0.2, y: mb.y + away * 0.75 } // shoved aside, off balance
         : mv === 'speed' ? { x: mb.x - 0.25, y: mb.y - s * 0.2 } // turned, his hips open: the edge is gone
@@ -1874,6 +1884,14 @@ function passProtect(
     })
   }
   plan.forEach((pl, pi) => {
+    // animflow r6c2: the recorded winner whose block could only start in the
+    // last half-second before the moment (a quick throw, a long walk to the
+    // wall) has no time to beat it with a move: he is the man the protection
+    // never got a hand on — straight past the blocker's shoulder, untouched.
+    if (pl.r === opts.winner && pl.bs.length && pl.teP + 0.5 > opts.arriveSec) {
+      runTimed(m[pl.r], pl.burst.length ? pl.burst : pl.after, m[pl.r].t, opts.arriveSec, false, true, 1.6)
+      return
+    }
     for (const b of pl.bs) busy.add(b)
     const final = pl.r === opts.winner ? pl.burst : pl.after
     if (!final.length) {
@@ -3209,7 +3227,7 @@ function glideTo(mv: Mover, P: Pt, T: number, vEnd: number) {
     const t = (Tg * i) / n
     const sdist = Math.min(L, sp * t + ((v1 - sp) * t * t) / (2 * Tg))
     const q = at(sdist)
-    mv.path.push({ t: mv.t + t, x: clampX(q.x), y: clampY(q.y) })
+    mv.path.push({ t: mv.t + t, x: clampN(q.x, Math.min(1, s0.x), Math.max(FIELD_W - 1, s0.x)), y: clampN(q.y, Math.min(1.2, s0.y), Math.max(FIELD_H - 1.2, s0.y)) })
   }
   mv.t += Tg
   mv.x = P.x
@@ -3291,7 +3309,7 @@ function pursuitLeg(mv: Mover, carrierPath: WP[], untilSec: number, near: number
     if (al > acc) { ax *= acc / al; ay *= acc / al }
     v = { x: v.x + ax * dt, y: v.y + ay * dt }
     t += dt
-    p = { x: clampX(p.x + v.x * dt), y: clampY(p.y + v.y * dt) }
+    p = stepIn(p, v, dt)
     mv.path.push({ t, x: p.x, y: p.y })
   }
   mv.t = t
@@ -3361,7 +3379,7 @@ function angleChase(m: Record<string, Mover>, keys: string[], fromSec: number, c
       if (al > acc) { ax *= acc / al; ay *= acc / al }
       v = { x: v.x + ax * dt, y: v.y + ay * dt }
       t += dt
-      p = { x: clampX(p.x + v.x * dt), y: clampY(p.y + v.y * dt) }
+      p = stepIn(p, v, dt)
       mv.path.push({ t, x: p.x, y: p.y })
     }
     mv.t = t
