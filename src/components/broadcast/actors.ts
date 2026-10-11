@@ -62,6 +62,7 @@ import {
   type FigureScreen,
   type Kit,
   type PoseParams,
+  groundEllipsePath,
 } from './figures.ts'
 import { holderAt, posAt } from './interp.ts'
 import type { ClubLike } from './palette.ts'
@@ -332,6 +333,12 @@ export class ActorLayer {
   addItems?: (scene: Scene, out: SceneItem[]) => void
   /** B4: turf-level drawing under every body, after the shadows. */
   ground?: (scene: Scene) => void
+  /** animflow r6a (user request): a ground ring round the man with the ball. */
+  holderRing = true
+  /** Pulse the ring (off = static, e.g. Lite quality / reduced motion). */
+  ringPulse = true
+  /** The last frame's ring (checks): the holder it was drawn for, or null. */
+  lastRing: string | null = null
   /** SL1: sideline people (team areas, officials, chain crew), depth-sorted with the figures. */
   people?: (scene: Scene, out: SceneItem[]) => void
   /** B6: visible actors after the last frame (canvas px). */
@@ -636,6 +643,29 @@ export class ActorLayer {
     drawShadows(ctx, cam, figs)
     if (this.drawBall) drawBallShadow(ctx, cam, ball)
     this.ground?.(scene)
+    // The ball carrier's ring: on the turf, before the figures so his body
+    // overlaps it; only while somebody really holds the ball (none in flight
+    // or loose). Bright yellow with a dark outline (never a team colour).
+    this.lastRing = null
+    if (this.holderRing && holder && bc.carried) {
+      const tr = this.byKey.get(holder)
+      const hf = tr ? tr.fig : null
+      if (hf && tr?.scr) {
+        const pulse = this.ringPulse ? 0.5 + 0.5 * Math.sin(seconds * 2 * Math.PI * 1.4) : 0.5
+        const r = 0.95 + 0.08 * pulse
+        ctx.save()
+        ctx.beginPath()
+        groundEllipsePath(ctx, cam, hf.x, hf.y, r, r)
+        ctx.lineWidth = Math.max(2.4, tr.scr.h * 0.07)
+        ctx.strokeStyle = 'rgba(10,12,8,0.6)'
+        ctx.stroke()
+        ctx.lineWidth = Math.max(1.3, tr.scr.h * 0.04)
+        ctx.strokeStyle = `rgba(255,230,70,${(0.8 + 0.2 * pulse).toFixed(3)})`
+        ctx.stroke()
+        ctx.restore()
+        this.lastRing = holder
+      }
+    }
     if (this.drawBall && bp) items.push({ kind: 'ball', key: 'ball', depth: ball.depth, order: 1000, draw: (g) => drawBallPlaceholder(g, cam, ball, info.dpr) })
     if (this.addItems) {
       const extra: SceneItem[] = []

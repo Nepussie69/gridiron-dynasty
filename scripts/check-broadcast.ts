@@ -83,6 +83,7 @@ import { ballState } from '../src/components/broadcast/ball.ts'
 import { createBallFx, withBallFx } from '../src/components/broadcast/ballFx.ts'
 import { buildFxSchedule, EVENT_FX, SHAKE_YARDS, shakeAt } from '../src/components/broadcast/fxSchedule.ts'
 import type { AnimEventKind } from '../src/components/playAnim.ts'
+import { holderAt as r6HolderAt, posAt as r6PosAt } from '../src/components/broadcast/interp.ts'
 import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
@@ -926,6 +927,42 @@ ok("B4: the composer drives B3's layer (placeholder off, ball + effects in the d
   assert.deepEqual(rm.shakePose(frame.camera, 0.5), frame.camera)
 })
 
+ok('animflow r6a: a ring is drawn round the ball holder, never while the ball is in the air', () => {
+  const anim: BroadcastAnim = {
+    ...fxAnim('catch'),
+    actors: [
+      { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 40, y: 26 }, { t: 1, x: 39, y: 26 }] },
+      { key: 'wr0', side: 'off', role: 'WR', path: [{ t: 0, x: 42, y: 20 }, { t: 0.5, x: 52, y: 22 }, { t: 1, x: 58, y: 22 }] },
+      { key: 'lb', side: 'def', role: 'LB', path: [{ t: 0, x: 46, y: 27 }, { t: 1, x: 55, y: 24 }] },
+    ],
+    ball: [{ t: 0, x: 40, y: 26 }, { t: 0.3, x: 40, y: 26 }, { t: 0.5, x: 52, y: 22 }, { t: 1, x: 58, y: 22 }],
+    holders: [{ t: 0, key: 'qb' }, { t: 0.3, key: null }, { t: 0.5, key: 'wr0' }],
+    flights: [{ t0: 0.3, t1: 0.5, height: 3 }],
+  }
+  const l = new ActorLayer()
+  l.setPlay({ anim, offClub: NFL0, defClub: NFL1, offHome: true })
+  const fl = anim.flights[0]
+  assert.ok(fl, 'synthetic catch has a flight')
+  const at = (t: number, x: number) => {
+    const frame = frameFor(1, x)
+    l.t = t
+    l.hook(stubCtx(), makeCamera(frame.camera, VP), frame, { dpr: 1, ...VP })
+    return l.lastRing
+  }
+  const ballX = (t: number) => r6PosAt(anim.ball, t).x
+  const pre = Math.max(0.01, fl.t0 - 0.05)
+  const holdPre = r6HolderAt(anim.holders, pre)
+  assert.ok(holdPre, 'someone holds the ball before the throw')
+  assert.equal(at(pre, ballX(pre)), holdPre, 'the ring is on the passer before the throw')
+  const mid = (fl.t0 + fl.t1) / 2
+  assert.equal(at(mid, ballX(mid)), null, 'no ring while the ball is in the air')
+  const post = Math.min(0.99, fl.t1 + 0.05)
+  const holdPost = r6HolderAt(anim.holders, post)
+  if (holdPost) assert.equal(at(post, ballX(post)), holdPost, 'the ring follows the catch')
+  l.holderRing = false
+  assert.equal(at(pre, ballX(pre)), null, 'ring can be switched off')
+})
+
 // ── B6b: telestrator replay ──────────────────────────────────────────────────
 
 /** Synthetic 3rd-down sack: double team on dl0, OL ring, dl1 gets home (5 s). */
@@ -1758,6 +1795,7 @@ ok('animflow r5: kick / punt returns move all 21 others (lanes, wall, gunners vs
   const { actorPlayers } = await import('../src/components/jersey.ts')
   const cam = await import('../src/components/broadcast/camera.ts')
   const { createBroadcastDirector } = await import('../src/components/broadcast/directorRules.ts')
+  const pc = await import('../src/components/broadcast/phoneCamera.ts')
   ok('animflow r5: the carrier stays inside the safe frame above the controls on every frame (harness plays)', () => {
     store.useGame.getState().startCareer({ name: 'C', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
     const world = store.getWorld()
@@ -1793,6 +1831,49 @@ ok('animflow r5: kick / punt returns move all 21 others (lanes, wall, gunners vs
       if (carried) plays++
     }
     assert.ok(plays > 80 && frames > 10000, `harness coverage ${plays} plays / ${frames} frames`)
+  })
+  // animflow r6a (user request): the play starts a little zoomed out — at frame 0 every
+  // on-field player is inside the frame with a margin, desktop and 375 px phone.
+  ok('animflow r6a: frame 0 is wide — every on-field player inside with a margin (desktop 1280), the formation core on a 375 px phone', () => {
+    store.useGame.getState().startCareer({ name: 'C', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const sim = simulatePlayByPlay(world, nfl[0].id, nfl[1].id, world.seed + 13)
+    const misses: string[] = []
+    let checked = 0
+    const CORE = /^(ol\d|qb|rb|fb|te|dl\d|lb\d)$/
+    for (const [profile, W, H, clear] of [['live', 1280, 720, 48], ['phone', 351, 480, 0]] as const) {
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (!['run', 'pass', 'kickoff', 'punt'].includes(play.type)) continue
+        if (profile === 'phone' && play.type === 'kickoff') continue
+        const other = play.offId === nfl[0].id ? nfl[1].id : nfl[0].id
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const d = createBroadcastDirector({ profile, viewport: { w: W, h: H }, bottomClearPx: clear })
+        d.reset(play, anim)
+        let pose = d.toCamera(d.shotAt(0))
+        if (profile === 'phone') {
+          const b = posAt(anim.ball, 0)
+          pose = pc.applyCameraProfile(pose, pc.CAMERA_PROFILES.phone, { strongSideY: 32.5, carrier: null, ball: { x: b.x, y: b.y, z: 0 }, losX: b.x, direction: 1, phase: 'live', viewport: { w: W, h: H }, wide: 1 })
+        }
+        const c = cam.makeCamera(pose, { width: W, height: H })
+        for (const a of anim.actors) {
+          // Kickoffs: the receiving unit is 40-60 yd away, behind the kick-side camera rig;
+          // the kicking unit at the ball is the pre-kick subject. Phone: the formation core.
+          if (play.type === 'kickoff' && a.side === 'off') continue
+          const p = posAt(a.path, 0)
+          // Phone (portrait, ~20 yd wide): the box — linemen, backs, backers within 9 yd of the ball.
+          if (profile === 'phone' && (!CORE.test(a.key) || Math.abs(p.y - posAt(anim.ball, 0).y) > 9)) continue
+          const s = cam.project(c, p.x, p.y, 0)
+          const m = 0.02
+          const inside = !!s && s.x >= W * m && s.x <= W * (1 - m) && s.y >= H * m && s.y <= H - Math.max(clear, H * m)
+          checked++
+          if (!inside) misses.push(`${profile} play ${i} ${play.type} ${a.key} (${s ? s.x.toFixed(0) + ',' + s.y.toFixed(0) : 'behind'})`)
+        }
+      }
+    }
+    assert.ok(checked > 3000, `coverage ${checked}`)
+    assert.ok(misses.length === 0, `${misses.length} players outside the frame at the start: ${misses.slice(0, 6).join('; ')}`)
   })
 }
 
