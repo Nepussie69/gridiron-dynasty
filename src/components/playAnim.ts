@@ -2365,13 +2365,15 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       const cv = fl.velOf(carrier, t)
       const lead = { x: c.x + cv.x * 0.4 - a.x, y: c.y + cv.y * 0.4 - a.y }
       const ll = Math.hypot(lead.x, lead.y) || 1
-      const dx = -pr.ay * s * 1.0 + (lead.x / ll) * 0.9
-      const dy = pr.ax * s * 1.0 + (lead.y / ll) * 0.9
+      // animflow r6d: the rip clears the blocker's hip harder (more across his face, a sharper first
+      // step) — run sheds were 0.9 yd off the blocker 0.3 s after the shed vs the NFL's ~1.8 (BDB).
+      const dx = -pr.ay * s * 1.6 + (lead.x / ll) * 0.9
+      const dy = pr.ax * s * 1.6 + (lead.y / ll) * 0.9
       const dl = Math.hypot(dx, dy) || 1
       const rip = { x: a.x + (dx / dl) * 6, y: a.y + (dy / dl) * 6 }
       const close = pursueBrain(def, DEF_KEYS.indexOf(def))
       const t1 = t + RIP_SEC
-      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(5, me.mv.pace.top * 0.85), burst: 4.2 } : close(tt, me, f2))
+      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(6, me.mv.pace.top * 0.95), burst: 5.5 } : close(tt, me, f2))
       if (def === creditedKey) {
         credShed = t
         a.noBlock = true
@@ -2390,10 +2392,11 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       // animflow r6c: beaten — his weight carries him on into the space his
       // man left (over-extended, turned), then he turns and chases.
       const s = ripSide(fl, pr)
-      const lunge = { x: clampX(a.x + pr.ax * 0.45 + pr.ay * s * 0.5), y: clampY(a.y + pr.ay * 0.45 - pr.ax * s * 0.5) }
+      // animflow r6d: he falls off the other way (his momentum was into the man who just left him).
+      const lunge = { x: clampX(a.x + pr.ax * 0.8 + pr.ay * s * 0.9), y: clampY(a.y + pr.ay * 0.8 - pr.ax * s * 0.9) }
       a.recover = 0
       const chase = pursue(carrier, { keep: () => 3.4, speed: 0.45, lead: 0.3 })
-      a.brain = (tt, me, f2) => (tt < t + 0.6 ? { x: lunge.x, y: lunge.y, speed: 2, burst: 1.5 } : chase(tt, me, f2))
+      a.brain = (tt, me, f2) => (tt < t + 0.7 ? { x: lunge.x, y: lunge.y, speed: 3, burst: 2.5 } : chase(tt, me, f2))
     },
   }, seed)
   field.script(m[carrier])
