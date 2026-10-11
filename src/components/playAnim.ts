@@ -25,7 +25,7 @@ import type { Play } from '../game/engine/playsim'
 import type { Player } from '../game/types'
 import { ROUTES, type RouteDef, type WP } from '../game/data/routes'
 import { formationForConcept, formationHasFullback, playbookPlay, treeFor } from '../game/data/playbookData'
-import { presentAnim, type BroadcastAnim } from './broadcast/animData'
+import { presentAnim, throwHand, THROW_TIMING, type BroadcastAnim, type ThrowStyle } from './broadcast/animData'
 import { LiveField, pursue, phases, holdSpot, livePos, type Brain, type PairPlan } from './playLive'
 
 export const FIELD_W = 120
@@ -59,6 +59,8 @@ export interface PlayAnim {
   engagements?: Engagement[]
   /** Recorded beats of the play, in time order (B1). */
   events?: AnimEvent[]
+  /** How the quarterback throws (animflow round 3; passes only). */
+  throwStyle?: ThrowStyle
 }
 
 export interface AnimContext {
@@ -421,6 +423,51 @@ export function liftAt(anim: PlayAnim, t: number): number {
     if (t > f.t0 && t < f.t1) return Math.sin(Math.PI * ((t - f.t0) / (f.t1 - f.t0))) * f.height
   }
   return 0
+}
+
+/**
+ * Top-down view of the QB's throw (animflow round 3): the throwing arm (from the
+ * shoulder to the hand) and the off arm, in the offense frame, through the same
+ * wind-up / release / follow-through as the 2.5D figure (THROW_TIMING), and
+ * where the ball is drawn: in the hand until the release, then easing onto its
+ * flight in the first 0.12 s. Null outside the throw.
+ */
+export function qbThrowAt(anim: PlayAnim, t: number): {
+  shoulder: Pt; hand: Pt; off: Pt | null; offShoulder: Pt; ball: Pt | null; ballMix: number
+} | null {
+  const style = anim.throwStyle
+  const f = anim.flights[0]
+  const qb = anim.actors.find((a) => a.key === 'qb')
+  if (!style || !f || !qb) return null
+  const D = Math.max(0.05, anim.duration / 1000)
+  const T = THROW_TIMING[style]
+  const age = (t - f.t0) * D + T.wind
+  if (age < 0 || age > T.wind + T.follow) return null
+  const sm = (u: number) => { const v = u < 0 ? 0 : u > 1 ? 1 : u; return v * v * (3 - 2 * v) }
+  const cock = sm(age / (T.wind * 0.75))
+  const rel = sm((age - (T.wind - 0.07)) / 0.13)
+  const thf = sm((age - (T.wind + 0.04)) / Math.max(0.1, T.follow - 0.1))
+  const oa = sm(age / (T.wind * 0.6)) * (1 - thf)
+  const q = posAt(qb.path, t)
+  const c = posAt(anim.ball, f.t1)
+  const l = Math.hypot(c.x - q.x, c.y - q.y) || 1
+  const u = { x: (c.x - q.x) / l, y: (c.y - q.y) / l }
+  const n = { x: u.y, y: -u.x } // throwing side
+  const at = (a: number, b: number): Pt => ({ x: q.x + u.x * a + n.x * b, y: q.y + u.y * a + n.y * b })
+  const quick = style === 'quick' || style === 'hurry' ? 0.75 : 1
+  const lerpN = (a: number, b: number, k: number) => a + (b - a) * k
+  // along / across: carry → ear (back and out) → over the top → across the body
+  let fa = lerpN(0.7, -1.2 * quick, cock)
+  let fb = lerpN(0.5, 1.3, cock)
+  fa = lerpN(fa, 2.5 * quick, rel)
+  fb = lerpN(fb, style === 'quick' ? 1.1 : 0.5, rel)
+  fa = lerpN(fa, 1.3, thf)
+  fb = lerpN(fb, -1.5, thf)
+  const hand = at(fa, fb)
+  const off = oa > 0.05 ? at(lerpN(0.4, 2.3, oa), lerpN(-0.6, -0.5, oa)) : null
+  const tRel = f.t0
+  const mix = t <= tRel ? 1 : Math.max(0, 1 - ((t - tRel) * D) / 0.12)
+  return { shoulder: at(0, 0.9), hand, off, offShoulder: at(0, -0.9), ball: mix > 0 ? hand : null, ballMix: mix }
 }
 
 export function holderAt(anim: PlayAnim, t: number): string | null {
@@ -1168,13 +1215,20 @@ function applyBlockEngagements(
 }
 
 // ── plays ────────────────────────────────────────────────────────────────────
+/** buildPass's throw style (the builders return finish()'s PlayAnim). */
+let LAST_THROW_STYLE: ThrowStyle | undefined
 export function buildPlayAnim(play: Play, ctx: AnimContext = {}): BroadcastAnim {
   const buildRaw = (): PlayAnim => {
     switch (play.type) {
       case 'run':
         return buildRun(play, ctx)
       case 'pass':
-        return play.result.startsWith('Sack') ? buildSack(play, ctx) : buildPass(play, ctx)
+        if (play.result.startsWith('Sack')) return buildSack(play, ctx)
+        LAST_THROW_STYLE = undefined
+        {
+          const a = buildPass(play, ctx)
+          return LAST_THROW_STYLE ? { ...a, throwStyle: LAST_THROW_STYLE } : a
+        }
       case 'punt':
         return buildPunt(play, ctx)
       case 'fg':
@@ -2778,7 +2832,14 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const flightSec = flightFor(Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y))
   const releaseSec = Math.max(minRel, catchSec - flightSec)
   // Set in the pocket until the throw: he hitches up and keeps his feet alive.
-  if (m.qb.t < releaseSec - 0.1) pocketPair(m, null, ['qb'], m.qb.t, releaseSec, -0.6, seed + 77)
+  // A bootleg (or a scramble that is still escaping) throws on the move: he
+  // keeps rolling through the release (animflow round 3).
+  const rollOn = boot || (scramble && releaseSec - m.qb.t < 0.7)
+  if (rollOn && m.qb.t < releaseSec - 0.05) {
+    const ry = rollY > MID_Y ? 1 : -1
+    const dist = (releaseSec + 0.3 - m.qb.t) * 3.2
+    runTimed(m.qb, [{ x: clampX(m.qb.x + dist * 0.35), y: clampY(m.qb.y + ry * dist * 0.94) }], m.qb.t, releaseSec + 0.3, false, false)
+  } else if (m.qb.t < releaseSec - 0.1) pocketPair(m, null, ['qb'], m.qb.t, releaseSec, -0.6, seed + 77)
   const releasePos = posAt(m.qb.path, releaseSec)
   recEv(releaseSec, 'throw', ['qb', tgt], releasePos)
   if (scramble) {
@@ -2825,19 +2886,73 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // Linemen release downfield toward the ball.
     jogTo(mv, { x: clampX(Math.max(mv.x + 3, playTo.x - 4)), y: mv.y + (playTo.y - mv.y) * 0.45 }, 3.6)
   }
-  // The passer follows through, then drifts toward the throw.
+  // ── the throw (animflow round 3) ──────────────────────────────────────────
+  // How he throws: on the move (boot / scramble / still running at the
+  // release), hurried (a rusher on him), a deep shot, quick game, or a normal
+  // dropback throw. The motion is timed to the release set above.
+  const qbSpdAt = (t: number) => {
+    const a = posAt(m.qb.path, Math.max(0, t - 0.06))
+    const b = posAt(m.qb.path, t + 0.06)
+    return Math.hypot(b.x - a.x, b.y - a.y) / 0.12
+  }
+  const rushGap = Math.min(...rushers.map((k) => {
+    const p = posAt(m[k].path, releaseSec)
+    return Math.hypot(p.x - releasePos.x, p.y - releasePos.y)
+  }))
+  const throwStyle: ThrowStyle = qbSpdAt(releaseSec) > 1.6 ? 'run'
+    : scramble || rushGap < 1.9 ? 'hurry'
+    : depth >= 20 ? 'deep'
+    : bucket === 'quick' || bucket === 'screen' ? 'quick' : 'normal'
+  const thT = THROW_TIMING[throwStyle]
+  LAST_THROW_STYLE = throwStyle
+  const toTgt = (() => {
+    const dx = catchPt.x - releasePos.x
+    const dy = catchPt.y - releasePos.y
+    const l = Math.hypot(dx, dy) || 1
+    return { x: dx / l, y: dy / l }
+  })()
+  // The passer: a step toward the target into the release (a fade away from
+  // the rush when hurried; none on the run), the follow-through with his feet
+  // set, then he drifts toward the throw watching the ball.
   {
     const q = m.qb
-    if (q.t < releaseSec) q.hold(releaseSec - q.t)
-    else seek(q, releaseSec)
+    if (throwStyle !== 'run') {
+      const t0 = releaseSec - 0.12
+      if (q.t < t0) q.hold(t0 - q.t)
+      else seek(q, t0)
+      const stepLen = throwStyle === 'hurry' ? -0.45 : throwStyle === 'quick' ? 0.3 : 0.42
+      const sx = throwStyle === 'hurry' ? -1 : toTgt.x
+      const sy = throwStyle === 'hurry' ? 0 : toTgt.y
+      runTimed(q, [{ x: clampX(q.x + sx * Math.abs(stepLen)), y: clampY(q.y + sy * Math.abs(stepLen)) }], q.t, releaseSec + 0.1, false, true)
+      q.hold(Math.max(0, releaseSec + thT.follow - q.t))
+    } else {
+      // On the run: he carries his momentum through the release.
+      const ry = rollY > MID_Y ? 1 : -1
+      if (q.t < releaseSec) q.hold(releaseSec - q.t)
+      else seek(q, releaseSec)
+      jogTo(q, { x: clampX(q.x + 0.5), y: clampY(q.y + ry * 1.1) }, 2.6)
+    }
     jogTo(q, { x: q.x + 1.2, y: q.y + (catchPt.y - q.y) * 0.05 }, 2.0)
     jogTo(q, { x: q.x + Math.max(3, (playTo.x - q.x) * 0.35), y: q.y + (playTo.y - q.y) * 0.35 }, 2.4)
   }
 
-  const ball: WP[] = snapBall(m, los, releaseSec)
+  // The ball rides in his hand: back to the ear through the wind-up, then out
+  // over the top; the flight leaves from the hand at the release frame.
+  const handAt = (t: number): Pt => {
+    const p = posAt(m.qb.path, t)
+    const off = throwHand(throwStyle, releaseSec - t).off
+    return { x: clampX(p.x + toTgt.x * off), y: clampY(p.y + toTgt.y * off) }
+  }
+  const windT0 = Math.max(SNAP + 0.05, releaseSec - thT.wind)
+  const ball: WP[] = snapBall(m, los, windT0)
+  for (let i = 1; i <= 8; i++) {
+    const t = windT0 + (releaseSec - windT0) * (i / 8)
+    ball.push({ t, ...handAt(t) })
+  }
+  const handRel = handAt(releaseSec)
   const bias = clampN((70 - accuracy) * 0.03, -0.5, 1.0)
   ball.push(
-    { t: (releaseSec + catchSec) / 2, x: clampX((releasePos.x + catchPt.x) / 2 + bias), y: clampY((releasePos.y + catchPt.y) / 2) },
+    { t: (releaseSec + catchSec) / 2, x: clampX((handRel.x + catchPt.x) / 2 + bias), y: clampY((handRel.y + catchPt.y) / 2) },
     { t: catchSec, x: catchPt.x, y: catchPt.y },
   )
   const flights = [{ t0: releaseSec, t1: catchSec, height: Math.min(1, 0.35 + depth / 40) }]

@@ -55,7 +55,7 @@ import {
   type PoseParams,
 } from '../src/components/broadcast/figures.ts'
 import { ActorLayer } from '../src/components/broadcast/actors.ts'
-import { presentAnim, type BroadcastAnim } from '../src/components/broadcast/animData.ts'
+import { ballZAt, presentAnim, THROW_STATE, THROW_TIMING, throwHand, type BroadcastAnim, type ThrowStyle } from '../src/components/broadcast/animData.ts'
 import { LiveField, livePos, pursue, PAIR_GAP, type LiveMover } from '../src/components/playLive.ts'
 import type { BroadcastFrame } from '../src/components/broadcast/renderer.ts'
 import { readFileSync } from 'node:fs'
@@ -1445,6 +1445,63 @@ ok('animflow: the carrier stumbles at first contact and the tackler wraps him up
   const fw = pa.facing.lb1.find((x) => x.t0 <= 0.8 && x.t1 >= 0.8)
   assert.ok(fw && fw.mode === 'actor' && fw.key === 'rb', `lb1 faces the carrier: ${JSON.stringify(fw)}`)
   assert.ok(pa.poses.lb1.some((w) => w.state === 'dive' || w.state === 'down'), 'tackler goes down')
+})
+
+ok('animflow r3: the QB throw is a set, wind-up, release at the flight start and a follow-through, per style (ball in the hand)', () => {
+  const mk = (style: ThrowStyle) => {
+    const D = 5
+    const R = 2.6 / D
+    const anim = {
+      duration: D * 1000,
+      actors: [
+        { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26.65 }, { t: 0.04, x: 30, y: 26.65 }, { t: 0.3, x: 27.4, y: 26.65 }, { t: 0.6, x: 27.6, y: 26.65 }, { t: 1, x: 31, y: 26 }] },
+        { key: 'wr0', side: 'off', role: 'WR', path: [{ t: 0, x: 35, y: 10 }, { t: 0.7, x: 47, y: 14 }, { t: 1, x: 52, y: 15 }] },
+        { key: 'cb0', side: 'def', role: 'CB', path: [{ t: 0, x: 42, y: 10 }, { t: 0.7, x: 48, y: 13 }, { t: 1, x: 52, y: 14 }] },
+      ],
+      ball: [{ t: 0, x: 35, y: 26.65 }, { t: 0.03, x: 30, y: 26.65 }, { t: R, x: 27.6, y: 26.65 }, { t: 0.7, x: 47, y: 14 }, { t: 1, x: 52, y: 15 }],
+      holders: [{ t: 0, key: null }, { t: 0.03, key: 'qb' }, { t: R, key: null }, { t: 0.7, key: 'wr0' }],
+      flights: [{ t0: R, t1: 0.7, height: 0.6 }],
+      engagements: [],
+      events: [{ t: 0.03, kind: 'snap', keys: ['ol2', 'qb'], spot: { x: 35, y: 26.65 } }, { t: R, kind: 'throw', keys: ['qb', 'wr0'], spot: { x: 27.6, y: 26.65 } }, { t: 0.7, kind: 'catch', keys: ['wr0'], spot: { x: 47, y: 14 } }],
+      throwStyle: style,
+    } as unknown as BroadcastAnim
+    const play = { type: 'pass', concept: 'Smash', result: 'Complete', startYard: 25, endYard: 42, yards: 17 } as unknown as Play
+    return { pa: presentAnim(anim, play), D, R }
+  }
+  const p = {} as PoseParams
+  for (const style of ['normal', 'quick', 'deep', 'run', 'hurry'] as ThrowStyle[]) {
+    const { pa, D, R } = mk(style)
+    const T = THROW_TIMING[style]
+    const st = THROW_STATE[style]
+    const w = pa.poses.qb.find((x) => x.state === st)
+    assert.ok(w, `${style}: throw window ${JSON.stringify(pa.poses.qb)}`)
+    assert.ok(Math.abs(w!.t0 - (R - T.wind / D)) < 1e-6, `${style}: wind-up starts ${T.wind} s before the release`)
+    assert.ok(Math.abs(w!.t1 - (R + T.follow / D)) < 1e-6, `${style}: follow-through lasts ${T.follow} s`)
+    // The drop is done and he is set before the wind-up.
+    assert.ok(pa.poses.qb.some((x) => x.state === 'set' && x.t1 <= w!.t0 + 1e-9), `${style}: set before the throw ${JSON.stringify(pa.poses.qb)}`)
+    // The pose library is in step with THROW_TIMING: ball at the ear before the
+    // release, the arm coming through at the release frame, across after it.
+    poseParams(st, T.wind - 0.07, T.wind + T.follow, p)
+    assert.ok(p.thr > 0.7 && p.rel === 0 && p.oa > 0.9, `${style}: cocked, off arm out ${JSON.stringify(p)}`)
+    poseParams(st, T.wind, T.wind + T.follow, p)
+    assert.ok(p.rel > 0.3 && p.rel < 0.8 && p.thf === 0, `${style}: release frame mid-arm ${JSON.stringify(p)}`)
+    poseParams(st, T.wind + T.follow - 0.01, T.wind + T.follow, p)
+    assert.ok(p.thf > 0.85, `${style}: follow-through ${p.thf}`)
+    // The ball is in the hand: at the ear late in the wind-up, at the release height at the flight start.
+    assert.ok(Math.abs(ballZAt(pa, R) - throwHand(style, 0).z) < 1e-6, `${style}: flight leaves from the hand ${ballZAt(pa, R)}`)
+    assert.ok(ballZAt(pa, R - 0.08 / D) > 1.6 && ballZAt(pa, R - T.wind / D) < 1.3, `${style}: ball to the ear in the wind-up`)
+    assert.ok(throwHand(style, 0.08).off < 0 && throwHand(style, 0).off > 0, `${style}: back then out over the top`)
+    // Shoulders to the target through the motion, and he watches the ball after.
+    for (const tt of [R - T.wind / D, R, R + T.follow / D, 0.65]) {
+      const fw = pa.facing.qb.find((x) => x.t0 <= tt + 1e-9 && x.t1 >= tt - 1e-9)
+      assert.ok(fw && fw.mode === 'actor' && fw.key === 'wr0', `${style}: faces the target at ${tt}: ${JSON.stringify(fw)}`)
+    }
+    if (style === 'run' || style === 'hurry') { poseParams(st, T.wind, 1, p); assert.ok(p.stp === 0, `${style}: no plant`) }
+    if (style === 'normal') { poseParams(st, T.wind + 0.05, 1, p); assert.ok(p.stp > 0.9, 'normal: stride planted at the release') }
+  }
+  assert.ok(THROW_TIMING.quick.wind < THROW_TIMING.normal.wind && THROW_TIMING.deep.wind > THROW_TIMING.normal.wind, 'quick shorter, deep longer')
+  poseParams('throwQuick', 0.1, 0.4, p)
+  assert.ok(p.qtr === 1, 'quick game is three-quarter')
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)

@@ -219,9 +219,19 @@ export interface PoseParams {
   tk: number
   /** Jostle (engaged in a block). */
   jos: number
-  /** Throw: wind-up 0..1, then release 0..1. */
+  /** Throw: wind-up 0..1 (ball to the ear), then release 0..1 (over the top). */
   thr: number
   rel: number
+  /** Throw follow-through 0..1 (arm across the body). */
+  thf: number
+  /** Off arm pointing at the target 0..1. */
+  oa: number
+  /** Stride toward the target 0..1 (front foot out, back foot pushes). */
+  stp: number
+  /** Arm slot: 0 over the top … 1 three-quarter. */
+  qtr: number
+  /** Release height boost (a lofted deep ball) 0..1. */
+  hi: number
   /** Falling / lying: 0 upright … 1 on the ground. */
   fall: number
   /** Kick: leg swing 0 (plant) … 1 (follow-through). */
@@ -234,9 +244,9 @@ export interface PoseParams {
   run: number
 }
 
-const PKEYS = ['cr', 'af', 'au', 'ln', 'hd', 'tk', 'jos', 'thr', 'rel', 'fall', 'kk', 'kn', 'sp', 'run'] as const
+const PKEYS = ['cr', 'af', 'au', 'ln', 'hd', 'tk', 'jos', 'thr', 'rel', 'thf', 'oa', 'stp', 'qtr', 'hi', 'fall', 'kk', 'kn', 'sp', 'run'] as const
 
-export const ZERO_POSE: Readonly<PoseParams> = Object.freeze({ cr: 0, af: 0, au: 0, ln: 0, hd: 0, tk: 0, jos: 0, thr: 0, rel: 0, fall: 0, kk: 0, kn: 0, sp: 0, run: 1 })
+export const ZERO_POSE: Readonly<PoseParams> = Object.freeze({ cr: 0, af: 0, au: 0, ln: 0, hd: 0, tk: 0, jos: 0, thr: 0, rel: 0, thf: 0, oa: 0, stp: 0, qtr: 0, hi: 0, fall: 0, kk: 0, kn: 0, sp: 0, run: 1 })
 
 export interface PoseDef {
   base: Partial<PoseParams>
@@ -252,6 +262,31 @@ const lerp = (a: number, b: number, u: number) => a + (b - a) * u
 const ease = (u: number) => u * u * (3 - 2 * u)
 const easeOut = (u: number) => 1 - (1 - u) * (1 - u)
 
+/**
+ * The quarterback's throw (animflow round 3), timed so the release frame is at
+ * age `wind` (animData THROW_TIMING; the ball leaves the hand there):
+ *   0 … 0.75·wind  ball back to the ear, off arm points at the target
+ *   wind − 0.07 …  the arm comes over the top (rel), the stride lands (stp)
+ *   wind + 0.04 …  follow-through across the body (thf), chest over the knee
+ * `plant` 0 = on the move (no stride, the legs keep running).
+ */
+function throwDyn(wind: number, follow: number, o: { qtr: number; hi: number; plant: number; lean: number; run: number }): PoseDef['dyn'] {
+  return (age, _len, p) => {
+    const cock = ease(clamp01(age / (wind * 0.75)))
+    p.thr = cock
+    p.rel = ease(clamp01((age - (wind - 0.07)) / 0.13))
+    p.thf = ease(clamp01((age - (wind + 0.04)) / Math.max(0.1, follow - 0.1)))
+    p.oa = ease(clamp01(age / (wind * 0.6))) * (1 - p.thf)
+    p.stp = o.plant * ease(clamp01((age - (wind - 0.14)) / 0.16))
+    p.qtr = o.qtr
+    p.hi = o.hi
+    p.ln = 0.08 - 0.06 * cock + o.lean * p.thf
+    p.cr = 0.1 + 0.1 * p.stp
+    p.af = 0.55 * (1 - cock)
+    p.run = o.run
+  }
+}
+
 /** Every pose state animData emits (keep in sync with animData PoseState; check-broadcast asserts it). */
 export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
   stance3: { base: { cr: 1, ln: 0.75, hd: 1, run: 0 } },
@@ -261,14 +296,14 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
   pedal: { base: { cr: 0.34, ln: 0.1, af: 0.25, run: 0.75 } },
   block: { base: { cr: 0.42, af: 1, ln: 0.42, jos: 1, run: 0.45 } },
   fake: { base: { cr: 0.25, af: 0.9, ln: 0.15, run: 0.6 } },
-  throw: {
-    base: { ln: 0.2, cr: 0.08, run: 0.35 },
-    dyn: (age, len, p) => {
-      const u = age / Math.max(0.15, len)
-      p.thr = clamp01(u / 0.55)
-      p.rel = easeOut(clamp01((u - 0.6) / 0.4))
-    },
-  },
+  // animflow round 3: the set (ball high at the chest, feet under him) and the
+  // throw variants (timings: animData THROW_TIMING, kept in sync by check-broadcast).
+  set: { base: { cr: 0.14, af: 0.55, ln: 0.08, run: 0.45 } },
+  throw: { base: {}, dyn: throwDyn(0.26, 0.32, { qtr: 0, hi: 0, plant: 1, lean: 0.34, run: 0.25 }) },
+  throwQuick: { base: {}, dyn: throwDyn(0.18, 0.26, { qtr: 1, hi: 0, plant: 0.7, lean: 0.22, run: 0.25 }) },
+  throwDeep: { base: {}, dyn: throwDyn(0.32, 0.36, { qtr: 0, hi: 1, plant: 1, lean: 0.4, run: 0.25 }) },
+  throwRun: { base: {}, dyn: throwDyn(0.2, 0.28, { qtr: 0.3, hi: 0, plant: 0, lean: 0.2, run: 0.85 }) },
+  throwHurry: { base: {}, dyn: throwDyn(0.15, 0.22, { qtr: 0.6, hi: 0, plant: 0, lean: 0.05, run: 0.4 }) },
   catch: { base: { au: 1, ln: 0.05, run: 0.8 } },
   carry: { base: { tk: 1, ln: 0.3 } },
   stumble: {
@@ -702,6 +737,7 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
   g.lineJoin = 'round'
 
   const hipY = hipYOf(P)
+  const tl = sdx >= 0 ? -1 : 1 // trailing (throwing / tucking) arm
 
   // ── legs ──
   for (const L of [-1, 1]) {
@@ -714,6 +750,18 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
     let fyp = -Math.max(0, Math.cos(pp)) * amp * 0.09 * (1 + (1 - ad) * 0.5)
     let kx = (hx + fxp) / 2 + sdx * (0.045 * amp + 0.08 * P.cr) + L * 0.025 * P.cr * (1 - ad)
     let ky = (hy + fyp) / 2 + 0.01 * P.cr
+    if (P.stp > 0) {
+      // The throwing stride: the front foot (opposite the arm) steps toward the
+      // target (into the screen when he faces away), the back foot pushes off.
+      if (L === -tl) {
+        fxp += sdx * 0.17 * P.stp
+        fyp -= (1 - ad) * 0.035 * P.stp
+      } else {
+        fxp -= sdx * 0.06 * P.stp
+        fyp += (1 - ad) * 0.01 * P.stp
+      }
+      kx = (hx + fxp) / 2 + sdx * 0.03
+    }
     if (P.kk > 0 && L > 0) {
       // Kicking leg: plant behind, swing through and up.
       const u = P.kk
@@ -749,7 +797,6 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
   g.translate(0, hipY)
   g.rotate(sdx * lean * 0.5)
   g.scale(1, 1 - lean * 0.14 * (1 - ad))
-  const tl = sdx >= 0 ? -1 : 1 // trailing (throwing / tucking) arm
   for (let i = 0; i < 2; i++) {
     const L = i === 0 ? -1 : 1
     const sw = -Math.sin(ph + (L > 0 ? 0 : Math.PI)) * amp
@@ -771,10 +818,23 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
       }
     }
     if (P.thr > 0 && L === tl) {
-      const tx = lerp(-sdx * 0.13 + L * 0.05, sdx * 0.3, P.rel)
-      const ty = lerp(-0.52, -0.33, P.rel)
-      hx = lerp(hx, tx, P.thr)
-      hy = lerp(hy, ty, P.thr)
+      // Throwing hand: chest → ear (wind-up) → over the top / three-quarter
+      // (release) → down across the body (follow-through). animData.throwHand
+      // carries the ball on the same path.
+      const q = P.qtr
+      hx = lerp(hx, -sdx * (0.14 - 0.05 * q) + L * (0.06 + 0.04 * q), P.thr)
+      hy = lerp(hy, -0.52 + 0.04 * q, P.thr)
+      hx = lerp(hx, sdx * (0.2 + 0.06 * q) + L * 0.1 * q, P.rel)
+      hy = lerp(hy, -0.62 + 0.18 * q - 0.06 * P.hi, P.rel)
+      hx = lerp(hx, sdx * 0.14 - L * 0.12, P.thf)
+      hy = lerp(hy, -0.12, P.thf)
+    }
+    if (L === -tl && (P.oa > 0 || P.thf > 0)) {
+      // Off arm: points at the target through the wind-up, tucks in after.
+      hx = lerp(hx, sdx * 0.34 + L * 0.04, P.oa)
+      hy = lerp(hy, -0.42, P.oa)
+      hx = lerp(hx, -sdx * 0.02 + L * 0.14, P.thf * (1 - P.oa))
+      hy = lerp(hy, -0.1, P.thf * (1 - P.oa))
     }
     if (P.tk > 0 && L === tl) {
       hx = lerp(hx, sdx * 0.07 + L * 0.02, P.tk)

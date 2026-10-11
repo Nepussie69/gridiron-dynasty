@@ -36,6 +36,51 @@ interface InB1aInput { engagements?: InEngagement[]; events?: InEvent[] }
 export type PoseState =
   | 'stance3' | 'stance2' | 'stand' | 'run' | 'pedal' | 'block' | 'fake' | 'throw'
   | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold' | 'tackle'
+  | 'set' | 'throwQuick' | 'throwDeep' | 'throwRun' | 'throwHurry'
+
+/**
+ * animflow round 3: how the quarterback throws. playAnim picks it (it knows the
+ * concept, the depth, whether he is on the move and how close the rush is) and
+ * records it on the PlayAnim; the pose library times the motion from it.
+ *   normal  dropback: set, wind-up to the ear, over the top, step, follow-through
+ *   quick   quick game / screens: short three-quarter flick
+ *   deep    longer wind-up, a higher release
+ *   run     on the move (boot / scramble): shoulders turned, no plant
+ *   hurry   a rusher on him: short arm, weight back (fade)
+ */
+export type ThrowStyle = 'normal' | 'quick' | 'deep' | 'run' | 'hurry'
+/** Seconds of wind-up before the release frame and of follow-through after it. */
+export const THROW_TIMING: Record<ThrowStyle, { wind: number; follow: number }> = {
+  normal: { wind: 0.26, follow: 0.32 },
+  quick: { wind: 0.18, follow: 0.26 },
+  deep: { wind: 0.32, follow: 0.36 },
+  run: { wind: 0.2, follow: 0.28 },
+  hurry: { wind: 0.15, follow: 0.22 },
+}
+export const THROW_STATE: Record<ThrowStyle, PoseState> = {
+  normal: 'throw',
+  quick: 'throwQuick',
+  deep: 'throwDeep',
+  run: 'throwRun',
+  hurry: 'throwHurry',
+}
+/**
+ * The ball's offset along the throw (yd, + toward the target) and height (yd)
+ * in the passer's hand `toRel` seconds before the release (negative = after).
+ * Matches the figure's throwing hand: carried at the chest, back to the ear
+ * through the wind-up, then over the top to the release point.
+ */
+export function throwHand(style: ThrowStyle, toRel: number): { off: number; z: number } {
+  const { wind } = THROW_TIMING[style]
+  const a = wind - toRel // age in the throw window
+  if (a <= 0) return { off: 0, z: 1.2 }
+  const cock = smooth01(a / (wind * 0.75))
+  const over = smooth01((a - (wind - 0.07)) / 0.13)
+  const back = style === 'quick' ? -0.18 : style === 'hurry' ? -0.22 : -0.28
+  const top = style === 'deep' ? 2.2 : style === 'quick' ? 1.75 : style === 'hurry' ? 1.82 : style === 'run' ? 1.97 : 2.1
+  return { off: back * cock + (0.4 - back) * over * cock, z: 1.2 + (1.95 - 1.2) * cock + (top - 1.95) * over }
+}
+const smooth01 = (u: number) => { const v = u < 0 ? 0 : u > 1 ? 1 : u; return v * v * (3 - 2 * v) }
 
 export interface PoseWindow { t0: number; t1: number; state: PoseState }
 
@@ -195,6 +240,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const koPlay = type === 'kickoff'
   const flight = anim.flights && anim.flights.length ? anim.flights[0] : undefined
   const kickT = flight ? flight.t0 : 0
+  const throwStyle: ThrowStyle = anim.throwStyle ?? 'normal'
+  const throwT = THROW_TIMING[throwStyle]
 
   const b1a = anim as PlayAnim & InB1aInput
   const engagements: InEngagement[] = Array.isArray(b1a.engagements) ? b1a.engagements : []
@@ -248,7 +295,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       return { z0: 0.7, z1: 0.2 }
     }
     if (koPlay) return touchback ? { z0: 0.15, z1: 0 } : { z0: 0.15, z1: 1.4 }
-    if (type === 'pass') return inc ? { z0: 2.0, z1: 0.2 } : { z0: 2.0, z1: 1.4 }
+    if (type === 'pass') { const z0 = throwHand(throwStyle, 0).z; return inc ? { z0, z1: 0.2 } : { z0, z1: 1.4 } }
     return { z0: 1.1, z1: 0.2 } // a loose ball (run fumble)
   }
   const postFlightZ = (): number => {
@@ -305,7 +352,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
 
   // ── special windows ────────────────────────────────────────────────────────
   const throwWin: { t0: number; t1: number } | null =
-    type === 'pass' && !sackPlay && flight ? { t0: Math.max(0, flight.t0 - 0.25 / D), t1: flight.t0 } : null
+    type === 'pass' && !sackPlay && flight ? { t0: Math.max(0, flight.t0 - throwT.wind / D), t1: Math.min(1, flight.t0 + throwT.follow / D) } : null
 
   let fakeWin: { t0: number; t1: number } | null = null
   if (type === 'pass' && /Play Action|PA Cross|RPO/.test(concept)) {
@@ -470,7 +517,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const stateFor = (k: string, t: number, vx: number, spd: number, hKey: string | null, nearCar: boolean): PoseState => {
     if (kickerKey && k === kickerKey && kickWin && t >= kickWin.t0 - 1e-9 && t <= kickWin.t1 + 1e-9) return 'kick'
     if (k === fgHolderKey && t < kickT) return 'hold'
-    if (qbKey && k === qbKey && throwWin && t >= throwWin.t0 && t <= throwWin.t1) return 'throw'
+    if (qbKey && k === qbKey && throwWin && t >= throwWin.t0 && t <= throwWin.t1) return THROW_STATE[throwStyle]
     if (qbKey && k === qbKey && fakeWin && t >= fakeWin.t0 && t <= fakeWin.t1) return 'fake'
     const cw = catchBy[k]
     if (cw && t >= cw.t0 && t <= cw.t1) return 'catch'
@@ -487,6 +534,9 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (t < SNAP_T) return preSnap(k)
     if (hKey === k) {
       if (roles[k] === 'H') return 'hold'
+      // animflow round 3: the passer, drop done, is set (ball high at the chest,
+      // feet under him) until the wind-up; a pocket shuffle stays a set.
+      if (k === 'qb' && type === 'pass' && !sackPlay && t > SNAP_T) return spd > 2.2 ? 'run' : 'set'
       if (k === 'qb') return spd > RUN_SPEED ? 'run' : 'stand'
       return 'carry'
     }
@@ -505,7 +555,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     | { mode: 'actor'; key: string }
     | { mode: 'backpedal' }
 
-  const facingFor = (k: string, t: number, st: PoseState, hKey: string | null, pos: Pt, hPos: Pt | null, nearCar: boolean): FMode => {
+  const facingFor = (k: string, t: number, st: PoseState, hKey: string | null, pos: Pt, hPos: Pt | null, nearCar: boolean, vx = 0): FMode => {
     if (kickerKey && k === kickerKey && kickDir != null && (st === 'kick' || fgPlay || puntPlay)) {
       return { mode: 'angle', angle: kickDir }
     }
@@ -518,9 +568,15 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (st === 'tackle' && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
     const bo = blockOther(k, t)
     if (bo) return { mode: 'actor', key: bo }
+    // Shoulders to the target from the set through the follow-through, then he
+    // watches the ball to the catch (on the run too: the shoulders turn).
     if (qbKey && k === qbKey && throwWin && targetKey && keySet[targetKey] && targetKey !== k &&
-      t >= throwWin.t0 - 0.4 / D && t <= throwWin.t1) {
+      t >= throwWin.t0 - 0.45 / D && t <= (flight ? Math.max(throwWin.t1, flight.t1) : throwWin.t1)) {
       return { mode: 'actor', key: targetKey }
+    }
+    // The drop: he gets depth with his eyes downfield, never turning his back.
+    if (qbKey && k === qbKey && type === 'pass' && !sackPlay && hKey === k && t > SNAP_T && st === 'run' && vx < -0.8) {
+      return { mode: 'backpedal' }
     }
     if (flight && isReceiverKey(k) && t >= flight.t1 - 0.4 / D && t <= flight.t1) {
       const ref = qbKey ?? (carrierKey && keySet[carrierKey] ? carrierKey : null)
@@ -591,7 +647,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       const lastP = outP[outP.length - 1]
       if (lastP && lastP.state === st) lastP.t1 = b
       else outP.push({ t0: a, t1: b, state: st })
-      const w = { t0: a, t1: b, ...facingFor(k, mid, st, hKey, pk[i], hPos, nearCar) } as FacingWindow
+      const w = { t0: a, t1: b, ...facingFor(k, mid, st, hKey, pk[i], hPos, nearCar, vx) } as FacingWindow
       const lastF = outF[outF.length - 1]
       if (lastF && sameFacing(lastF, w)) lastF.t1 = b
       else outF.push(w)
@@ -610,6 +666,16 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   }
   pushZ(0, 0.15)
   if (type === 'run' || type === 'pass' || puntPlay || fgPlay) pushZ(SNAP_T, 1.1)
+  if (throwWin && flight) {
+    // animflow round 3: carried at the chest, then back to the ear and over the
+    // top with the throwing hand (throwHand); the flight starts at the hand.
+    const R = flight.t0
+    pushZ(Math.min(R, SNAP_T + 0.12 / D), 1.2)
+    for (let i = 0; i <= 8; i++) {
+      const toRel = throwT.wind * (1 - i / 8)
+      pushZ(R - toRel / D, throwHand(throwStyle, toRel).z)
+    }
+  }
   const fh = flightHeights()
   for (let fi = 0; fi < anim.flights.length; fi++) {
     const fl = anim.flights[fi]

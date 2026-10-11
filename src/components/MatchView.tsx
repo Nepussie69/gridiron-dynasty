@@ -17,7 +17,7 @@ import { KeysCard } from './KeysCard'
 import { momentFieldPos } from './fieldPos'
 import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
-import { buildPlayAnim, holderAt, liftAt, posAt, snapYard, targetKey, actorWhy } from './playAnim'
+import { buildPlayAnim, holderAt, liftAt, posAt, qbThrowAt, snapYard, targetKey, actorWhy } from './playAnim'
 import { RouteDiagram } from './RouteDiagram'
 import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
@@ -933,9 +933,25 @@ export function MatchView() {
                 )
               })}
 
+              {/* the QB's throwing motion: wind-up, over the top, follow-through (animflow r3) */}
+              {anim && (() => {
+                const th = qbThrowAt(anim, t)
+                if (!th) return null
+                return (
+                  <g pointerEvents="none" strokeLinecap="round">
+                    {th.off && <line x1={mx(th.offShoulder.x)} y1={th.offShoulder.y} x2={mx(th.off.x)} y2={th.off.y} stroke={offColor} strokeWidth={0.42} opacity={0.75} />}
+                    <line x1={mx(th.shoulder.x)} y1={th.shoulder.y} x2={mx(th.hand.x)} y2={th.hand.y} stroke="var(--color-ink)" strokeWidth={0.62} />
+                    <line x1={mx(th.shoulder.x)} y1={th.shoulder.y} x2={mx(th.hand.x)} y2={th.hand.y} stroke={offColor} strokeWidth={0.38} />
+                  </g>
+                )
+              })()}
+
               {/* ball: dashed arc while airborne, lace, and a burst at the end spot */}
               {anim && (() => {
-                const b = posAt(anim.ball, t)
+                const th = qbThrowAt(anim, t)
+                const b0 = posAt(anim.ball, t)
+                // In the passer's hand until the release, then onto its flight.
+                const b = th?.ball ? { x: b0.x + (th.ball.x - b0.x) * th.ballMix, y: b0.y + (th.ball.y - b0.y) * th.ballMix } : b0
                 const lift = liftAt(anim, t)
                 const bx = mx(b.x)
                 const flight = anim.flights.find((f) => t > f.t0 && t < f.t1)
