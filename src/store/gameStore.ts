@@ -16,6 +16,7 @@ import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, fi
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
+import { gameWeather, setWeather, getWeather, type GameWeather, type WeatherGame } from '../game/engine/weather'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills, userSeat } from '../game/engine/coaching'
 import {
   gainGameReps,
@@ -353,6 +354,11 @@ export function getStatsDb(): CareerDatabase {
 export function getAwards(): AwardHistory {
   return awards
 }
+/** FUTURES #6: the pure, recomputable conditions for a schedule game. */
+function weatherForGame(g: WeatherGame): GameWeather {
+  return gameWeather(world, g)
+}
+export { setWeather, getWeather }
 export { leaderboard, teamHistory, recordBook, type LeaderRow, type TeamSeasonRecord, type SeasonHonors }
 
 /** The scheme a team runs on a given side, for stat/familiarity tracking. */
@@ -1316,7 +1322,7 @@ export const useGame = create<GameStore>((set, get) => ({
     if (userGame) {
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
-      sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101, userCtx(career))
+      sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101, userCtx(career), weatherForGame(userGame))
       finalizeGame(world, userGame, sim.homeScore, sim.awayScore)
       // Record career stats for both teams' players (college or pro).
       const level = world.byId[userGame.homeId].tier === 'NFL' ? 'NFL' : 'CFB'
@@ -1545,7 +1551,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast("Only your team's games have full play-by-play.")
       return
     }
-    const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101)
+    const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, undefined, weatherForGame(game))
     sim.box = boxScore(world, sim)
     sim.film = game.film
     sim.keys = game.keys
@@ -1569,7 +1575,7 @@ export const useGame = create<GameStore>((set, get) => ({
       const game = world.schedule.find((g) => g.id === gd.gameId)
       if (keepPlays !== undefined && game && keepPlays < old.plays.length && !old.done) {
         const switches = (gd.callSwitches ?? []).filter((w) => w.at <= keepPlays)
-        const rebuilt = createGame(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, { ...oldCtx, callAll: gd.callStart })
+        const rebuilt = createGame(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, { ...oldCtx, callAll: gd.callStart }, old.weather)
         let ok = true
         let guard = 4000
         while (ok && rebuilt.plays.length < keepPlays && !rebuilt.done && guard-- > 0) {
@@ -1620,7 +1626,7 @@ export const useGame = create<GameStore>((set, get) => ({
     setLivePlan({ teamId: career.teamId, off: plan.off, def: plan.def })
     applyUserCoaching(career)
     // L12.6: "call every play" only applies to a coached game, never to fast sim.
-    const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, { ...ctx, callAll: career.callMode })
+    const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, { ...ctx, callAll: career.callMode }, weatherForGame(game))
     // L11.5 Q2: run out the first drive so the user sees the game start.
     const moment = runUntil(world, state, 'drive')
     set({
@@ -3993,6 +3999,7 @@ async function simulateLeagueWeek(world: World, week: number, exceptGameId?: str
     homeId: g.homeId,
     awayId: g.awayId,
     seed: world.seed + week * 7919 + 101 + i * 131,
+    weather: weatherForGame(g),
   }))
   const results = await simLeagueGames(world, reqs)
   if (!results) return false
@@ -5535,8 +5542,10 @@ export function gameDayEquivalence(n = 20) {
     const opp = nfl.filter((t) => t.id !== career.teamId)[i % Math.max(1, nfl.length - 1)]
     if (!opp) continue
     const seed = world.seed + i * 7919 + 101
-    const a = simulatePlayByPlay(world, career.teamId, opp.id, seed, ctx)
-    const s = createGame(world, career.teamId, opp.id, seed, ctx)
+    // FUTURES #6: the coached and fast paths get the SAME conditions object.
+    const weather = weatherForGame({ id: `eq_${i}_${career.teamId}_${opp.id}`, week: (i % 18) + 1, homeId: career.teamId })
+    const a = simulatePlayByPlay(world, career.teamId, opp.id, seed, ctx, weather)
+    const s = createGame(world, career.teamId, opp.id, seed, ctx, weather)
     for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId, 'standing')
     const b = finishGame(s)
     if (pick(a) === pick(b)) identical++
@@ -7676,6 +7685,7 @@ export async function leaguePbpProbe(count = 8) {
     homeId: g.homeId,
     awayId: g.awayId,
     seed: world.seed + week * 7919 + 101 + i * 131,
+    weather: weatherForGame(g),
   }))
   const t0 = Date.now()
   const results = await simLeagueGames(world, reqs)
@@ -8047,7 +8057,10 @@ export function simTest(games = 80, tier: 'NFL' | 'FBS' = 'NFL') {
     const h = pool[Math.floor(rng() * pool.length)]
     const a = pool[Math.floor(rng() * pool.length)]
     if (h.id === a.id) continue
-    const sim = simulatePlayByPlay(world, h.id, a.id, world.seed + made * 7919 + 101)
+    // FUTURES #6: give each calibration game real conditions (a week across the
+    // season, the home venue's roof/climate). Pure and recomputable, and exactly
+    // neutral when the weather toggle is off.
+    const sim = simulatePlayByPlay(world, h.id, a.id, world.seed + made * 7919 + 101, undefined, weatherForGame({ id: `test_${made}_${h.id}_${a.id}`, week: (made % 18) + 1, homeId: h.id }))
     for (const k of keys) acc[k] += sim.stats.home[k]
     margin += Math.abs(sim.homeScore - sim.awayScore)
     // drive/red-zone accounting for the home team

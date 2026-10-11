@@ -23,6 +23,7 @@ import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../
 import { mod, schemeFit, styleProfile } from './style'
 import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, spendChallenge, inBoothWindow, type ReviewSnapshot } from './review'
 import type { PlayReview, PendingReview, ChallengeState } from './review'
+import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -1303,7 +1304,7 @@ function weightedPick<T extends string>(rng: Rng, dist: Record<T, number>, keys:
 }
 
 /** An AI club's derived tendencies in one bucket (G8): offense class + defensive call. */
-export function aiTendency(world: World, teamId: string, bucket: Bucket): { off: Record<OffClass, number>; def: Record<DefCall, number> } {
+export function aiTendency(world: World, teamId: string, bucket: Bucket, weather?: GameWeather): { off: Record<OffClass, number>; def: Record<DefCall, number> } {
   const style = offStyle(world, teamId)
   const d = defStyle(world, teamId)
   // pickConcept forces a throw on 3rd & long; otherwise the OC's pass rate rules.
@@ -1317,6 +1318,21 @@ export function aiTendency(world: World, teamId: string, bucket: Bucket): { off:
     else short += 1
   }
   const offRaw: Record<OffClass, number> = { run: run * (1 - pPass), short: short * pPass, deep: deep * pPass }
+  // FUTURES #6: in bad weather the AI leans on the run and shortens the tree.
+  // A bounded tilt: bad weather runs more, good weather slightly less, so the
+  // season mean is unchanged (the `aiBad` center is measured by the probe).
+  // Gated on the weather toggle so the base is exact.
+  if (weather && getWeather()) {
+    const windBad = clamp((weather.windMph - 15) / 15, 0, 1)
+    const snowBad = weather.precip === 'snow' ? 0.6 : 0
+    const bad = Math.max(windBad, snowBad) - WX_CENTER.aiBad
+    if (bad !== 0) {
+      const shift = WX.aiRunShift * bad
+      offRaw.run *= 1 + shift
+      offRaw.deep *= 1 - shift
+      offRaw.short *= 1 - shift * 0.5
+    }
+  }
   let blitz = d.blitz
   let stack = Math.max(0, d.runFit - 1) * 4
   if (bucket === '3rd-long') blitz *= 1.35
@@ -1374,7 +1390,7 @@ function drawAIDefCall(world: World, s: GameState, defId: string, bucket: Bucket
 
 /** The AI offense's class, drawn after the user's defCall (G9). */
 function drawAIOffClass(world: World, s: GameState, offId: string, bucket: Bucket): OffClass {
-  const dist = { ...aiTendency(world, offId, bucket).off }
+  const dist = { ...aiTendency(world, offId, bucket, s.weather).off }
   exploitOffClass(world, s, dist, bucket, coordRating(world, offId, 'Offensive Coordinator'))
   return weightedPick(s.rng, dist, OFF_CLASSES)
 }
@@ -1455,6 +1471,9 @@ interface SimEnv {
   fat?: Record<string, number>
   /** R17: wind in mph for the kick hook (positive = into the kicker's face). 0 = calm. */
   wind?: number
+  /** FUTURES #6: bounded, centered weather effects for this offence & quarter.
+   *  Undefined (or all-neutral) when no weather was supplied or weather is off. */
+  wx?: WxEffects
 }
 
 /**
@@ -1737,8 +1756,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // A pass-heavy plan is predictable: the defense pins its ears back and sits
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
-  const pressureEdge = pressure - protection + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
-    + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE - fatDiff * R15.fatPress
+  const pressureEdge = (pressure - protection + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
+    + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE - fatDiff * R15.fatPress) * (env?.wx?.pressureMult ?? 1)
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
@@ -1920,13 +1939,16 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // deep concept a target (slightly lower completion).
   if (hasFix(env, offId, 'quickGame') && concept.depth <= 8) compProb = clamp(compProb + 0.03, 0.42, 0.74)
   if (hasFix(env, offId, 'maxProtect') && concept.depth >= 12) compProb = clamp(compProb - 0.03, 0.42, 0.74)
+  // FUTURES #6: a deep ball (depth >= 15) in the wind is harder to complete.
+  // Centred multiplier (exactly 1 when weather is off); no rng draw is added.
+  if (concept.depth >= 15) compProb = clamp(compProb * (env?.wx?.deepCatchMult ?? 1), 0.42, 0.74)
   // G7 hurry: a faster offense forces riskier throws.
   // L12 E2: JMP/PRC replace part of the trait-only ball-hawk in the pick rate.
   const ratingHawk = avg([...cbs, ...saf].map((p) => {
     const a = mkAttrs(p)
     return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
   }))
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt), 0.005, 0.06)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * (1 - avg(saf.map((p) => styleProfile(p).ballHawk)) * 0.15 - ratingHawk * E2_W) * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1), 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -2018,8 +2040,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R16: the ball can still come loose on a clean stop — a big-hit strip, or the
     // receiver's own bobble (a muff). Either way a proximity hash decides who falls
     // on it; the offence keeps roughly half of all loose balls.
-    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)
-    const muff = !strip && gain > 0 && yard + gain < 100 && h01(`${n}:${offId}:muff`) < muffChance(target?.pos, tA)
+    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < (R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)) * (env?.wx?.fumbleMult ?? 1)
+    const muff = !strip && gain > 0 && yard + gain < 100 && h01(`${n}:${offId}:muff`) < muffChance(target?.pos, tA) * (env?.wx?.muffMult ?? 1)
     const loose = strip || muff
     const recovery = loose ? fumbleRecovery(`${n}:${offId}:passrec`, R16.offRecover) : undefined
     const lost = loose && recovery === 'def'
@@ -2055,7 +2077,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
-  if (target && hash32(`${n}:${offId}:drop`) / 4294967296 < dropChance(target.pos, tA)) incomplete.dropId = target.id
+  if (target && hash32(`${n}:${offId}:drop`) / 4294967296 < dropChance(target.pos, tA) * (env?.wx?.dropMult ?? 1)) incomplete.dropId = target.id
   return incomplete
 }
 
@@ -2183,7 +2205,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty + olShortStrength(ol, distance) + fbLeadBlock(fb) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
     + (isQ4 ? (relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
   const gains: string[] = []
-  const runGain = sampleYards(rng, false, edge * 0.25, gains, yard, tier)
+  const runGain = sampleYards(rng, false, edge * 0.25 * (env?.wx?.runVarianceMult ?? 1), gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
   let gain = tier === 'FBS' && runGain < 0 ? Math.round(runGain * 0.7) : runGain
   // R2: trim the positive run tail to the 10-year NFL average (base constant only).
@@ -2208,7 +2230,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
   // squirts out. Threshold only, so no rng() draw is added or removed.
   const glMult = yard >= R16.goalLineYard ? R16.goalLineMult : 1
-  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult
+  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1)
   // R16: a proximity hash decides who falls on it; goal-line piles lean defence.
   const recovery = fumble ? fumbleRecovery(`${n}:${defId}:runrec`, yard >= R16.goalLineYard ? R16.goalLineOffRecover : R16.offRecover) : undefined
   const lost = fumble && recovery === 'def'
@@ -2291,9 +2313,10 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
     const late = (env?.qtr ?? 0) >= 4 && Math.abs(margin) <= 3
     const power = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
     // R17: the lone rng() draw is unchanged; a blocked kick is a per-play hash.
-    // The wind hook is exactly neutral at 0 (weather #6 will supply a value).
-    const wind = env?.wind ?? 0
-    const made = rng() < fgProb(yard, power) + wind * R17.windPerMph
+    // FUTURES #6: the weather layer supplies a bounded, centred make-probability
+    // offset (sign already fixed: a headwind lowers the chance). Exactly 0 when
+    // weather is off or absent, so the base sim is byte-identical.
+    const made = rng() < fgProb(yard, power) + (env?.wx?.kickMakeAdd ?? 0)
     const blocked = h01(`${n}:${offId}:fgblock`) < R17.blockFg
     const good = made && !blocked
     return {
@@ -2311,7 +2334,7 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   // R6: the existing distance formula is the GROSS punt; the return (or a
   // touchback) comes out of it, so the net lands at ~40–41 with ~9-yard
   // returns. The lone rng() draw is unchanged; the outcome is a per-play hash.
-  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wind ?? 0) * 0.3 + m.gross)
+  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wx?.puntAdd ?? 0) + m.gross)
   const key = `${n}:${offId}:punt`
   const u = h01(`${key}:kind`)
   const pr = defId ? clubReturners(world, defId).pr : undefined
@@ -2376,9 +2399,9 @@ function resolvePAT(world: World, rng: Rng, offId: string, n = 0, env?: SimEnv):
   const acc = k ? (mkAttrs(k).KAC ?? 84) : 84
   // R2: the real extra-point rate is ≈ 94% over the last decade.
   // R17: the lone rng() draw is unchanged; a block is a per-play hash and the
-  // wind hook is exactly neutral at 0. The base carries the block rate so the
-  // NET make rate (and the XP% band) is unchanged by blocking.
-  const made = rng() < clamp(0.93 + (acc - 80) * 0.005 + R17.blockPat, 0.88, 0.99) + (env?.wind ?? 0) * R17.windPerMph
+  // FUTURES #6 weather offset is exactly 0 when weather is off. The base carries
+  // the block rate so the NET make rate (and the XP% band) is unchanged by blocking.
+  const made = rng() < clamp(0.93 + (acc - 80) * 0.005 + R17.blockPat + (env?.wx?.kickMakeAdd ?? 0), 0.88, 0.99)
   const blocked = h01(`${n}:${offId}:patblock`) < R17.blockPat
   const good = made && !blocked
   return {
@@ -2406,6 +2429,8 @@ function resolveStKick(
 ): { scored: boolean } {
   const kAbbr = world.byId[kicking]?.abbr ?? kicking
   const rAbbr = world.byId[receiving]?.abbr ?? receiving
+  // FUTURES #6: a wet ball is looser on a squib return (neutral with weather off).
+  const stWx = wxFor(s, kicking === s.homeId)
   // A squib never reaches the end zone: no touchback, a short return. The
   // receiving club lands around its own 30–35.
   if (call === 'squib') {
@@ -2413,7 +2438,7 @@ function resolveStKick(
     const cy = clamp(3 + Math.round(h01(`${base}:cy`) * 5), 0, 8)
     const ry = returner ? Math.max(0, returnYards(base, returnScore(returner), cov, 26, 8)) : 24
     const returnTD = !!returner && h01(`${base}:sqt`) < 0.001
-    const fumble = !returnTD && !!returner && h01(`${base}:fum`) < 0.008
+    const fumble = !returnTD && !!returner && h01(`${base}:fum`) < 0.008 * (stWx?.fumbleMult ?? 1)
     const start = returnTD ? 100 : clamp(cy + ry, 1, 99)
     pushPlay(s, {
       type: 'kickoff', concept: 'Squib kick', yards: 0, kickCall: 'squib',
@@ -2498,6 +2523,9 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   const cov = coverageScore(world, kicking)
   const mem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
   const alert = alertness(mem?.[kicking])
+  // FUTURES #6: a kick into the wind carries shorter (fewer touchbacks) and a wet
+  // ball is looser. Centred — exactly neutral when weather is off or absent.
+  const koWx = wxFor(s, kicking === s.homeId)
 
   // FUTURES #4: the user calls their own kickoffs. The moment sits before any
   // kickoff hash (and before any rng), exactly like the other decision points.
@@ -2558,7 +2586,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   // FUTURES #4: the kick + return strategies bend the same hashes. Every
   // modifier is 0/1 at the default strategies, so this is identity by default.
   const rm = kickReturnMods(recST.kr, kickST.kickoff)
-  const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006 + rm.tb, 0.42, 0.85)
+  const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006 + rm.tb + (koWx?.kickoffAdd ?? 0) * WX.kickoffTbPerYd, 0.42, 0.85)
   const returner = clubReturners(world, receiving).kr
   const touchback = !returner || h01(`${base}:tb`) < pTb
   let retYds = 0
@@ -2569,7 +2597,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
     catchYard = clamp(2 + Math.round(h01(`${base}:cy`) * 7), 0, 9)
     retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5 + rm.base, 26 * rm.spread))
     returnTD = h01(`${base}:td`) < 0.003
-    fumble = !returnTD && h01(`${base}:fum`) < 0.005 * rm.fumble
+    fumble = !returnTD && h01(`${base}:fum`) < 0.005 * rm.fumble * (koWx?.fumbleMult ?? 1)
     if (returnTD) retYds = 100 - catchYard
   }
   const start = touchback ? R2.kickoffYard : returnTD ? 100 : clamp(catchYard + retYds, 1, 99)
@@ -2797,6 +2825,8 @@ export interface GameState {
   // ── R17: kicking realism ───────────────────────────────────────────────────
   /** Wind for the kick hook (mph, positive into the kicker's face). 0 = calm. */
   wind: number
+  /** FUTURES #6: the conditions this game is played in (pure, never saved). */
+  weather?: GameWeather
   // ── FUTURES #5: replay review ──────────────────────────────────────────────
   /** A challenge-domain ruling awaiting the hurt club's decision (C2). */
   review?: PendingReview | null
@@ -2953,7 +2983,10 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const kickPower = kickPowerOf(world, s.offId)
   // R17: the offered FG range scales with the kicker's power (the make model's
   // range sits 3 yards shorter, matching the pre-R17 option/EV gap).
-  const inFgRange = s.yard >= fgRangeYard(kickPower) - 3
+  // FUTURES #6: a kick into the wind has a shorter effective range (0 when off).
+  const fourthWx = wxFor(s, s.offId === s.homeId)
+  const rangeAdj = fourthWx?.kickRangeYds ?? 0
+  const inFgRange = s.yard >= fgRangeYard(kickPower) - 3 + rangeAdj
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const sit: Situation = { yard: s.yard, down: 4, distance: s.distance, qtr: s.qtr, clockSec: s.clock, margin }
   const ev = fourthDownEV(sit, kickPower)
@@ -3153,7 +3186,12 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId) }
+}
+
+/** FUTURES #6: the centred weather effects for one offence (undefined = neutral). */
+function wxFor(s: GameState, offIsHome: boolean): WxEffects | undefined {
+  return s.weather ? wxEffects(s.weather, offIsHome, s.qtr) : undefined
 }
 
 /** The offense's two-minute choice at the start of a possession (G7). */
@@ -3255,7 +3293,7 @@ function usedTimeout(world: World, s: GameState, offId: string, defId: string, o
   return false
 }
 
-export function createGame(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx): GameState {
+export function createGame(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx, weather?: GameWeather): GameState {
   const isCollege = world.byId[homeId].tier !== 'NFL'
   const rng = makeRng(seed)
   // L12.13 M3: league mastery means and per-team mental-error multipliers are
@@ -3319,6 +3357,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     driveSnaps: 0,
     pIndex: new Map(world.players.map((p) => [p.id, p])),
     wind: 0,
+    weather,
     review: null,
     challenges: { [homeId]: { left: 2, won: 0, lost: 0 }, [awayId]: { left: 2, won: 0, lost: 0 } },
   }
@@ -3972,7 +4011,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // Offensive penalty — typed by hash within the R2 yardage tier, replay the down.
   const offDisc = ocEffect(world, offId).discipline * cohesionMult(s.cohesionMean?.off, s.cohesion?.[offId]?.off, 0.6)
   const hurryPen = s.twoMinMode === 'hurry' ? 1.3 : 1
-  if (s.rng() < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1)) {
+  // FUTURES #6: the road offence false-starts more in a loud house; the home side
+  // carries the centering offset. Exactly 1 with weather off, so the base is exact.
+  const crowdPen = wxFor(s, offId === s.homeId)?.falseStartMult ?? 1
+  if (s.rng() < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1) * crowdPen) {
     const penS = statFor(s, offId)
     const startY = s.yard
     const py = penaltyYards(`${s.n}:penO:${offId}`, 'off')
@@ -4149,8 +4191,8 @@ export function finishGame(s: GameState): GameSim {
   }
 }
 
-export function simulatePlayByPlay(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx): GameSim {
-  const s = createGame(world, homeId, awayId, seed, ctx)
+export function simulatePlayByPlay(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx, weather?: GameWeather): GameSim {
+  const s = createGame(world, homeId, awayId, seed, ctx, weather)
   for (let m = runToMoment(world, s); m; m = runToMoment(world, s)) answerMoment(s, m.defaultId, 'standing')
   return finishGame(s)
 }
