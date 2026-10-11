@@ -3,9 +3,10 @@
 //
 // Four localStorage-only keys (never a save field, never the sim):
 //   gd.view.game     'auto' | 'broadcast' | 'topdown'   (default 'auto')
-//   gd.view.replays  'big' | 'all' | 'off'              (default 'big')
+//   gd.view.replays  'big' | 'all' | 'off' | 'custom'   (default 'big')
 //   gd.view.quality  'auto' | 'full' | 'lite'           (default 'auto')
 //   gd.view.autoQ    JSON of the last Auto measurement
+//   gd.view.replayTypes  JSON array of reason ids for 'custom' (default: all)
 //
 // Every read and write is wrapped in try/catch; a missing OR corrupt value
 // falls back to its default and never throws. A tiny external store
@@ -13,9 +14,10 @@
 // useViewSettings() can ride useSyncExternalStore.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useSyncExternalStore } from 'react'
+import { DEFAULT_REPLAY_TYPES, REPLAY_REASON_IDS, type ReplayReasonId } from './replay'
 
 export type GameView = 'auto' | 'broadcast' | 'topdown'
-export type ReplayMode = 'big' | 'all' | 'off'
+export type ReplayMode = 'big' | 'all' | 'off' | 'custom'
 export type QualitySetting = 'auto' | 'full' | 'lite'
 export type QualityLevel = 'full' | 'lite'
 
@@ -35,6 +37,8 @@ export interface AutoQState {
 export interface ViewSettings {
   game: GameView
   replays: ReplayMode
+  /** 'custom' replays: which reasons (gd.view.replayTypes). Default: every reason. */
+  replayTypes: ReplayReasonId[]
   quality: QualitySetting
   autoQ: AutoQState | null
 }
@@ -42,6 +46,7 @@ export interface ViewSettings {
 export const VIEW_KEYS = {
   game: 'gd.view.game',
   replays: 'gd.view.replays',
+  replayTypes: 'gd.view.replayTypes',
   quality: 'gd.view.quality',
   autoQ: 'gd.view.autoQ',
 } as const
@@ -49,6 +54,7 @@ export const VIEW_KEYS = {
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
   game: 'auto',
   replays: 'big',
+  replayTypes: [...DEFAULT_REPLAY_TYPES],
   quality: 'auto',
   autoQ: null,
 })
@@ -105,6 +111,27 @@ function pick<T extends string>(v: string | null, allowed: readonly T[], fallbac
   return v != null && (allowed as readonly string[]).includes(v) ? (v as T) : fallback
 }
 
+/**
+ * The 'custom' replay reason ids (gd.view.replayTypes). A missing, non-array or
+ * unknown value falls back to every reason; an explicit empty array is kept
+ * (the user unchecked everything → nothing replays).
+ */
+function readReplayTypes(): ReplayReasonId[] {
+  const raw = readRaw(VIEW_KEYS.replayTypes)
+  if (!raw) return [...DEFAULT_REPLAY_TYPES]
+  try {
+    const v: unknown = JSON.parse(raw)
+    if (!Array.isArray(v)) return [...DEFAULT_REPLAY_TYPES]
+    const known = new Set<string>(REPLAY_REASON_IDS)
+    if (!v.every((x) => typeof x === 'string' && known.has(x))) return [...DEFAULT_REPLAY_TYPES]
+    const out: ReplayReasonId[] = []
+    for (const x of v as ReplayReasonId[]) if (!out.includes(x)) out.push(x)
+    return out
+  } catch {
+    return [...DEFAULT_REPLAY_TYPES]
+  }
+}
+
 function readAutoQ(): AutoQState | null {
   const raw = readRaw(VIEW_KEYS.autoQ)
   if (!raw) return null
@@ -129,7 +156,8 @@ function readAutoQ(): AutoQState | null {
 function readAll(): ViewSettings {
   return {
     game: pick(readRaw(VIEW_KEYS.game), ['auto', 'broadcast', 'topdown'] as const, 'auto'),
-    replays: pick(readRaw(VIEW_KEYS.replays), ['big', 'all', 'off'] as const, 'big'),
+    replays: pick(readRaw(VIEW_KEYS.replays), ['big', 'all', 'off', 'custom'] as const, 'big'),
+    replayTypes: readReplayTypes(),
     quality: pick(readRaw(VIEW_KEYS.quality), ['auto', 'full', 'lite'] as const, 'auto'),
     autoQ: readAutoQ(),
   }
@@ -171,6 +199,14 @@ export function setGameView(v: GameView): void {
 
 export function setReplayMode(v: ReplayMode): void {
   writeRaw(VIEW_KEYS.replays, v)
+  refresh()
+}
+
+/** Persist the 'custom' replay reason ids (unknown ids are dropped, order kept). */
+export function setReplayTypes(v: readonly ReplayReasonId[]): void {
+  const known = new Set<string>(REPLAY_REASON_IDS)
+  const out = v.filter((x, i) => known.has(x) && v.indexOf(x) === i)
+  writeRaw(VIEW_KEYS.replayTypes, JSON.stringify(out))
   refresh()
 }
 

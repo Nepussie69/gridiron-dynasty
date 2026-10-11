@@ -82,7 +82,7 @@ import { ballState } from '../src/components/broadcast/ball.ts'
 import { createBallFx, withBallFx } from '../src/components/broadcast/ballFx.ts'
 import { buildFxSchedule, EVENT_FX, SHAKE_YARDS, shakeAt } from '../src/components/broadcast/fxSchedule.ts'
 import type { AnimEventKind } from '../src/components/playAnim.ts'
-import { BIG_GAIN_YDS, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan } from '../src/components/broadcast/replay.ts'
+import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
 
@@ -1066,6 +1066,73 @@ ok('B6b: the big-play rule table (big / all / off / force / fast)', () => {
   assert.equal(replayPlan(P({ type: 'run', concept: 'Kneel', yards: -1 }), A(['down']), { force: true }).replay, false)
   assert.equal(replayPlan(P({ type: 'penalty' }), A([]), { setting: 'all' }).replay, false)
   assert.equal(replayPlan(P({ yards: 30 }), { ...GA, events: [{ t: 0.1, kind: 'flag', keys: [], spot: { x: 1, y: 1 } }] }, { setting: 'all' }).replay, false)
+})
+
+ok("B6b: custom replay filtering per reason; the default set == 'big'; big/all/off unchanged", () => {
+  const base = GPLAY as unknown as Record<string, unknown>
+  const P = (o: Record<string, unknown>) => ({ ...base, ...o }) as unknown as Play
+  const ev = (kinds: AnimEventKind[]) => kinds.map((kind, i) => ({ t: 0.1 + i * 0.1, kind, keys: ['wr0'], spot: { x: 50, y: 20 } }))
+  const A = (kinds: AnimEventKind[]): BroadcastAnim => ({ ...GA, events: [{ t: 0.03, kind: 'snap', keys: ['qb'], spot: { x: 35, y: 26 } }, ...ev(kinds)] })
+  // The default custom set is exactly the six reasons, i.e. the same as 'big'.
+  assert.equal(REPLAY_REASON_IDS.length, 6)
+  assert.equal(new Set(REPLAY_REASON_IDS).size, 6)
+  assert.deepEqual([...DEFAULT_REPLAY_TYPES], [...REPLAY_REASON_IDS])
+  // The pure filter keeps the chosen ids (order-preserving); unknown ids and an
+  // empty set keep none. 'all' / 'forced' are not choosable reasons.
+  assert.deepEqual(customReplayReasons(['touchdown', 'bigGain', 'safety'], []), [])
+  assert.deepEqual(customReplayReasons(['touchdown', 'bigGain', 'safety'], ['bigGain']), ['bigGain'])
+  assert.deepEqual(customReplayReasons(['touchdown', 'all', 'forced'], ['touchdown']), ['touchdown'])
+  assert.deepEqual(customReplayReasons(['touchdown'], ['bogus' as ReplayReasonId]), [])
+  assert.deepEqual(customReplayReasons(['touchdown']), ['touchdown'])
+  const table: [string, Play, BroadcastAnim, ReplayReasonId[]][] = [
+    ['short completion', P({ yards: 8, endYard: 33 }), A(['throw', 'catch', 'tackle']), []],
+    [`${BIG_GAIN_YDS}-yd completion`, P({ yards: BIG_GAIN_YDS, endYard: 45 }), A(['throw', 'catch', 'tackle']), ['bigGain']],
+    ['19-yd run', P({ type: 'run', yards: 19, endYard: 44, result: 'Run' }), A(['tackle']), []],
+    ['passing TD', P({ yards: 75, endYard: 100 }), A(['throw', 'catch', 'score']), ['touchdown', 'bigGain']],
+    ['1-yd TD run', P({ type: 'run', yards: 1, startYard: 99, endYard: 100, result: 'Run' }), A(['score']), ['touchdown']],
+    ['interception', P({ yards: 0, result: 'Interception', turnover: true }), A(['throw', 'interception', 'tackle']), ['turnover']],
+    ['lost fumble', P({ type: 'run', yards: 3, result: 'Fumble', turnover: true }), A(['fumble', 'turnover']), ['turnover']],
+    ['sack on 3rd', P({ result: 'Sack', yards: -6, down: 3 }), A(['sack']), ['lateDownSack']],
+    ['sack on 4th', P({ result: 'Sack', yards: -6, down: 4 }), A(['sack']), ['lateDownSack']],
+    ['sack on 2nd', P({ result: 'Sack', yards: -6, down: 2 }), A(['sack']), []],
+    ['safety', P({ result: 'Sack', yards: -6, down: 2, safety: true }), A(['sack', 'safety']), ['safety']],
+    [`${LONG_FG_YDS}-yd FG good`, P({ type: 'fg', result: `${LONG_FG_YDS}-yd FG is good`, yards: 0 }), A(['kick', 'kickGood']), ['longFieldGoal']],
+    ['49-yd FG good', P({ type: 'fg', result: '49-yd FG is good', yards: 0 }), A(['kick', 'kickGood']), []],
+    ['muffed punt', P({ type: 'punt', result: 'Punt', returnKind: 'muff', turnover: true }), A(['kick', 'fumble', 'turnover']), ['turnover']],
+    ['PAT', P({ type: 'pat', result: 'PAT good' }), A(['kick', 'kickGood']), []],
+  ]
+  for (const [name, play, anim, want] of table) {
+    const big = replayPlan(play, anim, { setting: 'big' })
+    // big / all / off are unchanged by the new mode.
+    assert.equal(big.replay, want.length > 0, `${name}: big replay`)
+    assert.deepEqual([...big.reasons].sort(), [...want].sort(), `${name}: big reasons`)
+    assert.equal(replayPlan(play, anim, { setting: 'off' }).replay, false, `${name}: replayed with replays off`)
+    assert.equal(replayPlan(play, anim, { setting: 'all' }).replay, play.type !== 'pat', `${name}: 'all' replay`)
+    // Custom with no types (the default), or all six, is byte-identical to big.
+    assert.deepEqual(replayPlan(play, anim, { setting: 'custom' }), big, `${name}: custom default != big`)
+    assert.deepEqual(replayPlan(play, anim, { setting: 'custom', types: DEFAULT_REPLAY_TYPES }), big, `${name}: custom all-types != big`)
+    // Per reason: custom replays iff that reason is one of the play's reasons.
+    for (const r of REPLAY_REASON_IDS) {
+      const p = replayPlan(play, anim, { setting: 'custom', types: [r] })
+      assert.equal(p.replay, want.includes(r), `${name}: custom[${r}] replay ${p.replay}`)
+      if (p.replay) assert.deepEqual(p.reasons, [r], `${name}: custom[${r}] reasons ${p.reasons}`)
+    }
+    // A subset keeps only the intersection (the passing TD: touchdown + bigGain).
+    const inter = want.filter((r) => r === 'touchdown' || r === 'safety').sort()
+    const sub = replayPlan(play, anim, { setting: 'custom', types: ['touchdown', 'safety'] })
+    assert.equal(sub.replay, inter.length > 0, `${name}: custom subset replay`)
+    if (sub.replay) assert.deepEqual([...sub.reasons].sort(), inter, `${name}: custom subset reasons`)
+    // An empty set replays nothing at all.
+    assert.equal(replayPlan(play, anim, { setting: 'custom', types: [] }).replay, false, `${name}: empty custom set replayed`)
+  }
+  // gameDayReplay passes the chosen types through (falsy types = the default set).
+  const td = P({ yards: 75, endYard: 100 })
+  const tdA = A(['throw', 'catch', 'score'])
+  const live = { setting: 'custom' as const, playing: true }
+  assert.deepEqual(gameDayReplay(td, tdA, live).plan, replayPlan(td, tdA, { setting: 'custom' }))
+  assert.equal(gameDayReplay(td, tdA, live).plan.replay, true)
+  assert.deepEqual(gameDayReplay(td, tdA, { ...live, types: ['touchdown'] }).plan, replayPlan(td, tdA, { setting: 'custom', types: ['touchdown'] }))
+  assert.equal(gameDayReplay(td, tdA, { ...live, types: ['safety'] }).plan.replay, false)
 })
 
 ok('B6b: telestrations only reference actors that exist (fixtures + 400 fuzzed plays)', () => {
