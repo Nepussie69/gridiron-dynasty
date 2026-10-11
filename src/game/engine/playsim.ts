@@ -14,7 +14,7 @@ import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../da
 import { NO_USER_BONUS, coachEffect } from './coaching'
 import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
-import { clubReturners, coverageScore, returnScore } from './returns'
+import { clubReturners, coverageScore, coverUnit, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
@@ -25,6 +25,7 @@ import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, 
 import type { PlayReview, PendingReview, ChallengeState } from './review'
 import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
 import { clutchEdge, kickClutch } from './clutch'
+import { getIndividual } from './individual'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -59,6 +60,12 @@ export function setMenuRealism(on: boolean) {
 export function getMenuRealism(): boolean {
   return MENU_REALISM_ON
 }
+// J8d: dev-only toggle for the individual-ratings pass over penalties, special
+// teams and the fast sim. The flag itself lives in `individual.ts` (so the fast-sim
+// `teamStrength` in generate.ts can read it without a module cycle); re-exported
+// here so the probe and the OFF calibration copy share one switch, the J1 pattern.
+// Default ON; OFF restores the pre-J8d unit-average / OVR-stand-in engine exactly.
+export { setIndividual, getIndividual } from './individual'
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
     // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
@@ -328,6 +335,70 @@ const PEN_DEF_W: Partial<Record<PenaltyKind, number>> = {
   offside: 0.3, holdingDef: 0.25, dpi: 0.18, illegalContact: 0.12, unnecessary: 0.09, roughing: 0.06,
 }
 
+// ── J8d: individual special teams / penalties / fast sim ─────────────────────
+// Every constant this job adds lives here. The `*Center`/`*Shift` numbers are the
+// measured league means (32 real clubs) of the individual metric minus the unit
+// mean it replaces, so each new term is centred and league totals do not drift
+// (the `WX_CENTER` pattern). Tune only this block.
+export const J8D = {
+  // Penalty kind weights: the R14 slopes are kept, but the value is now ONE player
+  // on the field (the likeliest offender) rather than a whole-roster/unit mean.
+  penHoldW: 0.012, penHoldCenter: 21.34,
+  penAwrW: 0.012, penOpiW: 0.01, penShiftOl: -6.23, penShiftWr: -1.5, penShiftQb: 8.65,
+  penShiftDb: -4.99, penShiftDl: -1.13, shiftCb: -3.94,
+  // Return coverage: the value is the individual cover man the returner must beat.
+  // The rating-weighted pick sits `covPickBias` above the old unit mean.
+  covPickBias: 0.37,
+  // Return TD = base × f(returner athletic − cover man); centred on the league mean.
+  tdCenter: 13.04, tdW: 0.05, tdLo: 0.3, tdHi: 2.6,
+  tdPunt: 0.0103, tdKick: 0.0013, tdSquib: 0.0004,
+  // Ball security: the returner's own CAR (centred on the league-mean CAR).
+  carCenter: 71.75, fumW: 0.03, fumLo: 0.35, fumHi: 2.4,
+  muffPunt: 0.01, fumKick: 0.005, fumSquib: 0.008,
+}
+
+/** J8d: the on-field player with the lowest value of `key` (the weakest link). */
+function worstPlayer(list: Player[], key: string): Player | undefined {
+  let out: Player | undefined
+  let worst = Infinity
+  for (const p of list) {
+    const v = mkAttrs(p)[key]
+    if (v !== undefined && v < worst) { worst = v; out = p }
+  }
+  return out
+}
+/** J8d: the on-field player with the best edge-rush rating (max of PMV/FMV). */
+function bestRusher(list: Player[]): Player | undefined {
+  let out: Player | undefined
+  let best = -Infinity
+  for (const p of list) {
+    const a = mkAttrs(p)
+    const v = Math.max(a.PMV ?? -1, a.FMV ?? -1)
+    if (v > best) { best = v; out = p }
+  }
+  return out
+}
+/** J8d: the individual rating that makes a player the likeliest offender for a foul. */
+const PEN_OFF_RATING: Partial<Record<PenaltyKind, { key: string; high?: boolean }>> = {
+  holdingOff: { key: 'PBK' }, falseStart: { key: 'AWR' }, opi: { key: 'AWR' }, delay: { key: 'AWR' },
+  dpi: { key: 'MCV' }, illegalContact: { key: 'MCV' }, holdingDef: { key: 'AWR' }, offside: { key: 'AWR' },
+  roughing: { key: 'PMV', high: true }, unnecessary: { key: 'AWR' },
+}
+/** J8d: a missing specialist's replacement value — the league mean at his position. */
+function specMean(pos: 'K' | 'P', key: string, hard: number): number {
+  return getIndividual() ? (POS_MEAN[pos]?.[key] ?? hard) : hard
+}
+
+/** J8d: the on-field units for the penalty stage (the concept is already chosen). */
+function penaltyFields(world: World, s: GameState, concept: Concept, offId: string, defId: string): { off: Player[]; def: Player[] } {
+  const env = envFor(s)
+  const userOffP = s.ctx?.userTeamId === offId ? s.ctx?.personnel?.off : undefined
+  const off = fillToEleven(world, offId, offenseOnField(world, offId, concept, env.qbOverride, undefined, env.fat, userOffP ? offenseCounts(userOffP) : undefined), OFF_FILL)
+  const userDefP = s.ctx?.userTeamId === defId ? s.ctx?.personnel?.def : undefined
+  const def = fillToEleven(world, defId, defenseOnField(world, defId, concept.personnel, env.fat, userDefP ? defenseCounts(userDefP) : undefined), DEF_FILL)
+  return { off, def }
+}
+
 /** R14: mean rating across a club's non-injured players at these positions. */
 function posRatingAvg(world: World, teamId: string, positions: Position[], key: string): number {
   const ps = (world.roster[teamId] ?? []).filter((p) => positions.includes(p.pos) && !p.injured)
@@ -348,7 +419,19 @@ function passRushAvg(world: World, teamId: string): number {
   return sum / ps.length
 }
 /** R14: the most likely offender for a foul — a starter at one of its positions. */
-function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', positions: Position[], key: string): Player | undefined {
+function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', positions: Position[], key: string, kind?: PenaltyKind, field?: Player[]): Player | undefined {
+  // J8d: a specific man on the field at one of the foul's positions, picked by the
+  // rating that makes him likeliest to commit it (weighted hash, no rng draw).
+  if (getIndividual() && field && field.length && kind) {
+    const pool = field.filter((p) => positions.includes(p.pos))
+    const use = pool.length ? pool : field
+    const spec = PEN_OFF_RATING[kind] ?? { key: 'AWR' }
+    return hashPick(use, (p) => {
+      const a = mkAttrs(p)
+      const v = spec.high ? Math.max(a.PMV ?? 70, a.FMV ?? 70) : (a[spec.key] ?? POS_MEAN[p.pos]?.[spec.key] ?? 70)
+      return Math.max(1, spec.high ? v : 100 - v)
+    }, hash32(key)) ?? use[0]
+  }
   let ps = (world.roster[teamId] ?? []).filter((p) => positions.includes(p.pos) && !p.injured)
   // Fall back to the whole unit if the position list does not fit this side.
   if (!ps.length) ps = (world.roster[teamId] ?? []).filter((p) => (p.side === 'DEF' ? 'def' : 'off') === side && !p.injured)
@@ -357,9 +440,61 @@ function penaltyOffender(world: World, teamId: string, side: 'off' | 'def', posi
   return ps[(hash32(key) >>> 0) % ps.length]
 }
 /** R14: pick the foul type from the rating-modulated weights, within the tier. */
-function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId: string, oppId: string, away: boolean, tier: number): PenaltyKind {
+function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId: string, oppId: string, away: boolean, tier: number, field?: Player[], oppField?: Player[]): PenaltyKind {
   const w: Partial<Record<PenaltyKind, number>> = { ...(side === 'off' ? PEN_OFF_W : PEN_DEF_W) }
-  if (side === 'off') {
+  if (getIndividual() && field && field.length) {
+    // J8d: every weight below is driven by ONE player on the field — the man who
+    // commits the foul — instead of a whole-roster/unit mean. Each term is shifted
+    // by the measured difference between the individual metric's league mean and
+    // the old mean, so the foul mix (and the league totals) does not drift.
+    if (side === 'off') {
+      const ol = field.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
+      const wr = field.filter((p) => p.pos === 'WR' || p.pos === 'TE')
+      const qb = field.find((p) => p.pos === 'QB')
+      const rushers = (oppField ?? []).filter((p) => p.pos === 'DE' || p.pos === 'DT' || p.pos === 'LB')
+      const holder = ol.length ? worstPlayer(ol, 'PBK') : undefined
+      const rusher = rushers.length ? bestRusher(rushers) : undefined
+      if (holder && rusher) {
+        const a = mkAttrs(rusher)
+        const diff = Math.max(a.PMV ?? 70, a.FMV ?? 70) - (mkAttrs(holder).PBK ?? 70)
+        w.holdingOff = (w.holdingOff ?? 0) * clamp(1 + (diff - J8D.penHoldCenter) * J8D.penHoldW, 0.7, 1.35)
+      }
+      if (ol.length) {
+        const awr = mkAttrs(worstPlayer(ol, 'AWR')!).AWR ?? 70
+        w.falseStart = (w.falseStart ?? 0) * clamp(1 + (72 - awr + J8D.penShiftOl) * J8D.penAwrW, 0.7, 1.3) * (away ? 1.25 : 1)
+      }
+      if (wr.length) {
+        const awr = mkAttrs(worstPlayer(wr, 'AWR')!).AWR ?? 70
+        w.opi = (w.opi ?? 0) * clamp(1 + (72 - awr + J8D.penShiftWr) * J8D.penOpiW, 0.8, 1.3)
+      }
+      if (qb) {
+        const awr = mkAttrs(qb).AWR ?? 70
+        w.delay = (w.delay ?? 0) * clamp(1 + (72 - awr + J8D.penShiftQb) * J8D.penAwrW, 0.7, 1.3)
+      }
+    } else {
+      const db = field.filter((p) => p.pos === 'CB' || p.pos === 'S')
+      const dblb = field.filter((p) => p.pos === 'CB' || p.pos === 'S' || p.pos === 'LB')
+      const dl = field.filter((p) => p.pos === 'DE' || p.pos === 'DT')
+      const cover = db.length ? worstPlayer(db, 'MCV') : undefined
+      if (cover) {
+        const mcv = mkAttrs(cover).MCV ?? 70
+        w.dpi = (w.dpi ?? 0) * clamp(1 + (72 - mcv + J8D.shiftCb) * 0.012, 0.7, 1.4)
+        w.illegalContact = (w.illegalContact ?? 0) * clamp(1 + (72 - mcv + J8D.shiftCb) * 0.01, 0.8, 1.3)
+      }
+      const dbw = dblb.length ? worstPlayer(dblb, 'AWR') : undefined
+      if (dbw) {
+        const awr = mkAttrs(dbw).AWR ?? 70
+        w.holdingDef = (w.holdingDef ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDb) * 0.01, 0.8, 1.3)
+        w.unnecessary = (w.unnecessary ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDb) * 0.01, 0.8, 1.3)
+      }
+      const dlw = dl.length ? worstPlayer(dl, 'AWR') : undefined
+      if (dlw) {
+        const awr = mkAttrs(dlw).AWR ?? 70
+        w.offside = (w.offside ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDl) * 0.012, 0.7, 1.3)
+        w.roughing = (w.roughing ?? 0) * clamp(1 + (72 - awr + J8D.penShiftDl) * 0.008, 0.8, 1.3)
+      }
+    }
+  } else if (side === 'off') {
     const olAwr = posRatingAvg(world, teamId, ['OT', 'OG', 'C'], 'AWR')
     const qbAwr = posRatingAvg(world, teamId, ['QB'], 'AWR')
     const wrAwr = posRatingAvg(world, teamId, ['WR', 'TE'], 'AWR')
@@ -436,6 +571,41 @@ function returnYards(key: string, retScore: number, covScore: number, base: numb
   const bell = (h01(`${key}:y1`) + h01(`${key}:y2`) + h01(`${key}:y3`)) / 3 - 0.5
   const edge = (retScore - covScore) * 0.14
   return Math.round(clamp(base + bell * spread + edge, -4, 45))
+}
+
+/** J8d: the individual cover man who takes the angle on a return (weighted pick). */
+function stCoverMan(world: World, teamId: string, key: string): Player | undefined {
+  const unit = coverUnit(world, teamId)
+  if (!unit.length) return undefined
+  return hashPick(unit, (p) => {
+    const a = mkAttrs(p)
+    return Math.max(1, (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.35 + (a.SPD ?? 70) * 0.25)
+  }, hash32(key))
+}
+/** J8d: a cover man's individual coverage value (replaces the old unit mean). */
+function coverScoreOf(p: Player | undefined): number {
+  const a = p ? mkAttrs(p) : {}
+  return (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.35 + (a.SPD ?? 70) * 0.25 - J8D.covPickBias
+}
+/** J8d: the returner's return athletics (SPD/ACC/BCV) for the TD chance. */
+function returnAthOf(p: Player | undefined): number {
+  const a = p ? mkAttrs(p) : {}
+  return (a.SPD ?? 70) * 0.5 + (a.ACC ?? 70) * 0.3 + (a.BCV ?? 70) * 0.2
+}
+/** J8d: the cover man's chase athletics (SPD/TAK/PUR) for the TD chance. */
+function coverAthOf(p: Player | undefined): number {
+  const a = p ? mkAttrs(p) : {}
+  return (a.SPD ?? 70) * 0.4 + (a.TAK ?? 70) * 0.4 + (a.PUR ?? 70) * 0.2
+}
+/** J8d: an individual return-TD chance (centred on the league-mean returner−cover gap). */
+function returnTdProb(base: number, returner: Player | undefined, coverMan: Player | undefined): number {
+  const diff = returnAthOf(returner) - coverAthOf(coverMan)
+  return base * clamp(1 + (diff - J8D.tdCenter) * J8D.tdW, J8D.tdLo, J8D.tdHi)
+}
+/** J8d: an individual ball-security multiplier from the returner's own CAR. */
+function carrySecurityOf(returner: Player | undefined): number {
+  const a = returner ? mkAttrs(returner) : {}
+  return clamp(1 + (J8D.carCenter - (a.CAR ?? J8D.carCenter)) * J8D.fumW, J8D.fumLo, J8D.fumHi)
 }
 
 export interface Play {
@@ -2124,8 +2294,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const coverIntMult = MATCHUPS_ON && coverA && covPos
     ? clamp(1 + (manW * rmean(covPos, 'MCV', coverA.MCV ?? 70) + (1 - manW) * rmean(covPos, 'ZCV', coverA.ZCV ?? 70)) * MU.intW, 0.85, 1.3)
     : 1
+  // J8d: the route-rating fallback is the receiver's raw OVR, exactly like target
+  // selection above — a receiver whose position does not carry DRR/MRR (TE/RB) no
+  // longer silently drops to 70 in separation.
+  const tRaw = target ? unscaleOvr(target.ovr) : 70
+  const targetRoute = concept.depth > 14 ? (tA.DRR ?? (getIndividual() ? tRaw : 70))
+    : concept.depth > 7 ? (tA.MRR ?? (getIndividual() ? tRaw : 70))
+      : (tA.SRR ?? (getIndividual() ? tRaw : 70))
   const separation =
-    (concept.depth > 14 ? (tA.DRR ?? 70) : concept.depth > 7 ? (tA.MRR ?? 70) : (tA.SRR ?? 70)) * 0.5 +
+    targetRoute * 0.5 +
     (tA.SPD ?? 70) * 0.3 +
     (tA.AGI ?? 70) * 0.2 +
     tStyle.deepBias * (concept.depth >= 12 ? 6 : -2) -
@@ -2583,7 +2760,7 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
     const dist = 100 - yard + 10 + FG_HOLDER_DEPTH
     // L12 E2: an aware kicker is steadier in a one-score fourth quarter.
     const late = (env?.qtr ?? 0) >= 4 && Math.abs(margin) <= 3
-    const power = (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
+    const power = (kA.KPW ?? specMean('K', 'KPW', 78)) * 0.5 + (kA.KAC ?? specMean('K', 'KAC', 78)) * 0.5 + (late ? rmean('K', 'AWR', kA.AWR ?? 70) * 0.25 * E2_W : 0)
     // R17: the lone rng() draw is unchanged; a blocked kick is a per-play hash.
     // FUTURES #6: the weather layer supplies a bounded, centred make-probability
     // offset (sign already fixed: a headwind lowers the chance). Exactly 0 when
@@ -2610,7 +2787,7 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   // R6: the existing distance formula is the GROSS punt; the return (or a
   // touchback) comes out of it, so the net lands at ~40–41 with ~9-yard
   // returns. The lone rng() draw is unchanged; the outcome is a per-play hash.
-  const gross = 40 + Math.round(((pA.KPW ?? 80) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wx?.puntAdd ?? 0) + m.gross)
+  const gross = 40 + Math.round(((pA.KPW ?? specMean('P', 'KPW', 80)) - 78) * 0.4 + rmean('P', 'AWR', pA.AWR ?? 70) * 0.1 * E2_W + rng() * 14 + (env?.wx?.puntAdd ?? 0) + m.gross)
   const key = `${n}:${offId}:punt`
   const u = h01(`${key}:kind`)
   const pr = defId ? clubReturners(world, defId).pr : undefined
@@ -2623,7 +2800,8 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   const fc = 0.25 + m.fcDelta
   const dn = fc + 0.2
   const tb = dn + 0.08
-  const mu = tb + 0.01 * clamp(m.fumble, 0.4, 2)
+  const muffBase = getIndividual() ? J8D.muffPunt * carrySecurityOf(pr) : 0.01
+  const mu = tb + muffBase * clamp(m.fumble, 0.4, 2)
   let kind: 'return' | 'fairCatch' | 'downed' | 'touchback' | 'muff' | 'blocked'
   if (blocked) kind = 'blocked'
   else if (u < fc) kind = 'fairCatch'
@@ -2640,9 +2818,11 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   let returnerId: string | undefined
   if ((kind === 'return' || kind === 'fairCatch' || kind === 'muff') && pr) returnerId = pr.id
   if (kind === 'return' && pr) {
-    const cov = defId ? coverageScore(world, defId) : 72
+    // J8d: the deciding cover man on the play (specific player, not the unit mean).
+    const covMan = getIndividual() && defId ? stCoverMan(world, defId, `${key}:cov`) : undefined
+    const cov = defId ? (getIndividual() ? coverScoreOf(covMan) : coverageScore(world, defId)) : 72
     retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 7 + m.base, 14 * m.spread))
-    returnTD = h01(`${key}:td`) < 0.006
+    returnTD = h01(`${key}:td`) < (getIndividual() ? returnTdProb(J8D.tdPunt, pr, covMan) : 0.006)
     // A return touchdown is caught at the punt's landing spot and taken the rest
     // of the way, so its recorded yardage runs to the kicking team's goal line
     // (yard + gross yards back the way the punt came).
@@ -2673,7 +2853,7 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
 
 function resolvePAT(world: World, rng: Rng, offId: string, n = 0, env?: SimEnv): PlayOutcome {
   const k = topGroup(world, offId, ['K'], 1)[0]
-  const acc = k ? (mkAttrs(k).KAC ?? 84) : 84
+  const acc = k ? (mkAttrs(k).KAC ?? specMean('K', 'KAC', 84)) : specMean('K', 'KAC', 84)
   // R2: the real extra-point rate is ≈ 94% over the last decade.
   // R17: the lone rng() draw is unchanged; a block is a per-play hash and the
   // FUTURES #6 weather offset is exactly 0 when weather is off. The base carries
@@ -2702,7 +2882,7 @@ function planForClub(s: GameState, clubId: string): SpecialTeamsPlan {
  */
 function resolveStKick(
   world: World, s: GameState, call: KickoffCall, base: string, kicking: string, receiving: string,
-  kA: Record<string, number>, cov: number, alert: number,
+  kA: Record<string, number>, cov: number, alert: number, covMan?: Player,
 ): { scored: boolean } {
   const kAbbr = world.byId[kicking]?.abbr ?? kicking
   const rAbbr = world.byId[receiving]?.abbr ?? receiving
@@ -2714,8 +2894,8 @@ function resolveStKick(
     const returner = clubReturners(world, receiving).kr
     const cy = clamp(3 + Math.round(h01(`${base}:cy`) * 5), 0, 8)
     const ry = returner ? Math.max(0, returnYards(base, returnScore(returner), cov, 26, 8)) : 24
-    const returnTD = !!returner && h01(`${base}:sqt`) < 0.001
-    const fumble = !returnTD && !!returner && h01(`${base}:fum`) < 0.008 * (stWx?.fumbleMult ?? 1)
+    const returnTD = !!returner && h01(`${base}:sqt`) < (getIndividual() ? returnTdProb(J8D.tdSquib, returner, covMan) : 0.001)
+    const fumble = !returnTD && !!returner && h01(`${base}:fum`) < (getIndividual() ? J8D.fumSquib * carrySecurityOf(returner) * (stWx?.fumbleMult ?? 1) : 0.008 * (stWx?.fumbleMult ?? 1))
     const start = returnTD ? 100 : clamp(cy + ry, 1, 99)
     pushPlay(s, {
       type: 'kickoff', concept: 'Squib kick', yards: 0, kickCall: 'squib',
@@ -2747,8 +2927,8 @@ function resolveStKick(
   // club's surprise is cut. A failed surprise gives the receiving club the ball
   // near midfield — the risk that makes it a surprise.
   const surprise = call === 'surprise'
-  const kpw = kA.KPW ?? 78
-  const kac = kA.KAC ?? 78
+  const kpw = kA.KPW ?? specMean('K', 'KPW', 78)
+  const kac = kA.KAC ?? specMean('K', 'KAC', 78)
   const recoverChance = surprise ? surpriseChance(kpw, kac, cov, alert) : onsideChance(kpw, kac, cov)
   const recovered = h01(`${base}:onsiderec`) < recoverChance
   if (recovered) {
@@ -2797,7 +2977,9 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   const base = `${s.n}:${kicking}:ko`
   const koMargin = kicking === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const desperate = s.qtr === 4 && s.clock <= 150 && koMargin < 0 && koMargin >= -10
-  const cov = coverageScore(world, kicking)
+  // J8d: the deciding cover man on this kick (specific player, not the unit mean).
+  const covMan = getIndividual() ? stCoverMan(world, kicking, `${base}:cov`) : undefined
+  const cov = getIndividual() ? coverScoreOf(covMan) : coverageScore(world, kicking)
   const mem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
   const alert = alertness(mem?.[kicking])
   // FUTURES #6: a kick into the wind carries shorter (fewer touchbacks) and a wet
@@ -2813,8 +2995,8 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
     const options: MomentOption[] = [
       { id: 'deep', label: 'Deep kick', hint: 'Kick it deep — the safe call.' },
       { id: 'squib', label: 'Squib kick', hint: 'No touchback; a short return, ball near their 30.' },
-      { id: 'onside', label: `Onside kick (≈${Math.round(onsideChance(kA.KPW ?? 78, kA.KAC ?? 78, cov) * 100)}%)`, hint: 'A long shot at keeping the ball.' },
-      ...(!desperate ? [{ id: 'surprise', label: `Surprise onside (≈${Math.round(surpriseChance(kA.KPW ?? 78, kA.KAC ?? 78, cov, alert) * 100)}%)`, hint: 'A real shot — but a miss leaves them near midfield.' }] : []),
+      { id: 'onside', label: `Onside kick (≈${Math.round(onsideChance(kA.KPW ?? specMean('K', 'KPW', 78), kA.KAC ?? specMean('K', 'KAC', 78), cov) * 100)}%)`, hint: 'A long shot at keeping the ball.' },
+      ...(!desperate ? [{ id: 'surprise', label: `Surprise onside (≈${Math.round(surpriseChance(kA.KPW ?? specMean('K', 'KPW', 78), kA.KAC ?? specMean('K', 'KAC', 78), cov, alert) * 100)}%)`, hint: 'A real shot — but a miss leaves them near midfield.' }] : []),
     ]
     const choice = decide(s, {
       kind: 'kickoff', side: 'hc', teamId: kicking, qtr: s.qtr, clock: fmtClock(s.clock), down: null, distance: null,
@@ -2827,7 +3009,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   }
 
   if (call === 'squib' || call === 'onside' || call === 'surprise') {
-    return resolveStKick(world, s, call, base, kicking, receiving, kA, cov, alert)
+    return resolveStKick(world, s, call, base, kicking, receiving, kA, cov, alert, covMan)
   }
 
   // R17: a desperate, trailing AI club can still try an onside kick. FUTURES #4:
@@ -2863,7 +3045,7 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   // FUTURES #4: the kick + return strategies bend the same hashes. Every
   // modifier is 0/1 at the default strategies, so this is identity by default.
   const rm = kickReturnMods(recST.kr, kickST.kickoff)
-  const pTb = clamp(0.47 + ((kA.KPW ?? 80) - 78) * 0.006 + rm.tb + (koWx?.kickoffAdd ?? 0) * WX.kickoffTbPerYd, 0.42, 0.85)
+  const pTb = clamp(0.47 + ((kA.KPW ?? specMean('K', 'KPW', 80)) - 78) * 0.006 + rm.tb + (koWx?.kickoffAdd ?? 0) * WX.kickoffTbPerYd, 0.42, 0.85)
   const returner = clubReturners(world, receiving).kr
   const touchback = !returner || h01(`${base}:tb`) < pTb
   let retYds = 0
@@ -2873,8 +3055,8 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   if (!touchback && returner) {
     catchYard = clamp(2 + Math.round(h01(`${base}:cy`) * 7), 0, 9)
     retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5 + rm.base, 26 * rm.spread))
-    returnTD = h01(`${base}:td`) < 0.003
-    fumble = !returnTD && h01(`${base}:fum`) < 0.005 * rm.fumble * (koWx?.fumbleMult ?? 1)
+    returnTD = h01(`${base}:td`) < (getIndividual() ? returnTdProb(J8D.tdKick, returner, covMan) : 0.003)
+    fumble = !returnTD && h01(`${base}:fum`) < (getIndividual() ? J8D.fumKick * carrySecurityOf(returner) * rm.fumble * (koWx?.fumbleMult ?? 1) : 0.005 * rm.fumble * (koWx?.fumbleMult ?? 1))
     if (returnTD) retYds = 100 - catchYard
   }
   const start = touchback ? R2.kickoffYard : returnTD ? 100 : clamp(catchYard + retYds, 1, 99)
@@ -3251,7 +3433,7 @@ function fmtEV(v: number): string {
 function kickPowerOf(world: World, teamId: string): number {
   const k = topGroup(world, teamId, ['K'], 1)[0]
   const kA = k ? mkAttrs(k) : {}
-  return (kA.KPW ?? 78) * 0.5 + (kA.KAC ?? 78) * 0.5
+  return (kA.KPW ?? specMean('K', 'KPW', 78)) * 0.5 + (kA.KAC ?? specMean('K', 'KAC', 78)) * 0.5
 }
 
 function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake' | null {
@@ -4273,15 +4455,16 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   // Defensive penalty — typed by hash within the R2 yardage tier, automatic first down.
+  const penFields = getIndividual() ? penaltyFields(world, s, concept, offId, defId) : undefined
   const defDisc = ocEffect(world, defId).discipline * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
   // L12.13 M3: a defense that knows the system makes fewer mental errors.
   if (s.rng() < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1)) {
     const penS = statFor(s, offId)
     const startY = s.yard
     const py = penaltyYards(`${s.n}:penD:${defId}`, 'def')
-    const kind = pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py)
+    const kind = pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py, penFields?.def, penFields?.off)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`)
+    const offender = penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`, kind, penFields?.def)
     const who = shortName(offender?.name)
     // R14: offsetting — both clubs fouled on the snap; replay, no yardage.
     const offset = h01(`${s.n}:penOffset:${defId}`) < 0.001
@@ -4319,9 +4502,9 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const penS = statFor(s, offId)
     const startY = s.yard
     const py = penaltyYards(`${s.n}:penO:${offId}`, 'off')
-    const kind = pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py)
+    const kind = pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py, penFields?.off, penFields?.def)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`)
+    const offender = penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`, kind, penFields?.off)
     const who = shortName(offender?.name)
     s.yard = clamp(s.yard - py, 1, 99)
     // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
