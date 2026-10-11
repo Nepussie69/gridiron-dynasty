@@ -375,6 +375,30 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
   },
   // Arm tackle: reaching from the side, one arm across, body trailing.
   tackleArm: { base: { af: 0.45, sp: 0.55, ln: 0.48, cr: 0.18, run: 0.75 } },
+  // animflow r6c: pass-rush / run-shed moves (no ball). Rip: dip the inside
+  // shoulder low and drive the far arm up through the blocker's (sa sweeps).
+  rip: {
+    base: { cr: 0.55, ln: 0.72, af: 0.35, run: 0.85 },
+    dyn: (age, len, p) => {
+      const u = clamp01(age / Math.max(0.1, len))
+      p.sa = ease(clamp01(u / 0.35)) * (1 - ease(clamp01((u - 0.7) / 0.3)))
+      p.cr = 0.55 - 0.2 * u
+      p.ln = 0.72 - 0.2 * u
+    },
+  },
+  // Swim: club the blocker's hands down, then the far arm over the top.
+  swim: {
+    base: { cr: 0.32, ln: 0.48, af: 0.6, run: 0.7 },
+    dyn: (age, len, p) => {
+      const u = clamp01(age / Math.max(0.1, len))
+      p.au = 0.75 * Math.sin(Math.PI * clamp01((u - 0.1) / 0.7))
+      p.af = 0.6 * (1 - p.au)
+    },
+  },
+  // Bull rush: low, arms locked out into the man's chest, legs driving.
+  bull: { base: { cr: 0.5, ln: 0.68, af: 1, jos: 0.9, run: 0.75 } },
+  // Spin off the blocker's hip (facing 'spin'): compact, arms in, low.
+  spinRush: { base: { cr: 0.35, ln: 0.18, af: 0.3, sp: 0.2, run: 0.45 } },
   // animflow r6b (item 4): hands on the hips, slightly bent over (a tired man).
   hips: {
     base: { hp: 1, ln: 0.1, cr: 0.05, run: 0.3 },

@@ -14,7 +14,7 @@ import { useState, type ReactNode } from 'react'
 import { ChevronDown, LayoutGrid, List, Search, SlidersHorizontal, Star, UserMinus, UserRound, Compass } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { ELITE, money, mult, signed, STAFF_BASELINE } from '../lib/format'
-import type { StaffMember } from '../game/types'
+import type { StaffMember, StaffRole } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import {
   AccessBanner,
@@ -51,6 +51,8 @@ import {
 } from '../ui/kit'
 import { gateMenuItem, useAccessLevel, useMediaQuery, usePhone, WIDE_QUERY } from '../ui/hooks'
 import { DataTable, type Column } from '../components/DataTable'
+import { CoachSubRatings } from '../components/CoachSubRatings'
+import { isSubKey, SUB_FLOOR, SUB_META, subsForRole, subValue, type SubKey } from '../components/coachSubsUi'
 import { staffGrade, type CoachEffect } from '../game/engine/coaching'
 import {
   ANALYTICS_ROLE,
@@ -140,8 +142,16 @@ const SORTS = [
   { id: 'age', label: 'Age' },
   { id: 'value', label: 'OVR / $M' },
 ] as const
-type SortKey = (typeof SORTS)[number]['id']
+type SortKey = (typeof SORTS)[number]['id'] | SubKey
 type View = 'chart' | 'table'
+
+/** The base sorts plus one option per sub-rating relevant to the picked role. */
+function marketSorts(role: string): { id: SortKey; label: string }[] {
+  return [
+    ...SORTS.map((s) => ({ id: s.id as SortKey, label: s.label })),
+    ...subsForRole(role as StaffRole).map((k) => ({ id: k as SortKey, label: SUB_META[k].label })),
+  ]
+}
 
 const KEY_GROUP = 'gd.staff.roleGroup'
 const KEY_VIEW = 'gd.staff.view'
@@ -294,6 +304,8 @@ export function Staff() {
   const pickMarketRole = (r: string) => {
     setMarketRole(r)
     save(KEY_MROLE, r)
+    // A sub sort only exists for the roles that read that sub.
+    if (isSubKey(sortKey) && !subsForRole(r as StaffRole).includes(sortKey)) setSortKey('ovr')
   }
   const openMarket = (role: string) => {
     setTab('market')
@@ -346,6 +358,7 @@ export function Staff() {
     .filter((c) => (maxSalary === 0 ? true : c.askingSalary <= maxSalary))
     .filter((c) => (fitsOnly ? fitsMyScheme(c.role, c.scheme) : true))
     .sort((a, b) => {
+      if (isSubKey(sortKey)) return subValue(b, sortKey) - subValue(a, sortKey)
       if (sortKey === 'salary') return a.askingSalary - b.askingSalary
       if (sortKey === 'age') return a.age - b.age
       if (sortKey === 'value') return b.rating / b.askingSalary - a.rating / a.askingSalary
@@ -362,6 +375,8 @@ export function Staff() {
     (minOvr > 0 ? 1 : 0) +
     (maxSalary > 0 ? 1 : 0) +
     (fitsOnly ? 1 : 0)
+  // Base sorts + one per sub the picked role reads (FUTURES #32 follow-up).
+  const sortOptions = marketSorts(marketRole)
 
   /** "Find a better OC": market for the role, rated above him (52+ while a coordinator sits at the floor), live scheme first. */
   const findFor = (role: string) => {
@@ -751,6 +766,7 @@ export function Staff() {
               onFits={setFitsOnly}
               sortKey={sortKey}
               onSort={setSortKey}
+              sorts={sortOptions}
               phone={phone}
             />
           }
@@ -761,7 +777,7 @@ export function Staff() {
             setMaxSalary(0)
             setFitsOnly(false)
           }}
-          sortLabel={SORTS.find((s) => s.id === sortKey)?.label ?? 'OVR'}
+          sortLabel={sortOptions.find((s) => s.id === sortKey)?.label ?? 'OVR'}
           renderCard={(c) => (
             <MarketCard
               key={c.id}
@@ -1048,7 +1064,16 @@ function OrgChart({
     <VacantSeat
       key={role}
       role={SHORT_ROLE[role] ?? role}
-      consequence={vacancyCost(role, seatHolds(ctx.seat, role))}
+      consequence={
+        <>
+          {vacancyCost(role, seatHolds(ctx.seat, role))}
+          {subsForRole(role as StaffRole).length > 0 && (
+            <>
+              {' · '}plays at floor <b className="font-600 text-ink-2 tnum">{SUB_FLOOR}</b>
+            </>
+          )}
+        </>
+      }
       compact={compact}
       action={{ label: 'Find a hire', onClick: () => onVacant(role) }}
     />
@@ -1148,6 +1173,7 @@ function HeadCoachSlab({ m, ctx }: { m: StaffMember; ctx: Ctx }) {
             <MemberEffect m={m} ctx={ctx} />
             <StaffTags m={m} ctx={ctx} />
           </div>
+          <CoachSubRatings m={m} className="mt-2" />
         </div>
         <RatingTile value={m.rating} size="lg" tierWord delta label="Staff rating" />
         <Contract m={m} stacked />
@@ -1207,6 +1233,7 @@ function UnitColumn({
               <MemberEffect m={coord} ctx={ctx} />
               <StaffTags m={coord} ctx={ctx} />
             </div>
+            <CoachSubRatings m={coord} className="col-span-2" />
             <div className="col-span-2 flex items-center justify-between gap-2">
               <Contract m={coord} />
               <OverflowMenu items={ctx.menuFor(coord)} label={`Actions for ${coord.name}`} size="sm" />
@@ -1261,6 +1288,7 @@ function CompactRow({ m, ctx, tag, sub }: { m: StaffMember; ctx: Ctx; tag: strin
           <StaffTags m={m} ctx={ctx} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">{sub}</div>
+        <CoachSubRatings m={m} className="mt-1" />
         <div className="mt-1">
           <Contract m={m} />
         </div>
@@ -1319,6 +1347,13 @@ function StaffTable({
       headerTitle: 'What the seat does in the sim; sorts by size (edges in points, development as (× − 1) × 10)',
       sortValue: (m) => memberEffect(m, ctx.eff, ctx.lim).sort,
       render: (m) => <MemberEffect m={m} ctx={ctx} />,
+    },
+    {
+      key: 'subs',
+      label: 'Sub-ratings',
+      card: 'meta',
+      headerTitle: 'The individual coaching sub-ratings his seat reads in the sim (FUTURES #32)',
+      render: (m) => <CoachSubRatings m={m} />,
     },
     {
       key: 'ovr',
@@ -1460,6 +1495,13 @@ function InspectorBody({
         <div className="label mb-1">Scheme</div>
         <p className="text-small text-ink-2">{schemeLine}</p>
       </section>
+
+      {subsForRole(m.role).length > 0 && (
+        <section>
+          <div className="label mb-1.5">Sub-ratings</div>
+          <CoachSubRatings m={m} layout="rows" />
+        </section>
+      )}
 
       <section>
         <div className="label mb-1">Contract</div>
@@ -1611,6 +1653,7 @@ function MarketFilters({
   onFits,
   sortKey,
   onSort,
+  sorts,
   phone,
 }: {
   marketRole: string
@@ -1626,6 +1669,8 @@ function MarketFilters({
   onFits: (v: boolean) => void
   sortKey: SortKey
   onSort: (k: SortKey) => void
+  /** Base sorts + the picked role's sub-ratings (FUTURES #32 follow-up). */
+  sorts: { id: SortKey; label: string }[]
   phone: boolean
 }) {
   const field = 'h-9 rounded-[var(--r-md)] border border-line-strong bg-surface px-2 text-ink max-sm:h-11 max-sm:text-[16px] sm:text-small'
@@ -1682,7 +1727,7 @@ function MarketFilters({
       <div className="flex flex-wrap items-center gap-2">
         <span className="label mr-1 w-full sm:w-auto">Sort</span>
         <div className="max-w-full overflow-x-auto">
-          <SegmentedControl label="Sort candidates" size="sm" value={sortKey} onChange={onSort} options={SORTS.map((s) => ({ id: s.id, label: s.label }))} />
+          <SegmentedControl label="Sort candidates" size="sm" value={sortKey} onChange={onSort} options={sorts} />
         </div>
       </div>
     </div>
@@ -1767,6 +1812,8 @@ function MarketCard({
         <MiniStat label="Asking" value={money(candidate.askingSalary)} />
         <MiniStat label="Deal" value="3 yr" />
       </dl>
+
+      <CoachSubRatings m={candidate} className="mt-2" />
 
       <div className="mt-2 space-y-1 rounded-[var(--r-md)] bg-surface-2 px-3 py-2 text-small">
         {current ? (

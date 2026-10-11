@@ -120,7 +120,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     if (play.type === 'pass') {
       const qb = play.qbId
       if (qb) {
-        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result.startsWith('Interception') || play.result === 'TOUCHDOWN!' || play.fumbleId || play.muffedCatch) {
+        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result.startsWith('Interception') || play.result === 'TOUCHDOWN!' || play.fumbleId || play.muffedCatch || play.spike) {
           add(qb, off, 'passAtt', 1)
         }
         if (isComp) {
@@ -184,7 +184,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     } else if (play.type === 'run') {
       if (play.carrierId) {
         add(play.carrierId, off, 'rushAtt', 1)
-        add(play.carrierId, off, 'rushYds', Math.max(0, play.yards))
+        add(play.carrierId, off, 'rushYds', play.kneel ? play.yards : Math.max(0, play.yards))
         if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'rushTD', 1)
       }
       // One tackler per run — the defense shares stops across the front seven.

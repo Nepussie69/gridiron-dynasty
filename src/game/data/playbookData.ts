@@ -60,6 +60,9 @@ export const FORMATIONS: Formation[] = [
   { name: 'Strong I', personnel: '22', fullback: true, wide: 1 },
   { name: 'Weak I', personnel: '21', fullback: true, wide: 2 },
   { name: 'Goal Line', personnel: 'GL', fullback: true, wide: 0 },
+  // J5: shotgun two-tight-end (12) look and a 13-personnel jumbo short-yardage front.
+  { name: 'Gun Ace', personnel: '12', fullback: false, wide: 2 },
+  { name: 'Heavy Jumbo', personnel: '13', fullback: false, wide: 0 },
 ]
 
 const FB_FORMATIONS = new Set(FORMATIONS.filter((f) => f.fullback).map((f) => f.name))
@@ -143,6 +146,20 @@ export const PLAYBOOK: PlaybookPlay[] = [
   { name: 'QB Draw', formation: 'Gun Empty', personnel: '10', type: 'run', depth: 4, yac: 0, description: 'Show pass, then the QB runs up the middle', assignments: [R('QB', 'screen'), RB_('RB', 'middle'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
   { name: 'Read Option', formation: 'Pistol', personnel: '11', type: 'run', depth: 5, yac: 0, description: 'The QB reads the end: hand off or keep', assignments: [BLK('QB', 'play-action'), RB_('RB', 'outside'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
   { name: 'Jet Sweep', formation: 'Gun Trips', personnel: '11', type: 'run', depth: 6, yac: 0, description: 'A receiver in motion takes the handoff on the edge', assignments: [BLK('QB', 'play-action'), RB_('RB', 'outside'), R('WR3', 'bubble'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  // ── J5: shotgun / pistol runs, gun play-action, and the 13 jumbo group ──────
+  { name: 'Gun Inside Zone', formation: 'Gun Doubles', personnel: '11', type: 'run', depth: 4, yac: 0, description: 'Shotgun zone run with the back pressing one gap', assignments: [BLK('QB', 'play-action'), RB_('RB', 'middle'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Gun Power', formation: 'Gun Doubles', personnel: '11', type: 'run', depth: 3, yac: 0, description: 'Shotgun power run behind a pulling guard', assignments: [BLK('QB', 'play-action'), RB_('RB', 'right'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Gun Counter', formation: 'Gun Doubles', personnel: '11', type: 'run', depth: 3, yac: 0, description: 'Shotgun misdirection run off a pulling guard', assignments: [BLK('QB', 'play-action'), RB_('RB', 'left'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Zone Read', formation: 'Gun Doubles', personnel: '11', type: 'run', depth: 5, yac: 0, description: 'The QB reads the end: hand off or keep', assignments: [BLK('QB', 'play-action'), RB_('RB', 'outside'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Pistol Inside Zone', formation: 'Pistol', personnel: '11', type: 'run', depth: 4, yac: 0, description: 'Pistol zone run straight downhill', assignments: [BLK('QB', 'play-action'), RB_('RB', 'middle'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Singleback Zone', formation: 'Singleback Doubles', personnel: '11', type: 'run', depth: 4, yac: 0, description: 'Under-centre zone run from 11 personnel', assignments: [BLK('QB', 'play-action'), RB_('RB', 'middle'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Gun Ace Zone', formation: 'Gun Ace', personnel: '12', type: 'run', depth: 3, yac: 0, description: 'Shotgun two-tight-end run behind a heavy edge', assignments: [BLK('QB', 'play-action'), RB_('RB', 'middle'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Gun PA Boot', formation: 'Gun Doubles', personnel: '11', type: 'pass', depth: 8, yac: 0.7, description: 'Shotgun play-action boot: QB rolls away from the fake', assignments: [BLK('OL'), BLK('QB', 'play-action'), R('WR1', 'comeback'), R('WR2', 'over'), R('WR3', 'stick'), R('TE', 'drag'), BLK('RB', 'run-block')] },
+  { name: 'Gun PA Cross', formation: 'Gun Doubles', personnel: '11', type: 'pass', depth: 14, yac: 0.5, description: 'Shotgun play-action crosser over the middle', assignments: [BLK('OL'), BLK('QB', 'play-action'), R('WR1', 'post'), R('WR2', 'go'), R('WR3', 'dig'), R('TE', 'cross'), R('RB', 'runFake')] },
+  { name: 'Gun Ace PA', formation: 'Gun Ace', personnel: '12', type: 'pass', depth: 10, yac: 0.6, description: 'Shotgun play-action from two tight ends', assignments: [BLK('OL'), BLK('QB', 'play-action'), R('WR1', 'post'), R('WR2', 'go'), R('TE', 'dig'), R('TE', 'cross'), R('RB', 'runFake')] },
+  { name: 'Jumbo Power', formation: 'Heavy Jumbo', personnel: '13', type: 'run', depth: 3, yac: 0, description: 'Short-yardage power run behind three tight ends', assignments: [BLK('QB', 'play-action'), RB_('RB', 'middle'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Jumbo Inside Zone', formation: 'Heavy Jumbo', personnel: '13', type: 'run', depth: 4, yac: 0, description: 'Goal-line zone run from the jumbo package', assignments: [BLK('QB', 'play-action'), RB_('RB', 'middle'), BLK('OL', 'run-block'), BLK('TE', 'run-block')] },
+  { name: 'Jumbo PA', formation: 'Heavy Jumbo', personnel: '13', type: 'pass', depth: 6, yac: 0.7, description: 'Play-action out of the jumbo front: boot to a tight end', assignments: [BLK('OL'), BLK('QB', 'play-action'), R('WR1', 'comeback'), R('TE', 'drag'), R('TE', 'stick'), R('RB', 'check')] },
 ]
 
 /** Concept shape used by the sim. */
@@ -188,6 +205,30 @@ export const SCHEME_MENUS: Record<string, SimConcept[]> = {
   Spread: ['Four Verts', 'Quick Slant', 'RPO Bubble', 'Outside Zone', 'QB Draw'].map(sim),
   'West Coast': ['Mesh', 'Slant', 'RB Screen', 'Bootleg', 'Inside Zone'].map(sim),
   'RPO Heavy': ['RPO Pass', 'Quick Slant', 'RPO Run', 'Inside Zone'].map(sim),
+}
+
+// ── J5: realistic menus, formations, personnel and motion ────────────────────
+// The pickConcept draw is unchanged (one pass/run roll, then one uniform pick
+// from the type-filtered menu), so a scheme's pass:run split is exactly the
+// same as with SCHEME_MENUS — only *which* run or pass it chooses changes. A
+// name repeated N times is a weight of N. Shapes the league-wide mix toward the
+// nflverse 2021-25 targets (shotgun ~64% of plays, 11 personnel ~61%, 13 >= 2%,
+// RPO <= 8%, motion ~47%) while each scheme keeps its own flavour.
+export const MENU_REALISM = {
+  /** J5: base share of scrimmage plays run with pre-snap motion. Set so the
+   *  league-wide flag lands at ~46.7% once the 11-personnel gun bump below is
+   *  folded in (11-personnel shotgun is ~57% of all snaps). */
+  motionRate: 0.45,
+  /** J5: pre-snap motion is a little more common from 11-personnel shotgun looks. */
+  motionGun11Bump: 0.03,
+}
+
+export const SCHEME_MENUS_REALISM: Record<string, SimConcept[]> = {
+  'Air Raid': ['Mesh', 'Mesh', 'Y-Cross', 'Y-Cross', 'Smash', 'Smash', 'Smash', 'Quick Slant', 'Quick Slant', 'Mills', 'Gun PA Cross', 'Gun PA Cross', 'Gun PA Boot', 'Stick', 'Stick', 'Four Verticals', 'RB Screen', 'Gun Ace PA', 'Gun Ace PA', 'Gun Inside Zone', 'Gun Inside Zone', 'Zone Read', 'Gun Ace Zone', 'Inside Zone', 'Singleback Zone', 'Power'].map(sim),
+  'Pro Style': ['Play Action Deep', 'Play Action Deep', 'Play Action Deep', 'PA Cross', 'PA Cross', 'PA Cross', 'Bootleg', 'Bootleg', 'Gun PA Cross', 'Gun PA Boot', 'Mesh', 'Quick Slant', 'Smash', 'Gun Ace PA', 'Jumbo PA', 'Inside Zone', 'Inside Zone', 'Inside Zone', 'Power', 'Power', 'Counter', 'Iso', 'Trap', 'Toss', 'Gun Inside Zone', 'Duo', 'Pin-Pull', 'Singleback Zone', 'Jumbo Power', 'Gun Ace Zone'].map(sim),
+  Spread: ['Quick Slant', 'Slant', 'Mesh', 'Smash', 'Scissors', 'Gun PA Cross', 'RPO Bubble', 'Gun Ace PA', 'Four Verts', 'Jumbo PA', 'Outside Zone', 'Outside Zone', 'RPO Run', 'Gun Inside Zone', 'Gun Ace Zone', 'QB Draw', 'Draw', 'Zone Read', 'Inside Zone', 'Singleback Zone', 'Duo'].map(sim),
+  'West Coast': ['Mesh', 'Mesh', 'Slant', 'Slant', 'Quick Slant', 'Curl-Flat', 'Dagger', 'RB Screen', 'RB Screen', 'Bootleg', 'Bootleg', 'Gun PA Boot', 'Gun PA Cross', 'Gun Ace PA', 'Y-Cross', 'Y-Cross', 'Jumbo PA', 'Inside Zone', 'Inside Zone', 'Inside Zone', 'Gun Inside Zone', 'Draw', 'Jet Sweep', 'Singleback Zone', 'Power', 'Duo', 'Jumbo Power', 'Gun Ace Zone', 'Gun Inside Zone'].map(sim),
+  'RPO Heavy': ['Quick Slant', 'Quick Slant', 'Quick Slant', 'Mesh', 'Slant', 'Slant', 'Y-Cross', 'Dagger', 'Gun PA Boot', 'Gun PA Cross', 'RPO Bubble', 'RPO Pass', 'Gun Ace PA', 'Gun Ace PA', 'Inside Zone', 'Inside Zone', 'Inside Zone', 'Gun Inside Zone', 'Gun Inside Zone', 'RPO Run', 'RPO Run', 'Outside Zone', 'Outside Zone', 'Zone Read', 'Singleback Zone', 'Gun Power', 'Jumbo Inside Zone', 'Duo', 'Gun Ace Zone'].map(sim),
 }
 
 /** Playbook size, for the status report. */

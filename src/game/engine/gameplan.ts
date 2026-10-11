@@ -16,6 +16,12 @@ export interface GamePlan {
   aggression: number
   /** 0 = zone (no big plays) … 1 = balanced … 2 = press man */
   coverage: number
+  /**
+   * J36 (FUTURES #36): opponent player ids the game plan targets, at most two —
+   * the players the scouting report flagged this week. Optional, so an old save
+   * (no `targets`) loads and behaves exactly as before.
+   */
+  targets?: string[]
 }
 
 export const BALANCED_PLAN: GamePlan = { passBias: 0, tempo: 0, aggression: 0.5, coverage: 1 }

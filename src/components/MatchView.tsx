@@ -307,8 +307,9 @@ export function MatchView() {
     const tKey = play.type === 'pass' && play.targetId
       ? targetKey(play, { targetPos: byId.get(play.targetId)?.pos })
       : null
-    return actorPlayers(world, play, defId, tKey)
-  }, [world, match, play, byId])
+    // animflow r6d (J12): the user's own matchup call (double / shadow / spy) shapes his side's look.
+    return actorPlayers(world, play, defId, tKey, { teamId: career?.teamId, matchups: career?.matchups })
+  }, [world, match, play, byId, career?.teamId, career?.matchups])
   const anim = useMemo(() => {
     if (!play) return null
     return buildPlayAnim(play, {
@@ -1445,6 +1446,24 @@ function IconBtn({ title, onClick, children, playToggle, disabled }: { title: st
 
 interface Drive { offId: string; start: number; end: number }
 
+/** J7: the coverage note appended to a pass in the play log. */
+function coverNote(p: PlayEvent, jersey: (t: string, id: string) => number | undefined, players: Map<string, import('../game/types').Player>): string {
+  const tgtId = p.targetId
+  const covId = p.coverDefenderId ?? p.coverId
+  const tgt = tgtId ? `#${jersey(p.offId, tgtId) ?? '?'}` : 'the receiver'
+  const cov = covId ? `#${jersey(p.defId, covId) ?? '?'}` : 'the defender'
+  const covPos = covId ? players.get(covId)?.pos : undefined
+  const tgtPos = tgtId ? players.get(tgtId)?.pos : undefined
+  const mismatch = (covPos === 'LB' || covPos === 'S') && (tgtPos === 'WR' || tgtPos === 'TE' || tgtPos === 'RB')
+  if (p.coverTag === 'bust') return mismatch ? `mismatch: ${covPos} ${cov} on ${tgt} — busted coverage` : `busted coverage — ${tgt} wide open`
+  if (p.coverTag === 'miscall') return `defensive mis-call — ${tgt} open`
+  if (mismatch) return `mismatch: ${covPos} ${cov} on ${tgt}${p.coverTag === 'wide' ? ' — wide open' : ''}`
+  if (p.coverTag === 'blanket') return `blanketed by ${cov}`
+  if (p.coverTag === 'tight') return `tight coverage by ${cov}`
+  if (p.coverTag === 'wide') return `${tgt} wide open`
+  return `open — ${cov} trailing`
+}
+
 /** Plays grouped into drives (a drive = consecutive plays by one offense). */
 function drivesOf(plays: PlayEvent[]): Drive[] {
   const out: Drive[] = []
@@ -1467,6 +1486,8 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
     return m
   }, [plays, world])
   const jersey = (teamId: string, id: string) => jerseys.get(teamId)?.get(id)
+  // J7: positions for the coverage note ("mismatch: LB #54 on #11").
+  const players = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
   const activeRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest' })
@@ -1518,6 +1539,9 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
                     ) : null}
                     {p.dropId ? (
                       <span className="text-muted"> — dropped by #{jersey(p.offId, p.dropId) ?? '?'}</span>
+                    ) : null}
+                    {p.type === 'pass' && p.coverTag ? (
+                      <span className="text-muted"> — {coverNote(p, jersey, players)}</span>
                     ) : null}
                   </span>
                   {(p.type === 'run' || p.type === 'pass') && (

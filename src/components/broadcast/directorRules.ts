@@ -390,6 +390,38 @@ const fieldGoal: DirectorRule = {
 const GOAL_LINE = 110
 const OWN_GOAL_LINE = 10
 
+/**
+ * Which goal line the framing is about. Goal to go / backed up: the one at the
+ * line of scrimmage. Otherwise the one the carrier is near (animflow 6c: an
+ * 86-yd catch-and-run from the own 24 framed the OWN goal line once he got
+ * inside the 8 — the camera ran 30 yd back up the field away from him).
+ */
+function goalOf(ctx: ShotContext): number {
+  if (ctx.los >= 100 || ctx.los <= 20) return ctx.los >= 55 ? GOAL_LINE : OWN_GOAL_LINE
+  const x = ctx.carrier ? ctx.carrier.x : ctx.ball.x
+  return x >= 60 ? GOAL_LINE : OWN_GOAL_LINE
+}
+
+/**
+ * animflow r6d: how far a carrier running AWAY from the goal line of this framing
+ * (a backed-up run breaking out, a return leaving its own end zone) has left it:
+ * 0 while he is within 3 yd of it or not moving away, 1 from 10 yd out. The goal-line
+ * shot hands over to the follow with it instead of parking on the line until he is
+ * 14 yd out (the camera then trailed him by 14 yd).
+ */
+function leavingGoal(ctx: ShotContext, gl: number): number {
+  const c = ctx.carrier
+  if (!c) return 0
+  const away = Math.sign(c.x - gl)
+  if (!away) return 0
+  const v = velAt(ctx, c.key, ctx.t)
+  // At the own goal line (backed up) the framing is there for the safety: a carrier at speed who is not
+  // heading back at the line is leaving it even when he runs across the field (a jet sweep from the 2).
+  const leaving = gl === OWN_GOAL_LINE ? v.x * away > -1 && Math.hypot(v.x, v.y) > 3 : v.x * away >= 2
+  if (!leaving) return 0
+  return clamp01((Math.abs(c.x - gl) - 3) / 7)
+}
+
 const goalLine: DirectorRule = {
   id: 'goalLine',
   applies(ctx) {
@@ -401,7 +433,7 @@ const goalLine: DirectorRule = {
       // is still near that goal line. animflow 6b-wx: a backed-up play broken
       // for 40 yd used to keep the camera parked at the own goal line, aiming
       // up after the runner (he crossed the top of the frame).
-      const gl = ctx.los >= 55 ? GOAL_LINE : OWN_GOAL_LINE
+      const gl = goalOf(ctx)
       const x = ctx.carrier ? ctx.carrier.x : ctx.ball.x
       return Math.abs(x - gl) <= 14
     }
@@ -410,8 +442,8 @@ const goalLine: DirectorRule = {
     return c.x >= GOAL_LINE - 8 || c.x <= OWN_GOAL_LINE + 8
   },
   shape(ctx, desired) {
-    const scoring = ctx.los >= 55
-    const gl = scoring ? GOAL_LINE : OWN_GOAL_LINE
+    const gl = goalOf(ctx)
+    const scoring = gl === GOAL_LINE
     const scored = ctx.events.some((e) => e.kind === 'score')
     // The goal line sits ~1/3 in from the end-zone edge: frame ~30 yd, the back
     // line at one side, so the goal line lands a third of the way across.
@@ -420,12 +452,19 @@ const goalLine: DirectorRule = {
     // keep the base's span (only capping wide framings): narrowing it here made a
     // fast cut into the end zone drop the carrier off the edge for a few frames.
     const cy = clamp(ctx.carrier ? ctx.carrier.y : desired.cy, 8, FIELD_H - 8)
-    return { cx, cy, span: clamp(desired.span, 24, 40) }
+    const span = clamp(desired.span, 24, 40)
+    const f = scored ? 0 : leavingGoal(ctx, gl)
+    if (f > 0) return { cx: cx + (desired.cx - cx) * f, cy: cy + (desired.cy - cy) * f, span: span + (desired.span - span) * f }
+    return { cx, cy, span }
   },
   mustSee(ctx) {
-    const scoring = ctx.los >= 55
-    const gl = scoring ? GOAL_LINE : OWN_GOAL_LINE
+    const gl = goalOf(ctx)
+    const scoring = gl === GOAL_LINE
     const y = ctx.carrier ? ctx.carrier.y : MID_Y
+    // A carrier leaving the goal line is the only thing that must stay in frame (r6d).
+    if (ctx.carrier && !ctx.events.some((e) => e.kind === 'score') && leavingGoal(ctx, gl) > 0) {
+      return [...carrierPts(ctx.carrier), { x: ctx.ball.x, y: ctx.ball.y, z: 0 }]
+    }
     // Pin the goal line and the end zone AT THE CARRIER's lane, plus the nearest
     // pylon — pinning both corners 53 yd apart cannot fit the safe frame and
     // would send B5a's hard containment chasing an impossible shift.

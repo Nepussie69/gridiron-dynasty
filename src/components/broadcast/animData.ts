@@ -31,7 +31,8 @@ type InAnimEventKind =
   | 'down' | 'firstDown' | 'score' | 'safety' | 'turnover' | 'fumble' | 'kick'
   | 'fairCatch' | 'touchback' | 'kickGood' | 'kickMiss' | 'flag'
 interface InEvent { t: number; kind: InAnimEventKind; keys: string[]; spot: Pt }
-interface InB1aInput { engagements?: InEngagement[]; events?: InEvent[] }
+interface InShed { def: string; blk: string[]; t0: number; t1: number; move: 'speed' | 'bull' | 'swim' | 'spin' | 'rip' }
+interface InB1aInput { engagements?: InEngagement[]; events?: InEvent[]; sheds?: InShed[] }
 
 // ── public shapes (the renderer, B3/B4/B5, consumes these) ───────────────────
 export type PoseState =
@@ -39,6 +40,7 @@ export type PoseState =
   | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold' | 'tackle'
   | 'set' | 'throwQuick' | 'throwDeep' | 'throwRun' | 'throwHurry'
   | 'juke' | 'spin' | 'stiffArm' | 'truck' | 'tackleHit' | 'tackleArm' | 'hips'
+  | 'rip' | 'swim' | 'bull' | 'spinRush'
 
 /**
  * animflow round 3: how the quarterback throws. playAnim picks it (it knows the
@@ -514,6 +516,27 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     })
   }
 
+  // animflow r6c: a defender beating his block shows the move (rip / swim /
+  // bull / spin) and the beaten blocker is turned and off balance (a stumble,
+  // facing the man who beat him) for a beat after it.
+  const beatenBy: Record<string, { t0: number; t1: number; key: string }[]> = {}
+  for (const sh of Array.isArray(b1a.sheds) ? b1a.sheds : []) {
+    if (!keySet[sh.def] || sh.def === carrierKey) continue
+    const st: PoseState = sh.move === 'speed' || sh.move === 'rip' ? 'rip' : sh.move === 'spin' ? 'spinRush' : sh.move
+    const t0 = clamp01(sh.t0)
+    const t1 = Math.min(1, Math.max(sh.t1, sh.t0 + 0.2 / D))
+    if (t1 - t0 < 1e-6) continue
+    ;(moveBy[sh.def] ??= []).push({ t0, t1, state: st })
+    if (sh.move === 'spin' && !spinBy[sh.def]) spinBy[sh.def] = { t0, t1, dir: hashSide(play.n ?? 0, sh.def.length) }
+    for (const b of sh.blk) {
+      if (!keySet[b] || b === carrierKey) continue
+      const w = { t0: Math.min(1, t0 + 0.06 / D), t1: Math.min(1, t1 + 0.25 / D) }
+      if (w.t1 - w.t0 < 1e-6) continue
+      ;(moveBy[b] ??= []).push({ ...w, state: 'stumble' })
+      ;(beatenBy[b] ??= []).push({ ...w, key: sh.def })
+    }
+  }
+
   // animflow: the carrier is jolted (a stumble) at first contact before he goes
   // down, unless a broken tackle already shows one.
   if (carrierKey && !stumbleBy[carrierKey]) {
@@ -694,6 +717,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   // coverage rating plus a per-play draw.
   const r6Hash = (n: number) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x) }
   const scrimmage = type === 'pass' || type === 'run'
+  const qbUnder = scrimmage && (() => { const q = anim.actors.find((a) => a.key === 'qb'); return !!q && 10 + (play.startYard ?? 0) - q.path[0].x < 1.6 })()
   const pedalEnd: Record<string, number> = {}
   const ballLag: Record<string, number> = {}
   keys.forEach((k, i) => {
@@ -721,18 +745,22 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     for (const e of events) if (e.kind === 'tackle' || e.kind === 'sack' || e.kind === 'outOfBounds' || e.kind === 'down' || e.kind === 'score' || e.kind === 'incomplete' || e.kind === 'safety' || e.kind === 'fairCatch' || e.kind === 'touchback') w = w == null ? e.t : Math.min(w, e.t)
     return w
   })()
+  const kneelT = play.kneel ? events.find((e) => e.kind === 'down')?.t : undefined
   const preSnap = (k: string): PoseState => {
     if (k === fgHolderKey) return 'hold'
     if (k === returnerKey) return 'stand'
     if (kickerKey && k === kickerKey && (fgPlay || puntPlay)) return 'stand'
     if (k.startsWith('ol') || k.startsWith('dl')) return 'stance3'
-    if (k === 'qb') return 'stand'
+    // animflow r6c2 (295): under centre the passer is crouched over the ball.
+    if (k === 'qb') return qbUnder ? 'stance2' : 'stand'
     return 'stance2'
   }
 
   const stateFor = (k: string, t: number, vx: number, spd: number, hKey: string | null, nearCar: boolean): PoseState => {
     if (kickerKey && k === kickerKey && kickWin && t >= kickWin.t0 - 1e-9 && t <= kickWin.t1 + 1e-9) return 'kick'
     if (k === fgHolderKey && t < kickT) return 'hold'
+    // animflow r6d (J6): the kneel — the passer goes down on a knee and stays there.
+    if (play.kneel && k === 'qb' && kneelT != null && t >= kneelT) return 'hold'
     if (qbKey && k === qbKey && throwWin && t >= throwWin.t0 && t <= throwWin.t1) return THROW_STATE[throwStyle]
     if (qbKey && k === qbKey && fakeWin && t >= fakeWin.t0 && t <= fakeWin.t1) return 'fake'
     const cw = catchBy[k]
@@ -809,6 +837,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (scrimmage && type === 'pass' && qbKey && keySet[qbKey] && sides[k] === 'def' && !k.startsWith('dl') && (st === 'run' || st === 'stand') &&
       t > SNAP_T && !(flight && t >= flight.t0) && Math.hypot(vx, vy) < 2.5 && !nearCar && Math.hypot(pos.x - ballAtCatch.x, pos.y - ballAtCatch.y) > 8) return { mode: 'actor', key: qbKey }
     if (st === 'tackle' && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
+    const bt = beatenBy[k]?.find((w) => t >= w.t0 && t <= w.t1)
+    if (bt && keySet[bt.key]) return { mode: 'actor', key: bt.key }
     const bo = blockOther(k, t)
     if (bo) return { mode: 'actor', key: bo }
     // Shoulders to the target from the set through the follow-through, then he
