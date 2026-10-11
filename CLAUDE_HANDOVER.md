@@ -5,6 +5,10 @@ Read AGENTS.md first. Backlog rows 268–270 are this chat's new requests. Only 
 ## Goal
 Orchestrate the FUTURES queue and playtest fixes; main thrust is NFL-realistic play animation (tracking data) and realistic play calling. DeepSeek implements engine/UI jobs; Claude sub-agents do animation (Opus) and analysis/checks (Sonnet, `model: "sonnet"`).
 
+## Chat 3 (2026-10-11 19:00)
+- BDB 2021 verified + unzipped to `~/gridiron-work/nfl-tracking/bdb/2021` (week1–17.csv). Round 6 prompt updated with BDB 2021/22/23 + real accel caps + round 5 side effects.
+- SL1 (Opus) and C3 (Sonnet) relaunched from briefs. W2 on try 2 (try 1 hit 5400 s watchdog).
+
 ## Current state (main a2aaab0, 15 commits NOT pushed; 4173 HELD at 0f898f0)
 - Merged this chat: FP3 Future classes UI (I hid the header List/Cards on future tabs), animflow round 5 (returns, QB mobility, YAC, camera at tackle; accel caps 1.5× NFL by decision). Gates on main: build, lint 4, hex, contrast, broadcast 53 all pass.
 - **Claude sub-agents DIE on clear — check output, relaunch from brief if no result:**
