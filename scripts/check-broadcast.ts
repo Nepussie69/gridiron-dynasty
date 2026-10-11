@@ -2062,4 +2062,154 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   assert.ok(!pa.poses.wr0.some((w) => w.state === 'hips' && w.t1 <= 0.6 && w.t0 > 0.05), 'not during the play')
 })
 
+// animflow 6b-wx: weather on the field (indoors / off: nothing; rain / snow / cold / wind: drawn),
+// the 2.5D camera keeps up with a fast carrier, and the stride rate follows ground speed.
+{
+  const wx = await import('../src/components/broadcast/weatherFx.ts')
+  const base = { roof: 'open', closed: false, tempF: 45, windMph: 14, windAlong: 10, precip: 'rain', intensity: 0.8, loud: 0.5, altitude: 0 } as const
+  ok('animflow 6b-wx: weather layer absent indoors / when off / with no weather, present in rain and snow (Lite fewer, reduced motion still)', () => {
+    assert.equal(wx.fieldWeather(null, true), null)
+    assert.equal(wx.fieldWeather(undefined, true), null)
+    assert.equal(wx.fieldWeather({ ...base }, false), null, 'weather toggle off')
+    assert.equal(wx.fieldWeather({ ...base, roof: 'dome', closed: true }, true), null, 'dome')
+    assert.equal(wx.fieldWeather({ ...base, roof: 'retractable', closed: true }, true), null, 'roof closed')
+    const cam = makeCamera(orbitPose({ focusX: 60, focusY: 26.65, back: 27, height: 14, yaw: 0, fovDeg: 34 }), VP)
+    const info = { dpr: 1, width: VP.width, height: VP.height }
+    const frame = {} as never
+    const run = (w: ReturnType<typeof wx.fieldWeather>, o: { lite?: boolean; rm?: boolean; sec?: number } = {}) => {
+      const L = new wx.WeatherLayer(null)
+      L.weather = w
+      L.quality = o.lite ? 'lite' : 'full'
+      L.reducedMotion = !!o.rm
+      L.sec = o.sec ?? 1.3
+      const items: unknown[] = []
+      L.ground(stubCtx(), cam, frame, info)
+      L.items({ cam } as never, items as never)
+      L.air(stubCtx(), cam, frame, info)
+      return { ...L.stats, items: items.length }
+    }
+    const none = run(null)
+    assert.ok(none.particles === 0 && !none.sheen && !none.veil && none.items === 0 && none.streamers === 0, `nothing indoors: ${JSON.stringify(none)}`)
+    const dome = run(wx.fieldWeather({ ...base, roof: 'dome', closed: true }, true))
+    assert.equal(dome.items + dome.particles, 0)
+    const rain = run(wx.fieldWeather({ ...base }, true))
+    assert.ok(rain.particles > 100 && rain.sheen, `rain: ${JSON.stringify(rain)}`)
+    assert.ok(rain.streamers === 2, `streamers on the far posts' 2 uprights (the near posts are behind the lens): ${rain.streamers}`)
+    const lite = run(wx.fieldWeather({ ...base }, true), { lite: true })
+    assert.ok(lite.particles > 0 && lite.particles < rain.particles * 0.5, `Lite draws fewer: ${lite.particles} vs ${rain.particles}`)
+    const rm = run(wx.fieldWeather({ ...base }, true), { rm: true })
+    assert.ok(rm.particles === 0 && rm.veil && rm.sheen, 'reduced motion: a still veil, no moving particles')
+    const snow = run(wx.fieldWeather({ ...base, precip: 'snow', tempF: 25 }, true))
+    assert.ok(snow.particles > 40 && snow.sheen, `snow: ${JSON.stringify(snow)}`)
+    const clear = run(wx.fieldWeather({ ...base, precip: 'none', intensity: 0 }, true))
+    assert.ok(clear.particles === 0 && !clear.sheen && clear.streamers === 2, 'open air, dry: streamers only')
+    // Wind: the home club attacks +x on screen; the sim's headwind for the home offence is
+    // windAlong in odd quarters, -windAlong in even ones — so it blows toward -x in Q1.
+    const fw = wx.fieldWeather({ ...base }, true)!
+    assert.ok(wx.worldWind(fw, 1).x < 0 && wx.worldWind(fw, 2).x > 0 && near(Math.hypot(wx.worldWind(fw, 3).x, wx.worldWind(fw, 3).y), 14, 1e-9), 'wind flips with the quarter, total speed kept')
+    // Breath: cold air, visible men.
+    const al = new ActorLayer()
+    for (let i = 0; i < 8; i++) al.screen.set(`p${i}`, { key: `p${i}`, side: 'off', role: 'WR', x: 100 + i * 60, y: 500, headX: 100 + i * 60, headY: 440, top: 430, depth: 30, scale: 40, pose: 'run', holder: false } as never)
+    let breath = 0
+    let warm = 0
+    for (let sec = 0; sec < 2; sec += 0.25) {
+      const L = new wx.WeatherLayer(al)
+      L.weather = wx.fieldWeather({ ...base, precip: 'none', intensity: 0, tempF: 20 }, true)
+      L.sec = sec
+      L.air(stubCtx(), cam, frame, info)
+      breath += L.stats.breath
+      L.weather = wx.fieldWeather({ ...base, precip: 'none', intensity: 0, tempF: 65 }, true)
+      L.air(stubCtx(), cam, frame, info)
+      warm += L.stats.breath
+    }
+    assert.ok(breath > 8 && warm === 0, `breath in the cold only: ${breath} / warm ${warm}`)
+  })
+
+  ok('animflow 6b-wx: stride rate follows ground speed (~2 steps/s walking, ~3 jogging, ~4.3 sprinting)', () => {
+    const cad = (v: number) => v / cycleLength(v) // cycles (two steps) per second
+    let prev = 0
+    for (let v = 1; v <= 10.5; v += 0.5) {
+      assert.ok(cad(v) > prev, `cadence rises with speed at ${v}`)
+      prev = cad(v)
+    }
+    assert.ok(cad(2) >= 0.8 && cad(2) <= 1.2, `walk 2 yd/s: ${cad(2).toFixed(2)}`)
+    assert.ok(cad(4) >= 1.3 && cad(4) <= 1.8, `jog 4 yd/s: ${cad(4).toFixed(2)}`)
+    for (const v of [8, 9, 10]) assert.ok(cad(v) >= 1.9 && cad(v) <= 2.5, `sprint ${v} yd/s: ${cad(v).toFixed(2)} cycles/s`)
+    // The actor layer's run-cycle phase advances at that rate (SYN rb: 10 yd/s).
+    const l = new ActorLayer()
+    l.setPlay({ anim: SYN, offClub: NFL_TEAMS[0], defClub: NFL_TEAMS[1], offHome: true })
+    const a = l.sampleOf('rb', 0.3)!
+    const b = l.sampleOf('rb', 0.5)!
+    const rate = (b.ph - a.ph) / (2 * Math.PI) / (0.2 * 4)
+    assert.ok(near(rate, cad(10), 0.05 * cad(10)), `layer cadence ${rate.toFixed(2)} vs ${cad(10).toFixed(2)}`)
+  })
+
+  const { fileURLToPath } = await import('node:url')
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const rj = (n: string) => JSON.parse(readFileSync(`${repo}public/data/${n}.json`, 'utf8'))
+  ;(await import('../src/game/data/realData.ts')).setRealData({ nfl: rj('madden26').players, cfb: rj('cfb26').teams, source: { madden: 'local', cfb: 'local' } })
+  ;(await import('../src/game/data/calibration.ts')).setCalibration(rj('calibration'))
+  const store = await import('../src/store/gameStore.ts')
+  const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
+  const { buildPlayAnim, holderAt, posAt } = await import('../src/components/playAnim.ts')
+  const { actorPlayers } = await import('../src/components/jersey.ts')
+  const { createBroadcastDirector } = await import('../src/components/broadcast/directorRules.ts')
+  const { FAST_SPAN_MAX } = await import('../src/components/broadcast/director.ts')
+  ok('animflow 6b-wx: the live camera keeps up with a fast carrier (lag bound) and holds the follow scale (harness plays)', () => {
+    store.useGame.getState().startCareer({ name: 'C', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const lags: number[] = []
+    const spans: number[] = []
+    let worst = ''
+    let worstLag = -Infinity
+    for (let g = 0; g < 2; g++) {
+      const home = nfl[2 * g].id
+      const away = nfl[2 * g + 1].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 13 + g * 101)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (!['run', 'pass', 'kickoff', 'punt'].includes(play.type)) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const d = createBroadcastDirector({ profile: 'live', viewport: { w: 1280, h: 720 }, bottomClearPx: 48 })
+        d.reset(play, anim)
+        const D = anim.duration / 1000
+        const n = Math.ceil(D * 60)
+        for (let j = 0; j < n; j++) {
+          const t = j / n
+          const key = holderAt(anim, t)
+          if (!key || (key === 'qb' && play.type === 'pass')) continue
+          const fl = anim.flights?.[0]
+          if ((play.type === 'kickoff' || play.type === 'punt') && fl && t < fl.t1) continue
+          const a = anim.actors.find((x) => x.key === key)
+          if (!a) continue
+          const p0 = posAt(a.path, t)
+          const p1 = posAt(a.path, (j + 1) / n)
+          const v = Math.hypot(p1.x - p0.x, p1.y - p0.y) * 60
+          if (v < 6) continue
+          const shot = d.shotAt(t)
+          // Before the contact, outside the goal-line / sideline framings (those park on a line by design).
+          if (shot.kind !== 'follow' || shot.rule === 'goalLine' || shot.rule === 'sideline') continue
+          const lag = ((p0.x - shot.cx) * (p1.x - p0.x) + (p0.y - shot.cy) * (p1.y - p0.y)) * 60 / v
+          lags.push(lag)
+          spans.push(shot.span)
+          if (lag > worstLag) {
+            worstLag = lag
+            worst = `play ${i} ${play.concept} t ${t.toFixed(3)} lag ${lag.toFixed(1)} yd (rule ${shot.rule})`
+          }
+        }
+      }
+    }
+    lags.sort((x, y) => x - y)
+    spans.sort((x, y) => x - y)
+    const p95 = lags[Math.floor(lags.length * 0.95)]
+    assert.ok(lags.length > 1500, `coverage ${lags.length} fast follow frames`)
+    assert.ok(p95 <= 2.5, `camera trails a fast carrier by ${p95.toFixed(2)} yd p95 (bound 2.5)`)
+    assert.ok(worstLag <= 4.5, `worst trail ${worst}`)
+    const spanMed = spans[Math.floor(spans.length / 2)]
+    assert.ok(spanMed <= FAST_SPAN_MAX + 4, `fast-carrier follow span median ${spanMed.toFixed(1)} yd`)
+  })
+}
+
 console.log(`check-broadcast: PASS (${n} checks)`)

@@ -22,6 +22,7 @@ import { CAMERA_PROFILES, createProfileApplier, type ProfileCtx } from './phoneC
 import { BroadcastRenderer, FrameWindow, type BroadcastFrame, type FrameStats, type LayerHook } from './renderer'
 import { ActorLayer, type ActorPlay, type SubPlan } from './actors'
 import { SidelineLayer } from './sideline'
+import { WeatherLayer, type FieldWeather } from './weatherFx'
 import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from './graphics'
 import { type Director, type DirectorProfile } from './director'
@@ -178,6 +179,8 @@ export interface LivePlay {
   possession: 'home' | 'away'
   /** Strong-side aim point in world y (for the phone lens). */
   strongSideY: number
+  /** animflow 6b-wx: the game's field weather (null: indoors, weather off or none). */
+  weather: FieldWeather | null
 }
 
 export interface LivePlayInput {
@@ -189,6 +192,8 @@ export interface LivePlayInput {
   numbers: Map<string, number>
   /** animflow r6b: the next play (its recorded personnel drives the substitutions). */
   next?: Play
+  /** animflow 6b-wx: the game's field weather (`fieldWeather(...)`; null/absent draws none). */
+  weather?: FieldWeather | null
 }
 
 /**
@@ -286,6 +291,7 @@ export function buildLivePlay(input: LivePlayInput): LivePlay {
     turfText: scrimmage && play.down != null && play.distance != null ? `${ORD(play.down)} & ${play.startYard + play.distance >= 100 ? 'GOAL' : play.distance}` : null,
     possession: offHome ? 'home' : 'away',
     strongSideY: strongSideWorldY(anim, dir),
+    weather: input.weather ?? null,
   }
 }
 
@@ -328,6 +334,8 @@ export class LiveBroadcast {
   readonly gfx: GraphicsLayer
   /** SL1: team areas, officials and the chain crew. */
   readonly sideline: SidelineLayer
+  /** animflow 6b-wx: rain / snow / breath / wind on the field. */
+  readonly weather: WeatherLayer
 
   private opts: LiveBroadcastOptions
   private director: Director | null = null
@@ -377,10 +385,18 @@ export class LiveBroadcast {
     this.sideline = new SidelineLayer()
     this.sideline.quality = this.quality
     this.layer.ringPulse = this.quality !== 'lite' && !opts.reducedMotion
-    this.layer.people = (scene, out) => this.sideline.items(scene, out)
+    this.weather = new WeatherLayer(this.layer)
+    this.weather.quality = this.quality
+    this.weather.reducedMotion = !!opts.reducedMotion
+    this.layer.people = (scene, out) => {
+      this.sideline.items(scene, out)
+      this.weather.items(scene, out)
+    }
     this.gfx = new GraphicsLayer(this.layer, readGfxTokens(canvas))
     this.gfx.bottomInset = opts.hudBottomInset ?? 0
     this.renderer.hooks.actors = this.layer.hook
+    this.renderer.hooks.ground = this.weather.ground
+    this.renderer.hooks.weather = this.weather.air
     this.renderer.hooks.overlay = this.gfx.hook
     // B8: telestrations under the HUD, the REPLAY bug + wipe over it. The
     // telestrator owns the vignette (so it stays under the strokes).
@@ -509,6 +525,9 @@ export class LiveBroadcast {
       homeId: this.opts.homeTeamId,
     })
     this.gfx.setTimeline(lp.tl)
+    this.weather.weather = lp.weather
+    this.weather.qtr = lp.play.qtr ?? 1
+    this.weather.club = club(this.opts.homeTeamId)
     // B5 director with B5b's special-teams rules (kicks, returns, FG/PAT).
     this.director = createBroadcastDirector({ profile: this.directorProfile(), viewport: this.viewport(), bottomClearPx: this.opts.hudBottomInset })
     this.director.reset(lp.play, lp.anim)
@@ -549,6 +568,7 @@ export class LiveBroadcast {
     this.quality = q
     this.renderer.setQuality(q)
     this.sideline.quality = q
+    this.weather.quality = q
     this.layer.ringPulse = q !== 'lite' && !this.opts.reducedMotion
     this.renderer.setDprCap(QUALITY[q].dprCap)
     this.tele.vignette = QUALITY[q].vignette
@@ -583,6 +603,7 @@ export class LiveBroadcast {
     // toast's hold (the toast enters at the whistle and holds `post` seconds).
     this.gfx.sec = lp ? t * Math.max(0.05, lp.anim.duration / 1000) + (inReplay ? 0 : this.endHold) : 0
     this.sideline.sec = this.gfx.sec
+    this.weather.sec = this.gfx.sec
     // The replay: chip only (no live callouts / toast over the telestrations).
     this.gfx.mode = inReplay ? 'fast' : 'full'
     this.gfx.reducedMotion = !!this.opts.reducedMotion
@@ -685,6 +706,7 @@ export class LiveBroadcast {
       teleMs: Math.round(this.tele.stats.ms * 1000) / 1000,
       teleLabels: this.tele.stats.labels,
       sideline: { ...this.sideline.stats, ms: Math.round(this.sideline.stats.ms * 1000) / 1000 },
+      weather: { on: this.weather.active, ...this.weather.stats, ms: Math.round(this.weather.stats.ms * 1000) / 1000 },
       lastMs: Math.round((this.win.count ? this.lastMs : 0) * 1000) / 1000,
       intervals: this.drawStamps.slice(-300),
     }

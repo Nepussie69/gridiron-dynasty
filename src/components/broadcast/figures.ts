@@ -654,20 +654,29 @@ export interface DrawOpts {
   time: number
 }
 
-/** Stride (yards per full two-step cycle) at speed v (yd/s): longer when faster. */
+/**
+ * Stride (yards per full two-step cycle) at speed v (yd/s): longer when faster.
+ * animflow 6b-wx: the cadence follows sprint data — ~2 steps/s walking (2 yd/s),
+ * ~3 jogging (4 yd/s), ~4.3 at 8-10 yd/s (was 6.7 at 8 yd/s: short, busy strides
+ * that read as running in place in the 2.5D view).
+ */
 export function cycleLength(v: number): number {
-  return 1.5 + 0.12 * Math.min(10, Math.max(0, v))
+  return 1.4 + 0.3 * Math.min(10.5, Math.max(0, v))
 }
+
+/** The widest leg swing (a sprint stride reaches past the walk geometry). */
+export const STRIDE_AMP_MAX = 1.35
 
 /**
  * Leg / arm swing amplitude (0..1) at speed v before pose damping. A foot
  * swings 0.4·amp yd either side of the hips (0.2 units × the 2-yd unit), so
  * amp = cycle / (2π · 0.4) moves a planted foot back exactly as fast as the
  * body moves forward (no skating at a jog or backpedal); faded in below
- * 0.8 yd/s so a standing figure does not hold a stride.
+ * 0.8 yd/s so a standing figure does not hold a stride. Capped at
+ * STRIDE_AMP_MAX: above ~6.5 yd/s part of each stride is flight, as in a sprint.
  */
 export function strideAmp(v: number): number {
-  return Math.min(1, cycleLength(v) / (Math.PI * 2 * 0.4)) * clamp01(v / 0.8)
+  return Math.min(STRIDE_AMP_MAX, cycleLength(v) / (Math.PI * 2 * 0.4)) * clamp01(v / 0.8)
 }
 
 /** Hip height (figure units, negative = up) for a pose. */

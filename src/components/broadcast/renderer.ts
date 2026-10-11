@@ -180,8 +180,12 @@ interface StaticCache {
 
 export class BroadcastRenderer {
   readonly canvas: HTMLCanvasElement
-  /** Layer hooks: set by B3/B4 (actors) and B6 (overlay). */
-  hooks: { actors?: LayerHook; overlay?: LayerHook } = {}
+  /**
+   * Layer hooks: set by B3/B4 (actors) and B6 (overlay). animflow 6b-wx: `ground`
+   * paints on the turf under the lines and players (wet sheen / snow), `weather`
+   * over the players and under the overlay (rain / snow / breath).
+   */
+  hooks: { ground?: LayerHook; actors?: LayerHook; weather?: LayerHook; overlay?: LayerHook } = {}
   onFrame?: (stats: FrameStats) => void
 
   private ctx: Ctx
@@ -473,6 +477,12 @@ export class BroadcastRenderer {
     this.learnReuse(mode, staticMs)
 
     // 2. turf paint
+    const info: LayerInfo = { dpr: this.dpr, width: W, height: H }
+    if (this.hooks.ground) {
+      ctx.save()
+      this.hooks.ground(ctx, cam, frame, info)
+      ctx.restore()
+    }
     const dir = frame.direction
     if (frame.turfText && frame.losYard != null) {
       let img = this.turfGraphics.get(frame.turfText)
@@ -489,10 +499,14 @@ export class BroadcastRenderer {
     })
 
     // 3–4. hooks + vignette
-    const info: LayerInfo = { dpr: this.dpr, width: W, height: H }
     if (this.hooks.actors) {
       ctx.save()
       this.hooks.actors(ctx, cam, frame, info)
+      ctx.restore()
+    }
+    if (this.hooks.weather) {
+      ctx.save()
+      this.hooks.weather(ctx, cam, frame, info)
       ctx.restore()
     }
     if (this.hooks.overlay) {
