@@ -2336,6 +2336,37 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(cred / tackles >= 0.7, `drawn tackler is the credited man on ${cred}/${tackles}`)
     assert.ok(slowTd === 0, `${slowTd} scores stop on the line: ${bad.filter((b) => /goal/.test(b)).slice(0, 3).join('; ')}`)
   })
+
+  ok('animflow 6c (302): crossers / slants / verticals are caught in stride (moving >= 3 yd/s at the catch); stop routes may be caught standing', () => {
+    store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const CROSS = /^(slant|quickSlant|cross|drag|shallow|meshIn|dig|in|whip|glance|angle|go|post|seam|corner|over|wheel|sluggo|chair|postCorner|outUp)$/
+    let n = 0
+    let moving = 0
+    for (let g = 0; g < 6; g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 4) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 53 + g * 211)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const c = (anim.events ?? []).find((e) => e.kind === 'catch')
+        if (!c || !CROSS.test(anim.catchRoute ?? '')) continue
+        const a = anim.actors.find((x) => x.key === c.keys[0])
+        if (!a) continue
+        const D = anim.duration / 1000
+        const p0 = posAt(a.path, Math.max(0, c.t - 0.05 / D))
+        const p1 = posAt(a.path, Math.min(1, c.t + 0.05 / D))
+        n++
+        if (Math.hypot(p1.x - p0.x, p1.y - p0.y) / 0.1 >= 3) moving++
+      }
+    }
+    assert.ok(n >= 60, `coverage: ${n} crossing / vertical catches`)
+    assert.ok(moving / n >= 0.7, `only ${moving}/${n} crossing / vertical catches made in stride`)
+  })
 }
 
 console.log(`check-broadcast: PASS (${n} checks)`)

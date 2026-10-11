@@ -68,6 +68,8 @@ export interface PlayAnim {
   throwStyle?: ThrowStyle
   /** animflow r6c: a defender beating his block (the move, his blocker(s), the window). Times 0..1. */
   sheds?: Shed[]
+  /** animflow r6c2 (302): the route the pass target runs (the catch is in stride unless it is a stop route). */
+  catchRoute?: string
 }
 
 /**
@@ -1375,6 +1377,7 @@ function applyBlockEngagements(
 // ── plays ────────────────────────────────────────────────────────────────────
 /** buildPass's throw style (the builders return finish()'s PlayAnim). */
 let LAST_THROW_STYLE: ThrowStyle | undefined
+let LAST_CATCH_ROUTE: string | undefined
 export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim {
   // animflow r6b: the sim's fatigue at the snap rides along (tired gait / poses).
   const fat = ctx0.fat ?? fatigueMap(play)
@@ -1388,7 +1391,9 @@ export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim
         LAST_THROW_STYLE = undefined
         {
           const a = buildPass(play, ctx)
-          return LAST_THROW_STYLE ? { ...a, throwStyle: LAST_THROW_STYLE } : a
+          const r = LAST_CATCH_ROUTE
+          LAST_CATCH_ROUTE = undefined
+          return LAST_THROW_STYLE || r ? { ...a, ...(LAST_THROW_STYLE ? { throwStyle: LAST_THROW_STYLE } : {}), ...(r ? { catchRoute: r } : {}) } : a
         }
       case 'punt':
         return buildPunt(play, ctx)
@@ -2557,15 +2562,33 @@ function routeRunRating(p: Player | undefined, depth: number): number {
 }
 
 /** Run a route: high route running = a crisp near-stop cut, low = a rounded drift. */
-function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1) {
+function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1, through = 0, flat = false) {
   const v0 = 0
   const saved = mv.pace
   // The stem can be run under control (animflow round 2: timed to the drop);
   // out of the break he is at full speed again.
   const stem = () => { if (stemPace < 1) mv.pace = { top: saved.top * stemPace, acc: saved.acc * Math.min(1, stemPace + 0.1) } }
+  // animflow r6c2 (302): a route the ball meets in stride is run on through
+  // its last point (`through` yd more along the final leg), not braked onto it.
+  const ext = (seg: Pt[], from: Pt): Pt[] => {
+    if (!through || !seg.length) return seg
+    const b = seg[seg.length - 1]
+    const a = seg.length >= 2 ? seg[seg.length - 2] : from
+    // `flat`: no room left before the recorded spot — he carries on across, not upfield.
+    const ax = flat ? (b.x - a.x) * 0.15 : b.x - a.x
+    const L = Math.hypot(ax, b.y - a.y) || 1
+    const e = { x: clampX(b.x + (ax / L) * through), y: clampY(b.y + ((b.y - a.y) / L) * through) }
+    const got = Math.hypot(e.x - b.x, e.y - b.y)
+    // Running out of field (an out at the sideline): he turns up it.
+    if (got < through * 0.5) {
+      const c = { x: clampX(b.x + (ax / L) * Math.min(got, 1.2)), y: clampY(b.y + ((b.y - a.y) / L) * Math.min(got, 1.2)) }
+      return [...seg, c, { x: clampX(c.x + 1.6), y: clampY(c.y + (MID_Y - c.y) * 0.05) }, { x: clampX(c.x + through * 0.8), y: c.y }]
+    }
+    return [...seg, e]
+  }
   if (breakIdx <= 0 || breakIdx >= pts.length - 1) {
     stem()
-    mv.run(pts, { v0, stop: true })
+    mv.run(ext(pts, { x: mv.x, y: mv.y }), { v0, stop: true })
     mv.pace = saved
     return
   }
@@ -2577,7 +2600,7 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
   mv.run(pts.slice(0, breakIdx + 1), { v0, stop: true })
   mv.pace = saved
   if (crisp) mv.hold(clampN(0.04 + (rr - CRISP_RR) * 0.0055, 0.04, 0.12))
-  mv.run(pts.slice(breakIdx + 1), { v0: 0, stop: true })
+  mv.run(ext(pts.slice(breakIdx + 1), pts[breakIdx]), { v0: 0, stop: true })
 }
 
 // ── coverage look (backlog 151) ───────────────────────────────────────────────
@@ -3556,6 +3579,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     if (short) routeMap[tgt] = short
   }
 
+  LAST_CATCH_ROUTE = routeMap[tgt]
   const receivers = ['wr0', 'wr1', 'wr2', 'te', 'rb'].filter((k) => m[k])
   // Only a tight end / back assigned to pass-protect (block/passBlock) stays in
   // (backlog 152); a screen "stalk" or a play-action "runFake" is a route, not
@@ -3588,7 +3612,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     return clampN(base - (rls - 75) * 0.006 + hash(seed + k.length * 13 + 7) * 0.18, 0.05, 0.65)
   }
   /** Run receiver k: the release at the line, then his route at `pace` of his speed. */
-  const runRecv = (k: string, pace: number) => {
+  const runRecv = (k: string, pace: number, through = 0, flat = false) => {
     const pts = routePts(k)
     if (!(k === 'rb' && chipped)) m[k].reset(f[k].x, f[k].y)
     const rel = releaseOf(k)
@@ -3599,32 +3623,65 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     }
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const breakIdx = pts.length >= 3 ? pts.length - 2 : -1
-    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace)
+    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace, through, flat)
     return { pts, breakIdx }
   }
   const endX0 = clampX(10 + play.endYard)
+  // animflow r6c2 (302): the ball meets a receiver in stride (crossers, slants,
+  // verticals, outs: he keeps his speed through the catch); only a stop route
+  // (hitch, curl, comeback, stick / sit, a back's check-down) or a back-shoulder
+  // fade is caught standing.
+  const tgtRoute = routeMap[tgt] ?? ''
+  const backShoulder = tgtRoute === 'fade' && hash(seed + 83) < 0.3
+  const stride = !screen && !backShoulder && !/^(hitch|curl|comeback|stick|sit|check|stalk|runFake|block|passBlock)$/.test(tgtRoute)
   /** The target at a stem pace: where and when the ball meets him, and when it must leave. */
   const planTarget = (pace: number) => {
-    const { pts, breakIdx } = runRecv(tgt, pace)
+    const room = !inc && !int ? endX0 - Math.min(yacT, Math.max(0, endX0 - los - 0.5)) - (routePts(tgt).slice(-1)[0]?.x ?? 0) : Infinity
+    const { pts, breakIdx } = runRecv(tgt, pace, stride ? 16 : 0, room < 4)
     let cPt = pts[pts.length - 1]
-    let cSec = m[tgt].t
+    let cSec = stride ? timeNearest(m[tgt], cPt, 0, m[tgt].t) : m[tgt].t
     let v0 = 0
+    let fixed = false
     // A completion that gains less than the route's depth: the ball arrives
     // earlier on the route, short of the end spot, so the run after the catch
     // goes forward (or across), never back toward the line like a real NFL catch.
+    let xMax = Infinity
     if (!inc && !int) {
       const gain = endX0 - los
       const yacMin = gain > 0 ? Math.min(yacT, Math.max(0, gain - 0.5)) : 0
+      xMax = endX0 - yacMin
       if (cPt.x > endX0 - yacMin) {
         for (let t = cSec; t >= 0.35; t -= 0.02) {
           if (posAt(m[tgt].path, t).x <= endX0 - yacMin) {
+            // In stride: not in his brake into the break.
+            if (stride) while (t > 0.6 && speedAtTime(m[tgt].path, t) < 3.5) t -= 0.04
             cPt = posAt(m[tgt].path, t)
             v0 = seek(m[tgt], t)
+            cSec = t
+            fixed = true
+            break
+          }
+        }
+      }
+    }
+    if (stride && !fixed) {
+      // Too early for the QB: the ball meets him further along his line (still
+      // running), as long as that stays short of the recorded spot.
+      const goal = Math.max(minRel, wantRel - 0.3)
+      const airAt = (p: Pt) => Math.hypot(p.x - (f.qb.x - drop), p.y - MID_Y)
+      if (cSec - flightFor(airAt(cPt)) < goal) {
+        // (never in the slow-down at the end of his line)
+        for (let t = cSec; t <= m[tgt].t - 1.0; t += 0.04) {
+          const p = posAt(m[tgt].path, t)
+          if (p.x > xMax + 0.3) break
+          if (t - flightFor(airAt(p)) >= goal) {
+            cPt = p
             cSec = t
             break
           }
         }
       }
+      v0 = seek(m[tgt], cSec)
     }
     cSec = Math.max(cSec, 0.35)
     if (screen) {
@@ -3659,7 +3716,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // target open when the QB wants to throw.
   let bestPace = 1
   let bestErr = Infinity
-  for (let pace = 1; pace >= 0.5 - 1e-9; pace -= 0.04) {
+  for (let pace = 1; pace >= (stride ? 0.36 : 0.5) - 1e-9; pace -= 0.04) {
     const r = planTarget(pace).rel
     const err = Math.abs(r - Math.max(wantRel, minRel)) + (r < minRel ? 5 + (minRel - r) : 0)
     if (err < bestErr) {
@@ -3678,11 +3735,42 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const relGoal = Math.max(minRel, wantRel - 0.3)
   if (tp.rel < relGoal) {
     const late = relGoal + flightFor(Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y))
-    seek(m[tgt], catchSec)
-    pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
-    catchSec = m[tgt].t
-    catchPt = { x: m[tgt].x, y: m[tgt].y }
-    catchV0 = 0
+    const v = seek(m[tgt], catchSec)
+    if (stride && late - catchSec > 0.2) {
+      // animflow r6c2 (302): a crosser / vertical early for the QB throttles
+      // down and keeps working across (no stop in the open): the ball meets him
+      // on the move. Across, not upfield, so the catch stays short of the spot.
+      const h = m[tgt].path.length > 1 ? speedVec(m[tgt].path, m[tgt].t) : { x: 0, y: 1 }
+      let hx = h.x * 0.2
+      let hy = Math.abs(h.y) > 0.3 ? h.y : (m[tgt].y < MID_Y ? 1 : -1)
+      const hl = Math.hypot(hx, hy) || 1
+      hx /= hl
+      hy /= hl
+      const jog = 3.6
+      let d = jog * (late - catchSec)
+      // Room before the sideline: turn back inside rather than run out.
+      const yRoom = hy > 0 ? FIELD_H - 2 - m[tgt].y : m[tgt].y - 2
+      if (d * Math.abs(hy) > yRoom) d = Math.max(0.5, yRoom / Math.max(0.2, Math.abs(hy)))
+      const saved = m[tgt].pace
+      m[tgt].pace = { top: Math.min(saved.top, Math.max(jog, v * 0.8)), acc: Math.min(saved.acc, 5) }
+      m[tgt].run([{ x: clampX(m[tgt].x + hx * d), y: clampY(m[tgt].y + hy * d) }], { v0: Math.min(v, m[tgt].pace.top), stop: false })
+      m[tgt].pace = saved
+      const tEnd = Math.min(m[tgt].t, late)
+      catchV0 = seek(m[tgt], tEnd)
+      catchSec = m[tgt].t
+      catchPt = { x: m[tgt].x, y: m[tgt].y }
+      if (late - catchSec > 0.05) {
+        pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
+        catchSec = m[tgt].t
+        catchPt = { x: m[tgt].x, y: m[tgt].y }
+        catchV0 = 0
+      }
+    } else {
+      pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
+      catchSec = m[tgt].t
+      catchPt = { x: m[tgt].x, y: m[tgt].y }
+      catchV0 = 0
+    }
   }
   for (const k of receivers) {
     if (stayIn.has(k) || k === tgt) continue
