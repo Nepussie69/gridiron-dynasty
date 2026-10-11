@@ -10,6 +10,8 @@ Orchestrate the FUTURES queue and playtest fixes; main thrust is NFL-realistic p
 - SL1 MERGED dc59f2a (backlog 268/269 ✅; check-broadcast needs `--import ~/gridiron-work/loader.mjs`, 54 checks). C3 blank-field fix MERGED (MatchView canvas as state; first-open + remount blank).
 - W2 weather MERGED 3204236. **Clutch P2** (DeepSeek) running in wt/clutchp2 → logs/clutchp2.log; verify file per prompts/clutch-p2.txt. Then J1, J2, J3, J5, J6 one at a time.
 - Pushed 510efc9 to GitHub + Pages (user ok). Save slots MERGED + PUSHED c9444bb (Pages index-BaD3tWEH.js); push ok consumed. **Ratings audit** (Sonnet, read-only) → RATINGS_BROADCAST_AUDIT.pdf in project folder.
+- Clutch P2 MERGED bfc3949. DeepSeek running: **J1** (wt/realismj1, logs/realismj1.log) and **W3a** weather screens (wt/weatherw3a, prompt prompts/weather-w3a.txt). Next sim job after J1: J2, J3, J5, J6.
+- **Round 6b = ratings-audit gaps** (user priority) → prompts/animflow-round6b-audit.txt, launch in wt/animflow after 6a merges; then 6c (orig items 4–6), 6d (7–10).
 - **Round 6a** (Opus) running in wt/animflow (at e50ae0e) → appends 'Round 6a' to logs/animflow-report.out. Relaunch brief: prompts/animflow-round6a-launch.txt. W2 on try 2 (try 1 hit 5400 s watchdog).
 
 ## Current state (main a2aaab0, 15 commits NOT pushed; 4173 HELD at 0f898f0)
