@@ -745,6 +745,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     for (const e of events) if (e.kind === 'tackle' || e.kind === 'sack' || e.kind === 'outOfBounds' || e.kind === 'down' || e.kind === 'score' || e.kind === 'incomplete' || e.kind === 'safety' || e.kind === 'fairCatch' || e.kind === 'touchback') w = w == null ? e.t : Math.min(w, e.t)
     return w
   })()
+  const kneelT = play.kneel ? events.find((e) => e.kind === 'down')?.t : undefined
   const preSnap = (k: string): PoseState => {
     if (k === fgHolderKey) return 'hold'
     if (k === returnerKey) return 'stand'
@@ -758,6 +759,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const stateFor = (k: string, t: number, vx: number, spd: number, hKey: string | null, nearCar: boolean): PoseState => {
     if (kickerKey && k === kickerKey && kickWin && t >= kickWin.t0 - 1e-9 && t <= kickWin.t1 + 1e-9) return 'kick'
     if (k === fgHolderKey && t < kickT) return 'hold'
+    // animflow r6d (J6): the kneel — the passer goes down on a knee and stays there.
+    if (play.kneel && k === 'qb' && kneelT != null && t >= kneelT) return 'hold'
     if (qbKey && k === qbKey && throwWin && t >= throwWin.t0 && t <= throwWin.t1) return THROW_STATE[throwStyle]
     if (qbKey && k === qbKey && fakeWin && t >= fakeWin.t0 && t <= fakeWin.t1) return 'fake'
     const cw = catchBy[k]
