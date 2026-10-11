@@ -23,8 +23,10 @@ import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { TeamHoverCard } from './TeamHoverCard'
-import { Badge, BroadcastScope, Button, ConfirmSheet, IconButton, OverflowMenu, ScoreBlock, TeamCrest, type MenuItem } from '../ui/kit'
+import { Badge, BroadcastScope, Button, ConfirmSheet, DivergingMeter, IconButton, OptionCard, OptionGroup, OverflowMenu, ScoreBlock, TeamCrest, VerdictChip, type MenuItem } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
+import { challengeThreshold, type ChallengeState, type PlayReview } from '../game/engine/review'
+import { ReviewCard } from './ReviewCard'
 import BroadcastBoundary from './broadcast/BroadcastBoundary'
 import { buildLivePlay, createLiveBroadcast, latchLiveView, reportFallback, useLiveView, type LiveBroadcast } from './broadcast/liveView'
 import { autoStartLevel } from './broadcast/quality'
@@ -156,6 +158,17 @@ function playToast(play: PlayEvent, next?: PlayEvent): { text: string; tone: Toa
 }
 
 
+/** FUTURES #5 C3: the replay booth's read (0–1) from a challenge moment's staff read. */
+function reviewRead(staffRead?: string): number | null {
+  const m = staffRead?.match(/(\d+)\s*%/)
+  return m ? Math.max(0, Math.min(1, Number(m[1]) / 100)) : null
+}
+
+/** FUTURES #5 C3: the badge label for a reviewed play: 'Booth' or 'Challenge'. */
+function reviewLabel(review: PlayReview): string {
+  return review.by === 'booth' ? 'Booth' : 'Challenge'
+}
+
 /** B8: CSS px the 2.5D HUD keeps clear for the floating replay pill (bottom-3 + its height). */
 const PILL_CLEAR_PX = { main: 48, phone: 68 } as const
 
@@ -197,6 +210,10 @@ export function MatchView() {
   const phone = usePhone()
   const [panelOpen, setPanelOpen] = useState(false)
   const [abandoning, setAbandoning] = useState(false)
+  // FUTURES #5 C3: the review overlay. The newest review is held in state so it
+  // stays on the field after the auto-advance moves to the next play.
+  const [reviewCard, setReviewCard] = useState<{ review: PlayReview; result: string; clubAbbr?: string } | null>(null)
+  const reviewKeyRef = useRef<string | null>(null)
 
   // U1: follow camera + full-field toggle + reduced-motion pref.
   const [fullField, setFullField] = useState(() => {
@@ -315,6 +332,11 @@ export function MatchView() {
   // Run the play's animation: a pre-snap beat, then t from 0 to 1.
   useEffect(() => {
     if (!anim || frozen) return
+    // FUTURES #5 C3: a reversal replaces the play on screen with the corrected
+    // truth — jump to its end frame and never re-animate it (backlog 82).
+    if (play?.review?.outcome === 'reversed' && tRef.current.i === idx && tRef.current.t < 1) {
+      tRef.current = { i: idx, t: 1 }
+    }
     // A play that already finished stays finished: when a coached game appends
     // the next plays, this play's animation is rebuilt (its "next" changed) —
     // don't replay it from the snap. Replay/jump reset tRef, so they still run.
@@ -336,7 +358,17 @@ export function MatchView() {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [anim, idx, speed, replay, frozen])
+  }, [anim, idx, speed, replay, frozen, play])
+
+  // FUTURES #5 C3: surface a newly-recorded review once, then hold it on screen.
+  const activeReview = play?.review ?? null
+  useEffect(() => {
+    if (!activeReview || !play) return
+    const key = `${play.n}:${activeReview.by}:${activeReview.kind}:${activeReview.outcome}`
+    if (reviewKeyRef.current === key) return
+    reviewKeyRef.current = key
+    setReviewCard({ review: activeReview, result: play.result, clubAbbr: activeReview.club ? world.byId[activeReview.club]?.abbr : undefined })
+  }, [activeReview, play, world])
 
   // The box score follows the replay: every play up to and including the one on
   // screen, so it never shows stats from further ahead than you've watched.
@@ -617,6 +649,14 @@ export function MatchView() {
   const userTeamId = gameDay?.state.ctx?.userTeamId ?? career?.teamId
   const timeoutsLeft = userTeamId ? (gameDay?.state.timeouts[userTeamId] ?? 0) : 0
   const timeoutArmed = !!gameDay && !!userTeamId && gameDay.state.manualTimeout === userTeamId
+  // FUTURES #5 C3: the challenge moment's replay read, threshold and flags left.
+  const challengeInfo = moment?.kind === 'challenge'
+    ? {
+        read: reviewRead(moment.staffRead) ?? 0,
+        threshold: gameDay?.state.ctx ? challengeThreshold(gameDay.state.ctx.callSheet) : 0.72,
+        left: (userTeamId ? gameDay?.state.challenges?.[userTeamId]?.left : 0) ?? 0,
+      }
+    : null
 
   const vb = fullField
     ? `0 0 ${W} ${H}`
@@ -746,7 +786,7 @@ export function MatchView() {
       {/* ── U2: broadcast scorebug (replaces the header row) ───────────────── */}
       <header className="flex shrink-0 items-center gap-1.5 border-b border-line bg-canvas/60 px-2 py-1.5 sm:gap-2 sm:px-3">
         <TeamHoverCard team={away} className="min-w-0">
-          <ScoreBlock team={away} score={shownScore.away} hasBall={play.offId === away.id} timeouts={gameDay?.state.timeouts?.[away.id]} align="left" />
+          <ScoreBlock team={away} score={shownScore.away} hasBall={play.offId === away.id} timeouts={gameDay?.state.timeouts?.[away.id]} challenges={gameDay?.state.challenges?.[away.id]?.left} align="left" />
         </TeamHoverCard>
         <div className="mx-auto flex min-w-0 flex-col items-center justify-center leading-tight">
           <div className="flex items-center gap-1.5">
@@ -774,7 +814,7 @@ export function MatchView() {
           )}
         </div>
         <TeamHoverCard team={home} className="min-w-0">
-          <ScoreBlock team={home} score={shownScore.home} hasBall={play.offId === home.id} timeouts={gameDay?.state.timeouts?.[home.id]} align="right" />
+          <ScoreBlock team={home} score={shownScore.home} hasBall={play.offId === home.id} timeouts={gameDay?.state.timeouts?.[home.id]} challenges={gameDay?.state.challenges?.[home.id]?.left} align="right" />
         </TeamHoverCard>
         <OverflowMenu items={gameMenu} label="Game options" size="sm" className="ml-0.5 shrink-0 self-center" />
         <IconButton
@@ -1067,10 +1107,23 @@ export function MatchView() {
               </div>
             )}
 
+            {/* FUTURES #5 C3: the replay-review overlay (booth or red flag). */}
+            {reviewCard && (
+              <ReviewCard
+                review={reviewCard.review}
+                result={reviewCard.result}
+                clubAbbr={reviewCard.clubAbbr}
+                onDone={() => setReviewCard(null)}
+              />
+            )}
+
             {/* play-result toast (top-down; the 2.5D view draws its own after the whistle) */}
             {toast && !broadcastLive && (
               <div key={idx} className="gd-toast pointer-events-none absolute inset-x-0 bottom-16 z-10 flex justify-center">
-                <span className={cn('rounded-md border px-3 py-1 font-cond text-sm font-700 uppercase tracking-wide shadow-lg backdrop-blur-sm', TOAST_TONE[toast.tone])}>
+                <span className={cn('inline-flex items-center rounded-md border px-3 py-1 font-cond text-sm font-700 uppercase tracking-wide shadow-lg backdrop-blur-sm', TOAST_TONE[toast.tone])}>
+                  {play.review && (
+                    <Badge tone={play.review.by === 'booth' ? 'neutral' : 'loss'} className="mr-1.5">{reviewLabel(play.review)}</Badge>
+                  )}
                   {toast.text}
                 </span>
               </div>
@@ -1145,6 +1198,7 @@ export function MatchView() {
                     onAnswer={answer}
                     quick={(lean) => quickOffCall(world, moment.teamId === match.homeId ? match.awayId : match.homeId, moment, lean)}
                     fourthNote={analyticsFourthNote(world, moment)}
+                    challenge={challengeInfo}
                   />
                 </div>
               ) : (
@@ -1239,6 +1293,7 @@ export function MatchView() {
                   teamId={boxTeamId}
                   box={liveBox}
                   pen={pen}
+                  challenges={gameDay?.state.challenges?.[boxTeamId]}
                   gmName={career?.gmName}
                   myTeamId={career?.teamId}
                   onTeamClick={
@@ -1433,6 +1488,7 @@ function PlayLog({ plays, idx, world, onJump, downText }: {
                   <span className="w-14 shrink-0 pt-px font-cond text-label tnum text-muted">{downText(p) || p.type.toUpperCase()}</span>
                   <span className="min-w-0 flex-1 leading-snug text-ink-2">
                     <span className="font-600 text-ink">{p.concept}</span> — {p.result}
+                    {p.review && <Badge tone={p.review.by === 'booth' ? 'neutral' : 'loss'} className="ml-1">{reviewLabel(p.review)}</Badge>}
                     {p.missedTackleIds?.length ? (
                       <span className="text-muted"> — broke a tackle by {p.missedTackleIds.map((id) => `#${jersey(p.defId, id) ?? '?'}`).join(', ')}</span>
                     ) : null}
@@ -1617,11 +1673,20 @@ function clockSeconds(clock: string): number {
   return (m || 0) * 60 + (s || 0)
 }
 
-function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote }: { moment: Moment; fieldPos: string; onAnswer: (id: string) => void; quick?: (lean: 'run' | 'pass') => string | null; fourthNote?: string | null }) {
+function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote, challenge }: {
+  moment: Moment
+  fieldPos: string
+  onAnswer: (id: string) => void
+  quick?: (lean: 'run' | 'pass') => string | null
+  fourthNote?: string | null
+  challenge?: { read: number; threshold: number; left: number } | null
+}) {
+  const isChallenge = moment.kind === 'challenge' && !!challenge
+  const likely = !!challenge && challenge.read >= challenge.threshold
   return (
-    <div className="rounded-2xl border border-gold/70 bg-canvas/60 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]">
+    <div className={cn('rounded-2xl border bg-canvas/60 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]', isChallenge ? 'border-loss/70' : 'border-gold/70')}>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <Badge tone="gold">Your call</Badge>
+        {isChallenge ? <Badge tone="loss">Red flag</Badge> : <Badge tone="gold">Your call</Badge>}
         <span className="font-display text-base font-700 uppercase text-ink">{moment.title}</span>
         <div className="ml-auto flex items-center gap-1.5">
           <span className="rounded-full bg-surface-2 px-2 py-0.5 font-cond text-xs font-700 tnum text-ink-2">
@@ -1635,55 +1700,92 @@ function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote }: { moment:
           </span>
         </div>
       </div>
-      {moment.staffRead && (
-        <div className="mb-2 flex items-center gap-1.5 text-label text-muted">
-          <Eye size={12} className="shrink-0" />
-          <span>{moment.staffRead}</span>
-        </div>
-      )}
-      {fourthNote && (
-        <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-gold-soft px-2 py-1 text-label text-gold">
-          <BarChart3 size={12} className="shrink-0" />
-          <span>{fourthNote}</span>
-        </div>
-      )}
-      {moment.kind === 'call' && quick && <QuickCallBar quick={quick} onAnswer={onAnswer} />}
-      {moment.kind === 'call' ? (
-        <CallPicker moment={moment} onAnswer={onAnswer} />
-      ) : (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {moment.options.map((o) => {
-            const Icon = optionIcon(moment.kind, o.id)
-            const ev = optionEv(o)
-            return (
-              <button
+      {isChallenge && challenge ? (
+        <>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="label">Replay booth read</span>
+            <div className="flex items-center gap-2">
+              <span className="font-cond text-label font-700 tnum text-ink-2">{Math.round(challenge.read * 100)}%</span>
+              <VerdictChip tone={likely ? 'win' : 'neutral'}>{likely ? 'Likely reversed' : 'Likely stands'}</VerdictChip>
+            </div>
+          </div>
+          <DivergingMeter
+            label="Replay read that the on-field ruling is wrong"
+            value={challenge.read}
+            min={0}
+            max={1}
+            mid={challenge.threshold}
+            goodWhen="up"
+            ticks={false}
+            format={(n) => `${Math.round(n * 100)}%`}
+            className="mb-2"
+          />
+          <div className="mb-2 text-label text-muted">Costs a timeout if it stands ({challenge.left} left).</div>
+          <OptionGroup label="Red flag" className="sm:grid-cols-2">
+            {moment.options.map((o) => (
+              <OptionCard
                 key={o.id}
-                onClick={() => onAnswer(o.id)}
-                className="flex items-start gap-2.5 rounded-xl border border-line-strong bg-surface-2 p-2.5 text-left transition hover:border-line-strong hover:bg-surface-3"
-              >
-                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-gold">
-                  <Icon size={17} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex w-full items-center gap-1.5">
-                    <span className="font-cond text-sm font-700 uppercase text-ink">{o.label}</span>
-                    {ev != null && (
-                      <span className="ml-auto rounded bg-gold-soft px-1.5 py-px font-cond text-label font-700 tnum uppercase text-gold">
-                        EV {ev >= 0 ? '+' : ''}{ev.toFixed(1)}
+                selected={o.id === moment.defaultId}
+                onSelect={() => onAnswer(o.id)}
+                title={o.label}
+                description={o.hint}
+              />
+            ))}
+          </OptionGroup>
+        </>
+      ) : (
+        <>
+          {moment.staffRead && (
+            <div className="mb-2 flex items-center gap-1.5 text-label text-muted">
+              <Eye size={12} className="shrink-0" />
+              <span>{moment.staffRead}</span>
+            </div>
+          )}
+          {fourthNote && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-gold-soft px-2 py-1 text-label text-gold">
+              <BarChart3 size={12} className="shrink-0" />
+              <span>{fourthNote}</span>
+            </div>
+          )}
+          {moment.kind === 'call' && quick && <QuickCallBar quick={quick} onAnswer={onAnswer} />}
+          {moment.kind === 'call' ? (
+            <CallPicker moment={moment} onAnswer={onAnswer} />
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {moment.options.map((o) => {
+                const Icon = optionIcon(moment.kind, o.id)
+                const ev = optionEv(o)
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => onAnswer(o.id)}
+                    className="flex items-start gap-2.5 rounded-xl border border-line-strong bg-surface-2 p-2.5 text-left transition hover:border-line-strong hover:bg-surface-3"
+                  >
+                    <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-gold">
+                      <Icon size={17} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex w-full items-center gap-1.5">
+                        <span className="font-cond text-sm font-700 uppercase text-ink">{o.label}</span>
+                        {ev != null && (
+                          <span className="ml-auto rounded bg-gold-soft px-1.5 py-px font-cond text-label font-700 tnum uppercase text-gold">
+                            EV {ev >= 0 ? '+' : ''}{ev.toFixed(1)}
+                          </span>
+                        )}
+                        {o.id === moment.defaultId && (
+                          <span className={cn('rounded bg-surface-3 px-1.5 py-px font-cond text-label font-700 uppercase text-ink-2', ev == null && 'ml-auto')}>
+                            Standing order
+                          </span>
+                        )}
                       </span>
-                    )}
-                    {o.id === moment.defaultId && (
-                      <span className={cn('rounded bg-surface-3 px-1.5 py-px font-cond text-label font-700 uppercase text-ink-2', ev == null && 'ml-auto')}>
-                        Standing order
-                      </span>
-                    )}
-                  </span>
-                  {o.hint && <span className="mt-0.5 block text-label leading-snug text-muted">{o.hint}</span>}
-                </span>
-              </button>
-            )
-          })}
-        </div>
+                      {o.hint && <span className="mt-0.5 block text-label leading-snug text-muted">{o.hint}</span>}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -1820,7 +1922,7 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
   )
 }
 
-export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClick }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; pen?: PenaltyTally; gmName?: string; myTeamId?: string; onTeamClick?: (teamId: string) => void }) {
+export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId, onTeamClick }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; pen?: PenaltyTally; challenges?: ChallengeState; gmName?: string; myTeamId?: string; onTeamClick?: (teamId: string) => void }) {
   const team = world.byId[teamId]
   const rows = (box ?? []).filter((b) => b.teamId === teamId)
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
@@ -1900,6 +2002,12 @@ export function BoxScore({ world, teamId, box, pen, gmName, myTeamId, onTeamClic
                 <span key={k}>{PENALTY_INFO[k as PenaltyKind]?.label ?? k} <span className="tnum text-ink-2">{n}</span></span>
               ))}
           </div>
+        </div>
+      )}
+      {challenges && challenges.won + challenges.lost > 0 && (
+        <div className="mb-1">
+          <div className="label mb-0.5">Challenges</div>
+          <div className="text-label text-ink-2 tnum">{challenges.won}/{challenges.won + challenges.lost} won</div>
         </div>
       )}
     </div>

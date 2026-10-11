@@ -445,6 +445,20 @@ function CallSheetCard({ disabled = false }: { disabled?: boolean }) {
               { id: 'aggressive', label: 'Use aggressively', hint: 'Stop the clock when you need the ball.' },
             ]}
           />
+          <div>
+            <CallSheetRow
+              label="Red flag"
+              value={sheet.challenges ?? 'standard'}
+              disabled={disabled}
+              onChange={(challenges) => setCallSheet({ ...sheet, challenges })}
+              options={[
+                { id: 'aggressive', label: 'Aggressive', hint: 'Throw when the replay read clears 66%.' },
+                { id: 'standard', label: 'Standard', hint: 'Throw when the read clears 72%.' },
+                { id: 'conservative', label: 'Conservative', hint: 'Only when the read clears 80%.' },
+              ]}
+            />
+            <p className="mt-1 text-small text-muted">Close calls only — a flag that stands costs a timeout.</p>
+          </div>
         </div>
       )}
     </Card>
