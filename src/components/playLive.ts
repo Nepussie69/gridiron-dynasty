@@ -78,6 +78,8 @@ export interface Agent {
   recover: number
   /** Last time he left a pair (no immediate re-engage). */
   freedAt: number
+  /** animflow r6c: nobody blocks him again (the credited tackler, once he has shed). */
+  noBlock?: boolean
 }
 
 export interface PairPlan {
@@ -265,6 +267,10 @@ export class LiveField {
         continue
       }
       if (Math.hypot(d.x - a.x, d.y - a.y) > CONTACT_AT) continue
+      if (d.noBlock) {
+        a.target = null
+        continue
+      }
       if (d.pair) {
         if (d.pair.blk.length < 2 && t - d.freedAt > 0.3) this.join(d.pair, a, t)
         else a.target = null

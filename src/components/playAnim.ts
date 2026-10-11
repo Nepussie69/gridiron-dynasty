@@ -2286,7 +2286,10 @@ function buildRun(play: Play, ctx: AnimContext): PlayAnim {
       const close = pursueBrain(def, DEF_KEYS.indexOf(def))
       const t1 = t + RIP_SEC
       a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(4, me.mv.pace.top * 0.6), burst: 2.6 } : close(tt, me, f2))
-      if (def === creditedKey) credShed = t
+      if (def === creditedKey) {
+        credShed = t
+        a.noBlock = true
+      }
       recShed(def, pr.blk, t, t1 + 0.1, 'rip')
     },
     onRelease: (blk, t, fl, pr, beaten) => {
