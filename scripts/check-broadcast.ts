@@ -2284,6 +2284,58 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(sacks >= 8 && runs >= 10 && rushers > 500, `coverage: ${sacks} engaged sacks, ${runs} DL run stops, ${rushers} rushers`)
     assert.ok(bad.length === 0, `${bad.length} bad sheds: ${bad.slice(0, 4).join('; ')}`)
   })
+
+  ok('animflow 6c (297): a long run / catch-and-run ends with a defender on the carrier (credited tackler when he can get there), never the carrier stopping alone; a score is run through the goal line at speed', () => {
+    store.useGame.getState().startCareer({ name: 'B', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    let tackles = 0
+    let alone = 0
+    let cred = 0
+    let tds = 0
+    let slowTd = 0
+    const bad: string[] = []
+    for (let g = 0; g < 8; g++) {
+      const home = nfl[(g * 3) % nfl.length].id
+      const away = nfl[(g * 3 + 1) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 71 + g * 977)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if ((play.type !== 'pass' && play.type !== 'run') || play.result.startsWith('Sack')) continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const D = anim.duration / 1000
+        const ev = anim.events ?? []
+        const end = ev.find((e) => e.kind === 'tackle' || e.kind === 'score')
+        if (!end) continue
+        const carrier = end.kind === 'tackle' ? end.keys[1] : end.keys[0]
+        const A = new Map(anim.actors.map((a) => [a.key, a]))
+        const ca = A.get(carrier)
+        if (!ca) continue
+        const from = play.type === 'pass' ? ev.find((e) => e.kind === 'catch')?.t : anim.holders.find((h) => h.key === carrier)?.t
+        if (from == null) continue
+        if (posAt(ca.path, end.t).x - posAt(ca.path, from).x < 10) continue
+        const cp = posAt(ca.path, end.t)
+        if (end.kind === 'tackle') {
+          tackles++
+          const near = Math.min(...anim.actors.filter((a) => a.side === 'def').map((a) => { const q = posAt(a.path, end.t); return Math.hypot(q.x - cp.x, q.y - cp.y) }))
+          if (near > 1.5) { alone++; bad.push(`play ${i} ${play.concept}: nearest defender ${near.toFixed(1)} yd at the tackle`) }
+          const ck = play.tackleIds?.[0] ? [...actors.entries()].find(([, pl]) => pl.id === play.tackleIds![0])?.[0] : undefined
+          if (!ck || end.keys[0] === ck) cred++
+        } else {
+          tds++
+          const a = posAt(ca.path, Math.max(0, end.t - 0.1 / D))
+          const v = Math.hypot(cp.x - a.x, cp.y - a.y) / 0.1
+          if (v < 4) { slowTd++; bad.push(`play ${i} ${play.concept}: crosses the goal line at ${v.toFixed(1)} yd/s`) }
+        }
+      }
+    }
+    assert.ok(tackles >= 40 && tds >= 5, `coverage: ${tackles} long tackles, ${tds} long scores`)
+    assert.ok(alone / tackles <= 0.1, `${alone}/${tackles} long plays end with nobody on the carrier: ${bad.slice(0, 3).join('; ')}`)
+    assert.ok(cred / tackles >= 0.7, `drawn tackler is the credited man on ${cred}/${tackles}`)
+    assert.ok(slowTd === 0, `${slowTd} scores stop on the line: ${bad.filter((b) => /goal/.test(b)).slice(0, 3).join('; ')}`)
+  })
 }
 
 console.log(`check-broadcast: PASS (${n} checks)`)
