@@ -30,6 +30,7 @@ import { kickFlight, presentAnim, throwHand, THROW_TIMING, type BroadcastAnim, t
 import { LiveField, pursue, phases, holdSpot, livePos, type Brain, type PairPlan } from './playLive'
 import { runReturnField, returnLine, returnScheme } from './playReturn.ts'
 import { carrierMove, effAttrs, effRating, fatigueMap, fatiguePace } from './animRatings'
+import { planOf } from './jersey'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
@@ -852,6 +853,8 @@ interface Formation {
  */
 export type SnapKind = 'gun' | 'pistol' | 'under'
 export function snapKindFor(concept: string): SnapKind {
+  // animflow r6d (J6): a kneel and a spike are taken under centre.
+  if (/Kneel|Spike/.test(concept)) return 'under'
   const fm = formationForConcept(concept)
   if (/^Gun/.test(fm)) return 'gun'
   if (fm === 'Pistol') return 'pistol'
@@ -1406,9 +1409,17 @@ export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim
   const buildRaw = (): PlayAnim => {
     switch (play.type) {
       case 'run':
+        // animflow r6d (J6): a victory-formation kneel is its own snap, not a run.
+        if (play.kneel) return buildKneel(play, ctx)
         return buildRun(play, ctx)
       case 'pass':
         if (play.result.startsWith('Sack')) return buildSack(play, ctx)
+        if (play.spike) {
+          LAST_THROW_STYLE = 'quick'
+          const a = buildSpike(play, ctx)
+          LAST_THROW_STYLE = undefined
+          return { ...a, throwStyle: 'quick' }
+        }
         LAST_THROW_STYLE = undefined
         {
           const a = buildPass(play, ctx)
@@ -1552,7 +1563,7 @@ function passProtect(
   m: Record<string, Mover>,
   f: Formation,
   los: number,
-  opts: { rushers: string[]; blockers: string[]; winner?: string; qbTarget: Pt; arriveSec: number; holdTo?: number; seed?: number; beaten?: string },
+  opts: { rushers: string[]; blockers: string[]; winner?: string; qbTarget: Pt; arriveSec: number; holdTo?: number; seed?: number; beaten?: string; primary?: string; double?: boolean },
 ): { doubled: string[]; free: string[]; pairs: { r: string; bs: string[] }[]; wallX: number } {
   const R = opts.rushers.filter((k) => m[k] && f[k])
   const B = opts.blockers.filter((k, i, a) => m[k] && f[k] && a.indexOf(k) === i)
@@ -1562,6 +1573,9 @@ function passProtect(
   const rush = (k: string) => bestAttr(m[k].player, ['PRS', 'PMV', 'FMV'])
   const prot = (k: string) => bestAttr(m[k].player, ['PBK', 'PBP', 'PBF'])
   const rank = [...R].sort((a, b) => rush(b) - rush(a))
+  // animflow r6d (J12): the sim's game plan names the rusher the protection commits to (DOUBLE: two
+  // linemen on him every dropback; CHIP: one, the back chips him on his way out).
+  if (opts.primary && rank.includes(opts.primary)) rank.splice(0, rank.length, opts.primary, ...rank.filter((k) => k !== opts.primary))
   const primary = rank[0]
 
   // Assign blockers: the primary is doubled on most dropbacks (occasionally
@@ -1570,7 +1584,7 @@ function passProtect(
   const usedB = new Set<string>()
   const pairs: { r: string; bs: string[] }[] = []
   const near = [...B].sort((a, b) => Math.abs(f[a].y - f[primary].y) - Math.abs(f[b].y - f[primary].y))
-  const want = hash(los * 7 + opts.rushers.length * 3 + 19) < 0.82 ? 2 : 1
+  const want = opts.double != null ? (opts.double ? 2 : 1) : hash(los * 7 + opts.rushers.length * 3 + 19) < 0.82 ? 2 : 1
   const pbs: string[] = []
   for (const b of near) {
     if (pbs.length < want) {
@@ -2351,13 +2365,15 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       const cv = fl.velOf(carrier, t)
       const lead = { x: c.x + cv.x * 0.4 - a.x, y: c.y + cv.y * 0.4 - a.y }
       const ll = Math.hypot(lead.x, lead.y) || 1
-      const dx = -pr.ay * s * 1.0 + (lead.x / ll) * 0.9
-      const dy = pr.ax * s * 1.0 + (lead.y / ll) * 0.9
+      // animflow r6d: the rip clears the blocker's hip harder (more across his face, a sharper first
+      // step) — run sheds were 0.9 yd off the blocker 0.3 s after the shed vs the NFL's ~1.8 (BDB).
+      const dx = -pr.ay * s * 1.6 + (lead.x / ll) * 0.9
+      const dy = pr.ax * s * 1.6 + (lead.y / ll) * 0.9
       const dl = Math.hypot(dx, dy) || 1
       const rip = { x: a.x + (dx / dl) * 6, y: a.y + (dy / dl) * 6 }
       const close = pursueBrain(def, DEF_KEYS.indexOf(def))
       const t1 = t + RIP_SEC
-      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(5, me.mv.pace.top * 0.85), burst: 4.2 } : close(tt, me, f2))
+      a.brain = (tt, me, f2) => (tt < t1 ? { x: rip.x, y: rip.y, speed: Math.max(6, me.mv.pace.top * 0.95), burst: 5.5 } : close(tt, me, f2))
       if (def === creditedKey) {
         credShed = t
         a.noBlock = true
@@ -2376,10 +2392,11 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       // animflow r6c: beaten — his weight carries him on into the space his
       // man left (over-extended, turned), then he turns and chases.
       const s = ripSide(fl, pr)
-      const lunge = { x: clampX(a.x + pr.ax * 0.45 + pr.ay * s * 0.5), y: clampY(a.y + pr.ay * 0.45 - pr.ax * s * 0.5) }
+      // animflow r6d: he falls off the other way (his momentum was into the man who just left him).
+      const lunge = { x: clampX(a.x + pr.ax * 0.8 + pr.ay * s * 0.9), y: clampY(a.y + pr.ay * 0.8 - pr.ax * s * 0.9) }
       a.recover = 0
       const chase = pursue(carrier, { keep: () => 3.4, speed: 0.45, lead: 0.3 })
-      a.brain = (tt, me, f2) => (tt < t + 0.6 ? { x: lunge.x, y: lunge.y, speed: 2, burst: 1.5 } : chase(tt, me, f2))
+      a.brain = (tt, me, f2) => (tt < t + 0.7 ? { x: lunge.x, y: lunge.y, speed: 3, burst: 2.5 } : chase(tt, me, f2))
     },
   }, seed)
   field.script(m[carrier])
@@ -2410,28 +2427,55 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     }
   }
   // Defense: the front fires off, backers read and fill, the secondary reads and comes down.
+  // animflow r6d (J8a-2): the sim's per-defender reads. A man who BIT (biteIds) takes his first steps
+  // the wrong way (with the backfield's flow / the fake, away from the hole) and reads late; the READ
+  // KEY (readKeyId) diagnoses it fast and steps straight into the hole; the alley FILLER (fillId, a
+  // safety) comes downhill into the alley outside the hole at once instead of reading from depth.
+  const biteK = new Set((play.biteIds ?? []).map((id) => keyOf(ctx, id, DEF_KEYS)).filter((k): k is string => !!k))
+  const readK = keyOf(ctx, play.readKeyId, DEF_KEYS)
+  const fillK = keyOf(ctx, play.fillId, DEF_KEYS)
   DEF_KEYS.forEach((k, i) => {
     const p = rate(k)
     const start = { x: f[k].x, y: f[k].y }
     let brain: Brain
+    const bit = biteK.has(k) && k !== readK
     if (k.startsWith('dl')) {
       brain = phases([
-        { from: 0, brain: () => ({ x: los - 0.6, y: start.y + side * 0.3, speed: m[k].pace.top * 0.8 }) },
-        { from: 1.2, brain: pursueBrain(k, i) },
+        bit
+          // Bit: up the field and across the wrong shoulder, away from the play.
+          ? { from: 0, brain: () => ({ x: los + 0.2, y: start.y - side * 1.6, speed: m[k].pace.top * 0.75 }) }
+          : k === readK
+            // Read it: squeeze inside toward the hole off the snap.
+            ? { from: 0, brain: () => ({ x: los - 0.6, y: start.y + (holeY - start.y) * 0.45, speed: m[k].pace.top * 0.85 }) }
+            : { from: 0, brain: () => ({ x: los - 0.6, y: start.y + side * 0.3, speed: m[k].pace.top * 0.8 }) },
+        { from: bit ? 1.45 : k === readK ? 0.95 : 1.2, brain: pursueBrain(k, i) },
       ])
     } else if (k.startsWith('lb')) {
-      const rt = readTime(p, 0.35, seed + i)
+      const rt0 = readTime(p, 0.35, seed + i)
+      const rt = bit ? rt0 + 0.35 : k === readK ? Math.max(0.2, rt0 * 0.6) : rt0
       brain = phases([
-        // Read step: shuffle with the flow, eyes in the backfield.
-        { from: 0, brain: () => ({ x: start.x + 0.4, y: start.y + (holeY - start.y) * 0.25, speed: 2.2 }) },
+        bit
+          // False step: flows two yards with the fake before he recovers.
+          ? { from: 0, brain: () => ({ x: start.x + 0.6, y: start.y - side * 2.4, speed: 3.6 }) }
+          : k === readK
+            // Downhill into his gap from the first step.
+            ? { from: 0, brain: () => ({ x: Math.max(holeX + 1.2, start.x - 2.5), y: start.y + (holeY - start.y) * 0.6, speed: 4.2 }) }
+            // Read step: shuffle with the flow, eyes in the backfield.
+            : { from: 0, brain: () => ({ x: start.x + 0.4, y: start.y + (holeY - start.y) * 0.25, speed: 2.2 }) },
         { from: rt, brain: pursueBrain(k, i) },
       ])
     } else if (k.startsWith('s')) {
       const rt = readTime(p, 0.55, seed + i)
-      brain = phases([
-        { from: 0, brain: () => ({ x: start.x + 1.5, y: start.y + (holeY - start.y) * 0.1, speed: 2.4 }) },
-        { from: rt, brain: pursueBrain(k, i) },
-      ])
+      brain = k === fillK
+        ? phases([
+          // The alley: downhill outside the hole at a sprint, then he takes his angle on the ball.
+          { from: 0, brain: () => ({ x: holeX + 4.5, y: clampY(holeY + side * 3), speed: m[k].pace.top * 0.85 }) },
+          { from: Math.max(0.35, rt - 0.2), brain: pursueBrain(k, i) },
+        ])
+        : phases([
+          { from: 0, brain: () => ({ x: start.x + 1.5, y: start.y + (holeY - start.y) * 0.1, speed: 2.4 }) },
+          { from: rt, brain: pursueBrain(k, i) },
+        ])
     } else {
       const rt = readTime(p, 0.5, seed + i)
       brain = phases([
@@ -2535,6 +2579,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   if (!scoreRun) hitAndRide(m[tackler], m[carrier], hitFrom, contactT, endSec)
   const res = { tackler, endSec }
   capAll(m, ALL_KEYS(f), res.endSec)
+  if (play.outOfBounds && !scoreRun) stepOut(m[carrier], tackler ? [m[tackler]] : [])
   recMissedTackles(play, ctx, carrier, holeT, res.endSec, m, DEF_KEYS)
   recClose(m, carrier, res.tackler, res.endSec, DEF_KEYS, {
     play,
@@ -2653,6 +2698,84 @@ function pathLen(path: WP[]): number {
 }
 
 /** The defensive look: the recorded call, else a stable pick per play. */
+/**
+ * animflow r6d: a pre-snap alignment that is not where the man's scripted path starts (a disguised
+ * shell, a safety rotating down, a corner travelling with the WR1). He stands at `pre` until the snap,
+ * then the offset bleeds out (smoothstep) over a rotation window long enough to keep it under ~7 yd/s
+ * on top of his own motion, so his path from the snap on is unchanged once the window is over.
+ */
+function presnapShift(mv: Mover, pre: Pt, maxEnd = Infinity, minDur = 0.8): void {
+  const p0 = mv.path[0]
+  let dx = clampX(pre.x) - p0.x
+  let dy = clampY(pre.y) - p0.y
+  const d = Math.hypot(dx, dy)
+  if (d < 0.05 || maxEnd < SNAP + minDur) return
+  // He must be back on his scripted path by `maxEnd` (his catch / pressure moment): a late, far
+  // rotation is cut short (he shows less of the other look) rather than run faster than ~7 yd/s.
+  const dur = Math.min(Math.max(minDur, d / 4.6), maxEnd - SNAP)
+  const k0 = Math.min(1, (4.6 * dur) / d)
+  dx *= k0
+  dy *= k0
+  pre = { x: p0.x + dx, y: p0.y + dy }
+  const t1 = SNAP + dur
+  // Resample the window so the offset is applied smoothly between sparse knots.
+  const out: WP[] = [{ t: 0, x: pre.x, y: pre.y }, { t: SNAP, x: posAt(mv.path, SNAP).x + dx, y: posAt(mv.path, SNAP).y + dy }]
+  const end = mv.path[mv.path.length - 1].t
+  for (let t = SNAP + 0.05; t < Math.min(t1, end); t += 0.05) {
+    const u = (t - SNAP) / dur
+    const k = 1 - u * u * (3 - 2 * u)
+    const q = posAt(mv.path, t)
+    out.push({ t, x: clampX(q.x + dx * k), y: clampY(q.y + dy * k) })
+  }
+  for (const w of mv.path) if (w.t >= t1) out.push(w)
+  if (end < t1) {
+    // He never moved after the snap: walk the rest of the way to his spot.
+    out.push({ t: t1, x: mv.path[mv.path.length - 1].x, y: mv.path[mv.path.length - 1].y })
+    if (mv.t < t1) mv.t = t1
+  }
+  mv.path = out
+}
+/**
+ * animflow r6d (J6 / T2M): a carrier who went out of bounds steps over the sideline instead of
+ * stopping a yard and a half inside it. The last ~0.45 s of his path (and of a man riding him out)
+ * bends out to ~0.8 yd past the line; x is untouched, so the end spot is the same.
+ */
+function stepOut(mv: Mover, riders: Mover[] = [], win = 0.45): void {
+  const end = mv.path[mv.path.length - 1]
+  const tEnd = end.t
+  const side = end.y < MID_Y ? -1 : 1
+  const edge = side < 0 ? 0 : FIELD_H
+  if (Math.abs(end.y - edge) > 3.2) return
+  const dy = (side < 0 ? -0.8 : FIELD_H + 0.8) - end.y
+  const bend = (who: Mover) => {
+    const t0 = Math.max(0, tEnd - win)
+    const out: WP[] = who.path.filter((w) => w.t < t0)
+    out.push({ t: t0, ...posAt(who.path, t0) })
+    for (let t = t0 + 0.05; t < tEnd + 1e-6; t += 0.05) {
+      const u = Math.min(1, (t - t0) / win)
+      const q = posAt(who.path, t)
+      out.push({ t, x: q.x, y: q.y + dy * u * u * (3 - 2 * u) })
+    }
+    const last = who.path[who.path.length - 1]
+    if (last.t > tEnd + 1e-6) {
+      for (const w of who.path) if (w.t > tEnd + 1e-6) out.push({ t: w.t, x: w.x, y: w.y + dy })
+    } else {
+      const q = posAt(who.path, tEnd)
+      if (out[out.length - 1].t < tEnd - 1e-6) out.push({ t: tEnd, x: q.x, y: q.y + dy })
+      else out[out.length - 1] = { t: tEnd, x: q.x, y: q.y + dy }
+    }
+    who.path = out
+    const l = out[out.length - 1]
+    who.x = l.x
+    who.y = l.y
+  }
+  bend(mv)
+  for (const r of riders) {
+    const q = posAt(r.path, tEnd)
+    if (Math.hypot(q.x - end.x, q.y - end.y) < 2.2) bend(r)
+  }
+}
+
 function coverageScheme(play: Play, seed: number): 'man' | 'zone' | 'blitz' | 'twoHigh' | 'stack' {
   if (play.defCall) return play.defCall
   if (play.blitz) return 'blitz'
@@ -3526,6 +3649,30 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const seed = play.n * 11 + play.startYard
   const inc = play.result === 'Incomplete'
   const int = play.result.startsWith('Interception')
+  // animflow r6d (J12): the snap's game plan (the sim's own call, see jersey planOf).
+  const plan = planOf(ctx.actors)
+  const ovrOf = (k: string) => m[k]?.player?.ovr ?? 0
+  // SHADOW: the best corner on the field travels with the best wideout (aligns across from him).
+  let shadowPlan: { cb: string; wr: string } | undefined
+  if (plan?.def === 'shadowWR1') {
+    const wr = ['wr0', 'wr1', 'wr2'].filter((k) => m[k]?.player).reduce<string | undefined>((a, k) => (!a || ovrOf(k) > ovrOf(a) ? k : a), undefined)
+    const cb = ['cb0', 'cb1'].filter((k) => m[k]?.player).reduce<string | undefined>((a, k) => (!a || ovrOf(k) > ovrOf(a) ? k : a), undefined)
+    if (wr && cb) shadowPlan = { cb, wr }
+  }
+  if (shadowPlan) {
+    // He lines up across from his man before the snap (a swap of the corners' spots when the WR1 is
+    // the far wideout; over the slot when he is in the slot). Nothing has moved yet.
+    const nat = shadowPlan.wr === 'wr0' ? 'cb0' : shadowPlan.wr === 'wr1' ? 'cb1' : undefined
+    if (nat && nat !== shadowPlan.cb) {
+      const a = f[nat]
+      const b = f[shadowPlan.cb]
+      f[nat] = { ...a, x: b.x, y: b.y }
+      f[shadowPlan.cb] = { ...b, x: a.x, y: a.y }
+    } else if (!nat) {
+      f[shadowPlan.cb] = { ...f[shadowPlan.cb], x: los + 4, y: clampY(f[shadowPlan.wr].y + (f[shadowPlan.wr].y < MID_Y ? 1 : -1)) }
+    }
+    for (const k of ['cb0', 'cb1']) m[k].reset(f[k].x, f[k].y)
+  }
   // A completion is drawn as a throw no deeper than the gain allows (plus a
   // little run after the catch): a 1-yard completion is a flat or bubble, not
   // a 15-yard dig caught and run back to the line.
@@ -3651,11 +3798,18 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // Only a tight end / back assigned to pass-protect (block/passBlock) stays in
   // (backlog 152); a screen "stalk" or a play-action "runFake" is a route, not
   // protection, and runs like everyone else (backlog 152 follow-up).
+  // animflow r6d (J12): DOUBLE / CHIP commit protection to the defence's best rusher (the sim's rep
+  // edge: max of his power / finesse move) — the back stays in on a DOUBLE, chips him on a CHIP.
+  const bestRusher = plan?.off === 'doubleRusher' || plan?.off === 'chipEdge'
+    ? ['dl0', 'dl1', 'dl2', 'dl3'].filter((k) => m[k]).reduce((a, k) => (Math.max(attrOf(m[k].player, 'PMV'), attrOf(m[k].player, 'FMV')) > Math.max(attrOf(m[a].player, 'PMV'), attrOf(m[a].player, 'FMV')) ? k : a), 'dl0')
+    : undefined
+  if (plan?.off === 'doubleRusher' && m.rb && tgt !== 'rb' && routeMap.rb !== 'runFake') routeMap.rb = 'passBlock'
   const stayIn = new Set(receivers.filter((k) => k !== tgt && (k === 'te' || k === 'rb' || k === 'fb') && /^(block|passBlock)$/.test(routeMap[k] ?? '')))
   // A back chips an edge or blitzer before releasing into his route — but a back
   // selling a run fake (play-action / RPO) has a fake to run, not a chip.
-  if (play.blitz && tgt !== 'rb' && !stayIn.has('rb') && routeMap.rb !== 'runFake') {
-    const chipR = blitzKeys(seed).reduce((a, k) => (Math.abs(f[k].y - f.rb.y) < Math.abs(f[a].y - f.rb.y) ? k : a))
+  const chipPlan = plan?.off === 'chipEdge' && !!bestRusher
+  if ((play.blitz || chipPlan) && m.rb && tgt !== 'rb' && !stayIn.has('rb') && routeMap.rb !== 'runFake') {
+    const chipR = chipPlan ? bestRusher! : blitzKeys(seed).reduce((a, k) => (Math.abs(f[k].y - f.rb.y) < Math.abs(f[a].y - f.rb.y) ? k : a))
     const dir = f.rb.y >= f[chipR].y ? 1 : -1
     m.rb.run([{ x: clampX(los - 1.6), y: clampY(f[chipR].y + dir * 1.1) }], { stop: true })
     m.rb.hold(0.1)
@@ -3910,6 +4064,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     arriveSec: releaseSec,
     holdTo,
     seed,
+    ...(bestRusher ? { primary: bestRusher, double: plan?.off === 'doubleRusher' } : {}),
   })
   for (const pr of prot.pairs) {
     if (pr.r !== pressureKey && m[pr.r].t <= holdTo + 0.06) {
@@ -4030,6 +4185,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const deepKey = receivers.reduce((a, k) => ((ROUTES[routeMap[k]]?.depth ?? 0) > (ROUTES[routeMap[a]]?.depth ?? 0) ? k : a), receivers[0])
   const deepInfo = routeInfo(routeMap[deepKey] ?? '')
   const manPos: Record<string, string> = { wr0: 'cb0', wr1: 'cb1', wr2: 's1', te: 'lb0', rb: 'lb1', fb: 'lb2' }
+  // animflow r6d (J12 SHADOW): the shadow corner has the WR1; his old man goes to the WR1's old defender.
+  if (shadowPlan && manPos[shadowPlan.wr] !== shadowPlan.cb) {
+    const was = Object.keys(manPos).find((r) => manPos[r] === shadowPlan!.cb)
+    if (was) manPos[was] = manPos[shadowPlan.wr]
+    manPos[shadowPlan.wr] = shadowPlan.cb
+  }
   const zoneLook = scheme === 'zone' || scheme === 'twoHigh' || scheme === 'stack'
   const poolAll = ['cb0', 'cb1', 's1', 'lb0', 'lb1', 'lb2', 's0']
   // The sim's recorded coverage defender on the target (else the credited
@@ -4051,6 +4212,14 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     if (!d || used.has(d) || isBlitzer(d)) return
     used.add(d)
     assign[recv] = d
+  }
+  // animflow r6d (J12 SPY): the fastest linebacker not rushing / not the recorded cover man stays home
+  // and mirrors the quarterback ~5 yd off the ball instead of dropping.
+  let spyK: string | undefined
+  if (plan?.def === 'spyQB') {
+    const cands = ['lb0', 'lb1', 'lb2'].filter((k) => m[k] && !isBlitzer(k) && k !== tgtMan && k !== coverKey)
+    spyK = cands.reduce<string | undefined>((a, k) => (!a || attrOf(m[k].player, 'SPD') > attrOf(m[a].player, 'SPD') ? k : a), undefined)
+    if (spyK) used.add(spyK)
   }
   if (runners.includes(tgt)) take(tgt, tgtMan)
   for (const k of runners) if (!assign[k]) take(k)
@@ -4079,6 +4248,66 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     if (isBlitzer(dk) || used.has(dk)) continue
     if (dk.startsWith('s')) safetyRoam(m[dk], { fromSec: 0.1, toSec: trailEnd, releaseSec, los, deep: m[deepKey], depth: deepInfo.depth, catchPt, side: dk === 's0' ? -1 : 1, start: { x: m[dk].x, y: m[dk].y } })
     else zoneDrop(m[dk], { fromSec: 0.1, toSec: trailEnd, releaseSec, landmark: { x: los + 8, y: dk === 'cb0' ? 8 : dk === 'cb1' ? FIELD_H - 8 : MID_Y + (dk === 'lb0' ? -8 : dk === 'lb2' ? 8 : 0) }, zcv: attrOf(m[dk].player, 'ZCV'), threat: m[deepKey], catchPt })
+  }
+
+  // animflow r6d (J12 disguise): the shell the offence sees before the snap. The post-snap shell is
+  // what the safeties actually do (one rolled down to a man / the blitz = single high; both deep = two
+  // high). An honest look shows it; a disguised one (play.disguised) shows the other and rotates at the
+  // snap — two-high rolling to single-high, or a safety walked down to the box bailing to his half.
+  const preSpots: Record<string, Pt> = {}
+  {
+    const down = (k: string) => used.has(k) || isBlitzer(k)
+    const sDown = ['s0', 's1'].filter((k) => m[k] && down(k))
+    const postSingle = sDown.length === 1
+    const postTwo = sDown.length === 0
+    const showSingle = play.disguised ? postTwo : postSingle
+    if (showSingle && !postSingle) {
+      // Two-high played, single-high shown: s1 walked down into the box, s0 in the middle.
+      const side = f.s1.y < MID_Y ? -1 : 1
+      preSpots.s1 = { x: los + 7.5, y: clampY(MID_Y + side * 8) }
+      preSpots.s0 = { x: f.s0.x, y: clampY(MID_Y - side * 1.5) }
+    } else if (showSingle) {
+      // Honest single-high: the man coming down already shows it (his man / blitz alignment); the
+      // other safety sits in the middle of the field.
+      const hi = sDown[0] === 's0' ? 's1' : 's0'
+      preSpots[hi] = { x: f[hi].x, y: clampY(MID_Y + (f[hi].y < MID_Y ? -1.5 : 1.5)) }
+    } else if (play.disguised) {
+      // Single-high (or zero) played, two-high shown: each man coming down starts on the deep half on
+      // his own side of the field (straight back from his man, not across it).
+      for (const k of sDown) {
+        const y0 = m[k].path[0].y
+        preSpots[k] = { x: Math.max(f[k].x - 1, m[k].path[0].x), y: clampY(MID_Y + clampN(y0 - MID_Y, -12, 12)) }
+      }
+    }
+  }
+  const finishPass = (rest: Parameters<typeof finish>[2]) => {
+    for (const [k, pt] of Object.entries(preSpots)) {
+      if (!m[k]) continue
+      // Back on his script before he matters: a blitzer by ~1 s, a cover man before the release.
+      presnapShift(m[k], pt, isBlitzer(k) || k === pressureKey ? SNAP + 0.9 : releaseSec - 0.1)
+    }
+    return finish(f, m, rest)
+  }
+  if (spyK) {
+    // Mirror: his lane follows the QB's with a ~0.25 s read lag, at 5 yd off the ball, capped at his speed.
+    const mv = m[spyK]
+    const vmax = mv.pace.top * 0.9
+    let x = mv.x
+    let y = mv.y
+    for (let t = Math.max(mv.t, 0.1) + 0.1; t <= trailEnd + 1e-6; t += 0.1) {
+      const q = posAt(m.qb.path, Math.max(0, t - 0.25))
+      const wx = clampX(Math.max(los + 4.5, q.x + 5.5))
+      const wy = clampY(q.y)
+      const d = Math.hypot(wx - x, wy - y)
+      const k = d > vmax * 0.1 ? (vmax * 0.1) / d : 1
+      x += (wx - x) * k
+      y += (wy - y) * k
+      mv.path.push({ t, x, y })
+      mv.t = t
+      mv.x = x
+      mv.y = y
+    }
+    mv.lastStop = false
   }
 
   // animflow r6c2 (J7): the sim's matchup decides how open he is. The recorded
@@ -4136,7 +4365,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const stopT = catchSec + 0.16
     capAll(m, ALL_KEYS(f), stopT)
     recEv(catchSec, 'incomplete', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
-    return finish(f, m, { ball, holders, flights })
+    return finishPass({ ball, holders, flights })
   }
 
   if (int) {
@@ -4154,7 +4383,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     capAll(m, ALL_KEYS(f), res.endSec)
     recClose(m, near, res.tackler, res.endSec, OFF_KEYS, { from: catchSec, td: !!play.defTD, tdX: 110, tdDir: 1, outOfBounds: !!play.outOfBounds })
     ball.push(...shadow(m[near].path, catchSec).slice(1))
-    return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: near }], flights })
+    return finishPass({ ball, holders: [...holders, { t: catchSec, key: near }], flights })
   }
 
   // Complete: the catch, then the run after it to the recorded end spot. A
@@ -4187,7 +4416,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     recEv(popT + 0.02, 'turnover', [rec], { x: loose.x, y: loose.y })
     recEv(recT, 'down', [rec], { x: loose.x, y: loose.y })
     capAll(m, ALL_KEYS(f), Math.max(recT, popT + 0.4))
-    return finish(f, m, {
+    return finishPass({
       ball,
       holders: [...holders, { t: catchSec, key: tgt }, { t: popT, key: null }, { t: recT, key: rec }],
       flights,
@@ -4201,6 +4430,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // animflow r6c2 (297): through the goal line at speed; the coverage takes
     // real pursuit angles (the fast men close, the rest angle at the pylon).
     if (isTD) runThroughGoal(m[tgt], 110, 1)
+    else stepOut(m[tgt])
     const endSec = m[tgt].t
     // The chase is over at the goal line: they pull up as he crosses.
     const chaseTo = isTD ? Math.min(endSec, (crossX(m[tgt], 110, catchSec, endSec, 1) ?? endSec) + 0.3) : endSec
@@ -4216,7 +4446,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     } else {
       recEv(endSec, 'outOfBounds', [tgt], posAt(m[tgt].path, endSec))
     }
-    return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
+    return finishPass({ ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
   }
 
   // In bounds and short of the goal line: the credited tackler (when the sim
@@ -4228,7 +4458,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
   recMissedTackles(play, ctx, tgt, catchSec, res.endSec, m, DEF_KEYS)
   recClose(m, tgt, res.tackler, res.endSec, pursuers, { play, los, from: catchSec })
-  return finish(f, m, { ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
+  return finishPass({ ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
 }
 
 /**
@@ -5010,6 +5240,75 @@ function buildPenalty(play: Play, ctx: AnimContext): PlayAnim {
     flights: [],
     flag: { t: 0.3, x: los + (play.yards > 0 ? 2 : -2), y: MID_Y + 3 },
   })
+}
+
+/**
+ * animflow r6d (J6): the victory formation. QB under centre with two up-backs at his hips and a back
+ * eight yards deep as the safety valve, the tight end and wideouts in tight; the defence does not
+ * rush. The QB takes the snap, gives ground to the recorded spot and goes down on a knee.
+ */
+function buildKneel(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
+  const los = 10 + play.startYard
+  const f = formation(los, false, 'under')
+  const spots: Record<string, Pt> = {
+    rb: { x: los - 8, y: MID_Y },
+    wr2: { x: los - 2.3, y: MID_Y - 1.7 },
+    wr1: { x: los - 2.3, y: MID_Y + 1.7 },
+    wr0: { x: los - 0.8, y: MID_Y - 5.6 },
+    te: { x: los - 0.8, y: MID_Y + 4.4 },
+  }
+  for (const [k, pt] of Object.entries(spots)) if (f[k]) f[k] = { ...f[k], x: pt.x, y: clampY(pt.y) }
+  // The defence comes up tight but does not rush (no one is going to be hit on a kneel).
+  for (const k of ['lb0', 'lb1', 'lb2']) f[k] = { ...f[k], x: los + 4 }
+  for (const k of ['cb0', 'cb1']) f[k] = { ...f[k], x: los + 3, y: clampY(MID_Y + (f[k].y < MID_Y ? -9 : 9)) }
+  for (const k of ['s0', 's1']) f[k] = { ...f[k], x: los + 9, y: clampY(MID_Y + (f[k].y < MID_Y ? -5 : 5)) }
+  const m = startMovers(f, ctx)
+  recSnap(los)
+  const endX = clampX(10 + play.endYard)
+  // Snap, a step and a half back, down on the knee.
+  m.qb.hold(SNAP)
+  runTimed(m.qb, [{ x: endX, y: MID_Y }], SNAP, SNAP + 0.55, false, true)
+  const downT = m.qb.t
+  m.qb.hold(1.6)
+  const endSec = m.qb.t
+  // The line fires out a step and stands up; the up-backs square up; everyone else drifts in.
+  for (const k of ['ol0', 'ol1', 'ol2', 'ol3', 'ol4']) { m[k].hold(SNAP); runTimed(m[k], [{ x: f[k].x - 0.5, y: f[k].y }], SNAP, SNAP + 0.5, false, true) }
+  for (const k of ['dl0', 'dl1', 'dl2', 'dl3']) { m[k].hold(SNAP + 0.05); runTimed(m[k], [{ x: los + 0.4, y: f[k].y }], SNAP + 0.05, SNAP + 0.6, false, true) }
+  for (const k of ['lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']) { m[k].hold(SNAP + 0.3); runTimed(m[k], [{ x: f[k].x - 1.2, y: f[k].y + (MID_Y - f[k].y) * 0.08 }], SNAP + 0.3, SNAP + 1.3, false, true) }
+  for (const k of ['wr0', 'wr1', 'wr2', 'te', 'rb']) if (m[k]) { m[k].hold(SNAP + 0.1); runTimed(m[k], [{ x: f[k].x + 0.3, y: f[k].y }], SNAP + 0.1, SNAP + 0.6, false, true) }
+  for (const k of ALL_KEYS(f)) if (m[k].t < endSec) m[k].hold(endSec - m[k].t)
+  recEv(downT, 'down', ['qb'], { x: endX, y: MID_Y })
+  return finish(f, m, { ball: snapBall(m, los, endSec), holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }], flights: [] })
+}
+
+/**
+ * animflow r6d (J6): the spike. QB under centre, takes the snap and throws the ball straight into the
+ * turf a yard in front of him; the line pops up, receivers take a couple of steps and stop.
+ */
+function buildSpike(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
+  const los = 10 + play.startYard
+  const f = formation(los, false, 'under')
+  const m = startMovers(f, ctx)
+  recSnap(los)
+  m.qb.hold(SNAP)
+  runTimed(m.qb, [{ x: f.qb.x - 0.6, y: MID_Y }], SNAP, SNAP + 0.3, false, true)
+  const rel = m.qb.t + 0.05
+  m.qb.hold(rel - m.qb.t)
+  const land = rel + 0.18
+  const spot: Pt = { x: f.qb.x + 0.8, y: MID_Y + 0.4 }
+  m.qb.hold(1.4)
+  const endSec = m.qb.t
+  for (const k of ['ol0', 'ol1', 'ol2', 'ol3', 'ol4']) { m[k].hold(SNAP); runTimed(m[k], [{ x: f[k].x - 0.8, y: f[k].y }], SNAP, SNAP + 0.45, false, true) }
+  for (const k of ['dl0', 'dl1', 'dl2', 'dl3']) { m[k].hold(SNAP + 0.05); runTimed(m[k], [{ x: los - 0.2, y: f[k].y }], SNAP + 0.05, SNAP + 0.6, false, true) }
+  for (const k of ['wr0', 'wr1', 'wr2', 'te', 'rb']) if (m[k]) { m[k].hold(SNAP); runTimed(m[k], [{ x: f[k].x + (k === 'rb' ? 0.8 : 3), y: f[k].y }], SNAP, SNAP + 0.9, false, true) }
+  for (const k of ['lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']) { m[k].hold(SNAP + 0.15); runTimed(m[k], [{ x: f[k].x - 0.8, y: f[k].y }], SNAP + 0.15, SNAP + 0.8, false, true) }
+  for (const k of ALL_KEYS(f)) if (m[k].t < endSec) m[k].hold(endSec - m[k].t)
+  const ball: WP[] = [...snapBall(m, los, rel), { t: land, x: spot.x, y: spot.y }, { t: endSec, x: spot.x + 0.6, y: spot.y }]
+  recEv(rel, 'throw', ['qb'], posAt(m.qb.path, rel))
+  recEv(land, 'incomplete', [], spot)
+  return finish(f, m, { ball, holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: rel, key: null }], flights: [{ t0: rel, t1: land, height: 0.2 }] })
 }
 
 function buildStatic(play: Play, ctx: AnimContext): PlayAnim {

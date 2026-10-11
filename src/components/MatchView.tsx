@@ -307,8 +307,9 @@ export function MatchView() {
     const tKey = play.type === 'pass' && play.targetId
       ? targetKey(play, { targetPos: byId.get(play.targetId)?.pos })
       : null
-    return actorPlayers(world, play, defId, tKey)
-  }, [world, match, play, byId])
+    // animflow r6d (J12): the user's own matchup call (double / shadow / spy) shapes his side's look.
+    return actorPlayers(world, play, defId, tKey, { teamId: career?.teamId, matchups: career?.matchups })
+  }, [world, match, play, byId, career?.teamId, career?.matchups])
   const anim = useMemo(() => {
     if (!play) return null
     return buildPlayAnim(play, {
