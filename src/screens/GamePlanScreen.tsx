@@ -29,6 +29,7 @@ import { TopPlayers } from '../components/TopPlayers'
 import { TeamHoverCard } from '../components/TeamHoverCard'
 import { StakesChip, StakesSheet } from '../components/StakesSheet'
 import { ScoutButton } from '../components/ScoutClub'
+import { ScoutReportCard } from '../components/ScoutReportCard'
 import { AnalyticsCard } from '../components/AnalyticsCard'
 import {
   AccessBanner,
@@ -243,7 +244,7 @@ export function GamePlanScreen() {
               )}
               <Badge tone="neutral" className="ml-auto">{side === 'off' ? 'Offense' : 'Defense'}</Badge>
             </div>
-            <PlanEditor plan={plan} onChange={(p) => setDefaultPlan(side, p)} side={side} disabled={readOnly} />
+            <PlanEditor plan={plan} onChange={(p) => setDefaultPlan(side, { ...p, targets: p.targets ?? plan.targets })} side={side} disabled={readOnly} />
           </Card>
 
           {capabilities(career).planScope !== 'none' && (
@@ -284,6 +285,7 @@ export function GamePlanScreen() {
         <div className="grid items-start gap-4 lg:grid-cols-2">
           <StudyOpponentCard oppId={opp?.id} />
           <SelfScoutCard />
+          <ScoutReportCard oppId={opp?.id} side={side} disabled={readOnly} />
           <AnalyticsCard oppId={opp?.id} home={!!next?.home} />
           <CoordinatorAdviceCard oppId={opp?.id} />
           <CulturePanel teamId={team.id} className="lg:col-span-2" />
