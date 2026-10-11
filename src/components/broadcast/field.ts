@@ -23,6 +23,14 @@ import {
 import { drawTex, fillPoly, makeCanvas, pathPoly, strokeWorld, type Ctx } from './paint.ts'
 import { ART, clubArt, withAlpha, type ClubLike } from './palette.ts'
 
+/**
+ * SL1 team area (yards beyond each sideline): the 6-ft white border ends at
+ * `border`, the coaching box's restraining line is at `coach` (6 ft further),
+ * the team box runs back to `back` (just inside the LED wall). Along the field
+ * it spans the 32-yard lines (world x 42 … 78).
+ */
+export const TEAM_BOX = { x0: 42, x1: 78, border: 2, coach: 4, back: 9.6 } as const
+
 /** Numbers: 6 ft tall, tops 9 yd from the sideline; each digit 4 ft wide. */
 const NUM_TOP = 9
 const NUM_H = 2
@@ -176,6 +184,21 @@ function drawMarkings(ctx: Ctx, c: Camera, tex: FieldTextures, lite = false): vo
   pathPoly(ctx, c, Q(-2, 0, 0, FW))
   pathPoly(ctx, c, Q(FL, 0, FL + 2, FW))
   ctx.fillStyle = ART.paint
+  ctx.fill()
+  // SL1 team areas between the 32-yard lines on both sidelines: the coaching
+  // box (6 ft behind the 6-ft border, closed by its restraining line) and the
+  // team box behind it, bounded by the 32-yard-line extensions to the wall.
+  ctx.beginPath()
+  for (const s of [-1, 1] as const) {
+    const y = (off: number) => (s < 0 ? -off : FW + off)
+    const band = (o0: number, o1: number): [number, number] => (s < 0 ? [y(o1), y(o0)] : [y(o0), y(o1)])
+    const [r0, r1] = band(TEAM_BOX.coach - 0.055, TEAM_BOX.coach + 0.055)
+    pathPoly(ctx, c, Q(TEAM_BOX.x0, r0, TEAM_BOX.x1, r1))
+    const [e0, e1] = band(TEAM_BOX.border, TEAM_BOX.back)
+    pathPoly(ctx, c, Q(TEAM_BOX.x0 - 0.055, e0, TEAM_BOX.x0 + 0.055, e1))
+    pathPoly(ctx, c, Q(TEAM_BOX.x1 - 0.055, e0, TEAM_BOX.x1 + 0.055, e1))
+  }
+  ctx.fillStyle = ART.paintSoft
   ctx.fill()
   // Yard lines every 5 (goal lines 8" wide, others 4"), stopping 8" short of the sideline.
   ctx.beginPath()

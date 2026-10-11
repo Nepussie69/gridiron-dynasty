@@ -86,6 +86,8 @@ import type { AnimEventKind } from '../src/components/playAnim.ts'
 import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
+import { BENCHES, buildTeamArea, officialsAt, OFFICIAL_ROLES, readPlay, sideY } from '../src/components/broadcast/sideline.ts'
+import { TEAM_BOX } from '../src/components/broadcast/field.ts'
 
 let n = 0
 const ok = (name: string, fn: () => void) => {
@@ -1793,5 +1795,47 @@ ok('animflow r5: kick / punt returns move all 21 others (lanes, wall, gunners vs
     assert.ok(plays > 80 && frames > 10000, `harness coverage ${plays} plays / ${frames} frames`)
   })
 }
+
+ok('SL1 sideline: team areas between the 32s, behind the border, home near / away far; officials placed by mechanics and deterministic', () => {
+  const homeC = NFL_TEAMS[0]
+  const awayC = NFL_TEAMS[1]
+  for (const [side, club, home] of [['home', homeC, true], ['away', awayC, false]] as const) {
+    const ps = buildTeamArea(side, club, home)
+    assert.ok(ps.length >= 45, `~46-man sideline incl. staff: ${ps.length}`)
+    assert.equal(ps.filter((p) => p.lite).length, 12, 'Lite draws 12 per side')
+    assert.equal(ps.filter((p) => p.role === 'hc').length, 1, 'one head coach')
+    for (const p of ps) {
+      assert.ok(p.x >= TEAM_BOX.x0 && p.x <= TEAM_BOX.x1, `between the 32s: ${p.x}`)
+      assert.ok(p.off >= TEAM_BOX.border + 0.4, `outside the field + border: ${p.role} ${p.off}`)
+      if (p.role === 'player' || p.role === 'bench' || p.role === 'staff') assert.ok(p.off > TEAM_BOX.coach, `players / staff behind the restraining line: ${p.off}`)
+      assert.ok(p.off < 10, 'inside the wall')
+      const y = sideY(side, p.off)
+      assert.ok(side === 'home' ? y < -2 : y > 53.3 + 2, `${side} sideline (${y})`)
+    }
+    assert.deepEqual(buildTeamArea(side, club, home), ps, 'deterministic layout')
+  }
+  assert.ok(BENCHES.every(([a, b]) => a >= TEAM_BOX.x0 && b <= TEAM_BOX.x1), 'benches inside the team box')
+  // Officials: a 1st & 10 at the own 30 (LOS x = 40), ball still.
+  const play = { type: 'pass', qtr: 1, clock: '10:00', down: 1, distance: 10, startYard: 30, endYard: 30, yards: 0, result: 'Incomplete', offId: 'A', defId: 'B' } as unknown as Play
+  const anim = { duration: 4000, events: [{ t: 0.6, kind: 'incomplete', keys: [], spot: { x: 50, y: 26.65 } }] } as unknown as BroadcastAnim
+  const rd = readPlay(play, anim, 'A')
+  assert.ok(!rd.td && !rd.firstDown && rd.cheer == null, 'an incompletion: no signal, no cheer')
+  const still = () => ({ x: 40, y: 26.65 })
+  const at = (t: number, p = play) => Object.fromEntries(officialsAt(p, still, t, 4, 40, rd, true).map((o) => [o.role, o]))
+  const o0 = at(0)
+  assert.deepEqual(Object.keys(o0).sort(), [...OFFICIAL_ROLES].sort(), 'seven officials')
+  assert.ok(near(o0.R.x, 29) && o0.R.y < 26.65, `referee 11 yd deep on the throwing side: ${JSON.stringify(o0.R)}`)
+  assert.ok(o0.U.x < 40, 'umpire in the offensive backfield')
+  assert.ok(near(o0.DJ.x, 40) && near(o0.LJ.x, 40) && o0.DJ.y > 53.3 && o0.LJ.y < 0, 'wing officials on the LOS, opposite sidelines (DJ on the chain side)')
+  assert.ok(near(o0.SJ.x, 60) && near(o0.FJ.x, 60) && o0.SJ.y > 26.65 && o0.FJ.y < 26.65, 'side / field judges 20 deep, opposite sides')
+  assert.ok(near(o0.BJ.x, 65) && near(o0.BJ.y, 26.65), 'back judge 25 deep in the middle')
+  const late = at(0, { ...play, qtr: 4, clock: '1:30' } as Play)
+  assert.ok(late.U.x > 40, 'final 2:00: umpire on the defensive side')
+  assert.deepEqual(at(0.3), at(0.3), 'deterministic in t')
+  const td = readPlay({ ...play, type: 'run', endYard: 100, yards: 70, result: 'Touchdown' } as Play, { duration: 4000, events: [{ t: 0.8, kind: 'score', keys: [], spot: { x: 110, y: 20 } }] } as unknown as BroadcastAnim, 'A')
+  assert.ok(td.td && td.cheer === 'home' && near(td.tScore, 0.8), 'a home TD: signal + home sideline cheers')
+  const fdR = readPlay({ ...play, type: 'run', down: 3, distance: 4, yards: 6, endYard: 36, result: '6-yd run' } as Play, { duration: 4000, events: [{ t: 0.7, kind: 'tackle', keys: [], spot: { x: 46, y: 20 } }] } as unknown as BroadcastAnim, 'B')
+  assert.ok(fdR.firstDown && !fdR.td && near(fdR.tEnd, 0.7), 'a conversion signals a first down')
+})
 
 console.log(`check-broadcast: PASS (${n} checks)`)
