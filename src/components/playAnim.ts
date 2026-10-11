@@ -853,6 +853,8 @@ interface Formation {
  */
 export type SnapKind = 'gun' | 'pistol' | 'under'
 export function snapKindFor(concept: string): SnapKind {
+  // animflow r6d (J6): a kneel and a spike are taken under centre.
+  if (/Kneel|Spike/.test(concept)) return 'under'
   const fm = formationForConcept(concept)
   if (/^Gun/.test(fm)) return 'gun'
   if (fm === 'Pistol') return 'pistol'
@@ -1407,9 +1409,17 @@ export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim
   const buildRaw = (): PlayAnim => {
     switch (play.type) {
       case 'run':
+        // animflow r6d (J6): a victory-formation kneel is its own snap, not a run.
+        if (play.kneel) return buildKneel(play, ctx)
         return buildRun(play, ctx)
       case 'pass':
         if (play.result.startsWith('Sack')) return buildSack(play, ctx)
+        if (play.spike) {
+          LAST_THROW_STYLE = 'quick'
+          const a = buildSpike(play, ctx)
+          LAST_THROW_STYLE = undefined
+          return { ...a, throwStyle: 'quick' }
+        }
         LAST_THROW_STYLE = undefined
         {
           const a = buildPass(play, ctx)
@@ -2566,6 +2576,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   if (!scoreRun) hitAndRide(m[tackler], m[carrier], hitFrom, contactT, endSec)
   const res = { tackler, endSec }
   capAll(m, ALL_KEYS(f), res.endSec)
+  if (play.outOfBounds && !scoreRun) stepOut(m[carrier], tackler ? [m[tackler]] : [])
   recMissedTackles(play, ctx, carrier, holeT, res.endSec, m, DEF_KEYS)
   recClose(m, carrier, res.tackler, res.endSec, DEF_KEYS, {
     play,
@@ -2721,6 +2732,47 @@ function presnapShift(mv: Mover, pre: Pt, maxEnd = Infinity, minDur = 0.8): void
   }
   mv.path = out
 }
+/**
+ * animflow r6d (J6 / T2M): a carrier who went out of bounds steps over the sideline instead of
+ * stopping a yard and a half inside it. The last ~0.45 s of his path (and of a man riding him out)
+ * bends out to ~0.8 yd past the line; x is untouched, so the end spot is the same.
+ */
+function stepOut(mv: Mover, riders: Mover[] = [], win = 0.45): void {
+  const end = mv.path[mv.path.length - 1]
+  const tEnd = end.t
+  const side = end.y < MID_Y ? -1 : 1
+  const edge = side < 0 ? 0 : FIELD_H
+  if (Math.abs(end.y - edge) > 3.2) return
+  const dy = (side < 0 ? -0.8 : FIELD_H + 0.8) - end.y
+  const bend = (who: Mover) => {
+    const t0 = Math.max(0, tEnd - win)
+    const out: WP[] = who.path.filter((w) => w.t < t0)
+    out.push({ t: t0, ...posAt(who.path, t0) })
+    for (let t = t0 + 0.05; t < tEnd + 1e-6; t += 0.05) {
+      const u = Math.min(1, (t - t0) / win)
+      const q = posAt(who.path, t)
+      out.push({ t, x: q.x, y: q.y + dy * u * u * (3 - 2 * u) })
+    }
+    const last = who.path[who.path.length - 1]
+    if (last.t > tEnd + 1e-6) {
+      for (const w of who.path) if (w.t > tEnd + 1e-6) out.push({ t: w.t, x: w.x, y: w.y + dy })
+    } else {
+      const q = posAt(who.path, tEnd)
+      if (out[out.length - 1].t < tEnd - 1e-6) out.push({ t: tEnd, x: q.x, y: q.y + dy })
+      else out[out.length - 1] = { t: tEnd, x: q.x, y: q.y + dy }
+    }
+    who.path = out
+    const l = out[out.length - 1]
+    who.x = l.x
+    who.y = l.y
+  }
+  bend(mv)
+  for (const r of riders) {
+    const q = posAt(r.path, tEnd)
+    if (Math.hypot(q.x - end.x, q.y - end.y) < 2.2) bend(r)
+  }
+}
+
 function coverageScheme(play: Play, seed: number): 'man' | 'zone' | 'blitz' | 'twoHigh' | 'stack' {
   if (play.defCall) return play.defCall
   if (play.blitz) return 'blitz'
@@ -4375,6 +4427,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // animflow r6c2 (297): through the goal line at speed; the coverage takes
     // real pursuit angles (the fast men close, the rest angle at the pylon).
     if (isTD) runThroughGoal(m[tgt], 110, 1)
+    else stepOut(m[tgt])
     const endSec = m[tgt].t
     // The chase is over at the goal line: they pull up as he crosses.
     const chaseTo = isTD ? Math.min(endSec, (crossX(m[tgt], 110, catchSec, endSec, 1) ?? endSec) + 0.3) : endSec
@@ -5184,6 +5237,75 @@ function buildPenalty(play: Play, ctx: AnimContext): PlayAnim {
     flights: [],
     flag: { t: 0.3, x: los + (play.yards > 0 ? 2 : -2), y: MID_Y + 3 },
   })
+}
+
+/**
+ * animflow r6d (J6): the victory formation. QB under centre with two up-backs at his hips and a back
+ * eight yards deep as the safety valve, the tight end and wideouts in tight; the defence does not
+ * rush. The QB takes the snap, gives ground to the recorded spot and goes down on a knee.
+ */
+function buildKneel(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
+  const los = 10 + play.startYard
+  const f = formation(los, false, 'under')
+  const spots: Record<string, Pt> = {
+    rb: { x: los - 8, y: MID_Y },
+    wr2: { x: los - 2.3, y: MID_Y - 1.7 },
+    wr1: { x: los - 2.3, y: MID_Y + 1.7 },
+    wr0: { x: los - 0.8, y: MID_Y - 5.6 },
+    te: { x: los - 0.8, y: MID_Y + 4.4 },
+  }
+  for (const [k, pt] of Object.entries(spots)) if (f[k]) f[k] = { ...f[k], x: pt.x, y: clampY(pt.y) }
+  // The defence comes up tight but does not rush (no one is going to be hit on a kneel).
+  for (const k of ['lb0', 'lb1', 'lb2']) f[k] = { ...f[k], x: los + 4 }
+  for (const k of ['cb0', 'cb1']) f[k] = { ...f[k], x: los + 3, y: clampY(MID_Y + (f[k].y < MID_Y ? -9 : 9)) }
+  for (const k of ['s0', 's1']) f[k] = { ...f[k], x: los + 9, y: clampY(MID_Y + (f[k].y < MID_Y ? -5 : 5)) }
+  const m = startMovers(f, ctx)
+  recSnap(los)
+  const endX = clampX(10 + play.endYard)
+  // Snap, a step and a half back, down on the knee.
+  m.qb.hold(SNAP)
+  runTimed(m.qb, [{ x: endX, y: MID_Y }], SNAP, SNAP + 0.55, false, true)
+  const downT = m.qb.t
+  m.qb.hold(1.6)
+  const endSec = m.qb.t
+  // The line fires out a step and stands up; the up-backs square up; everyone else drifts in.
+  for (const k of ['ol0', 'ol1', 'ol2', 'ol3', 'ol4']) { m[k].hold(SNAP); runTimed(m[k], [{ x: f[k].x - 0.5, y: f[k].y }], SNAP, SNAP + 0.5, false, true) }
+  for (const k of ['dl0', 'dl1', 'dl2', 'dl3']) { m[k].hold(SNAP + 0.05); runTimed(m[k], [{ x: los + 0.4, y: f[k].y }], SNAP + 0.05, SNAP + 0.6, false, true) }
+  for (const k of ['lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']) { m[k].hold(SNAP + 0.3); runTimed(m[k], [{ x: f[k].x - 1.2, y: f[k].y + (MID_Y - f[k].y) * 0.08 }], SNAP + 0.3, SNAP + 1.3, false, true) }
+  for (const k of ['wr0', 'wr1', 'wr2', 'te', 'rb']) if (m[k]) { m[k].hold(SNAP + 0.1); runTimed(m[k], [{ x: f[k].x + 0.3, y: f[k].y }], SNAP + 0.1, SNAP + 0.6, false, true) }
+  for (const k of ALL_KEYS(f)) if (m[k].t < endSec) m[k].hold(endSec - m[k].t)
+  recEv(downT, 'down', ['qb'], { x: endX, y: MID_Y })
+  return finish(f, m, { ball: snapBall(m, los, endSec), holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }], flights: [] })
+}
+
+/**
+ * animflow r6d (J6): the spike. QB under centre, takes the snap and throws the ball straight into the
+ * turf a yard in front of him; the line pops up, receivers take a couple of steps and stop.
+ */
+function buildSpike(play: Play, ctx: AnimContext): PlayAnim {
+  recStart()
+  const los = 10 + play.startYard
+  const f = formation(los, false, 'under')
+  const m = startMovers(f, ctx)
+  recSnap(los)
+  m.qb.hold(SNAP)
+  runTimed(m.qb, [{ x: f.qb.x - 0.6, y: MID_Y }], SNAP, SNAP + 0.3, false, true)
+  const rel = m.qb.t + 0.05
+  m.qb.hold(rel - m.qb.t)
+  const land = rel + 0.18
+  const spot: Pt = { x: f.qb.x + 0.8, y: MID_Y + 0.4 }
+  m.qb.hold(1.4)
+  const endSec = m.qb.t
+  for (const k of ['ol0', 'ol1', 'ol2', 'ol3', 'ol4']) { m[k].hold(SNAP); runTimed(m[k], [{ x: f[k].x - 0.8, y: f[k].y }], SNAP, SNAP + 0.45, false, true) }
+  for (const k of ['dl0', 'dl1', 'dl2', 'dl3']) { m[k].hold(SNAP + 0.05); runTimed(m[k], [{ x: los - 0.2, y: f[k].y }], SNAP + 0.05, SNAP + 0.6, false, true) }
+  for (const k of ['wr0', 'wr1', 'wr2', 'te', 'rb']) if (m[k]) { m[k].hold(SNAP); runTimed(m[k], [{ x: f[k].x + (k === 'rb' ? 0.8 : 3), y: f[k].y }], SNAP, SNAP + 0.9, false, true) }
+  for (const k of ['lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']) { m[k].hold(SNAP + 0.15); runTimed(m[k], [{ x: f[k].x - 0.8, y: f[k].y }], SNAP + 0.15, SNAP + 0.8, false, true) }
+  for (const k of ALL_KEYS(f)) if (m[k].t < endSec) m[k].hold(endSec - m[k].t)
+  const ball: WP[] = [...snapBall(m, los, rel), { t: land, x: spot.x, y: spot.y }, { t: endSec, x: spot.x + 0.6, y: spot.y }]
+  recEv(rel, 'throw', ['qb'], posAt(m.qb.path, rel))
+  recEv(land, 'incomplete', [], spot)
+  return finish(f, m, { ball, holders: [{ t: 0, key: null }, { t: SNAP, key: 'qb' }, { t: rel, key: null }], flights: [{ t0: rel, t1: land, height: 0.2 }] })
 }
 
 function buildStatic(play: Play, ctx: AnimContext): PlayAnim {
