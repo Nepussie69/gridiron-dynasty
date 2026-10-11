@@ -161,7 +161,9 @@ const PASS_ID_WIDEN = 1.9
  *  widening pivots on this, so it does not move and neither does the average pass
  *  rate. Cached per world and week; a club's staff does not change within a week. */
 const passIdMeans = new WeakMap<World, { key: string; mean: number }>()
-function worldPassMean(world: World): number {
+/** J1: exported so the situational pass-rate model can centre each club's pass
+ *  identity on its own league mean (no behaviour change on its own). */
+export function worldPassMean(world: World): number {
   const key = `${world.season}:${world.week}`
   const hit = passIdMeans.get(world)
   if (hit && hit.key === key) return hit.mean
