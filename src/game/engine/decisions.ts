@@ -117,13 +117,49 @@ export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: nu
   return best
 }
 
-export function twoPointChoice(rule: 'chart' | 'kick' | 'go', marginAfterTD: number, qtr: number): 'kick' | 'go2' {
+export function twoPointChoice(
+  rule: 'chart' | 'kick' | 'go',
+  marginAfterTD: number,
+  qtr: number,
+  opts?: { modern?: boolean; aggro?: number; key?: string; clockSec?: number; earlyAggroMin?: number; earlyRate?: number },
+): 'kick' | 'go2' {
   if (rule === 'kick') return 'kick'
-  const chartGo = qtr === 4 && [-2, -5, -9, -10, 1, 5].includes(marginAfterTD)
+  // J6 is a toggle-gated change: with `modern` off this is the untouched R18 chart
+  // (Q4-only, [-2,-5,-9,-10,1,5]) so the OFF path is byte-identical to main.
+  if (!opts?.modern) {
+    const legacyGo = qtr === 4 && [-2, -5, -9, -10, 1, 5].includes(marginAfterTD)
+    if (rule === 'go') return legacyGo || (qtr === 4 && marginAfterTD <= 0 && marginAfterTD >= -8) ? 'go2' : 'kick'
+    return legacyGo ? 'go2' : 'kick'
+  }
+  // The modern chart's go margins (the offence's margin AFTER the touchdown).
+  // Down 8 (was down 14) only chases late; everything else is the standard chart.
+  const chartGo =
+    marginAfterTD === 1 || marginAfterTD === 2 || marginAfterTD === 5 ||
+    marginAfterTD === -2 || marginAfterTD === -5 || marginAfterTD === -9 || marginAfterTD === -10 ||
+    marginAfterTD === -8
+  // J6: the chart is live in Q4, in the last two minutes of Q3, and (only when the
+  // margin math clearly favours it) the last two minutes of the first half. Q1–Q3
+  // chart aggression is deliberately limited so the league Q1–Q3 two-point rate
+  // lands at the NFL ~4.7% (the early-aggression share below supplies it).
+  const lateQ2 = qtr === 2 && (opts.clockSec ?? 999) <= 120
+  const chartLive = qtr === 4 || (qtr === 3 && (opts.clockSec ?? 999) <= 120) || lateQ2
+  if (chartLive && chartGo) return 'go2'
   // R18: an aggressive head coach also chases the deficit on two in the fourth
   // quarter instead of waiting for the exact chart margins.
-  if (rule === 'go') return chartGo || (qtr === 4 && marginAfterTD <= 0 && marginAfterTD >= -8) ? 'go2' : 'kick'
-  return chartGo ? 'go2' : 'kick'
+  if (rule === 'go' && qtr === 4 && marginAfterTD <= 0 && marginAfterTD >= -8) return 'go2'
+  // J6: analytics-aggressive coaches (the 'go' tendency, plus the top third of the
+  // aggro scale) go for two a small share of the time in Q1–Q3, matching the NFL's
+  // ~4.7% early two-point rate. Deterministic hash on the play/offence — never rng.
+  const aggro = opts.aggro ?? 0
+  const earlyMin = opts.earlyAggroMin ?? 0.3
+  const earlyRate = opts.earlyRate ?? 0
+  if (qtr <= 3 && opts.key && earlyRate > 0 && aggro >= earlyMin && h01(`${opts.key}:two`) < earlyRate) return 'go2'
+  return 'kick'
+}
+
+/** A deterministic uniform in [0,1) from a string key — never an rng() draw. */
+function h01(key: string): number {
+  return (hash32(key) >>> 0) / 4294967296
 }
 
 // ── R18: coaching tendencies ──────────────────────────────────────────────────
@@ -204,6 +240,8 @@ export interface CoachTendency {
   timeouts: 'save' | 'aggressive'
   /** Tempo: −1 deliberate … +1 up-tempo. */
   tempo: number
+  /** J6: raw 4th-down/two-point aggression score (≈ −1.5 … +1.5; league mean ≈ 0). */
+  aggro: number
 }
 
 /** Head-coach specialty nudges to the aggression score (league mean ≈ 0). */
@@ -255,7 +293,7 @@ export function coachTendency(world: World, teamId: string): CoachTendency {
   const timeouts: CoachTendency['timeouts'] = hcRating >= 75 || hc?.specialty === 'Play Calling' ? 'aggressive' : 'save'
   const passRate = offPassRate(world, teamId, oc?.scheme)
   const tempo = clamp((OC_TEMPO[oc?.scheme ?? ''] ?? 0) + (ocRating - 74) / 120, -1, 1)
-  return { fourth, twoPoint, passRate, timeouts, tempo }
+  return { fourth, twoPoint, passRate, timeouts, tempo, aggro }
 }
 
 /** An AI club's call sheet, derived from its coaching tendencies (R18). */

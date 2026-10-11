@@ -44,6 +44,93 @@ export function setStamina(on: boolean) {
 export function getStamina(): boolean {
   return STAMINA_ON
 }
+// J6: clock / situational realism (kneels, spikes, out-of-bounds, QB scrambles,
+// man-coverage share, the two-point chart). Dev-only toggle in the setStamina
+// pattern; default on. With it OFF the engine is byte-identical to the
+// unmodified sim: no rng() draw is added, no threshold is changed (every new
+// decision is a deterministic hash).
+let CLOCK_ON = true
+export function setClockRealism(on: boolean) {
+  CLOCK_ON = on
+}
+/** J6: read the current clock-realism toggle so a probe can restore it exactly. */
+export function getClockRealism(): boolean {
+  return CLOCK_ON
+}
+
+/**
+ * J6: every constant this job adds, in one place. All of it is deterministic
+ * (hashes / thresholds), never an rng() draw, so the OFF path is untouched.
+ */
+export const CLOCK_REALISM = {
+  /** Game-clock seconds a kneeldown burns (the play clock runs down). */
+  kneelBurn: 37,
+  /** Safety seconds subtracted before a kneel can exhaust the clock. */
+  kneelReserve: 6,
+  /**
+   * Deterministic share of otherwise-eligible kneel snaps that actually kneel.
+   * Tuned to 0.8: a kneel is a rush attempt for negative yards (the sim clamps
+   * every other negative run to 0), so each kneel costs the replaced carry's
+   * positive yards too and drags team YPC toward the 4.15 floor. 0.8 holds the
+   * NFL kneel rate (>= 0.568/team-game) while keeping YPC in band.
+   */
+  kneelGate: 0.8,
+  /** Latest first-half clock (s) at which a kneel is still taken. */
+  q2KneelMaxClock: 20,
+  /** Game-clock seconds a spike burns (the snap itself). */
+  spikeBurn: 4,
+  /** Latest clock a spike is still worth using (seconds). */
+  spikeMaxClock: 35,
+  /** Hash gate on an otherwise-eligible spike. */
+  spikeRate: 0.68,
+  /** Multiple applied to the two-minute out-of-bounds chance outside the drill. */
+  oobWiden: 1.15,
+  /**
+   * J6 compensation: a small run→pass lean added to the pass-rate roll (never to
+   * R2) to offset the dropback a scramble converts to a rush. Left at 0 because the
+   * scramble branch itself is backed out — see CLOCK_REALISM.scrambleBase.
+   */
+  passShift: 0,
+  /**
+   * Per-attempt scramble chance at scramble-style 0. BACKED OUT (0): a faithful
+   * pressured-dropback scramble at the NFL 4.9% of dropbacks was verified, but it
+   * necessarily converts ~1.9 pass plays/team-game into rushes and moves the
+   * calibration's Pass attempts (↓2.5), Gross/Net passing yards (↓12), Passing TD
+   * (↑0.1) and Rush attempts (↑2.2) out of band; the sim's baseline already sits at
+   * the top of the rush-attempt band. A run→pass compensation (passShift) traded one
+   * broken band for another, so — per the brief's fallback — the piece is backed out
+   * rather than retuning R2. Set to 0.037 and passShift ≈ 0.039 to re-enable.
+   */
+  scrambleBase: 0,
+  /** p = base × (1 + scrambleStyleSpan × scrambleStyle) × (pressured ? pressure : 1). */
+  scrambleStyleSpan: 0.6,
+  scramblePressure: 1.5,
+  /** Scramble gain model (deterministic bell; mean ≈ 6.5 yds, ~25% first downs). */
+  scrambleGainBase: 5.2,
+  scrambleGainSpread: 9,
+  scrambleSpdEdge: 0.06,
+  /** DEF_STYLES overrides applied only while CLOCK_ON: manCoverage/blitz lowered
+   *  to the NFL mix (the load-bearing share fix), coverage multiplier recentred to
+   *  hold completion % / gross pass yards.
+   *
+   *  try-5: the >1.0 coverage values were tuned on the PRE-merge base. On the
+   *  merged J1/J5/J7/J8b base the pass game is already leaner, so the same
+   *  multipliers over-suppressed comp% (−1.9 pts) and gross pass yards (−7) at the
+   *  36% man share. A 1-seed × 600-game probe (logs/realism-j6-cov2.out) showed the
+   *  coverage values must drop by ~0.10 (a ≈0.90 scale) to centre comp% 64.3 vs the
+   *  OFF 64.4 and gross 240.4 vs 239.9, with points/pass TD/3rd-down/first downs
+   *  all equal or better — i.e. set them back toward/slightly below 1.0. */
+  defStyles: {
+    '4-3 Base': { blitz: 0.19, manCoverage: 0.32, runFit: 1.0, coverage: 0.92 },
+    '3-4 Base': { blitz: 0.27, manCoverage: 0.24, runFit: 1.06, coverage: 0.92 },
+    '4-2-5 Nickel': { blitz: 0.21, manCoverage: 0.40, runFit: 0.9, coverage: 1.0 },
+    Multiple: { blitz: 0.26, manCoverage: 0.34, runFit: 1.0, coverage: 0.95 },
+    'Blitz Heavy': { blitz: 0.47, manCoverage: 0.53, runFit: 0.94, coverage: 0.9 },
+  } as Record<string, DefenseStyle>,
+  /** Two-point chart: analytics-aggressive early aggression. */
+  twoAggroMin: 0.3,
+  twoEarlyRate: 0.05,
+}
 // J1: dev-only toggle for the situational pass-rate model (the setStamina
 // pattern). The flag itself lives in situational.ts; re-exported here so the
 // probe and both pickConcept call sites share one switch. Default ON.
@@ -737,6 +824,12 @@ export interface Play {
   safety?: boolean
   /** T2M: the ball carrier ran out of bounds, stopping the clock (no runoff). */
   outOfBounds?: boolean
+  /** J6: a victory-formation kneeldown (a rush attempt for negative yards). */
+  kneel?: boolean
+  /** J6: the QB spiked the ball to stop the clock (a pass attempt, incomplete). */
+  spike?: boolean
+  /** J6: the QB escaped the pocket and ran (a rush attempt, not a pass attempt). */
+  scramble?: boolean
   /** R7: the defender credited with the pressure (sack, QB hit or hurry). */
   pressureId?: string
   /** R7: how the pressure is classified. A sack is always a pressure. */
@@ -2007,7 +2100,17 @@ export function offStyle(world: World, teamId: string): OffenseStyle {
 }
 function defStyle(world: World, teamId: string): DefenseStyle {
   const dc = (world.staff[teamId] ?? []).find((s) => s.role === 'Defensive Coordinator')
-  return DEF_STYLES[dc?.scheme ?? ''] ?? DEF_STYLES.Multiple
+  const key = dc?.scheme ?? ''
+  const base = DEF_STYLES[key] ?? DEF_STYLES.Multiple
+  // J6: while the clock-realism toggle is on, the man/blitz mix is shifted to the
+  // NFL shares (see CLOCK_REALISM.defStyles). OFF returns the untouched base so
+  // the engine is byte-identical to main.
+  if (!CLOCK_ON) return base
+  return CLOCK_REALISM.defStyles[key] ?? CLOCK_REALISM.defStyles.Multiple ?? base
+}
+/** J6: a club's man-coverage weight (probe/reporting helper). */
+export function manCoverageOf(world: World, defId: string): number {
+  return defStyle(world, defId).manCoverage
 }
 export function coachLabels(world: World, teamId: string) {
   const staff = world.staff[teamId] ?? []
@@ -2088,6 +2191,12 @@ export interface PlayOutcome {
   timeToPressureS?: number
   /** T2M: a sideline carry/reception went out of bounds (stops the clock). */
   outOfBounds?: boolean
+  /** J6: a victory-formation kneeldown (a rush attempt for negative yards). */
+  kneel?: boolean
+  /** J6: the QB spiked the ball to stop the clock (a pass attempt, incomplete). */
+  spike?: boolean
+  /** J6: the QB escaped the pocket and ran (a rush attempt, not a pass attempt). */
+  scramble?: boolean
   // ── R16: turnover variety ──────────────────────────────────────────────────
   fumbleCause?: 'run' | 'carry' | 'strip' | 'muff' | 'kickoff'
   fumbleRecoveredBy?: 'off' | 'def'
@@ -2422,6 +2531,15 @@ function oobSituation(env: SimEnv | undefined): boolean {
 // T2M: the concepts that get the ball on the edge — an outside run can reach the
 // sideline; an inside hand-off cannot.
 const OUTSIDE_RUNS = new Set(['Toss', 'Outside Zone', 'Pin-Pull', 'Jet Sweep', 'RPO Run', 'Read Option'])
+// J6 try-5: even a between-the-tackles hand-off can be strung out and pushed out
+// near the boundary, so with clock-realism ON every run carries a small sideline
+// chance — part of widening the ELIGIBLE play set (never the rate multiplier).
+const INSIDE_RUN_OOB = 0.05
+// J6 try-5: the sideline-route family. The base list is the T2M set (OFF path,
+// byte-identical to before2); the widened list adds the rest of the short/
+// intermediate sideline family and is used only while clock-realism is ON.
+const OOB_ROUTE_BASE = /out|flat|screen|bubble|swing|check|wheel|angle|texas|snag|whip|corner/i
+const OOB_ROUTE_WIDE = /out|flat|screen|bubble|swing|check|wheel|angle|texas|snag|whip|corner|comeback|hitch|curl|smash|sail|level|bench|flood|hank|spacing|mesh/i
 
 // J8a2: the run concepts a defence must read (misdirection / a pulling guard, a
 // delayed hand-off or a QB read) — a defender who bites on the first key is a gap
@@ -2432,14 +2550,42 @@ const MISDIRECTION_RUNS = new Set(['Counter', 'Gun Counter', 'Trap', 'Toss', 'Pi
  * T2M: the chance a sideline carry goes out of bounds. Outside runs and short
  * completions (outs, flats, screens, checkdowns) only; more for WR/RB on those
  * routes. Purely a probability fed to a per-play hash — never an rng() draw.
+ *
+ * J6 try-5 widens the ELIGIBLE set toward the NFL 10.8% share while the toggle is
+ * ON: every inside run can reach the boundary, the sideline-route list covers the
+ * full short/intermediate sideline family (comebacks, hitches, curls, sails,
+ * benches, …), and the per-position weights are raised. The `oobWiden` multiplier
+ * is UNCHANGED. With the toggle OFF every branch returns the exact pre-J6 value,
+ * so the OFF path (incl. the two-minute window) stays byte-identical.
  */
 function oobChance(concept: Concept, pos: string | undefined): number {
-  if (concept.type === 'run') return OUTSIDE_RUNS.has(concept.name) ? 0.4 : 0
+  if (concept.type === 'run') {
+    if (OUTSIDE_RUNS.has(concept.name)) return 0.4
+    return CLOCK_ON ? INSIDE_RUN_OOB : 0
+  }
   const short = concept.depth <= 8 || concept.yac >= 0.8
   if (!short) return 0
-  const route = /out|flat|screen|bubble|swing|check|wheel|angle|texas|snag|whip|corner/i.test(concept.name) ? 0.1 : 0
-  const byPos = pos === 'WR' ? 0.16 : pos === 'RB' || pos === 'FB' ? 0.12 : pos === 'TE' ? 0.05 : 0
-  return clamp(0.2 + route + byPos, 0, 0.6)
+  const route = CLOCK_ON
+    ? (OOB_ROUTE_WIDE.test(concept.name) ? 0.12 : 0)
+    : (OOB_ROUTE_BASE.test(concept.name) ? 0.1 : 0)
+  const byPos = CLOCK_ON
+    ? (pos === 'WR' ? 0.19 : pos === 'RB' || pos === 'FB' ? 0.15 : pos === 'TE' ? 0.08 : 0)
+    : (pos === 'WR' ? 0.16 : pos === 'RB' || pos === 'FB' ? 0.12 : pos === 'TE' ? 0.05 : 0)
+  return clamp(0.2 + route + byPos, 0, CLOCK_ON ? 0.62 : 0.6)
+}
+
+/**
+ * J6: the effective sideline rate for a play. Inside the two-minute drill the
+ * T2M rate is preserved; elsewhere (clock-realism on) sideline concepts still
+ * reach the boundary at a lower base rate so the marker and animation match real
+ * football — the clock cap in applyScrimmageOutcome stays gated to the real
+ * clock-stop window, so the extra flags never leak game time. Never rng().
+ */
+function oobRate(env: SimEnv | undefined, concept: Concept, pos: string | undefined): number {
+  const base = oobChance(concept, pos)
+  if (base <= 0) return 0
+  if (oobSituation(env)) return base
+  return CLOCK_ON ? base * CLOCK_REALISM.oobWiden : 0
 }
 
 function hasFix(env: SimEnv | undefined, teamId: string, fix: string): boolean {
@@ -2627,6 +2773,28 @@ function finishTackler(key: string, first: string | undefined, lists: Player[][]
   return hashPick(pool, (p) => {
     return Math.max(1, eff(p, 'TAK') * 0.5 + eff(p, 'PUR') * 0.3 + eff(p, 'SPD') * 0.2)
   }, hash32(key))?.id
+}
+
+/**
+ * J6: maybe convert a resolved pass outcome into a QB scramble. Deterministic
+ * (hash of the play number) and drawn from the pass-outcome population, so the
+ * scramble replaces the same share of completions and incompletions and the
+ * completion %, YPA and sack % are preserved. A pressured dropback and a
+ * scramble-style QB raise the chance. Never an rng() draw; the pass attempt's
+ * clock (timeUsed) is kept so plays/game and TOP do not move.
+ */
+function maybeScramble(offId: string, n: number, qb: Player | undefined, qbStyle: ReturnType<typeof styleProfile>, pressured: boolean, out: PlayOutcome, scores = false): PlayOutcome {
+  if (!CLOCK_ON || !qb || out.turnover || out.defTD || out.intId || scores) return out
+  const p = CLOCK_REALISM.scrambleBase * (1 + CLOCK_REALISM.scrambleStyleSpan * qbStyle.scramble) * (pressured ? CLOCK_REALISM.scramblePressure : 1)
+  if (p <= 0 || h01(`${n}:${offId}:scr`) >= p) return out
+  const a = mkAttrs(qb)
+  const bell = (h01(`${n}:${offId}:scry1`) + h01(`${n}:${offId}:scry2`)) / 2 - 0.5
+  const gain = clamp(Math.round(CLOCK_REALISM.scrambleGainBase + bell * CLOCK_REALISM.scrambleGainSpread + ((a.SPD ?? 75) - 75) * CLOCK_REALISM.scrambleSpdEdge + qbStyle.scramble * 1.5), -4, 30)
+  return {
+    type: 'run', concept: 'QB Scramble', yards: gain, result: 'Rush', turnover: false,
+    carrierId: qb.id, scramble: true, timeUsed: out.timeUsed,
+    onFieldOff: out.onFieldOff, onFieldDef: out.onFieldDef,
+  }
 }
 
 // ── J7: matchups & busts ─────────────────────────────────────────────────────
@@ -3614,13 +3782,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R2: on a money down the route is worked back to the sticks.
     if (gain > 0 && env?.down === 3) gain += R2.moneyYards
     // L12 S3: a completion is stopped by one defender — the coverage defender most
-    // often, support otherwise. No credit on a score or a catch that goes out of
-    // bounds (T2M: a real sideline receiver steps out, so the clock stops).
-    const oob = oobSituation(env) && gain > 0 && yard + gain < 100 &&
-      h01(`${n}:${offId}:oob`) < oobChance(concept, target?.pos)
-    const stopped = yard + gain < 100 && !oob
-      ? passTackler(n, defId, coverId, coverPlayer, saf, lbs)
-      : undefined
+    // often, support otherwise. No credit on a score. J6: a receiver forced out of
+    // bounds still credits a defender, so the widened marker keeps the tackle and
+    // missed-tackle accounting (the clock cap handles the real clock-stop window).
+    const oobP = oobRate(env, concept, target?.pos)
+    const oob = oobP > 0 && gain > 0 && yard + gain < 100 &&
+      h01(`${n}:${offId}:oob`) < oobP
+    const stopped = yard + gain < 100 && (!oob || CLOCK_ON) ? passTackler(n, defId, coverId, coverPlayer, saf, lbs) : undefined
     const tacklerGroups = [cbs, saf, lbs]
     // L12 E2: a strong tackler cuts the YAC short.
     if (stopped && gain > 0) gain = Math.max(-4, gain - tacklerYacShrink(stopped, tacklerGroups))
@@ -3668,7 +3836,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         : strip ? 'Fumble recovered by the offence'
           : muff ? 'Muffed catch, recovered by the offence'
             : big ? 'Explosive play!' : 'Complete'
-    return {
+    return maybeScramble(offId, n, qb, qbStyle, pressured, {
       type: 'pass', concept: concept.name, yards: gain, blitz,
       result: oob ? `${baseResult} (out of bounds)` : baseResult,
       turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !loose && big,
@@ -3681,7 +3849,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
-    }
+    }, loose || yard + gain >= 100)
   }
   const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
@@ -3695,7 +3863,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const pbuP = clamp(J8C.pbuBase + ballSkills(coverPlayer) * J8C.pbuSlope, 0.01, 0.2)
     if (h01(`${n}:${defId}:pbu`) < pbuP) incomplete.pbuId = coverPlayer.id
   }
-  return incomplete
+  // J6: a pressured QB tucks and runs instead of throwing it away. Taken from the
+  // pass-outcome population, so completion % / YPA / sack % are preserved.
+  return maybeScramble(offId, n, qb, qbStyle, pressured, incomplete)
 }
 
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
@@ -3923,17 +4093,21 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const lost = fumble && recovery === 'def'
   // T2M: an outside run in the two-minute drill can reach the sideline. The
   // runner steps out, so there is no defender to credit and the clock stops.
-  const oob = oobSituation(env) && !fumble && gain > -3 && yard + gain < 100 &&
-    h01(`${n}:${offId}:oob`) < oobChance(concept, carrier?.pos)
+  const oobP = oobRate(env, concept, carrier?.pos)
+  const oob = oobP > 0 && !fumble && gain > -3 && yard + gain < 100 &&
+    h01(`${n}:${offId}:oob`) < oobP
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
+  // J6: while clock-realism is on, a runner forced out of bounds is still credited
+  // to a defender, so the widened marker does not quietly remove a tackle attempt
+  // from the league's missed-tackle denominator. OFF keeps the original (no credit).
   // R5: the attempt exists on every in-bounds run — including a fumble, where the
   // defender's contact is what jars the ball loose, so the forcer is the real
   // stopping tackler just as the strip/pass path credits its stopper. The forcer
   // only ever comes from the actual defence on the field.
-  let tackler = oob ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs, J8A_ON ? (gain > 20 ? runClose.chaser : (J8A2_ON ? readKey : poiDl ?? poiLb)) : undefined)
+  let tackler = oob && !CLOCK_ON ? undefined : runTackler(n, defId, gain, lbs, dl, saf, cbs, J8A_ON ? (gain > 20 ? runClose.chaser : (J8A2_ON ? readKey : poiDl ?? poiLb)) : undefined)
   // J8a: on a long gain the man who ran him down (the fastest of the hash-picked
   // pursuers) is the deciding player, so he takes the credit.
-  if (J8A_ON && !oob && gain > 20 && runClose.chaser) tackler = runClose.chaser.id
+  if (J8A_ON && (!oob || CLOCK_ON) && gain > 20 && runClose.chaser) tackler = runClose.chaser.id
   let missedTackleIds: string[] | undefined
   let forcedMissedIds: string[] | undefined
   // R5: the first defender attempts the tackle. A deterministic miss adds yards
@@ -5002,6 +5176,99 @@ function usedTimeout(world: World, s: GameState, offId: string, defId: string, o
   return false
 }
 
+// ── J6: victory-formation kneel & two-minute spike ────────────────────────────
+const KNEEL_CONCEPT: Concept = { name: 'QB Kneel', type: 'run', depth: 0, yac: 0, description: 'Victory formation — take a knee.' }
+const SPIKE_CONCEPT: Concept = { name: 'Spike', type: 'pass', depth: 0, yac: 0, description: 'Spike the ball to stop the clock.' }
+
+/** J6: the last scrimmage play was an in-bounds run/completion, so the clock is running. */
+function clockRunning(s: GameState): boolean {
+  for (let i = s.plays.length - 1; i >= 0; i--) {
+    const p = s.plays[i]
+    if (p.type === 'end' || p.type === 'penalty') continue
+    if (p.offId !== s.offId) return false
+    if (p.type !== 'run' && p.type !== 'pass') return false
+    if (p.turnover || p.outOfBounds) return false
+    if (p.type === 'pass' && p.result.startsWith('Incomplete')) return false
+    return true
+  }
+  return false
+}
+
+/**
+ * J6: take a knee when the offence leads late and the defence cannot stop the
+ * clock enough to get the ball back. Each kneel burns `kneelBurn` seconds (a used
+ * timeout caps it to a few). Deterministic — no rng().
+ */
+function shouldKneel(world: World, s: GameState): boolean {
+  if (s.qtr !== 2 && s.qtr !== 4) return false
+  // J6: end of the first half — only at the very end (a snap that runs the clock
+  // out). A leading club kneels here in real life too.
+  if (s.qtr === 2 && s.clock > CLOCK_REALISM.q2KneelMaxClock) return false
+  if (s.clock <= 0 || s.down < 1 || s.down > 4) return false
+  if (s.yard < 4) return false // never kneel on the doorstep (avoid a safety)
+  // A deterministic per-snap gate so a kneel is not automatic on every eligible
+  // snap (keeps the rate at the NFL 0.768 and re-rolls the play stream).
+  if (h01(`${s.n}:${s.offId}:kneelgateD`) >= CLOCK_REALISM.kneelGate) return false
+  const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  if (margin <= 0) return false
+  // J6 try-5: a kneel is a RUN, so it must only ever replace a snap the leader
+  // would otherwise RUN (a clock-kill, 'protect'), never a snap it would throw.
+  // The engine's two-minute model puts a LEADING club in 'protect' and only a
+  // trailing/tied club in 'hurry' (pass-first), so a club in 'hurry' is never the
+  // one running the clock — the kneel is skipped and the trailing club keeps the
+  // clock-stop a real incompletion would have given it (no extra lost pass plays).
+  if (s.twoMinMode === 'hurry') return false
+  const kneelsLeft = 4 - s.down // downs 1..3 → 3..1
+  const stops = wantsTimeout(world, s, s.defId) ? (s.timeouts[s.defId] ?? 0) : 0
+  const stopped = Math.min(kneelsLeft, stops)
+  const burn = (kneelsLeft - stopped) * CLOCK_REALISM.kneelBurn + stopped * 6
+  if (s.down === 4) {
+    // Only when this snap runs the half/game out. AI only, so a user's explicit
+    // 4th-down moment is never pre-empted.
+    if (s.ctx && s.offId === s.ctx.userTeamId) return false
+    return s.clock <= (stops > 0 ? 6 : CLOCK_REALISM.kneelBurn)
+  }
+  return s.clock <= burn - CLOCK_REALISM.kneelReserve
+}
+
+/**
+ * J6: spike when in a hurry (or tied/trailing late) after an in-bounds play, out
+ * of timeouts, and a snap from field-goal range or the red zone is worth buying.
+ * Hash-gated so not every eligible situation spikes. No rng().
+ */
+function shouldSpike(world: World, s: GameState): boolean {
+  if (s.down < 1 || s.down > 3 || s.clock <= 0 || s.clock > CLOCK_REALISM.spikeMaxClock) return false
+  const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  const hurry = s.twoMinMode === 'hurry' || ((s.qtr === 2 || s.qtr === 4) && s.clock <= 60 && margin <= 0)
+  if (!hurry) return false
+  if ((s.timeouts[s.offId] ?? 0) > 0) return false // a timeout stops the clock better
+  if (!clockRunning(s)) return false
+  const inRange = s.yard >= fgRangeYard(kickPowerOf(world, s.offId)) - 3 || s.yard >= 80
+  if (!inRange) return false
+  return h01(`${s.n}:${s.offId}:spike`) < CLOCK_REALISM.spikeRate
+}
+
+/** J6: build the kneel/spike outcome (deterministic pick of the on-field eleven). */
+function situationalOutcome(world: World, s: GameState, kind: 'kneel' | 'spike'): PlayOutcome {
+  const offId = s.offId
+  const defId = s.defId
+  const concept = kind === 'kneel' ? KNEEL_CONCEPT : SPIKE_CONCEPT
+  const offEleven = fillToEleven(world, offId, offenseOnField(world, offId, concept, s.qbOverride, undefined, STAMINA_ON ? s.fat : undefined), OFF_FILL)
+  const defEleven = fillToEleven(world, defId, defenseOnField(world, defId, concept.personnel, STAMINA_ON ? s.fat : undefined), DEF_FILL)
+  const qb = offEleven.find((p) => p.pos === 'QB')
+  const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
+  const burn = kind === 'kneel' ? CLOCK_REALISM.kneelBurn : CLOCK_REALISM.spikeBurn
+  // timeUsed is scaled so applyScrimmageOutcome's burn (timeUsed × pace ×
+  // baseTimeScale × tempo) lands on the intended game-clock seconds.
+  const timeUsed = burn / (s.pace * baseTimeScale(world, offId) * tempoMult)
+  const fields = { timeUsed, onFieldOff: offEleven.map((p) => p.id), onFieldDef: defEleven.map((p) => p.id) }
+  if (kind === 'kneel') {
+    const yards = h01(`${s.n}:${offId}:kneel`) < 0.5 ? -1 : -2
+    return { type: 'run', concept: 'QB Kneel', yards, result: 'Kneel down', turnover: false, carrierId: qb?.id, kneel: true, ...fields }
+  }
+  return { type: 'pass', concept: 'Spike', yards: 0, result: 'Incomplete (spike)', turnover: false, qbId: qb?.id, spike: true, ...fields }
+}
+
 export function createGame(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx, weather?: GameWeather): GameState {
   const isCollege = world.byId[homeId].tier !== 'NFL'
   const rng = makeRng(seed)
@@ -5163,7 +5430,13 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
   const isUser = !!s.ctx && offId === s.ctx.userTeamId
   const sheet = isUser ? s.ctx!.callSheet : aiCallSheet(world, offId)
   const margin = offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  const twoDefault = twoPointChoice(sheet.twoPoint, margin, s.qtr)
+  // J6: the chart is situation- and coach-aware; the user's explicit 'go'/'kick'
+  // rules and every moment answer stay exactly as before (this is only the
+  // standing default). Gated on the toggle, so the OFF path is byte-identical.
+  const twoDefault = twoPointChoice(sheet.twoPoint, margin, s.qtr, CLOCK_ON ? {
+    modern: true, aggro: coachTendency(world, offId).aggro, key: `${s.n}:${offId}`, clockSec: s.clock,
+    earlyAggroMin: CLOCK_REALISM.twoAggroMin, earlyRate: CLOCK_REALISM.twoEarlyRate,
+  } : undefined)
   const choice = decide(s, {
     kind: 'two', side: 'hc', teamId: offId, qtr: s.qtr, clock: fmtClock(s.clock), down: null, distance: null, yard: 98,
     // Only ask when it can matter: the second half, or whenever the chart says go for two.
@@ -5249,8 +5522,11 @@ function applyScrimmageOutcome(
   let t = out.timeUsed * s.pace * baseTimeScale(world, offId) * tempoMult
   if (usedTimeout(world, s, offId, defId, out)) t = Math.min(t, 6)
   // T2M: a carry out of bounds stops the clock at the end of the play — no 40s
-  // runoff; only the few seconds the play itself took count.
-  if (out.outOfBounds) t = Math.min(t, 6)
+  // runoff; only the few seconds the play itself took count. J6: this cap is
+  // gated to the real clock-stop window (last two minutes of a half), so the
+  // widened out-of-bounds marker outside it never leaks game time. Byte-identical
+  // on the OFF path (a T2M out-of-bounds play is always inside the window).
+  if (out.outOfBounds && (s.qtr === 2 || s.qtr === 4) && s.clock <= 120) t = Math.min(t, 6)
   s.clock -= t
   const offS = statFor(s, offId)
   const defS = statFor(s, defId)
@@ -5270,10 +5546,10 @@ function applyScrimmageOutcome(
       // a ball the defence recovered is a lost fumble (turnover).
       offS.passComp += 1; offS.passYds += out.yards
       if (out.turnover) offS.fumbles += 1
-    } else if (out.result !== 'Incomplete') { offS.passComp += 1; offS.passYds += out.yards }
+    } else if (out.result !== 'Incomplete' && !out.spike) { offS.passComp += 1; offS.passYds += out.yards }
   } else {
     offS.rushAtt += 1
-    offS.rushYds += Math.max(0, out.yards)
+    offS.rushYds += out.kneel ? out.yards : Math.max(0, out.yards)
     if (out.turnover) offS.fumbles += 1
   }
   offS.top += out.timeUsed * s.pace
@@ -5555,6 +5831,20 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (checkTwoMinute(s) === 'moment') return 'moment'
   if (checkClock(s) === 'moment') return 'moment'
 
+  // J6: victory-formation kneel / two-minute spike. Deterministic (hash only) and
+  // placed before the fourth-down choice and any rng draw, so it is a standing
+  // decision in both the coached and the fast path. A kneel/spike is applied
+  // through the same outcome applier as a normal scrimmage play.
+  if (CLOCK_ON) {
+    const sit = shouldKneel(world, s) ? 'kneel' : shouldSpike(world, s) ? 'spike' : null
+    if (sit) {
+      const out = situationalOutcome(world, s, sit)
+      out.fatOn = [...(out.onFieldOff ?? []), ...(out.onFieldDef ?? [])].map((id) => Math.round((s.fat[id] ?? 0) * 100))
+      chargeSnaps(s, out)
+      return applyScrimmageOutcome(world, s, out, null, s.offId, s.defId, undefined)
+    }
+  }
+
   // 4th-down decision sits at the very start of the step, before any rng draw.
   let fourthChoice: 'go' | 'fg' | 'punt' | 'fake' | null = null
   if (s.down === 4) {
@@ -5594,11 +5884,14 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // R2: red-zone finishing — inside the 20 the league throws more than it does
   // between the 20s, so the concept draw leans pass there (no extra rng draw).
   const rzPassAdj = s.yard >= 80 ? R2.rzPassBias : 0
-  const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj + rzPassAdj
+  // J6: a small run→pass lean while clock-realism is on, compensating the dropback
+  // a scramble converts to a rush so pass/rush attempts stay in band. OFF adds 0.
+  const clockPassShift = CLOCK_ON ? CLOCK_REALISM.passShift : 0
+  const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj + rzPassAdj + clockPassShift
   // J1: with the situational model ON the table replaces the base league lean
   // (s.passAdj) and the red-zone lean (rzPassAdj) — no double counting — while
   // the plan/quick/mode edges stay additive. OFF keeps the legacy combined lean.
-  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj : passAdj
+  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj + clockPassShift : passAdj
 
   // ── L10 G9/G10: the snap's concept and any call-matrix edge. The `call` and
   //    `defCall` decisions sit before the penalty rng; the AI's counter-call is
