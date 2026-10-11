@@ -55,6 +55,7 @@ import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
 import { CareerRhythm } from '../components/CareerRhythm'
 import { DeadlinePanel } from '../components/DeadlinePanel'
+import { FrenzyCard } from '../components/FrenzyLotInspector'
 import { CareerPeople } from '../components/CareerPeople'
 import { GmRequestsDesk } from '../components/GmRequestsDesk'
 import { WeeklyChecklist } from '../components/WeeklyChecklist'
@@ -318,6 +319,8 @@ export function Career() {
             {career.deadline && career.deadline.season === league.season && career.deadline.week === league.week && (
               <DeadlinePanel />
             )}
+            {/* FUTURES #11: the March frenzy pointer — self-gates to the bidding window. */}
+            <FrenzyCard />
             <CareerRhythm />
           </div>
           <div className="space-y-4">
