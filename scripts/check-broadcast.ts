@@ -17,7 +17,8 @@
 // animflow: the live field — engaged pairs are drawn touching and keep moving,
 // a double team is shoulder to shoulder and one blocker climbs, pursuers never
 // get inside the keep-out ring before the tackle phase, and a blocked defender
-// takes the block pose facing his blocker.
+// takes the block pose facing his blocker; the carrier stumbles at first contact
+// and the tackler is in the tackle pose facing him before going down.
 // Run: node --experimental-strip-types scripts/check-broadcast.ts
 import assert from 'node:assert/strict'
 import { NFL_TEAMS } from '../src/game/data/nflTeams.ts'
@@ -1415,6 +1416,35 @@ ok('animflow: a blocked defender takes the block pose and faces his blocker (bot
   }
   const fw = pa.facing.dl0.find((x) => x.t0 <= 0.5 && x.t1 >= 0.5)
   assert.ok(fw && fw.mode === 'actor' && fw.key === 'ol0', `dl0 faces his blocker: ${JSON.stringify(fw)}`)
+})
+
+ok('animflow: the carrier stumbles at first contact and the tackler wraps him up (tackle pose, facing him) before going down', () => {
+  const anim = {
+    duration: 5000,
+    actors: [
+      { key: 'qb', side: 'off', role: 'QB', path: [{ t: 0, x: 30, y: 26.65 }, { t: 1, x: 29, y: 26.65 }] },
+      { key: 'rb', side: 'off', role: 'RB', path: [{ t: 0, x: 28, y: 28 }, { t: 0.7, x: 40, y: 27 }, { t: 1, x: 42, y: 27 }] },
+      { key: 'lb1', side: 'def', role: 'LB', path: [{ t: 0, x: 40, y: 22 }, { t: 0.7, x: 40.5, y: 26.5 }, { t: 1, x: 42.5, y: 26.6 }] },
+    ],
+    ball: [{ t: 0, x: 35, y: 26.65 }, { t: 0.05, x: 30, y: 26.65 }, { t: 0.2, x: 30, y: 27 }, { t: 1, x: 42, y: 27 }],
+    holders: [{ t: 0, key: null }, { t: 0.03, key: 'qb' }, { t: 0.2, key: 'rb' }],
+    flights: [],
+    engagements: [{ a: 'lb1', b: 'rb', t0: 0.7, t1: 1, kind: 'tackle' }],
+    events: [
+      { t: 0.03, kind: 'snap', keys: ['ol2', 'qb'], spot: { x: 35, y: 26.65 } },
+      { t: 0.7, kind: 'contact', keys: ['rb', 'lb1'], spot: { x: 40, y: 27 } },
+      { t: 1, kind: 'tackle', keys: ['lb1', 'rb'], spot: { x: 42, y: 27 } },
+    ],
+  } as unknown as BroadcastAnim
+  const play = { type: 'run', concept: 'Inside Zone', result: 'Rush', startYard: 25, endYard: 32, yards: 7 } as unknown as Play
+  const pa = presentAnim(anim, play)
+  assert.ok(pa.poses.rb.some((w) => w.state === 'stumble' && w.t0 <= 0.7 && w.t1 >= 0.7), `rb ${JSON.stringify(pa.poses.rb)}`)
+  assert.ok(pa.poses.rb.some((w) => w.state === 'down'), 'carrier goes down')
+  const tw = pa.poses.lb1.find((w) => w.state === 'tackle')
+  assert.ok(tw && tw.t0 <= 0.72, `lb1 ${JSON.stringify(pa.poses.lb1)}`)
+  const fw = pa.facing.lb1.find((x) => x.t0 <= 0.8 && x.t1 >= 0.8)
+  assert.ok(fw && fw.mode === 'actor' && fw.key === 'rb', `lb1 faces the carrier: ${JSON.stringify(fw)}`)
+  assert.ok(pa.poses.lb1.some((w) => w.state === 'dive' || w.state === 'down'), 'tackler goes down')
 })
 
 console.log(`check-broadcast: PASS (${n} checks)`)

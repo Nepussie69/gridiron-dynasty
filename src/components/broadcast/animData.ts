@@ -35,7 +35,7 @@ interface InB1aInput { engagements?: InEngagement[]; events?: InEvent[] }
 // ── public shapes (the renderer, B3/B4/B5, consumes these) ───────────────────
 export type PoseState =
   | 'stance3' | 'stance2' | 'stand' | 'run' | 'pedal' | 'block' | 'fake' | 'throw'
-  | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold'
+  | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold' | 'tackle'
 
 export interface PoseWindow { t0: number; t1: number; state: PoseState }
 
@@ -335,6 +335,20 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     stumbleBy[carrierKey] = { t0: Math.max(0, c - 0.15 / D), t1: Math.min(1, c + 0.15 / D) }
   }
 
+  // animflow: the carrier is jolted (a stumble) at first contact before he goes
+  // down, unless a broken tackle already shows one.
+  if (carrierKey && !stumbleBy[carrierKey]) {
+    const ev = events.find((e) => e.kind === 'contact' && e.keys[0] === carrierKey)
+    const stop = lastT(carrierKey)
+    if (ev && ev.t < stop - 0.35 / D) stumbleBy[carrierKey] = { t0: Math.max(0, ev.t - 0.04 / D), t1: Math.min(stop - 0.2 / D, ev.t + 0.2 / D) }
+  }
+  // animflow: men wrapping up the carrier (recorded 'tackle' engagements) are in
+  // the tackle pose — arms out, leaning in — until the dive / fall takes over.
+  const tackleBy: Record<string, { t0: number; t1: number }[]> = {}
+  for (const e of engagements) {
+    if (e.kind !== 'tackle' || !keySet[e.a] || e.a === carrierKey) continue
+    ;(tackleBy[e.a] ??= []).push({ t0: clamp01(e.t0), t1: clamp01(e.t1) })
+  }
   const diveBy: Record<string, { t0: number; t1: number }> = {}
   const fallBy: Record<string, { t0: number; t1: number }> = {}
   const downBy: Record<string, { t0: number; t1: number }> = {}
@@ -468,6 +482,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (fw && t >= fw.t0 && t <= fw.t1) return 'fall'
     const dn = downBy[k]
     if (dn && t >= dn.t0) return 'down'
+    const tw = tackleBy[k]
+    if (tw && tw.some((w) => t >= w.t0 && t <= w.t1)) return 'tackle'
     if (t < SNAP_T) return preSnap(k)
     if (hKey === k) {
       if (roles[k] === 'H') return 'hold'
@@ -499,6 +515,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       return { mode: 'angle', angle: Number.isFinite(a) ? a : 0 }
     }
     if (st === 'pedal') return { mode: 'backpedal' }
+    if (st === 'tackle' && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
     const bo = blockOther(k, t)
     if (bo) return { mode: 'actor', key: bo }
     if (qbKey && k === qbKey && throwWin && targetKey && keySet[targetKey] && targetKey !== k &&
