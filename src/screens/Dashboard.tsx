@@ -1,9 +1,10 @@
-import { ArrowRight, ChevronRight } from 'lucide-react'
+import { ArrowRight, ChevronRight, Cloud, CloudRain, CloudSnow, CloudSun } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { mult, ordinal, signed } from '../lib/format'
 import { depthGroup } from '../game/engine/depth'
 import { type World } from '../game/engine/generate'
 import { winProjection } from '../game/engine/analytics'
+import { forecastFor, getWeather, type WeatherForecast } from '../game/engine/weather'
 import type { Position } from '../game/types'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import {
@@ -28,6 +29,7 @@ import {
   Badge,
   Button,
   Card,
+  Chip,
   KpiStrip,
   KpiTile,
   OvrBadge,
@@ -91,6 +93,9 @@ export function Dashboard() {
   const nextRaw = next ? league.schedule.find((g) => g.id === next.id) : undefined
   const stakes = nextRaw ? stakesFor(league, career, nextRaw) : null
   const stakesLabel = nextRaw ? stakesText(league, career, nextRaw) : ''
+
+  // FUTURES #6: the next game's weather, as a small chip in the hero header.
+  const wxFc = next && getWeather() ? forecastFor(league, activeTeamId, next.week) : null
 
   // U4: a broadcast-style win probability for the hero card. Reads the same
   // strength model the ghost-GM projection uses (home field worth ~0.5).
@@ -190,7 +195,17 @@ export function Dashboard() {
           <Card pad={false} className="mb-4 overflow-hidden">
             <div className="hatch flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
               <div className="label">Up Next · Week {next.week}</div>
-              <div className="label">{next.home ? `Home · ${team.stadium}` : `Away · ${opp.stadium}`}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {wxFc && (
+                  <span title={wxChipTitle(wxFc)}>
+                    <Chip>
+                      <span className="mr-1 text-muted" aria-hidden><WxGlyph precip={wxFc.precip} closed={wxFc.closed} size={12} /></span>
+                      {wxChipText(wxFc)}
+                    </Chip>
+                  </span>
+                )}
+                <div className="label">{next.home ? `Home · ${team.stadium}` : `Away · ${opp.stadium}`}</div>
+              </div>
             </div>
 
             {stakesLabel && (
@@ -476,7 +491,30 @@ export function Dashboard() {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// FUTURES #6: the next-game weather chip (pure reads only).
+// ─────────────────────────────────────────────────────────────────────────────
+function WxGlyph({ precip, closed, size = 13 }: { precip: WeatherForecast['precip']; closed: boolean; size?: number }) {
+  if (closed) return <Cloud size={size} aria-hidden />
+  if (precip === 'snow') return <CloudSnow size={size} aria-hidden />
+  if (precip === 'rain') return <CloudRain size={size} aria-hidden />
+  return <CloudSun size={size} aria-hidden />
+}
 
+function wxChipText(fc: WeatherForecast): string {
+  if (fc.closed) return `Indoors · ${Math.round((fc.tempF.lo + fc.tempF.hi) / 2)}°F`
+  const temp = Math.round((fc.tempF.lo + fc.tempF.hi) / 2)
+  const wind = Math.round((fc.windMph.lo + fc.windMph.hi) / 2)
+  const precip = fc.precip === 'none' ? '' : fc.precip === 'snow' ? ' · snow' : ' · rain'
+  return `${temp}°F · ${wind} mph${precip}`
+}
+
+function wxChipTitle(fc: WeatherForecast): string {
+  if (fc.closed) return 'Indoors — no weather'
+  const roof = fc.roof === 'retractable' ? 'roof open' : 'open air'
+  const precip = fc.precip === 'none' ? 'no precip' : `${fc.precip} ${Math.round(fc.precipChance * 100)}%`
+  return `Kickoff conditions (${roof}): ${fc.tempF.lo}–${fc.tempF.hi}°F · wind ${fc.windMph.lo}–${fc.windMph.hi} mph · ${precip}`
+}
 
 /** One unit grade: a rating tile, the scheme that drives it, and its readout. */
 function UnitTile({
