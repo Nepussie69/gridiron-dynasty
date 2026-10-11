@@ -16,7 +16,7 @@ import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, PLAYBOOK, conceptFromPlaybook, type Personnel } from '../data/playbookData'
@@ -43,6 +43,10 @@ export function setStamina(on: boolean) {
 export function getStamina(): boolean {
   return STAMINA_ON
 }
+// J1: dev-only toggle for the situational pass-rate model (the setStamina
+// pattern). The flag itself lives in situational.ts; re-exported here so the
+// probe and both pickConcept call sites share one switch. Default ON.
+export { setSituational, getSituational } from './situational'
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
     // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
@@ -78,6 +82,7 @@ function cohesionMult(mean: number | undefined, coh: number | undefined, factor:
 
 import type { World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
+import { situationalPassRate, getSituational, type SituationInput } from './situational'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -1271,9 +1276,17 @@ function applyDefPlan(defId: string, dStyle: DefenseStyle) {
   return { compMult, coverMult, intMult, bigPlayRisk: eff.bigPlayRisk * dStyle.coverage }
 }
 
-function pickConcept(rng: Rng, style: OffenseStyle, down: number, distance: number, passAdj = 0): Concept {
+function pickConcept(rng: Rng, style: OffenseStyle, down: number, distance: number, passAdj = 0, sit?: SituationInput): Concept {
   let pool = style.concepts
-  const wantPass = rng() < style.passRate + passAdj || (down === 3 && distance > 5)
+  // J1: with the situational model ON the table supplies the down×distance base
+  // (and the red-zone lean), so `passAdj` carries only the plan/quick/mode edges.
+  // OFF runs the legacy flat-lean expression untouched (same single draw).
+  let wantPass: boolean
+  if (getSituational() && sit) {
+    wantPass = rng() < clamp(situationalPassRate(sit) + passAdj, 0, 1)
+  } else {
+    wantPass = rng() < style.passRate + passAdj || (down === 3 && distance > 5)
+  }
   const filtered = pool.filter((c) => (wantPass ? c.type === 'pass' : c.type === 'run'))
   if (filtered.length) pool = filtered
   return pool[Math.floor(rng() * pool.length)]
@@ -3889,12 +3902,25 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // between the 20s, so the concept draw leans pass there (no extra rng draw).
   const rzPassAdj = s.yard >= 80 ? R2.rzPassBias : 0
   const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj + rzPassAdj
+  // J1: with the situational model ON the table replaces the base league lean
+  // (s.passAdj) and the red-zone lean (rzPassAdj) — no double counting — while
+  // the plan/quick/mode edges stay additive. OFF keeps the legacy combined lean.
+  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj : passAdj
 
   // ── L10 G9/G10: the snap's concept and any call-matrix edge. The `call` and
   //    `defCall` decisions sit before the penalty rng; the AI's counter-call is
   //    drawn only after the user answers (or the standing order is taken).
   const bucket = bucketFor(s.down, s.distance, s.yard)
   const marginOf = (id: string) => (id === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore)
+  // J1: the snap's situation for the pass-rate model (pure; no rng). Built only
+  // when the model is ON so the OFF stream and code path are untouched. The OC
+  // identity is the club's widened pass rate centred on the league mean.
+  const sit: SituationInput | undefined = getSituational()
+    ? {
+        down: s.down, distance: s.distance, yard: s.yard, qtr: s.qtr, clockSec: s.clock,
+        margin: marginOf(offId), twoMinMode: s.twoMinMode, identity: style.passRate - worldPassMean(world),
+      }
+    : undefined
   const offIsUser = !!s.ctx && offId === s.ctx.userTeamId
   const defIsUser = !!s.ctx && defId === s.ctx.userTeamId
   let concept: Concept
@@ -3921,7 +3947,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const id = `call-${s.plays.length}`
     let standing = s.callConcepts[id]
     if (!standing) {
-      standing = pickConcept(s.rng, style, s.down, s.distance, passAdj)
+      standing = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
       s.callConcepts[id] = standing
     }
     const read = tendencyRead(world, s, s.defId, 'def', bucket)
@@ -3981,7 +4007,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       call = { edge: eff.edge + scriptedEdge, sackMult: eff.sackMult }
       s.scriptUsed += 1
     } else {
-      concept = pickConcept(s.rng, style, s.down, s.distance, passAdj)
+      concept = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
     }
   }
 
