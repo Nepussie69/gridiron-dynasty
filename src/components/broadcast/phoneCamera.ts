@@ -79,6 +79,12 @@ export interface ProfileCtx {
   phase?: 'live' | 'replay'
   /** Projection viewport in the same units the figure height is reported in (CSS px). */
   viewport?: { w: number; h: number }
+  /**
+   * animflow r6a (user request): 0..1, how far to open the lens for the
+   * pre-snap / snap shot (1 = before the snap, easing to 0 over the first
+   * second): pulled back and a little wider so the formation has room round it.
+   */
+  wide?: number
 }
 
 export const PROFILE_FOV_MAX = 56
@@ -133,7 +139,9 @@ export function applyCameraProfile(pose: CameraPose, prof: CameraProfile, ctx: P
   const [tx, ty, tz] = pose.target
 
   // 1. re-aim: lean the aim point toward the strong side, clamped inside the field.
-  const leanMax = Math.abs(v.by - MID_WIDTH)
+  const wide = clamp(ctx.wide ?? 0, 0, 1)
+  // The wide snap shot leans less (the whole formation, not one side of it).
+  const leanMax = Math.abs(v.by - MID_WIDTH) * (1 - 0.7 * wide)
   const shift = clamp(ctx.strongSideY - ty, -leanMax, leanMax)
   const nty = clamp(ty + shift, 2, FIELD_WIDTH - 2)
   const target: Vec3 = [tx + (v.dx ?? 0), nty, tz]
@@ -143,7 +151,13 @@ export function applyCameraProfile(pose: CameraPose, prof: CameraProfile, ctx: P
   const base = CAMERA_PROFILES.main.live
   const backScale = base.back > 0 ? v.back / base.back : 1
   const hAdd = v.h - base.h
-  const rig: Rig = { target, back: Math.hypot(px - tx, py - ty) * backScale, height: pz + hAdd, yaw, fov: v.fov > 0 ? v.fov : pose.fovDeg }
+  const rig: Rig = {
+    target,
+    back: Math.hypot(px - tx, py - ty) * backScale * (1 + 0.45 * wide),
+    height: pz + hAdd + 3 * wide,
+    yaw,
+    fov: (v.fov > 0 ? v.fov : pose.fovDeg) + (v.fov > 0 ? 6 * wide : 0),
+  }
 
   // 3. safe-area pass: widen the FOV (up to 56°, at most 2° per call), then pull
   //    back along the ray. Bounded per call so a teleporting input can never

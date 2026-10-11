@@ -512,8 +512,48 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     const tk = keyForId(play.tackleIds?.[0]) ?? keyForId(play.sackId) ??
       nearestOf(keys.filter((k) => sides[k] === 'def'), posAt(paths[carrierKey], tackleT), tackleT)
     if (tk && tk !== carrierKey) {
-      diveBy[tk] = { t0: Math.max(0, tackleT - 0.25 / D), t1: tackleT }
+      // animflow r6a: how he brings him down follows the angle and speed of the
+      // hit (BDB 2021 tackles after a catch: 54% from behind, 34% on an angle,
+      // 12% head-on): a chase from behind on a man still running ends in a
+      // dive at the legs (ankle / shoestring); an angle or head-on hit is a
+      // wrap-and-drive (arms round him, legs driving) and they go down together.
+      const ct = events.find((e) => e.kind === 'contact' && e.keys[0] === carrierKey)
+      const ht = ct && ct.t < tackleT ? ct.t : Math.max(0, tackleT - 0.4 / D)
+      const vel = (k: string, t: number): Pt => {
+        const a = posAt(paths[k], Math.max(0, t - 0.1 / D))
+        const b = posAt(paths[k], Math.min(1, t + 0.1 / D))
+        return { x: (b.x - a.x) / (0.2), y: (b.y - a.y) / (0.2) }
+      }
+      const tv = vel(tk, ht)
+      const cv = vel(carrierKey, ht)
+      const cs = Math.hypot(cv.x, cv.y)
+      const ang = Math.hypot(tv.x, tv.y) > 0.5 && cs > 0.5
+        ? Math.abs(((Math.atan2(tv.y, tv.x) - Math.atan2(cv.y, cv.x) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * (180 / Math.PI)
+        : 90
+      const fromBehind = ang < 50
+      if (fromBehind && cs > 3) {
+        diveBy[tk] = { t0: Math.max(0, tackleT - 0.25 / D), t1: tackleT }
+      } else {
+        ;(tackleBy[tk] ??= []).push({ t0: clamp01(Math.min(ht, tackleT - 0.2 / D)), t1: tackleT })
+      }
       downBy[tk] = { t0: tackleT, t1: 1 }
+    }
+  }
+
+  // animflow r6a: a recorded QB hit is a hit after the throw — the rusher
+  // arrives as the ball leaves, wraps him and the passer goes down (BDB 2023:
+  // QB hit on 9% of dropbacks; nflverse hit rate), then is back up.
+  if (type === 'pass' && !sackPlay && play.pressureType === 'hit' && throwWin && qbKey && !fallBy[qbKey]) {
+    const hk = keyForId(play.pressureId)
+    const f0 = throwWin.t1
+    const f1 = Math.min(1, f0 + 0.3 / D)
+    if (f1 > f0 + 1e-6) {
+      fallBy[qbKey] = { t0: f0, t1: f1 }
+      downBy[qbKey] = { t0: f1, t1: Math.min(1, f1 + 1.1 / D) }
+      if (hk && hk !== qbKey && sides[hk] === 'def') {
+        ;(tackleBy[hk] ??= []).push({ t0: clamp01(Math.max(throwWin.t0, f0 - 0.25 / D)), t1: f1 })
+        downBy[hk] ??= { t0: f1, t1: Math.min(1, f1 + 0.6 / D) }
+      }
     }
   }
 
@@ -609,6 +649,27 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     return null
   }
 
+  // ── coverage body control (animflow r6a; BDB 2021, 2018 pass plays) ────────
+  // A corner backpedals (44% of corners, at ~2.9 yd/s) and turns his hips after
+  // a median 1.8 s (p10 1.1, p90 3.3; a quarter never turn inside 4 s); after the
+  // throw the man nearest the target is facing the ball 77% of the time and the
+  // rest snap their heads round in a median 0.4 s. Times per player from his
+  // coverage rating plus a per-play draw.
+  const r6Hash = (n: number) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x) }
+  const scrimmage = type === 'pass' || type === 'run'
+  const pedalEnd: Record<string, number> = {}
+  const ballLag: Record<string, number> = {}
+  keys.forEach((k, i) => {
+    if (sides[k] !== 'def') return
+    const pl = ctx.actors?.get(k)
+    const cov = Math.max(pl?.attrs?.MCV ?? pl?.ovr ?? 70, pl?.attrs?.ZCV ?? 0)
+    const u = r6Hash((play.n ?? 0) * 31 + i * 7.1)
+    const hip = 2.1 + (70 - cov) * 0.02 + (u - 0.5) * 1.6 + (u > 0.8 ? 1.8 : 0)
+    pedalEnd[k] = SNAP_T + Math.max(0.9, Math.min(4.5, hip)) / D
+    const w = r6Hash((play.n ?? 0) * 17 + i * 3.3 + 5)
+    ballLag[k] = (w < 0.7 ? -0.1 : 0.2 + (w - 0.7) * 2.4) / D
+  })
+
   // ── per-t state ────────────────────────────────────────────────────────────
   const preSnap = (k: string): PoseState => {
     if (k === fgHolderKey) return 'hold'
@@ -633,7 +694,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     const fw = fallBy[k]
     if (fw && t >= fw.t0 && t <= fw.t1) return 'fall'
     const dn = downBy[k]
-    if (dn && t >= dn.t0) return 'down'
+    if (dn && t >= dn.t0 && t <= dn.t1) return 'down'
     const tw = tackleBy[k]
     if (tw && tw.some((w) => t >= w.t0 && t <= w.t1)) return 'tackle'
     if (t < SNAP_T) return preSnap(k)
@@ -648,7 +709,11 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (blockOther(k, t)) return 'block'
     if (k === returnerKey && flight && t < flight.t1) return 'stand'
     if (spd > RUN_SPEED) {
-      if (sides[k] === 'def' && vx > 0.2 && !nearCar) return 'pedal'
+      if (sides[k] === 'def' && vx > 0.2 && !nearCar) {
+        // animflow r6a: the backpedal ends at the hip turn (and on the throw).
+        if (!scrimmage) return 'pedal'
+        if (t <= (pedalEnd[k] ?? 1) && spd < 5.5 && !(flight && t >= flight.t0)) return 'pedal'
+      }
       return 'run'
     }
     return 'stand'
@@ -660,7 +725,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     | { mode: 'actor'; key: string }
     | { mode: 'backpedal' }
 
-  const facingFor = (k: string, t: number, st: PoseState, hKey: string | null, pos: Pt, hPos: Pt | null, nearCar: boolean, vx = 0): FMode => {
+  const facingFor = (k: string, t: number, st: PoseState, hKey: string | null, pos: Pt, hPos: Pt | null, nearCar: boolean, vx = 0, vy = 0): FMode => {
     if (kickerKey && k === kickerKey && kickDir != null && (st === 'kick' || fgPlay || puntPlay)) {
       return { mode: 'angle', angle: kickDir }
     }
@@ -670,6 +735,19 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       return { mode: 'angle', angle: Number.isFinite(a) ? a : 0 }
     }
     if (st === 'pedal') return { mode: 'backpedal' }
+    // animflow r6a: eyes to the ball once it is in the air (coverage defenders
+    // near the throw), after a short head-turn lag for some.
+    if (scrimmage && flight && type === 'pass' && sides[k] === 'def' && !k.startsWith('dl') && st !== 'tackle' && !blockOther(k, t) &&
+      t >= flight.t0 + (ballLag[k] ?? 0) && t <= flight.t1 && Math.hypot(pos.x - ballAtCatch.x, pos.y - ballAtCatch.y) < 18) {
+      const a = Math.atan2(ballAtCatch.y - pos.y, ballAtCatch.x - pos.x)
+      if (Number.isFinite(a)) return { mode: 'angle', angle: a }
+    }
+    // A shuffle: sliding across the field square to the quarterback (before the throw).
+    if (scrimmage && type === 'pass' && sides[k] === 'def' && !k.startsWith('dl') && st === 'run' && t > SNAP_T && !(flight && t >= flight.t0) &&
+      Math.abs(vy) > 1.2 * Math.abs(vx) && Math.hypot(vx, vy) < 4.5 && !nearCar) return { mode: 'angle', angle: Math.PI }
+    // Sitting in a zone (slow, before the throw): eyes on the quarterback.
+    if (scrimmage && type === 'pass' && qbKey && keySet[qbKey] && sides[k] === 'def' && !k.startsWith('dl') && (st === 'run' || st === 'stand') &&
+      t > SNAP_T && !(flight && t >= flight.t0) && Math.hypot(vx, vy) < 2.5 && !nearCar && Math.hypot(pos.x - ballAtCatch.x, pos.y - ballAtCatch.y) > 8) return { mode: 'actor', key: qbKey }
     if (st === 'tackle' && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
     const bo = blockOther(k, t)
     if (bo) return { mode: 'actor', key: bo }
@@ -752,7 +830,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       const lastP = outP[outP.length - 1]
       if (lastP && lastP.state === st) lastP.t1 = b
       else outP.push({ t0: a, t1: b, state: st })
-      const w = { t0: a, t1: b, ...facingFor(k, mid, st, hKey, pk[i], hPos, nearCar, vx) } as FacingWindow
+      const w = { t0: a, t1: b, ...facingFor(k, mid, st, hKey, pk[i], hPos, nearCar, vx, vy) } as FacingWindow
       const lastF = outF[outF.length - 1]
       if (lastF && sameFacing(lastF, w)) lastF.t1 = b
       else outF.push(w)

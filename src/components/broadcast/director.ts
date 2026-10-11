@@ -68,7 +68,10 @@ const HEAD_Z = 2.0
 const OMEGA_CENTER = 5 // rad/s, the centre spring
 const OMEGA_SPAN = 2.5 // rad/s, the slower span spring
 const OMEGA_CAM = 8 // rad/s-equivalent, the height / aim / heading springs
-const SAFE_INSET = 0.06 // 6% each side, incl. the top for the ball's height
+const SAFE_INSET = 0.06
+/** animflow r6a: the pre-snap formation shot is a little wider (was 34..55). */
+const PRE_SPAN_MIN = 40
+const PRE_SPAN_MAX = 58 // 6% each side, incl. the top for the ball's height
 /** The playback controls' height (CSS px) per profile when the caller does not say (MatchView PILL_CLEAR_PX). */
 const DEFAULT_CLEAR_PX: Record<'live' | 'replay' | 'phone', number> = { live: 48, replay: 48, phone: 68 }
 
@@ -493,23 +496,26 @@ export function createDirector(opts: DirectorOptions = {}): Director {
         if (s.y[0] > preMaxY) preMaxY = s.y[0]
       }
     }
+    // animflow r6a (user request): start a little wider — the whole formation
+    // plus a few yards of space on every side and downfield, then ease in.
+    const PRE_PAD = 3
     const preWatch: Pt3[] = [
-      { x: preMinX, y: preMinY, z: 0 },
-      { x: preMaxX, y: preMinY, z: 0 },
-      { x: preMaxX, y: preMaxY, z: 0 },
-      { x: preMinX, y: preMaxY, z: 0 },
+      { x: preMinX - PRE_PAD, y: preMinY - PRE_PAD, z: 0 },
+      { x: preMaxX + PRE_PAD + 2, y: preMinY - PRE_PAD, z: 0 },
+      { x: preMaxX + PRE_PAD + 2, y: preMaxY + PRE_PAD, z: 0 },
+      { x: preMinX - PRE_PAD, y: preMaxY + PRE_PAD, z: 0 },
       { x: ball.x[0], y: ball.y[0], z: ballZ[0] },
     ]
     const pre: Shot = {
       cx: los - 6,
       cy: clamp(0.6 * ball.y[0] + 0.4 * MID_Y, 3, FIELD_H - 3),
-      span: clamp(preMaxY - preMinY + 10, 34, 55),
+      span: clamp(preMaxY - preMinY + 16, PRE_SPAN_MIN, PRE_SPAN_MAX),
       z: rig.height,
       yaw: 0,
     }
-    const preContain: ContainOpts<Shot> = { ...commonContain, maxShift: 20, spanMin: 34, spanMax: 55, iterations: 10 }
+    const preContain: ContainOpts<Shot> = { ...commonContain, maxShift: 20, spanMin: PRE_SPAN_MIN, spanMax: PRE_SPAN_MAX, iterations: 10 }
     const preFit = containShot(pre, preWatch, preContain).shot
-    const preSnap: Shot = { cx: clamp(preFit.cx, 2, 118), cy: clamp(preFit.cy, 2, FIELD_H - 2), span: clamp(preFit.span, 34, 55), z: rig.height, yaw: 0 }
+    const preSnap: Shot = { cx: clamp(preFit.cx, 2, 118), cy: clamp(preFit.cy, 2, FIELD_H - 2), span: clamp(preFit.span, PRE_SPAN_MIN, PRE_SPAN_MAX), z: rig.height, yaw: 0 }
 
     // ── B5b pre-snap hook: a rule may reframe the frozen pre-snap shot ───────
     // Evaluated once (t = 0) so the shot stays settled through the whole pre-snap
@@ -550,7 +556,7 @@ export function createDirector(opts: DirectorOptions = {}): Director {
     const preSnapOut: Shot = {
       cx: clamp(preSnapShot.cx, 2, 118),
       cy: clamp(preSnapShot.cy, 2, FIELD_H - 2),
-      span: clamp(preSnapShot.span, 20, 55),
+      span: clamp(preSnapShot.span, 20, PRE_SPAN_MAX),
       z: clamp(preSnapShot.z ?? rig.height, MIN_CAM_Z, MAX_CAM_Z),
       yaw: clamp(preSnapShot.yaw ?? 0, -MAX_YAW_RAD, MAX_YAW_RAD),
       pitch: preSnapShot.pitch,
@@ -560,8 +566,8 @@ export function createDirector(opts: DirectorOptions = {}): Director {
     // The planned target keeps a little more room at the bottom than the hard
     // check, so the eased, rate-limited camera never lets the carrier dip under
     // the controls while it catches up (a keepCarrier raise moves him fast).
-    const shotContain: ContainOpts<Shot> = { ...commonContain, insetBottom: (commonContain.insetBottom ?? SAFE_INSET) + 0.04, maxShift: 24, spanMin: 20, spanMax: 55, iterations: 6 }
-    const hardContain: ContainOpts<Shot> = { ...commonContain, maxShift: 8, spanMin: 20, spanMax: 55, iterations: 4 }
+    const shotContain: ContainOpts<Shot> = { ...commonContain, insetBottom: (commonContain.insetBottom ?? SAFE_INSET) + 0.04, maxShift: 24, spanMin: 20, spanMax: PRE_SPAN_MAX, iterations: 6 }
+    const hardContain: ContainOpts<Shot> = { ...commonContain, maxShift: 8, spanMin: 20, spanMax: PRE_SPAN_MAX, iterations: 4 }
     const hasRules = rules.length > 0
     const out: ShotFrame[] = new Array(nFrames + 1)
     let cx = preSnapOut.cx
@@ -665,6 +671,8 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       }
       const sb = boundsOf(spanPts)
       let wantSpan = clamp(Math.max(sb.maxY - sb.minY, sb.maxX - sb.minX) + 14, 22, 52)
+      // animflow r6a: ease in from the wide formation shot over the first second.
+      wantSpan = Math.max(wantSpan, lerp(preSnapOut.span, wantSpan, clamp01((sec - snapSec) / 1.0)))
       let kindName = 'follow'
       if (contactSec != null && sec >= contactSec) {
         if (sec < contactSec + 0.4) {

@@ -229,9 +229,10 @@ const kicks: DirectorRule = {
     if (!fl) return
     const kick = posAt(ctx.anim.ball, fl.t0)
     return {
-      cx: clamp(kick.x + 6, 3, 117),
-      cy: clamp(kick.y, 3, FIELD_H - 3),
-      span: 48,
+      // animflow r6a: wide enough for the whole kick unit across the field.
+      cx: clamp(kick.x + (ctx.kind === 'kickoff' ? 1 : 6), 3, 117),
+      cy: clamp(ctx.kind === 'kickoff' ? FIELD_H / 2 : kick.y, 3, FIELD_H - 3),
+      span: ctx.kind === 'kickoff' ? 58 : 54,
     }
   },
   shape(ctx, desired) {
@@ -244,7 +245,7 @@ const kicks: DirectorRule = {
       const a = actorAt(ctx, kickKey(ctx))
       const px = a ? a.x : kick.x
       const py = a ? a.y : kick.y
-      return { cx: clamp(px, 3, 117), cy: clamp(py, 3, FIELD_H - 3), span: 42, yaw: 0 }
+      return { cx: clamp(px, 3, 117), cy: clamp(py, 3, FIELD_H - 3), span: 50, yaw: 0 }
     }
     if (ctx.t < fl.t1) {
       // Hang: follow the ball's ground spot and AIM UP so the arc stays in the

@@ -335,6 +335,7 @@ export class LiveBroadcast {
     this.layer = new ActorLayer()
     this.sideline = new SidelineLayer()
     this.sideline.quality = this.quality
+    this.layer.ringPulse = this.quality !== 'lite' && !opts.reducedMotion
     this.layer.people = (scene, out) => this.sideline.items(scene, out)
     this.gfx = new GraphicsLayer(this.layer, readGfxTokens(canvas))
     this.gfx.bottomInset = opts.hudBottomInset ?? 0
@@ -507,6 +508,7 @@ export class LiveBroadcast {
     this.quality = q
     this.renderer.setQuality(q)
     this.sideline.quality = q
+    this.layer.ringPulse = q !== 'lite' && !this.opts.reducedMotion
     this.renderer.setDprCap(QUALITY[q].dprCap)
     this.tele.vignette = QUALITY[q].vignette
     this.pacer = new FramePacer(QUALITY[q].fps)
@@ -563,6 +565,8 @@ export class LiveBroadcast {
           direction: dir,
           phase,
           viewport: { w: cssW, h: cssH },
+          // animflow r6a: open the phone lens at the snap, easing in over 1 s.
+          wide: inReplay ? 0 : clamp01Num(1 - (t * (lp.anim.duration / 1000) - 0.14) / 1.0),
         }
         camera = this.applier.apply(camera, ctx, `${lp.play.n}:${inReplay ? 'r' : 'l'}`)
       }
@@ -712,4 +716,8 @@ export function autoQualityHint(a: AutoQState | null, currentKey: string): strin
   const same = !currentKey || a.key === currentKey
   const label = a.result === 'lite' ? 'Lite' : 'Full'
   return same ? `Auto picked ${label} on this device (p95 ${a.p95.toFixed(1)} ms)` : `Auto last picked ${label} (p95 ${a.p95.toFixed(1)} ms on another device)`
+}
+
+function clamp01Num(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v
 }
