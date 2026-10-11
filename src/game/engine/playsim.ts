@@ -2381,8 +2381,9 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
     retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 7 + m.base, 14 * m.spread))
     returnTD = h01(`${key}:td`) < 0.006
     // A return touchdown is caught at the punt's landing spot and taken the rest
-    // of the way, so its recorded yardage runs to the goal line.
-    if (returnTD) retYds = Math.max(retYds, 100 - clamp(yard + gross, 1, 99))
+    // of the way, so its recorded yardage runs to the kicking team's goal line
+    // (yard + gross yards back the way the punt came).
+    if (returnTD) retYds = Math.max(retYds, clamp(yard + gross, 1, 99))
   }
   const spot =
     returnTD ? 100
