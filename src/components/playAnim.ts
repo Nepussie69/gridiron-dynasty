@@ -4351,8 +4351,8 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     }
     const pts = raw.map((w) => ({ x: clampX(w.x), y: clampY(w.y) }))
     // animflow r8: a breaking route caught in stride at the sim's air yards breaks AT that depth (the
-    // stem cut to it, the break leg kept at it), so the ball meets him on the move across the field -
-    // not parked at the top of a stem that runs deeper than the throw while the QB catches up.
+    // stem cut or run on to it, the break leg kept at it), so the ball meets him on the move across the
+    // field - not parked at the top of a stem that runs deeper than the throw while the QB catches up.
     if (k === tgt && stride && !inc && !int && pts.length >= 3) {
       const gain = endX0 - los
       const yacMin = gain > 0 ? Math.min(yacT, Math.max(0, gain - 0.5)) : 0
@@ -4361,7 +4361,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       const B = pts[bi]
       const E = pts[pts.length - 1]
       const lateral = Math.abs(E.y - B.y) > Math.abs(E.x - B.x)
-      if (lateral && B.x > xCap - 0.5 && xCap - 0.8 > los + 1.5) {
+      // (both ways: a stem deeper than the throw is cut to it, a shallower one - a whip, an out at 4 yd for
+      // an 8-yd throw - is run deeper, which also spends the time the QB needs at full speed)
+      if (lateral && Math.abs(B.x - (xCap - 0.8)) > 0.5 && xCap - 0.8 > los + 1.5) {
         const x0 = f[k].x
         const nb = xCap - 0.8
         const kx = (nb - x0) / Math.max(1e-6, B.x - x0)
