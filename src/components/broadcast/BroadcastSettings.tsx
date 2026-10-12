@@ -7,7 +7,7 @@ import { SegmentedControl } from '../../ui/Controls'
 import { cn } from '../../lib/cn'
 import { autoQualityHint, useLiveView, type Fallback } from './liveView'
 import { REPLAY_REASON_IDS, type ReplayReasonId } from './replay'
-import { deviceKey, setGameView, setQualitySetting, setReplayMode, setReplayTypes, useViewSettings } from './viewSettings'
+import { deviceKey, setCameraAngle, setGameView, setQualitySetting, setReplayMode, setReplayTypes, useViewSettings } from './viewSettings'
 
 const FALLBACK_NOTE: Record<Exclude<Fallback, null>, string> = {
   'no-canvas': 'This device has no 2D canvas — using the top-down view.',
@@ -59,6 +59,25 @@ export function BroadcastSettings({ row }: { row: string }) {
             { id: 'auto', label: 'Auto' },
             { id: 'broadcast', label: '2.5D' },
             { id: 'topdown', label: 'Top-down' },
+          ]}
+        />
+      </div>
+
+      <div className={row}>
+        <div className="min-w-0">
+          <span className="label block">Camera angle</span>
+          <span className="text-small text-muted">
+            {s.cameraAngle === 'fixed' ? 'One steady angle — the camera only pans and zooms' : 'The director raises, tilts and re-angles the camera'}
+          </span>
+        </div>
+        <SegmentedControl
+          label="Camera angle"
+          size="sm"
+          value={s.cameraAngle}
+          onChange={setCameraAngle}
+          options={[
+            { id: 'fixed', label: 'Fixed' },
+            { id: 'dynamic', label: 'Dynamic' },
           ]}
         />
       </div>
