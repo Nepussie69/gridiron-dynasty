@@ -2607,21 +2607,40 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(fillDown.length >= 40 && med(fillDown) >= 1 && med(fillDown) > med(otherDown) + 1, `alley filler downhill ${med(fillDown)?.toFixed(2)} vs ${med(otherDown)?.toFixed(2)} yd at 1.2 s`)
   })
 
-  ok('animflow r8: routes are run at route speed - wideouts\' stems (0.9 s to the first break, running upfield) at a median >= 0.75 x top and >= 75% of those frames in the sprint gait (>= 6 yd/s); WR play-max p50 in the NFL band (7.8-9.6 yd/s); WRs at >= 0.6 x top 1.0 s after the snap', () => {
+  ok('animflow r8 (a): routes at route speed and smooth - stems near top speed (peak before the break >= 0.85 x top, median >= 0.75), >= 80% of stem frames in the sprint gait, a fast launch (>= 0.6 x top 1.0 s after the snap), WR play-max in the NFL band, no stop-and-go on routes; catch-and-runs turn downfield at once (>= 60% of the velocity downfield 0.5 s after the catch, YAC >= 3)', () => {
     const ratio: number[] = []
+    const peak: number[] = []
     const mx: number[] = []
     const launch: number[] = []
     let spr = 0
     let all = 0
+    let routes = 0
+    let stopGo = 0
+    const sgBad: string[] = []
+    const ns = [0, 0]
+    const nsBad: string[] = []
     games6d(4, 19, (play, anim, actors) => {
       if (play.type !== 'pass' || play.result.startsWith('Sack') || play.spike) return
       const D = anim.duration / 1000
-      const th = (anim.events ?? []).find((e) => e.kind === 'throw')
+      const ev = anim.events ?? []
+      const th = ev.find((e) => e.kind === 'throw')
       if (!th) return
-      for (const k of ['wr0', 'wr1', 'wr2']) {
+      const tc = ev.find((e) => e.kind === 'catch' || e.kind === 'incomplete' || e.kind === 'interception')
+      const tgt = tc?.keys?.[0]
+      for (const k of ['wr0', 'wr1', 'wr2', 'te', 'rb']) {
         const a = anim.actors.find((x) => x.key === k)
         if (!a) continue
-        const sp = (s: number) => { const p0 = posAt(a.path, (s - 0.05) / D); const p1 = posAt(a.path, (s + 0.05) / D); return { v: Math.hypot(p1.x - p0.x, p1.y - p0.y) / 0.1, vx: (p1.x - p0.x) / 0.1 } }
+        const top = paceFor(actors.get(k), a.role).top
+        const sp = (s: number) => { const p0 = posAt(a.path, Math.max(0, s - 0.05) / D); const p1 = posAt(a.path, Math.min(D, s + 0.05) / D); return { v: Math.hypot(p1.x - p0.x, p1.y - p0.y) / 0.1, vx: (p1.x - p0.x) / 0.1 } }
+        if (posAt(a.path, th.t).x - posAt(a.path, 0).x < 4) continue
+        // smoothness: no stop-and-go between snap + 0.3 s and the throw (+0.4 s for a non-target)
+        routes++
+        const tEnd = Math.min(D - 0.1, th.t * D + (k === tgt ? 0 : 0.4))
+        let low = false
+        let sg = false
+        for (let s = 0.44; s <= tEnd; s += 0.05) { const v = sp(s).v; if (v < 1.5) low = true; else if (low && v > 3) sg = true }
+        if (sg) { stopGo++; if (sgBad.length < 4) sgBad.push(`${play.n} ${play.concept} ${k}`) }
+        if (!k.startsWith('wr')) continue
         const vs: number[] = []
         let best = 0
         for (let s = 0.3; s <= th.t * D; s += 0.05) {
@@ -2633,20 +2652,39 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         let m2 = 0
         for (let s = 0.2; s < D - 0.05; s += 0.05) m2 = Math.max(m2, sp(s).v)
         mx.push(m2)
-        // the launch: at snap + 1.0 s he is well into his stem (NFL: ~60-70% of top)
-        launch.push(sp(1.14).v / paceFor(actors.get(k), a.role).top)
+        launch.push(sp(1.14).v / top)
         if (vs.length < 4) continue
         vs.sort((x, y) => x - y)
-        ratio.push(vs[Math.floor(vs.length / 2)] / paceFor(actors.get(k), a.role).top)
+        ratio.push(vs[Math.floor(vs.length / 2)] / top)
+        // the stem's cruise: a stem >= 1.4 s long reaches its pace before the brake into the break
+        if (vs.length >= 10) peak.push(vs[vs.length - 1] / top)
         for (const v of vs) { all++; if (v >= 6) spr++ }
+      }
+      // north-south after the catch (in-bounds catch-and-runs; out-of-bounds ends have their own check)
+      if (tc?.kind === 'catch' && !play.turnover && !play.outOfBounds) {
+        const ca = anim.actors.find((x) => x.key === tgt)
+        const end = ca ? posAt(ca.path, 1) : null
+        if (ca && end && end.x - tc.spot.x >= 3) {
+          const s = tc.t * D + 0.5
+          const p0 = posAt(ca.path, (s - 0.05) / D)
+          const p1 = posAt(ca.path, Math.min(D, s + 0.05) / D)
+          const vl = Math.hypot(p1.x - p0.x, p1.y - p0.y)
+          ns[1]++
+          if (vl > 1e-6 && (p1.x - p0.x) / vl >= 0.6) ns[0]++
+          else if (nsBad.length < 4) nsBad.push(`${play.n} ${play.concept} ${anim.catchRoute}`)
+        }
       }
     })
     const med = (a: number[]) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]
-    assert.ok(ratio.length >= 200, `coverage ${ratio.length}`)
+    console.log(`      stems n ${ratio.length}: median ${med(ratio).toFixed(2)} x top, cruise ${med(peak).toFixed(2)} (n ${peak.length}), sprint gait ${(100 * spr / all).toFixed(1)}%, launch ${med(launch).toFixed(2)}, WR max p50 ${med(mx).toFixed(2)} yd/s; stop-and-go ${stopGo}/${routes}; north-south ${ns[0]}/${ns[1]}`)
+    assert.ok(ratio.length >= 200 && peak.length >= 80, `coverage ${ratio.length} / ${peak.length}`)
+    assert.ok(med(peak) >= 0.85, `stem cruise ${med(peak).toFixed(2)} x top`)
     assert.ok(med(ratio) >= 0.75, `stem median ${med(ratio).toFixed(2)} x top`)
-    assert.ok(spr / all >= 0.75, `sprint-gait share of stem frames ${(100 * spr / all).toFixed(1)}%`)
+    assert.ok(spr / all >= 0.8, `sprint-gait share of stem frames ${(100 * spr / all).toFixed(1)}%`)
     assert.ok(med(mx) >= 7.8 && med(mx) <= 9.6, `WR play-max p50 ${med(mx).toFixed(2)} yd/s`)
     assert.ok(med(launch) >= 0.6, `WR speed at snap + 1.0 s ${med(launch).toFixed(2)} x top`)
+    assert.ok(stopGo <= routes * 0.03, `stop-and-go on ${stopGo}/${routes} routes: ${sgBad.join('; ')}`)
+    assert.ok(ns[1] >= 60 && ns[0] >= ns[1] * 0.95, `catch-and-runs turning downfield ${ns[0]}/${ns[1]}: ${nsBad.join('; ')}`)
   })
 
   ok('animflow r8: an out-of-bounds end (not a clock step-out) is forced - a defender within 2.2 yd, ahead of or inside the carrier, as he goes out', () => {

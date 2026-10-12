@@ -688,9 +688,9 @@ export interface DrawOpts {
  */
 export function cycleLength(v: number): number {
   const u = Math.min(10.5, Math.max(0, v))
-  // animflow r8: above a jog the cadence keeps climbing (~4.1 steps/s at 6.5 yd/s, ~4.5 at 8,
-  // ~4.8 at 9-10: NFL sprint cadence) instead of the stride only lengthening.
-  return u <= 4 ? 1.4 + 0.3 * u : 2.6 + 0.235 * (u - 4)
+  // animflow r8: above a jog the cadence keeps climbing (~4.0 steps/s at 6.5 yd/s, ~4.4 at 8,
+  // ~4.6-4.8 at 9-10: NFL sprint cadence) instead of the stride only lengthening.
+  return u <= 4 ? 1.4 + 0.3 * u : 2.6 + 0.26 * (u - 4)
 }
 
 /**

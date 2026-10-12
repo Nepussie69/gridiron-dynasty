@@ -1623,8 +1623,8 @@ const STRIDE_RUNUP = 3.2
 /** animflow r8: the slowest stem pace (share of top speed) any route is run at (NFL ~0.85-1). */
 const ROUTE_PACE_MIN = 0.85
 /** animflow r8: the tapered launch - acceleration = rate x (LAUNCH_HI - LAUNCH_FADE x v / top). */
-const LAUNCH_HI = 1.2
-const LAUNCH_FADE = 0.55
+const LAUNCH_HI = 1.35
+const LAUNCH_FADE = 0.65
 /** animflow r6c: a pass rusher's speed coming out of his move (yd/s; BDB 2023 pressures: 3.6 at the shed). */
 const SHED_V0 = 3.6
 const CONTACT = 0.9 // yd between a blocker's and his rusher's centres (hands on, leaning in)
@@ -2827,8 +2827,45 @@ function routeRunRating(p: Player | undefined, depth: number): number {
   return attrNum(p, depth > 14 ? 'DRR' : depth > 7 ? 'MRR' : 'SRR', 70)
 }
 
-/** Run a route: high route running = a crisp near-stop cut, low = a rounded drift. */
-function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1, through = 0, flat = false, vIn = 0) {
+/**
+ * animflow r8: a leg from where the mover is to `E` that leaves along his current heading and bends
+ * onto `E` (a quadratic curve, so no plant and no snap turn), sampled for Mover.run. Points are not
+ * clamped (they may lie out of bounds).
+ */
+function bendPts(mv: Mover, E: Pt, reach: number, n = 12): Pt[] {
+  const v = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 1, y: 0 }
+  const sp = Math.hypot(v.x, v.y)
+  const h = sp > 0.3 ? { x: v.x / sp, y: v.y / sp } : { x: 1, y: 0 }
+  const D = Math.hypot(E.x - mv.x, E.y - mv.y)
+  const k = Math.min(D * 0.45, Math.max(0, reach))
+  const C = { x: mv.x + h.x * k, y: mv.y + h.y * k }
+  const out: Pt[] = []
+  for (let i = 1; i <= n; i++) {
+    const u = i / n
+    out.push({ x: (1 - u) * (1 - u) * mv.x + 2 * (1 - u) * u * C.x + u * u * E.x, y: (1 - u) * (1 - u) * mv.y + 2 * (1 - u) * u * C.y + u * u * E.y })
+  }
+  return out
+}
+
+/**
+ * animflow r8: the speed kept through a route break of turn cos `cos` (share of top): a speed cut
+ * (< ~25 deg, a stem bend) keeps it all; NFL tracking keeps ~60-65% through a 45 deg break, ~45%
+ * through a 90 deg one and ~20-25% into a comeback / curl. Route running moves it +-10%.
+ */
+function breakKeep(cos: number, rr: number): number {
+  if (cos > 0.9) return 1
+  const base = clampN(0.2 + 0.25 * (1 + cos), 0.2, 0.7)
+  return clampN(base * clampN(0.9 + (rr - CRISP_RR) * 0.008, 0.82, 1.1), 0.18, 0.78)
+}
+
+/**
+ * Run a route (animflow r8: smooth at speed). He drives the stem, sinks his hips into the break -
+ * decelerating to the speed the turn allows (breakKeep) - and is out of it at once: a crisp route
+ * runner (rr >= CRISP_RR) plants on a tight corner, a lower one rounds the break on a wider arc.
+ * `endV`: a man who is not the target flows on past the end of his route at that speed instead of
+ * braking onto it (no stop-and-go).
+ */
+function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1, through = 0, flat = false, vIn = 0, endV?: number) {
   // animflow r8: out of the release he is already moving (no stop between the jab and the stem).
   const v0 = vIn
   const saved = mv.pace
@@ -2853,9 +2890,10 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
     }
     return [...seg, e]
   }
+  const fin = endV != null && !through ? { stop: false, vEnd: endV } : { stop: true }
   if (breakIdx <= 0 || breakIdx >= pts.length - 1) {
     stem()
-    mv.run(ext(pts, { x: mv.x, y: mv.y }), { v0, stop: true })
+    mv.run(ext(pts, { x: mv.x, y: mv.y }), { v0, ...fin })
     mv.pace = saved
     return
   }
@@ -2864,14 +2902,39 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
   // of the league plants and snaps, the lower half rounds the break.
   const crisp = rr >= CRISP_RR
   stem()
-  // animflow r8: he sinks his hips and cuts at speed - a crisp route runner drops to ~a third of his
-  // speed in the plant and is out of it fast; a rounded break keeps more speed but drifts (was a
-  // full stop at every break: routes read as stop-and-go jogging).
-  const vCut = saved.top * (crisp ? clampN(0.36 - (rr - CRISP_RR) * 0.004, 0.28, 0.36) : 0.5)
-  mv.run(pts.slice(0, breakIdx + 1), { v0, stop: false, vEnd: Math.min(vCut, mv.pace.top) })
-  const vOut = Math.min(vCut, mv.pace.top)
+  // animflow r8 (user: "make the route running more realistic and smooth instead of slow like a
+  // snail"): the break costs the speed its angle costs (breakKeep), not a full stop, and the turn is
+  // a short arc - tight for a crisp runner (a plant on the spot), wider for a rounded one - so his
+  // facing swings through the cut instead of snapping, and he is straight back up to speed after it.
+  const B = pts[breakIdx]
+  const A = breakIdx >= 1 ? pts[breakIdx - 1] : { x: mv.x, y: mv.y }
+  const C = pts[breakIdx + 1]
+  const la = Math.hypot(B.x - A.x, B.y - A.y)
+  const lb = Math.hypot(C.x - B.x, C.y - B.y)
+  const cos = la > 1e-6 && lb > 1e-6 ? ((B.x - A.x) * (C.x - B.x) + (B.y - A.y) * (C.y - B.y)) / (la * lb) : 1
+  const keep = breakKeep(cos, rr)
+  if (keep >= 1) {
+    // A bend in the stem, not a break: he carries his speed through it.
+    mv.run(pts.slice(0, breakIdx + 1), { v0, stop: false })
+    mv.pace = saved
+    mv.run(ext(pts.slice(breakIdx + 1), B), { v0: carrySpeed(mv), ...fin, cut: true })
+    return
+  }
+  const vCut = Math.min(saved.top * keep, mv.pace.top)
+  const r = crisp ? clampN(0.45 - (rr - CRISP_RR) * 0.01, 0.25, 0.45) : clampN(0.7 + (CRISP_RR - rr) * 0.06, 0.7, 1.8)
+  const din = Math.min(r, la * 0.45)
+  const dout = Math.min(r, lb * 0.45)
+  const Pin = { x: B.x - ((B.x - A.x) / la) * din, y: B.y - ((B.y - A.y) / la) * din }
+  const Pout = { x: B.x + ((C.x - B.x) / lb) * dout, y: B.y + ((C.y - B.y) / lb) * dout }
+  const arc: Pt[] = []
+  for (let i = 1; i <= 6; i++) {
+    const u = i / 6
+    arc.push({ x: (1 - u) * (1 - u) * Pin.x + 2 * (1 - u) * u * B.x + u * u * Pout.x, y: (1 - u) * (1 - u) * Pin.y + 2 * (1 - u) * u * B.y + u * u * Pout.y })
+  }
+  mv.run([...pts.slice(0, breakIdx), Pin], { v0, stop: false, vEnd: vCut })
   mv.pace = saved
-  mv.run(ext(pts.slice(breakIdx + 1), pts[breakIdx]), { v0: vOut, stop: true, cut: true })
+  const vOut = Math.min(carrySpeed(mv), vCut)
+  mv.run(ext([...arc, ...pts.slice(breakIdx + 1)], B), { v0: vOut, ...fin, cut: true })
 }
 
 // ── coverage look (backlog 151) ───────────────────────────────────────────────
@@ -3771,7 +3834,10 @@ function resolveCarry(opts: {
   const hsp = Math.hypot(hv.x, hv.y)
   let line: Pt[]
   if (opts.northSouth && hsp > 1.5 && total > 1.2) {
-    const reach = Math.min(3, total * 0.4, hsp * 0.4)
+    // animflow r8 (user: "ran straight sideways after catching the ball, should be running downhill"):
+    // he turns upfield at once - a tight turn out of the catch (~1 yd along his heading), then
+    // north-south to the spot - instead of carrying the catch's lateral momentum for 3 yd first.
+    const reach = Math.min(1.1, total * 0.2, hsp * 0.15)
     line = quadPts(cPos, { x: clampX(cPos.x + (hv.x / hsp) * reach), y: clampY(cPos.y + (hv.y / hsp) * reach) }, spot, 14)
   } else line = Math.abs(bend) > 0.2 ? bowPts(cPos, spot, bend) : [spot]
   const { pre, post, c } = splitPolyline(cPos, line, Math.max(0, polyLen(cPos, line) - ac))
@@ -4088,18 +4154,21 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     return clampN(base - (rls - 75) * 0.005 + hash(seed + k.charCodeAt(k.length - 1) * 3.7 + k.length * 13 + 7) * 0.14, 0.05, 0.5)
   }
   /** Run receiver k: the release at the line, then his route at `pace` of his speed. */
-  const runRecv = (k: string, pace: number, through = 0, flat = false) => {
+  const runRecv = (k: string, pace: number, through = 0, flat = false, endV?: number) => {
     const pts = routePts(k)
     if (!(k === 'rb' && chipped)) m[k].reset(f[k].x, f[k].y)
     const rel = releaseOf(k)
-    if (rel > 0.04) {
-      // Hand-fight / jab step: a half-yard of foot work, never standing.
-      const jab = (hash(seed + k.length * 5) < 0.5 ? -1 : 1) * 0.55
-      runTimed(m[k], [{ x: clampX(f[k].x + 0.35), y: clampY(f[k].y + jab) }, { x: clampX(f[k].x + 0.8), y: clampY(f[k].y + jab * 0.3) }], m[k].t, m[k].t + rel, false, false)
+    // animflow r8: the release is a slight jab off the line folded into his launch (a lateral
+    // shimmy of 0.1-0.35 yd as he bursts; a worse release rating gives more of it) - the old two-leg
+    // zig-zag cost ~0.6 s at the line and a slow-down at its corner before the stem began.
+    const jabOk = rel > 0.04 && (pts[0]?.x ?? 0) > f[k].x + 1.2
+    if (jabOk) {
+      const jab = (hash(seed + k.length * 5) < 0.5 ? -1 : 1) * (0.1 + rel * 0.5)
+      m[k].run([{ x: clampX(f[k].x + 0.6), y: clampY(f[k].y + jab) }], { stop: false })
     }
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const breakIdx = pts.length >= 3 ? pts.length - 2 : -1
-    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace, through, flat, rel > 0.04 ? carrySpeed(m[k]) : 0)
+    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace, through, flat, jabOk ? carrySpeed(m[k]) : 0, endV)
     return { pts, breakIdx }
   }
   const endX0 = clampX(10 + play.endYard)
@@ -4227,14 +4296,24 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       const hl = Math.hypot(hx, hy) || 1
       hx /= hl
       hy /= hl
-      const jog = 5.6
-      let d = jog * (late - catchSec)
+      const jog = Math.min(5.6, v)
+      // animflow r8: he eases down from his speed to the working pace over the first yards (it used to
+      // cap his speed in one frame, and a > 40 deg turn planted him: a stop and restart in the open),
+      // on one smooth bend off his line, then works across at that pace.
+      const T = late - catchSec
+      const d1 = Math.min((v * v - jog * jog) / (2 * 4.5), (v + jog) * 0.5 * T * 0.6)
+      let d = d1 + Math.max(0, T - d1 / Math.max(0.5, (v + jog) * 0.5)) * jog
       // Room before the sideline: turn back inside rather than run out.
       const yRoom = hy > 0 ? FIELD_H - 2 - m[tgt].y : m[tgt].y - 2
       if (d * Math.abs(hy) > yRoom) d = Math.max(0.5, yRoom / Math.max(0.2, Math.abs(hy)))
       const saved = m[tgt].pace
-      m[tgt].pace = { top: Math.min(saved.top, Math.max(jog, v * 0.8)), acc: Math.min(saved.acc, 5) }
-      m[tgt].run([{ x: clampX(m[tgt].x + hx * d), y: clampY(m[tgt].y + hy * d) }], { v0: Math.min(v, m[tgt].pace.top), stop: false })
+      const E = { x: clampX(m[tgt].x + hx * d), y: clampY(m[tgt].y + hy * d) }
+      const bend = bendPts(m[tgt], E, Math.min(d * 0.4, v * 0.3), 14).map((p) => ({ x: clampX(p.x), y: clampY(p.y) }))
+      m[tgt].pace = { top: Math.max(v, jog), acc: Math.min(saved.acc, 5) }
+      const cut = Math.max(1, Math.min(bend.length - 1, Math.round((bend.length * Math.min(d1, d)) / Math.max(0.5, d))))
+      m[tgt].run(bend.slice(0, cut), { v0: v, stop: false, vEnd: jog, cut: true })
+      m[tgt].pace = { top: jog, acc: Math.min(saved.acc, 5) }
+      if (cut < bend.length) m[tgt].run(bend.slice(cut), { v0: Math.min(jog, carrySpeed(m[tgt])), stop: false, cut: true })
       m[tgt].pace = saved
       const tEnd = Math.min(m[tgt].t, late)
       // (seek() at his last knot would read 0: he is still moving there)
@@ -4329,9 +4408,13 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   }
   for (const k of receivers) {
     if (stayIn.has(k) || k === tgt) continue
-    const { pts, breakIdx } = runRecv(k, Math.min(1, bestPace + 0.05))
+    const stalk = routeMap[k] === 'stalk'
+    // animflow r8: a man who is not the target flows on past the end of his route (no brake onto
+    // its last point and restart: that read as stop-and-go on every non-target).
+    const flowV = stalk ? undefined : Math.max(4.2, m[k].pace.top * 0.6)
+    const { pts, breakIdx } = runRecv(k, Math.min(1, bestPace + 0.05), 0, false, flowV)
     if (breakIdx > 0) breaks.push({ k, t: timeNearest(m[k], pts[breakIdx], 0, m[k].t), pt: pts[breakIdx] })
-    if (routeMap[k] === 'stalk') {
+    if (stalk) {
       // A stalk block: he squares up on his man (engaged below, with coverage).
     } else {
       const a = pts[pts.length - 2] ?? pts[pts.length - 1]
@@ -4339,9 +4422,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       const dx = b.x - a.x
       const dy = b.y - a.y
       const len = Math.hypot(dx, dy) || 1
-      // Keep working: carry on through the route, then find space.
-      m[k].run([{ x: clampX(b.x + (dx / len) * 2.5), y: clampY(b.y + (dy / len) * 2.5) }], { stop: true })
-      if (m[k].t < catchSec) jogTo(m[k], { x: clampX(m[k].x + 2), y: clampY(m[k].y + (MID_Y - m[k].y) * 0.25) }, 4)
+      // Keep working: carry on through the route, then bend off into space and settle there
+      // (one smooth deceleration from his route speed).
+      const v = carrySpeed(m[k])
+      const run = Math.max(2.5, v * 0.9)
+      const sp = { x: clampX(b.x + (dx / len) * run + 1.2), y: clampY(b.y + (dy / len) * run + (MID_Y - b.y) * 0.12) }
+      m[k].run(bendPts(m[k], sp, v * 0.25).map((p) => ({ x: clampX(p.x), y: clampY(p.y) })), { v0: v, stop: true, cut: true })
     }
   }
   if (m.fb) m.fb.run([{ x: los - 3, y: MID_Y + 1 }, { x: los - 1, y: MID_Y + side * 4 }], { stop: true })
