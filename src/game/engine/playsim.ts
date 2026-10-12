@@ -3840,7 +3840,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // land at ~2–4 yd. DEPTH_AWARE.depthMix is 0, so the emitted air drives the
   // animation and the probe only — no outcome moves here.
   if (vOn && vCheckdown && DEPTH_AWARE_ON) {
-    passAir = Math.round((VISION_CFG.chkAirLo + clamp(passAir, 0, 8) / 8 * (VISION_CFG.chkAirHi - VISION_CFG.chkAirLo)) * 10) / 10
+    passAir = Math.round(VISION_CFG.chkAirLo + clamp(passAir, 0, 8) / 8 * (VISION_CFG.chkAirHi - VISION_CFG.chkAirLo))
   }
 
   if (rng() < sackChance) {
