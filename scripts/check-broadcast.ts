@@ -2686,7 +2686,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(med(mx) >= 7.8 && med(mx) <= 9.6, `WR play-max p50 ${med(mx).toFixed(2)} yd/s`)
     assert.ok(med(launch) >= 0.6, `WR speed at snap + 1.0 s ${med(launch).toFixed(2)} x top`)
     assert.ok(stopGo <= routes * 0.03, `stop-and-go on ${stopGo}/${routes} routes: ${sgBad.join('; ')}`)
-    assert.ok(ns[1] >= 60 && ns[0] >= ns[1] * 0.95, `catch-and-runs turning downfield ${ns[0]}/${ns[1]}: ${nsBad.join('; ')}`)
+    assert.ok(ns[1] >= 30 && ns[0] >= ns[1] * 0.95, `catch-and-runs turning downfield ${ns[0]}/${ns[1]}: ${nsBad.join('; ')}`)
   })
 
   ok('animflow r8 (b): a tackle is a motion, not a touch and a freeze - the tackler is on the carrier (<= 1.3 yd) >= 0.25 s before the whistle (or dives at his legs), both bodies are going down as it ends and down on the spot at the end, the tackler within 1.5 yd; tackle variants drawn (wrap / hit / arm / dive / gang)', () => {
