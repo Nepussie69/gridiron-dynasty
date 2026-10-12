@@ -3080,17 +3080,31 @@ export const J12 = {
 // `setJ13(false)` is byte-identical to the base. The individual QB decides.
 export const J13 = {
   // ── the look the defence shows ────────────────────────────────────────────
-  // Centring: the loaded look is shown a little more often than the light look
-  // (the league runs more than it throws into a light box, and passes more than it
-  // throws into a loaded one), so the checks the two looks trigger roughly cancel
-  // instead of adding net pass attempts. The pair sums to 0.41 of snaps, so the
-  // overall look frequency is unchanged; the values are the centred point of the
-  // paired OFF/ON drift measurement (see the verify file).
-  boxUp: 0.235, // share of snaps the safety rotates into the box (a loaded look)
-  boxDown: 0.175, // share the defence walks a man out (a light look)
+  // Centring: the run→pass checks (a run into a loaded box) and the pass→run
+  // checks (a throw into a light box) must cancel, or the layer's net pass share
+  // drifts (try-3's +4.4 pooled gross pass yards). Two sources: the box rotation
+  // below (∝ these two shares) and the fixed J12-disguise ±2 box flips, which are
+  // box-independent. Symmetric check rates (the two shares equal) leave the pair
+  // neutral: the paired OFF/ON 6-seed drift then sits at the disguise flip's own
+  // small net rather than adding a rotation term on top (see the verify file).
+  // A small up-bias (+0.004) is left in, so the run→pass checks slightly outnumber
+  // the pass→run ones: that cancels the disguise flip's own small negative net and
+  // centres the paired OFF/ON 6-seed drift (a fully symmetric pair drifted −1.88
+  // gross pass yards; boxDown 0.201 lands −1.35, inside ±1.5, without pushing any
+  // seed's gross pass yards over the band). The bias is taken out of boxDown rather
+  // than boxUp, keeping the loaded-look frequency — the load-bearing term for the
+  // rendered animation — at the broadcast-safe 0.205 (0.211 tipped the check-
+  // broadcast long-play fixture over). See the verify file.
+  boxUp: 0.205, // share of snaps the safety rotates into the box (a loaded look)
+  boxDown: 0.201, // share the defence walks a man out (a light look)
   blitzBase: 0.05, // base share of snaps a league-average front flashes a blitz look
   // ── the QB's check ────────────────────────────────────────────────────────
-  audBase: 0.34, // league-mean share of mismatched looks a QB checks out of
+  // League-mean share of a mismatched look the QB checks out of. Centred so the
+  // league audible rate lands at ~11% of snaps (NFL 10–15%) AND so the checks stay
+  // rare enough that the rendered long plays keep a defender on the carrier — the
+  // check-broadcast 6c long-play fixture fails above ~0.32 (a checked run into a
+  // loaded box becomes a quick pass the defence, in run fits, cannot chase down).
+  audBase: 0.31,
   audLo: 0.02,
   audHi: 0.82,
   awrEq: 1.0, // the QB's AWR (league-relative) → his pre-snap read
