@@ -133,7 +133,7 @@ export function BroadcastSettings({ row }: { row: string }) {
       <div className={row}>
         <div className="min-w-0">
           <span className="label block">QB vision cone</span>
-          <span className="text-small text-muted">Where the quarterback looks, and the throw's landing circle. Default: off in 2.5D, on in top-down</span>
+          <span className="text-small text-muted">Where the quarterback looks, and the throw's landing circle. Default: on</span>
         </div>
         <SegmentedControl
           label="QB vision cone"
