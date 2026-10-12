@@ -154,9 +154,9 @@ export const VISION = {
   eyeMax: 0.35,
   // ── league centring (never shrinks an individual effect) ───────────────────
   /** Share of completions (>2 yd) trimmed by a yard: holds YPA / first downs. */
-  centerYdP: 0.12,
+  centerYdP: 0.06,
   /** Added to the completion probability (league centring of the comp% the circle lifts). */
-  centerComp: -0.0035,
+  centerComp: -0.0018,
   /** Added to the pass missed-tackle chance: holds the league missed-tackle count
    *  (more checkdowns are stopped by linebackers, who miss less). */
   centerMiss: 0.015,
