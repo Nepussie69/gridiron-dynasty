@@ -625,13 +625,17 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       tackleStyles[tk] = style
       if (style === 'dive') {
         diveBy[tk] = { t0: Math.max(0, tackleT - 0.4 / D), t1: tackleT }
+        for (const o of moveBy[tk] ?? []) if (o.t1 > diveBy[tk].t0) o.t1 = Math.max(o.t0, diveBy[tk].t0)
       } else {
         // Close and wrap: hips sink into the contact a beat before it, arms round him, legs driving.
         const w = { t0: clamp01(Math.max(0, Math.min(ht - 0.14 / D, fs - 0.2 / D))), t1: fs }
+        // (the tackle beats any move window still open on him - a rip off his block runs into it)
+        const mv = (moveBy[tk] ??= [])
+        for (const o of mv) if (o.t1 > w.t0) o.t1 = Math.max(o.t0, w.t0)
         if (style === 'wrap') (tackleBy[tk] ??= []).push(w)
-        else (moveBy[tk] ??= []).push({ ...w, state: style === 'hit' ? 'tackleHit' : 'tackleArm' })
+        else mv.unshift({ ...w, state: style === 'hit' ? 'tackleHit' : 'tackleArm' })
         // ...then he takes him down and goes down with him (arms still round him).
-        ;(moveBy[tk] ??= []).push({ t0: fs, t1: tackleT, state: 'tackleFall' })
+        mv.unshift({ t0: fs, t1: tackleT, state: 'tackleFall' })
       }
       downBy[tk] = { t0: tackleT, t1: 1 }
       // Gang tackle: the next man in, on the pile at the end, goes down with them.

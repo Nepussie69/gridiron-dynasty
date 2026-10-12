@@ -2917,7 +2917,7 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
   const fin = endV != null && !through ? { stop: false, vEnd: endV } : { stop: true }
   if (breakIdx <= 0 || breakIdx >= pts.length - 1) {
     stem()
-    mv.run(ext(pts, { x: mv.x, y: mv.y }), { v0, ...fin })
+    mv.run(ext(pts, { x: mv.x, y: mv.y }), { v0, ...fin, cut: v0 > 0 })
     mv.pace = saved
     return
   }
@@ -2939,7 +2939,7 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
   const keep = breakKeep(cos, rr)
   if (keep >= 1) {
     // A bend in the stem, not a break: he carries his speed through it.
-    mv.run(pts.slice(0, breakIdx + 1), { v0, stop: false })
+    mv.run(pts.slice(0, breakIdx + 1), { v0, stop: false, cut: v0 > 0 })
     mv.pace = saved
     mv.run(ext(pts.slice(breakIdx + 1), B), { v0: carrySpeed(mv), ...fin, cut: true })
     return
@@ -2955,7 +2955,7 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
     const u = i / 6
     arc.push({ x: (1 - u) * (1 - u) * Pin.x + 2 * (1 - u) * u * B.x + u * u * Pout.x, y: (1 - u) * (1 - u) * Pin.y + 2 * (1 - u) * u * B.y + u * u * Pout.y })
   }
-  mv.run([...pts.slice(0, breakIdx), Pin], { v0, stop: false, vEnd: vCut })
+  mv.run([...pts.slice(0, breakIdx), Pin], { v0, stop: false, vEnd: vCut, cut: v0 > 0 })
   mv.pace = saved
   const vOut = Math.min(carrySpeed(mv), vCut)
   mv.run(ext([...arc, ...pts.slice(breakIdx + 1)], B), { v0: vOut, ...fin, cut: true })
@@ -3104,18 +3104,28 @@ function followTo(mv: Mover, fromSec: number, toSec: number, target: (t: number)
   const top = opts.top ?? mv.pace.top * 1.04
   const acc = opts.acc ?? Math.max(6.5, mv.pace.acc * 1.4)
   const w = opts.w ?? 5.5
+  // "Arrive" steering: the velocity he wants is the target's own plus a closing speed that he can
+  // still brake from (sqrt(2 a d)) - he runs the gap down at speed and breaks down onto the point
+  // instead of overshooting it.
+  const brake = acc * 0.6
   const dt = 0.04
   let t = mv.t
   while (t + dt <= toSec + 1e-6) {
     const T = target(t + dt)
     const T2 = target(t + 2 * dt)
-    let ax = w * w * (T.x - p.x) + 2 * w * ((T2.x - T.x) / dt - v.x)
-    let ay = w * w * (T.y - p.y) + 2 * w * ((T2.y - T.y) / dt - v.y)
+    const tv = { x: (T2.x - T.x) / dt, y: (T2.y - T.y) / dt }
+    const rx = T.x - p.x
+    const ry = T.y - p.y
+    const d = Math.hypot(rx, ry)
+    const close = d > 1e-6 ? Math.min(top, Math.sqrt(2 * brake * d), d * w) : 0
+    const want = { x: tv.x + (d > 1e-6 ? (rx / d) * close : 0), y: tv.y + (d > 1e-6 ? (ry / d) * close : 0) }
+    const wl = Math.hypot(want.x, want.y)
+    if (wl > top) { want.x *= top / wl; want.y *= top / wl }
+    let ax = (want.x - v.x) / dt
+    let ay = (want.y - v.y) / dt
     const al = Math.hypot(ax, ay)
     if (al > acc) { ax *= acc / al; ay *= acc / al }
     v = { x: v.x + ax * dt, y: v.y + ay * dt }
-    const vl = Math.hypot(v.x, v.y)
-    if (vl > top) { v.x *= top / vl; v.y *= top / vl }
     p = { x: p.x + v.x * dt, y: p.y + v.y * dt }
     t += dt
     mv.path.push({ t, x: p.x, y: p.y })
@@ -4325,7 +4335,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // zig-zag cost ~0.6 s at the line and a slow-down at its corner before the stem began.
     const jabOk = rel > 0.04 && (pts[0]?.x ?? 0) > f[k].x + 1.2
     if (jabOk) {
-      const jab = (hash(seed + k.length * 5) < 0.5 ? -1 : 1) * (0.1 + rel * 0.5)
+      // (toward the side his route leaves on, so the stem never turns back across the jab)
+      const lead = (pts[0]?.y ?? f[k].y) - f[k].y
+      const jab = (Math.abs(lead) > 0.3 ? Math.sign(lead) : hash(seed + k.length * 5) < 0.5 ? -1 : 1) * (0.1 + rel * 0.4)
       m[k].run([{ x: clampX(f[k].x + 0.6), y: clampY(f[k].y + jab) }], { stop: false })
     }
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
@@ -5049,8 +5061,18 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const others = pursuers.filter((k) => k !== forcer)
     angleChase(m, others, catchSec, m[tgt], endSec, seed)
     if (forcer) {
-      hitAndRide(m[forcer], m[tgt], catchSec, tQ, endSec, 3.5, pushSide(m[tgt], m[forcer], tQ))
-      ensurePush(m[forcer], m[tgt], tQ, endSec)
+      // He runs straight for the spot where his hands will land (the carrier's inside shoulder at the
+      // push), breaks down into it, then rides him over the line - one smooth chase, his own top speed
+      // and a hard acceleration cap (a tail chase / glide bow could leave him short of a slow catch).
+      const fk = m[forcer]
+      const u = pushSide(m[tgt], fk, catchSec)
+      const hands = (t: number) => {
+        const c = posAt(m[tgt].path, Math.min(Math.max(t, tQ), endSec))
+        const g = 0.62 - 0.1 * clampN((t - tQ) / 0.4, 0, 1)
+        return { x: c.x + u.x * g, y: c.y + u.y * g }
+      }
+      followTo(fk, catchSec, endSec, hands, { acc: Math.max(6.5, fk.pace.acc * 1.3), w: 4.5 })
+      ensurePush(fk, m[tgt], tQ, endSec)
     }
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
