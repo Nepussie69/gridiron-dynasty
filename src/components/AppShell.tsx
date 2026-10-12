@@ -43,10 +43,12 @@ import { money } from '../lib/format'
 import { rootTeamVars, TEAM_VAR_NAMES } from '../lib/teamColor'
 import { useGame, useWorld, type ScreenId } from '../store/gameStore'
 import { tierFor } from '../game/engine/career'
+import { isHeadCoachCareer } from '../game/engine/access'
 import { capSpace, recordOf, recordStr, rosterOf, scheduleFor, teamAvgOvr } from '../game/selectors'
 import type { Team } from '../game/types'
 import { CommandPalette } from './CommandPalette'
 import { BroadcastSettings } from './broadcast/BroadcastSettings'
+import { TradeControlToggle } from './TradeControlToggle'
 import {
   Avatar,
   Badge,
@@ -1003,6 +1005,19 @@ function SettingsHost() {
           />
         </div>
         <BroadcastSettings row={row} />
+        {career && isHeadCoachCareer(career) && (
+          <div className={row}>
+            <div>
+              <span className="label block">Trades</span>
+              <span className="text-small text-muted">
+                {career.tradeControl === 'coach'
+                  ? 'You propose, accept and execute trades yourself; the AI GM makes none for your club'
+                  : 'The GM holds the pen on trades; you advise and ask'}
+              </span>
+            </div>
+            <TradeControlToggle size="sm" />
+          </div>
+        )}
         <div className={cn(row, 'hidden lg:flex')}>
           <span className="label">Sidebar</span>
           <SegmentedControl

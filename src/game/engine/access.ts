@@ -43,6 +43,19 @@ export const ACCESS_META: Record<AccessLevel, AccessMeta> = {
   decide: { label: 'Decision Maker', short: 'Decide', blurb: 'The call is yours.', tone: 'win' },
 }
 
+/** The NFL head coach (the one rung that shares trade authority with a GM). */
+export function isHeadCoachCareer(career: CareerState): boolean {
+  return career.path === 'coach' && career.level >= 7
+}
+
+/**
+ * Head coach who has taken the trade pen from the GM (`tradeControl: 'coach'`).
+ * Missing or 'gm' (every old save) = the GM decides, exactly as before.
+ */
+export function coachHoldsTradePen(career: CareerState): boolean {
+  return isHeadCoachCareer(career) && career.tradeControl === 'coach'
+}
+
 /** What access does this rung have over a given area? */
 export function accessFor(career: CareerState, area: AccessArea): AccessLevel {
   const caps = capabilities(career)
@@ -50,7 +63,7 @@ export function accessFor(career: CareerState, area: AccessArea): AccessLevel {
   // The NFL head coach has complete control of football operations, but only
   // INFLUENCE over the roster and the cap — the GM holds the pen. The GM, in
   // turn, does not meddle in on-field operations; those read as view/advise.
-  const isHeadCoach = career.path === 'coach' && career.level >= 7
+  const isHeadCoach = isHeadCoachCareer(career)
   const isGm = career.path === 'personnel' && career.level >= 8
   if (isHeadCoach) {
     switch (area) {
@@ -58,10 +71,12 @@ export function accessFor(career: CareerState, area: AccessArea): AccessLevel {
         return 'decide' // sets the scheme, calls the plays, owns game management
       case 'staff':
         return 'advise' // recommends coaches; the GM signs off
+      case 'trades':
+        // The head coach can take the pen from the GM (CareerState.tradeControl).
+        return coachHoldsTradePen(career) ? 'decide' : 'advise'
       case 'draft':
       case 'cap':
       case 'freeagency':
-      case 'trades':
       case 'roster':
         return 'advise' // shapes the call; the GM makes the final one
       case 'scouting':

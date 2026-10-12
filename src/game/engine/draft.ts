@@ -1,6 +1,7 @@
 import type { CareerState, DraftProspect, Player, PlayerOrigin, Position } from '../types'
 import { makeRookieContract } from './cap'
 import { canDraft } from './career'
+import { coachHoldsTradePen } from './access'
 import { computeDraftOrder } from './sim'
 import { ensureDraftPicks } from './picks'
 import { pushLedger } from './ledger'
@@ -114,6 +115,17 @@ const NEED_TARGETS: Record<string, number> = {
 export function userOnClock(world: World, career: CareerState | null) {
   if (!career || !canDraft(career)) return false
   return currentTeamId(world) === career.teamId
+}
+
+/**
+ * On the clock for trade purposes. A head coach who holds the trade pen
+ * (CareerState.tradeControl 'coach') does not make the pick — his GM does —
+ * but the draft pauses on his slot so he can still take a trade-back offer.
+ * For every other career this is exactly `userOnClock`.
+ */
+export function userOnTradeClock(world: World, career: CareerState | null) {
+  if (userOnClock(world, career)) return true
+  return !!career && coachHoldsTradePen(career) && currentTeamId(world) === career.teamId
 }
 
 function teamNeeds(roster: Player[]): Record<string, number> {
@@ -390,12 +402,24 @@ function advancePick(world: World) {
   if (world.draftState.pickIndex >= totalPicks(world)) world.draftState.complete = true
 }
 
-/** Run AI picks until the user is on the clock or the draft ends. */
-export function simUntilUser(world: World, career: CareerState | null, max = 0) {
+/**
+ * Run AI picks until the user is on the clock or the draft ends. A head coach
+ * holding the trade pen also pauses on his slot (so he can trade it); `gmGo`
+ * lets the GM make that one pick and carry on.
+ */
+export function simUntilUser(world: World, career: CareerState | null, max = 0, gmGo = false) {
   const cap = max || totalPicks(world)
+  const startIndex = world.draftState.pickIndex
   let steps = 0
   while (!world.draftState.complete && steps < cap) {
     if (career && canDraft(career) && currentTeamId(world) === career.teamId) break
+    if (
+      career &&
+      coachHoldsTradePen(career) &&
+      currentTeamId(world) === career.teamId &&
+      !(gmGo && world.draftState.pickIndex === startIndex)
+    )
+      break
     const teamId = currentTeamId(world)
     if (!teamId) break
     // If the user lacks draft authority but has filed a board, the NPC weighs it.
@@ -475,6 +499,11 @@ export function simulateRestOfDraft(world: World, career: CareerState | null) {
     if (world.draftState.complete) break
     const teamId = currentTeamId(world)
     if (!teamId) break
+    // A head coach holding the trade pen: the draft paused on his slot, so the GM makes the pick as usual.
+    if (career && teamId === career.teamId && coachHoldsTradePen(career)) {
+      simUntilUser(world, career, totalPicks(world), true)
+      continue
+    }
     // The user's club is on the clock but the user chose to auto-finish: take best available for them.
     const mine = !!career && teamId === career.teamId
     const gradeOf = mine ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
