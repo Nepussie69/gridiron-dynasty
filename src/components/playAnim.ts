@@ -5544,7 +5544,9 @@ function scriptReturn(mv: Mover, from: Pt, spot: Pt, dir: 1 | -1, scheme: 'wall'
   mv.pace = { top: mv.pace.top * k, acc: mv.pace.acc }
   if (pre.length) {
     if (!td && t0 + natFor(k) < needT - 0.05) mv.run(routeByTime(from, c, mv.pace, vc, needT - t0, 0), { v0: vc, stop: false })
-    else mv.run(pre, { v0: vc, stop: td })
+    // animflow r8 (item c): a return touchdown is run INTO the goal line at full speed (the play ends
+    // as he crosses it - the probe's exact spot; the renderer carries him on into the end zone).
+    else mv.run(pre, { v0: vc, stop: false })
   }
   const contactT = mv.t
   if (!td) pileDrive(mv, post, carrySpeed(mv))

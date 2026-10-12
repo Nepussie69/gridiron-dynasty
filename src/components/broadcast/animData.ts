@@ -118,6 +118,12 @@ export interface AnimPresentation {
   camera: CameraHint
   /** animflow r6b: the broken-tackle moves and tackle styles drawn (checks / probes). */
   skill?: { moves: { key: string; move: CarrierMove; t: number; missed: string | null }[]; tackles: Record<string, string> }
+  /**
+   * animflow r8 (item c): a scorer still at speed when the play ends (a return touchdown ends on the
+   * goal line - the probe's exact spot) carries on into the end zone after the whistle: his speed
+   * (yd/s) and heading (offense frame, unit) at the end. The renderer runs it out during the hold.
+   */
+  runOn?: { key: string; v: number; hx: number; hy: number }
 }
 
 export type BroadcastAnim = PlayAnim & AnimPresentation
@@ -1080,7 +1086,18 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const skill = moves.length || Object.keys(tackleStyles).length
     ? { moves: moves.map((m) => ({ key: m.key, move: m.move, t: m.t, missed: m.missed })), tackles: tackleStyles }
     : undefined
-  return { ...anim, poses, facing, ballZ, camera, ...(skill ? { skill } : {}) }
+  // animflow r8 (item c): the scorer runs on through the goal line after the whistle.
+  let runOn: AnimPresentation['runOn']
+  const scoreEv = events.find((e) => e.kind === 'score')
+  if (scoreEv && keySet[scoreEv.keys[0]]) {
+    const k = scoreEv.keys[0]
+    const a = posAt(paths[k], Math.max(0, 1 - 0.1 / D))
+    const b = posAt(paths[k], 1)
+    const v = Math.hypot(b.x - a.x, b.y - a.y) / 0.1
+    // (only a man who ends ON a goal line at speed: a run / catch TD already runs through and eases up)
+    if (v >= 3 && Math.min(Math.abs(b.x - 10), Math.abs(b.x - 110)) < 1.5) runOn = { key: k, v, hx: (b.x - a.x) / (v * 0.1), hy: (b.y - a.y) / (v * 0.1) }
+  }
+  return { ...anim, poses, facing, ballZ, camera, ...(skill ? { skill } : {}), ...(runOn ? { runOn } : {}) }
 }
 
 /** animflow r6b: left / right for a spin, from the play number. */

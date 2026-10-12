@@ -568,8 +568,29 @@ export class ActorLayer {
         }
       }
     }
+    // animflow r8 (item c): the scorer carries it on into the end zone after the whistle.
+    if (carried && t >= 1 && holder === a.runOn?.key) {
+      const sh = this.runOnShift()
+      if (sh) {
+        p.x += sh.dx
+        p.y += sh.dy
+      }
+    }
     const w = offenseToWorld(p.x, p.y, dir)
     return { x: w.x, y: w.y, z, carried, holder }
+  }
+
+  /**
+   * animflow r8 (item c): a scorer who ends the play at speed on the goal line (a return touchdown)
+   * runs on into the end zone during the post-whistle hold, easing up (offense-frame shift, speed).
+   */
+  runOnShift(): { dx: number; dy: number; v: number; d: number } | null {
+    const ro = this.play?.anim.runOn
+    if (!ro || !(this.post > 0)) return null
+    const dec = 5.5
+    const tau = Math.min(this.post, ro.v / dec)
+    const d = ro.v * tau - 0.5 * dec * tau * tau
+    return { dx: ro.hx * d, dy: ro.hy * d, v: Math.max(0, ro.v - dec * this.post), d }
   }
 
   private draw(ctx: CanvasRenderingContext2D, cam: Camera, frame: BroadcastFrame, info: LayerInfo): void {
@@ -627,6 +648,18 @@ export class ActorLayer {
       f.accel = this.D > 0 ? (s.v - this.sample(tr, t - 0.12 / this.D).v) / 0.12 : 0
       f.phase = s.ph
       f.heading = dir === 1 ? s.hd : s.hd + Math.PI
+      // animflow r8 (item c): the scorer runs on through the goal line after the whistle.
+      if (t >= 1 && tr.key === play.anim.runOn?.key) {
+        const sh = this.runOnShift()
+        if (sh) {
+          const w2 = offenseToWorld(s.x + sh.dx, s.y + sh.dy, dir)
+          f.x = w2.x
+          f.y = w2.y
+          f.speed = sh.v
+          f.phase = s.ph + (sh.d / cycleLength(Math.max(1, (play.anim.runOn!.v + sh.v) / 2))) * TAU
+          f.accel = 0
+        }
+      }
       let st = this.poseFor(tr, t, f)
       if (f.fallDir != null && dir === -1) f.fallDir += Math.PI
       // animflow r6b (item 4): a man coming off jogs to his bench after the whistle.

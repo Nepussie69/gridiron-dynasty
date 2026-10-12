@@ -2764,6 +2764,49 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(C[0] >= C[1] * 0.9, `clock step-outs ${C[0]}/${C[1]}: ${badC.join('; ')}`)
   })
 
+  ok('animflow r8 (c): a return touchdown is run into the goal line at full speed (end spot exact) and carried on into the end zone after the whistle', () => {
+    store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const got = { kickoff: 0, punt: 0 }
+    const bad: string[] = []
+    for (let g = 0; g < 3 && (got.kickoff < 3 || got.punt < 3); g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 5) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 211 + g * 389)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const p0 = sim.plays[i]
+        if ((p0.type !== 'kickoff' && p0.type !== 'punt') || p0.returnKind !== 'return' || !p0.returnerId || p0.turnover && p0.type === 'kickoff') continue
+        const kind = p0.type as 'kickoff' | 'punt'
+        if (got[kind] >= 3) continue
+        // the same return, taken all the way (the sim's own touchdown fields)
+        const play = (kind === 'kickoff'
+          ? { ...p0, returnTD: true, startYard: 100, endYard: 100, returnYards: (p0.returnYards ?? 0) + 100 - p0.endYard, result: `${p0.result} TOUCHDOWN!`, scorerId: p0.returnerId }
+          : { ...p0, returnTD: true, result: `${p0.result} TOUCHDOWN!`, scorerId: p0.returnerId }) as Play
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: undefined, actors: actorPlayers(world, play, other, null) })
+        const key = kind === 'kickoff' ? 'rb' : 's0'
+        const a = anim.actors.find((x) => x.key === key)
+        if (!a) continue
+        got[kind]++
+        const D = anim.duration / 1000
+        const want = kind === 'kickoff' ? 110 : 10
+        const end = posAt(a.path, 1)
+        const pre = posAt(a.path, 1 - 0.1 / D)
+        const v = Math.hypot(end.x - pre.x, end.y - pre.y) / 0.1
+        const l = new ActorLayer()
+        l.setPlay({ anim, offClub: NFL_TEAMS[0], defClub: NFL_TEAMS[1], offHome: true })
+        l.post = 1.0
+        const sh = l.runOnShift()
+        const into = sh ? (kind === 'kickoff' ? sh.dx : -sh.dx) : 0
+        if (Math.abs(end.x - want) > 1e-3 || v < 5 || !(anim.events ?? []).some((e) => e.kind === 'score') || into < 2.5) bad.push(`${kind} ${i}: end ${end.x.toFixed(2)} (want ${want}) at ${v.toFixed(1)} yd/s, ${into.toFixed(1)} yd on after the whistle`)
+      }
+    }
+    console.log(`      return TDs drawn: ${got.kickoff} kickoff, ${got.punt} punt`)
+    assert.ok(got.kickoff >= 2 && got.punt >= 2, `coverage ${JSON.stringify(got)}`)
+    assert.ok(!bad.length, bad.join('; '))
+  })
+
   ok('animflow r8 (J38 / J12 / J36): featured plays are drawn as themselves (wildcat direct snap, jet motion, back-shoulder turn, TE seam, RB wheel); a fooled QB looks off first; a steered throw goes at the scouted corner', () => {
     const seen: Record<string, number> = {}
     const bad: string[] = []
