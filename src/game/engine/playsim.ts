@@ -6567,11 +6567,17 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const choice = decide(s, {
       kind: 'call', side: 'off', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
       yard: s.yard, title: downDistance(s.down, s.distance, s.yard),
-      options: callCards().map((c) => ({ id: c.name, label: c.name, hint: c.description })),
+      // A J38 featured standing call is not a call card — list it too, or the
+      // standing answer is rejected and the moment repeats forever.
+      options: [
+        ...callCards().map((c) => ({ id: c.name, label: c.name, hint: c.description })),
+        ...(callCards().some((c) => c.name === standing.name) ? [] : [{ id: standing.name, label: standing.name, hint: standing.description }]),
+      ],
       defaultId: standing.name, staffRead: read, ask: true, margin: marginOf(s.offId),
     })
     if (choice === null) return 'moment'
-    concept = style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
+    concept = (choice === standing.name && !callCards().some((c) => c.name === choice) ? standing : undefined) ??
+      style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
     const aiDef = drawAIDefCall(world, s, s.defId, bucket)
     // The matrix only applies to a call the user made; a standing order plays the
     // snap exactly as fast sim would (no edge either way).
