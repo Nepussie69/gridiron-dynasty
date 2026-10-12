@@ -3814,7 +3814,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // land at ~2–4 yd. DEPTH_AWARE.depthMix is 0, so the emitted air drives the
   // animation and the probe only — no outcome moves here.
   if (vOn && vCheckdown && DEPTH_AWARE_ON) {
-    passAir = clamp(Math.round(passAir), VISION_CFG.chkAirLo, VISION_CFG.chkAirHi)
+    passAir = Math.round((VISION_CFG.chkAirLo + clamp(passAir, 0, 8) / 8 * (VISION_CFG.chkAirHi - VISION_CFG.chkAirLo)) * 10) / 10
   }
 
   if (rng() < sackChance) {
@@ -4124,7 +4124,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J10a: the ball spot inside the placement circle drives catchable / contested.
   // Centred (`offSpotYd` has a league mean of 0), so the league completion rate
   // does not move; a ball well off the spot is harder to catch.
-  const vSpot = vThrow ? -vThrow.offSpotYd * VISION_CFG.spotW : 0
+  const vSpot = vThrow ? -vThrow.offSpotYd * VISION_CFG.spotW + VISION_CFG.centerComp : 0
   let compProb = clamp(
     (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(effDefMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0) + fatDiff * R15.fatComp + vSpot,
     0.42,
@@ -4289,6 +4289,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const oobP = oobRate(env, concept, target?.pos)
     const oob = oobP > 0 && gain > 0 && yard + gain < 100 &&
       h01(`${n}:${offId}:oob`) < oobP
+    // J10a league centring: the progression/checkdown layer moves a little more of
+    // the ball underneath. A deterministic hash trims `centerYdP` of the longer
+    // completions by a yard (league YPA / first downs back to the unmodified level);
+    // the individual QB / checkdown effects are untouched. Off => no-op.
+    if (vOn && gain > 2 && h01(`${n}:${offId}:vcenter`) < VISION_CFG.centerYdP) gain -= 1
     const stopped = yard + gain < 100 && (!oob || CLOCK_ON) ? passTackler(n, defId, coverId, coverPlayer, saf, lbs) : undefined
     const tacklerGroups = [cbs, saf, lbs]
     // L12 E2: a strong tackler cuts the YAC short.
@@ -4302,7 +4307,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     let missedTackleIds: string[] | undefined
     let forcedMissedIds: string[] | undefined
     if (stopped && gain > 0 && yard + gain < 100 &&
-      hash32(`${n}:${defId}:passmt`) / 4294967296 < tackleMissChance([...cbs, ...saf, ...lbs].find((p) => p.id === stopped), target, gain, true)) {
+      hash32(`${n}:${defId}:passmt`) / 4294967296 < (tackleMissChance([...cbs, ...saf, ...lbs].find((p) => p.id === stopped), target, gain, true) + (vOn ? VISION_CFG.centerMiss : 0))) {
       missedTackleIds = [stopped]
       gain += missExtraYards(`${n}:${offId}:passmty`)
       // A miss that reaches the end zone has no finishing tackle to credit.

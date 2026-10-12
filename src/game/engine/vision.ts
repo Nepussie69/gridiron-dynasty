@@ -152,6 +152,14 @@ export const VISION = {
   eyeIntW: 0.05, // per unit of off-cone × the defender's PRC/AWR skill
   jumpPbuW: 0.12, // per unit of off-cone (PBU bookkeeping on an incompletion)
   eyeMax: 0.35,
+  // ── league centring (never shrinks an individual effect) ───────────────────
+  /** Share of completions (>2 yd) trimmed by a yard: holds YPA / first downs. */
+  centerYdP: 0.12,
+  /** Added to the completion probability (league centring of the comp% the circle lifts). */
+  centerComp: -0.0035,
+  /** Added to the pass missed-tackle chance: holds the league missed-tackle count
+   *  (more checkdowns are stopped by linebackers, who miss less). */
+  centerMiss: 0.015,
 } as const
 
 // ── helpers (identical maths to playsim's, kept local to avoid a module cycle) ─
