@@ -2075,7 +2075,9 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
   // Lead with the block's volume stat: yards for offense, the first column otherwise.
   const sortKey = (['Defense', 'Pass rush', 'Coverage'].includes(title) ? cols[0]?.k : cols[1]?.k) as keyof GameStatLine
   const sorted = [...rows].sort((a, b) => ((b.line[sortKey] as number) ?? 0) - ((a.line[sortKey] as number) ?? 0))
-  const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct'
+  // The %-columns (PRS%, SNP%) are the widest headers; a 32px column left them touching their
+  // right-aligned neighbour ("PRS%SNP%", "TDSNP%"), so they get the wide width too.
+  const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct' || k === 'snapPct'
   return (
     <div className="mb-3">
       <div className="label mb-0.5">{title}</div>
@@ -2087,7 +2089,7 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
         <thead>
           <tr className="text-faint">
             <th className="text-left font-500">Player</th>
-            {cols.map((c) => <th key={c.k} title={c.title} className="whitespace-nowrap text-right font-500">{c.l}</th>)}
+            {cols.map((c) => <th key={c.k} title={c.title} className="whitespace-nowrap pl-1 text-right font-500">{c.l}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -2107,7 +2109,7 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
                   )}
                 </td>
                 {cols.map((c) => (
-                  <td key={c.k} className="whitespace-nowrap text-right">
+                  <td key={c.k} className="whitespace-nowrap pl-1 text-right">
                     {c.fmt ? c.fmt(b.line) : (b.line[c.k as keyof typeof b.line] as number ?? 0)}
                   </td>
                 ))}
