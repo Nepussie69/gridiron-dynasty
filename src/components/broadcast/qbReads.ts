@@ -77,6 +77,9 @@ export interface ReadPlace {
   dive: boolean
   /** Incompletion: within his reach (off his hands) rather than sailing past. */
   hands: boolean
+  /** A completion placed past his reach: he adjusts his line this far toward it at the catch (yd). */
+  sx: number
+  sy: number
 }
 export interface ReadAudible { t0: number; t1: number; key: string }
 export interface ReadPlan {
@@ -209,7 +212,7 @@ export function computeReadPlan(anim: PlayAnim, play: Play, ctx: AnimContext = {
     return Math.hypot(b.x - a.x, b.y - a.y) >= 3.5
   }
   const others = present.filter((k) => k !== target && runner(k)).sort((a, b) => rankOf(a) - rankOf(b) || present.indexOf(a) - present.indexOf(b))
-  const readNo = clampN(Math.round(play.readNo ?? 1), 1, 4)
+  const readNo = clampN(Math.round(play.readNo ?? 1), 1, 6)
   const checkdown = !sack && !!play.checkdown
   const stare = !sack && !!play.eyeJumpId
   const depth = play.passConceptDepth ?? play.passDepth ?? 10
@@ -298,7 +301,7 @@ export function computeReadPlan(anim: PlayAnim, play: Play, ctx: AnimContext = {
   // The engine's pressure term is a few degrees until J10b: on a pressured snap the drawn
   // start is held at least this far above the recorded cone so the squeeze reads.
   const floorW = !pressured ? 0 : pType === 'sack' || pType === 'hit' ? 12 : 9
-  const coneStart = Math.min(VISION.coneMax, Math.max(wClean, coneEnd + floorW))
+  const coneStart = Math.min(VISION.coneMax + 15, Math.max(wClean, coneEnd + floorW))
   const pressTerm = Math.max(0, wClean - coneEnd) / VISION.conePressW
   const rClean = Math.max(VISION.radiusMin, radEnd - pressTerm * VISION.radiusPressW)
   const floorR = !pressured ? 0 : pType === 'sack' || pType === 'hit' ? 0.45 : 0.35
@@ -357,9 +360,15 @@ function placement(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan)
   const h2 = hashU((play.n ?? 0) * 5.93 + 1.3)
   const backShoulder = anim.catchRoute === 'fade' && play.featured === 'fade'
   const cls: PlaceClass = backShoulder ? 'behind' : h < 0.3 ? 'high' : h < 0.55 ? 'low' : h < 0.8 ? 'behind' : 'ahead'
+  // Ends at the catch: no run after it (a dive is only drawn when nothing follows).
+  const last = tp[tp.length - 1]?.t ?? C
+  const ends = !inc && (last - C) * D <= 0.45
   const zLo = -1.25
   const zHi = inc ? 2.4 : 1.3
-  const reachH = inc ? Infinity : 1.6
+  // Arms reach 1.6 yd; a dive (nothing after it) 2.8; otherwise he adjusts his line up to
+  // SHIFT_MAX toward the ball over the last beat and reaches the rest.
+  const SHIFT_MAX = 1.4
+  const reachH = inc ? Infinity : ends ? 2.8 : 1.6 + SHIFT_MAX
   let dz = clampN(cls === 'high' ? 0.85 * o : cls === 'low' ? -0.8 * o : cls === 'behind' ? 0.25 * o : 0.1 * o, zLo, zHi)
   let hz = Math.sqrt(Math.max(0, o * o - dz * dz))
   if (hz > reachH) {
@@ -374,17 +383,19 @@ function placement(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan)
   ux += lx * lat
   uy += ly * lat
   const ul = Math.hypot(ux, uy) || 1
-  const dx = (ux / ul) * hz
-  const dy = (uy / ul) * hz
-  // Ends at the catch: no run after it (a dive is only drawn when nothing follows).
-  const last = tp[tp.length - 1]?.t ?? C
-  const ends = !inc && (last - C) * D <= 0.45
+  let dx = (ux / ul) * hz
+  let dy = (uy / ul) * hz
+  // Keep the spot on the field (mirror the part that would leave it).
+  if (ideal.y + dy < 0.6 || ideal.y + dy > 52.7) dy = -dy
+  if (ideal.x + dx < 0.5 || ideal.x + dx > 119.5) dx = -dx
+  const shift = !inc && !ends && hz > 1.6 ? Math.min(SHIFT_MAX, hz - 1.6) : 0
   const coverK = keyForId(anim, ctx, play.coverId)
   const cp = pathOf(anim, coverK)
   const contest = !!cp && !play.eyeJumpId && (() => { const d = posAt(cp, C); return Math.hypot(d.x - ideal.x, d.y - ideal.y) <= 1.3 })()
   let pose: PoseState
-  let dive = false
-  if (cls === 'high') pose = dz >= 0.45 ? 'catchHigh' : 'catch'
+  let dive = (inc || ends) && hz > 1.6
+  if (dive) pose = 'dive'
+  else if (cls === 'high') pose = dz >= 0.45 ? 'catchHigh' : 'catch'
   else if (cls === 'low') { dive = dz <= -0.9 && (inc || ends); pose = dive ? 'dive' : 'catchLow' }
   else if (cls === 'behind') pose = 'catchBack'
   else { dive = hz >= 1.25 && (inc || ends); pose = dive ? 'dive' : 'catchReach' }
@@ -392,6 +403,7 @@ function placement(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan)
   return {
     cls, key, ix: ideal.x, iy: ideal.y, dx, dy, dz, offset: o, exact, pose,
     contestKey: contest ? coverK : null, dive, hands: hz <= 1.2 && dz >= -1.0 && dz <= 1.1,
+    sx: shift ? (dx / hz) * shift : 0, sy: shift ? (dy / hz) * shift : 0,
   }
 }
 
@@ -535,7 +547,9 @@ export function applyReadPaths(anim: PlayAnim, play: Play, ctx: AnimContext = {}
   }
   if (!plan) return anim
   const out: PlayAnim & WithReads = { ...anim, reads: plan }
-  if (plan.place) out.ball = placeBall(anim, play, plan)
+  const pl = plan.place
+  if (pl && (pl.sx || pl.sy)) out.actors = anim.actors.map((a) => (a.key === pl.key ? { ...a, path: adjustPath(a.path, plan) } : a))
+  if (pl) out.ball = placeBall(out, play, plan)
   if (plan.jump) out.actors = anim.actors.map((a) => (a.key === plan!.jump!.key ? { ...a, path: jumpPath(a.path, plan!, anim, play) } : a))
   if (plan.checkdown && plan.target && /^(rb|fb)$/.test(plan.target)) {
     const bk = plan.target
@@ -590,6 +604,26 @@ function backCheckPath(path: WP[], plan: ReadPlan): WP[] | null {
   return out
 }
 
+/** A completion placed past his reach: his line bends toward the ball over the last 0.45 s
+ *  and back onto it over the next 0.45 s (the catch time, the run after it and the end spot unchanged). */
+function adjustPath(path: WP[], plan: ReadPlan): WP[] {
+  const pl = plan.place!
+  const C = plan.catchT!
+  const W = 0.45 / plan.D
+  const a = Math.max(0, C - W)
+  const b = Math.min(1, C + W)
+  const out: WP[] = path.filter((w) => w.t < a - 1e-9).map((w) => ({ ...w }))
+  const n = Math.max(4, Math.ceil(((b - a) * plan.D) / 0.04))
+  for (let i = 0; i <= n; i++) {
+    const t = a + ((b - a) * i) / n
+    const p = posAt(path, t)
+    const u = t <= C ? sm((t - a) / Math.max(1e-9, C - a)) : 1 - sm((t - C) / Math.max(1e-9, b - C))
+    out.push({ t, x: p.x + pl.sx * u, y: p.y + pl.sy * u })
+  }
+  for (const w of path) if (w.t > b + 1e-9) out.push({ ...w })
+  return out
+}
+
 function placeBall(anim: PlayAnim, play: Play, plan: ReadPlan): WP[] {
   const pl = plan.place!
   const C = plan.catchT!
@@ -622,9 +656,11 @@ function placeBall(anim: PlayAnim, play: Play, plan: ReadPlan): WP[] {
     // Pulled into his hands over 0.1 s, then carried (the shadow of his path).
     const tp = pathOf(anim, pl.key)!
     const t2 = Math.min(1, C + 0.1 / D)
-    const p2 = posAt(tp, t2)
-    const after = ball.slice(iC + 1).filter((w) => w.t > t2 + 1e-9)
-    return [...ball.slice(0, iC + 1), { t: t2, x: p2.x, y: p2.y }, ...after]
+    const tEnd = pl.sx || pl.sy ? Math.min(1, C + 0.46 / D) : t2
+    const mid: WP[] = []
+    for (let t = t2; t <= tEnd + 1e-9; t += 0.04 / D) { const p = posAt(tp, t); mid.push({ t, x: p.x, y: p.y }) }
+    const after = ball.slice(iC + 1).filter((w) => w.t > (mid[mid.length - 1]?.t ?? t2) + 1e-9)
+    return [...ball.slice(0, iC + 1), ...mid, ...after]
   }
   const k = iC + 1
   if (k < ball.length) {
