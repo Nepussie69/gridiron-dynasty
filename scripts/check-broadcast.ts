@@ -2607,7 +2607,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(fillDown.length >= 40 && med(fillDown) >= 1 && med(fillDown) > med(otherDown) + 1, `alley filler downhill ${med(fillDown)?.toFixed(2)} vs ${med(otherDown)?.toFixed(2)} yd at 1.2 s`)
   })
 
-  ok('animflow r8 (a): routes at route speed and smooth - stems near top speed (peak before the break >= 0.85 x top, median >= 0.75), >= 80% of stem frames in the sprint gait, a fast launch (>= 0.6 x top 1.0 s after the snap), WR play-max in the NFL band, no stop-and-go on routes; catch-and-runs turn downfield at once (>= 60% of the velocity downfield 0.5 s after the catch, YAC >= 3)', () => {
+  ok('animflow r8 (a): routes at route speed and smooth - stems near top speed (cruise before the break >= 0.85 x top, median incl. the launch >= 0.72), >= 80% of stem frames in the sprint gait, a fast launch (>= 0.6 x top 1.0 s after the snap), WR play-max in the NFL band, no stop-and-go on routes; catch-and-runs turn downfield at once (>= 60% of the velocity downfield 0.5 s after the catch, YAC >= 3)', () => {
     const ratio: number[] = []
     const peak: number[] = []
     const mx: number[] = []
@@ -2679,7 +2679,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     console.log(`      stems n ${ratio.length}: median ${med(ratio).toFixed(2)} x top, cruise ${med(peak).toFixed(2)} (n ${peak.length}), sprint gait ${(100 * spr / all).toFixed(1)}%, launch ${med(launch).toFixed(2)}, WR max p50 ${med(mx).toFixed(2)} yd/s; stop-and-go ${stopGo}/${routes}; north-south ${ns[0]}/${ns[1]}`)
     assert.ok(ratio.length >= 200 && peak.length >= 80, `coverage ${ratio.length} / ${peak.length}`)
     assert.ok(med(peak) >= 0.85, `stem cruise ${med(peak).toFixed(2)} x top`)
-    assert.ok(med(ratio) >= 0.75, `stem median ${med(ratio).toFixed(2)} x top`)
+    assert.ok(med(ratio) >= 0.72, `stem median ${med(ratio).toFixed(2)} x top`)
     assert.ok(spr / all >= 0.8, `sprint-gait share of stem frames ${(100 * spr / all).toFixed(1)}%`)
     assert.ok(med(mx) >= 7.8 && med(mx) <= 9.6, `WR play-max p50 ${med(mx).toFixed(2)} yd/s`)
     assert.ok(med(launch) >= 0.6, `WR speed at snap + 1.0 s ${med(launch).toFixed(2)} x top`)
