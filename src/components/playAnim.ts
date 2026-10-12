@@ -1036,6 +1036,72 @@ function bowPts(a: Pt, b: Pt, amp: number): Pt[] {
   return out
 }
 
+/** animflow r7a: a quadratic Bezier a -> ctrl -> b as `n` points (a excluded). Lateral speed changes sign at most once. */
+function quadPts(a: Pt, ctrl: Pt, b: Pt, n: number): Pt[] {
+  const out: Pt[] = []
+  for (let i = 1; i <= n; i++) {
+    const u = i / n
+    out.push({
+      x: clampX((1 - u) * (1 - u) * a.x + 2 * (1 - u) * u * ctrl.x + u * u * b.x),
+      y: clampY((1 - u) * (1 - u) * a.y + 2 * (1 - u) * u * ctrl.y + u * u * b.y),
+    })
+  }
+  out[out.length - 1] = { x: b.x, y: b.y }
+  return out
+}
+
+/**
+ * animflow r7a: `pts` (from a) widened to one side by a single sine bow — to the
+ * side he is already moving (`heading`), so the bow adds no second turn — until
+ * the run takes ~`target` s at `pace`. The bow is bounded (<= 15% of the length,
+ * 2.5 yd): he may arrive a touch early, but never loops back or weaves.
+ */
+function widenByTime(a: Pt, line: Pt[], pace: Pace, v0: number, target: number, heading: Pt): Pt[] {
+  const end = line[line.length - 1]
+  const L = Math.hypot(end.x - a.x, end.y - a.y)
+  if (L < 0.5) return line
+  const nx = -(end.y - a.y) / L
+  const ny = (end.x - a.x) / L
+  const sgn = heading.x * nx + heading.y * ny >= 0 ? 1 : -1
+  // Resample (<= 0.5 yd steps) so a sparse line still bows smoothly.
+  const pts: Pt[] = []
+  const src = [a, ...line]
+  for (let i = 1; i < src.length; i++) {
+    const s0 = src[i - 1]
+    const s1 = src[i]
+    const k = Math.max(1, Math.ceil(Math.hypot(s1.x - s0.x, s1.y - s0.y) / 0.5))
+    for (let j = 1; j <= k; j++) pts.push({ x: s0.x + ((s1.x - s0.x) * j) / k, y: s0.y + ((s1.y - s0.y) * j) / k })
+  }
+  const cum: number[] = []
+  let run = 0
+  let prev = a
+  for (const p of pts) {
+    run += Math.hypot(p.x - prev.x, p.y - prev.y)
+    cum.push(run)
+    prev = p
+  }
+  const tot = run || 1
+  const make = (amp: number) =>
+    pts.map((p, i) => {
+      if (i === pts.length - 1) return { x: end.x, y: end.y }
+      const off = Math.sin(Math.PI * (cum[i] / tot)) * amp * sgn
+      return { x: clampX(p.x + nx * off), y: clampY(p.y + ny * off) }
+    })
+  const timeOf = (amp: number) => timedLine([a, ...make(amp)], pace, { v0, stop: false }).slice(-1)[0]?.t ?? 0
+  // <= ~25 deg off his line at the start: a wider first step reads as a plant
+  // (Mover.run brakes along the old heading, then comes back = a weave).
+  const maxAmp = Math.min(2.5, L * 0.15)
+  if (timeOf(maxAmp) <= target) return make(maxAmp)
+  let lo = 0
+  let hi = maxAmp
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2
+    if (timeOf(mid) >= target) hi = mid
+    else lo = mid
+  }
+  return make(hi)
+}
+
 /** Time the [a, ...bow] route at a pace with the given speed profile. */
 function bowTime(a: Pt, b: Pt, pace: Pace, v0: number, amp: number): number {
   if (amp <= 1e-4) return straightTime(pace, Math.hypot(b.x - a.x, b.y - a.y), v0)
@@ -2213,7 +2279,9 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     const P = wide
       ? { x: holeX - 1.3, y: clampY(holeY - side * 1.0) }
       : cutback ? { x: holeX - 1.4, y: clampY(holeY + side * 0.4) } : { x: holeX - 1.4, y: clampY(holeY - side * 0.25) }
-    const H = { x: holeX, y: wide ? clampY(holeY + side * 0.3) : lane }
+    // animflow r7a: an outside run turns up AT the edge (lane), not 0.3 yd past it and
+    // back (that hook was a second lateral reversal at the hole).
+    const H = { x: holeX, y: lane }
     const a0 = Math.atan2(P.y - mv.y, P.x - mv.x)
     const a1 = Math.atan2(H.y - P.y, H.x - P.x)
     let cut = Math.abs(a1 - a0)
@@ -3573,7 +3641,16 @@ function resolveCarry(opts: {
   const total = Math.hypot(spot.x - cPos.x, spot.y - cPos.y)
   const ac = yardsAfterContact(carrier.player, total, seed)
   const bend = total > 4 ? (hash(seed + 3) - 0.5) * Math.min(opts.northSouth ? 1.2 : 3, total * (opts.northSouth ? 0.05 : 0.12)) : 0
-  const line = Math.abs(bend) > 0.2 ? bowPts(cPos, spot, bend) : [spot]
+  // animflow r7a: a catch-and-run carries the catch's momentum into ONE smooth
+  // turn upfield (a quadratic arc that leaves along his heading), so his lateral
+  // speed changes sign at most once: no snap turn, no S-bend.
+  const hv = opts.northSouth && carrier.path.length > 1 ? speedVec(carrier.path, fromSec) : { x: 0, y: 0 }
+  const hsp = Math.hypot(hv.x, hv.y)
+  let line: Pt[]
+  if (opts.northSouth && hsp > 1.5 && total > 1.2) {
+    const reach = Math.min(3, total * 0.4, hsp * 0.4)
+    line = quadPts(cPos, { x: clampX(cPos.x + (hv.x / hsp) * reach), y: clampY(cPos.y + (hv.y / hsp) * reach) }, spot, 14)
+  } else line = Math.abs(bend) > 0.2 ? bowPts(cPos, spot, bend) : [spot]
   const { pre, post, c } = splitPolyline(cPos, line, Math.max(0, polyLen(cPos, line) - ac))
   const preNat = pre.length ? timedLine([cPos, ...pre], carrier.pace, { v0: cV0, stop: false }).slice(-1)[0]?.t ?? 0 : 0
   const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, preNat + (opts.northSouth ? 2.0 : 1.4))
@@ -3584,10 +3661,12 @@ function resolveCarry(opts: {
     const saved = carrier.pace
     let k = 1
     const natK = (kk: number) => timedLine([cPos, ...pre], { top: saved.top * kk, acc: saved.acc }, { v0: Math.min(cV0, saved.top * kk), stop: false }).slice(-1)[0]?.t ?? 0
-    while (k > 0.45 && natK(k) < need) k -= 0.04
+    while (k > 0.32 && natK(k) < need) k -= 0.03
     carrier.pace = { top: saved.top * k, acc: saved.acc }
     const v0k = Math.min(cV0, carrier.pace.top)
-    carrier.run(natK(k) >= need - 0.05 ? pre : routeByTime(cPos, c, carrier.pace, v0k, need, 0), { v0: v0k, stop: false })
+    // animflow r7a: still early at a cautious pace -> the same line widened to one
+    // side (bounded; never a loop back or a second bow that S-bends).
+    carrier.run(natK(k) >= need - 0.05 ? pre : widenByTime(cPos, pre, carrier.pace, v0k, need, hv), { v0: v0k, stop: false })
     carrier.pace = saved
   } else if (need > preNat + 0.05 && pre.length) {
     // Nobody could get there yet: he runs a wider line (never a loop) to give

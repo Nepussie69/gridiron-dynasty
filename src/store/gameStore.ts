@@ -624,6 +624,8 @@ interface GameStore {
   /** Saved pre-game plan, applied every week. */
   defaultPlan: { off: GamePlan; def: GamePlan }
   setDefaultPlan: (side: 'off' | 'def', plan: GamePlan) => void
+  /** J36: set the scouting-report targets (≤2 opponent ids) on one side's plan. */
+  setPlanTargets: (side: 'off' | 'def', ids: string[]) => void
   /** L10 G4: the user's 4th-down / 2-point / timeout call sheet. */
   setCallSheet: (sheet: CallSheet) => void
   /** FUTURES #4: the user's special-teams kick + return strategies. */
@@ -1888,6 +1890,20 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     set({
       defaultPlan: { ...get().defaultPlan, [side]: plan },
+      career: career ? withFlag(career, 'gameplan') : career,
+      tick: get().tick + 1,
+    })
+    get().save()
+  },
+
+  // J36 (FUTURES #36): the scouting-report targets on one side's plan (≤2 ids).
+  // Old saves never carry `targets`, so this only ever writes an options array.
+  setPlanTargets: (side, ids) => {
+    const career = get().career
+    const plan = get().defaultPlan[side]
+    const targets = ids.slice(0, 2)
+    set({
+      defaultPlan: { ...get().defaultPlan, [side]: { ...plan, targets: targets.length ? targets : undefined } },
       career: career ? withFlag(career, 'gameplan') : career,
       tick: get().tick + 1,
     })
