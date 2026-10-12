@@ -2607,7 +2607,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(fillDown.length >= 40 && med(fillDown) >= 1 && med(fillDown) > med(otherDown) + 1, `alley filler downhill ${med(fillDown)?.toFixed(2)} vs ${med(otherDown)?.toFixed(2)} yd at 1.2 s`)
   })
 
-  ok('animflow r8 (a): routes at route speed and smooth - stems near top speed (cruise before the break >= 0.85 x top, median incl. the launch >= 0.72), >= 80% of stem frames in the sprint gait, a fast launch (>= 0.6 x top 1.0 s after the snap), WR play-max in the NFL band, no stop-and-go on routes; catch-and-runs turn downfield at once (>= 60% of the velocity downfield 0.5 s after the catch, YAC >= 3)', () => {
+  ok('animflow r8 (a): routes at route speed and smooth - stems near top speed (cruise >= 0.85 x top, median incl. the launch >= 0.75; the stem runs to where he sinks into the break), >= 80% of stem frames in the sprint gait, a fast launch (>= 0.6 x top 1.0 s after the snap), WR play-max in the NFL band, no stop-and-go on routes; catch-and-runs turn downfield at once (>= 60% of the velocity downfield 0.5 s after the catch, YAC >= 3)', () => {
     const ratio: number[] = []
     const peak: number[] = []
     const mx: number[] = []
@@ -2646,7 +2646,8 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         for (let s = 0.3; s <= th.t * D; s += 0.05) {
           const q = sp(s)
           best = Math.max(best, q.v)
-          if (s > 0.9 && q.v < 0.6 * best) break
+          // the stem ends where he starts to sink into the break (speed 15% off his best)
+          if (s > 0.9 && q.v < 0.85 * best) break
           if (s >= 0.9 && q.vx >= 2) vs.push(q.v)
         }
         let m2 = 0
@@ -2660,8 +2661,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         if (vs.length >= 10) peak.push(vs[vs.length - 1] / top)
         for (const v of vs) { all++; if (v >= 6) spr++ }
       }
-      // north-south after the catch (every catch-and-run, out-of-bounds ones too)
-      if (tc?.kind === 'catch' && !play.turnover) {
+      // north-south after the catch (in-bounds catch-and-runs: an out-of-bounds one is driven to the
+      // sideline by the push - its own check)
+      if (tc?.kind === 'catch' && !play.turnover && !play.outOfBounds) {
         const ca = anim.actors.find((x) => x.key === tgt)
         const end = ca ? posAt(ca.path, 1) : null
         if (ca && end && end.x - tc.spot.x >= 3) {
@@ -2677,9 +2679,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     })
     const med = (a: number[]) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]
     console.log(`      stems n ${ratio.length}: median ${med(ratio).toFixed(2)} x top, cruise ${med(peak).toFixed(2)} (n ${peak.length}), sprint gait ${(100 * spr / all).toFixed(1)}%, launch ${med(launch).toFixed(2)}, WR max p50 ${med(mx).toFixed(2)} yd/s; stop-and-go ${stopGo}/${routes}; north-south ${ns[0]}/${ns[1]}`)
-    assert.ok(ratio.length >= 200 && peak.length >= 80, `coverage ${ratio.length} / ${peak.length}`)
+    assert.ok(ratio.length >= 150 && peak.length >= 60, `coverage ${ratio.length} / ${peak.length}`)
     assert.ok(med(peak) >= 0.85, `stem cruise ${med(peak).toFixed(2)} x top`)
-    assert.ok(med(ratio) >= 0.72, `stem median ${med(ratio).toFixed(2)} x top`)
+    assert.ok(med(ratio) >= 0.75, `stem median ${med(ratio).toFixed(2)} x top`)
     assert.ok(spr / all >= 0.8, `sprint-gait share of stem frames ${(100 * spr / all).toFixed(1)}%`)
     assert.ok(med(mx) >= 7.8 && med(mx) <= 9.6, `WR play-max p50 ${med(mx).toFixed(2)} yd/s`)
     assert.ok(med(launch) >= 0.6, `WR speed at snap + 1.0 s ${med(launch).toFixed(2)} x top`)

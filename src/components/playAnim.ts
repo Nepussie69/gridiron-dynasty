@@ -3069,13 +3069,13 @@ function shoveOut(mv: Mover, endX: number): number {
     return { x: all[i].x + (all[i + 1].x - all[i].x) * u, y: all[i].y + (all[i + 1].y - all[i].y) * u }
   }
   // Driven: his speed bleeds evenly to ~1.4 yd/s over the shove (still fighting for the spot).
-  const vEnd = 1.4
+  const vEnd = Math.max(1.4, Math.min(vin, (2 * L) / 1.4 - vin))
   const dec = Math.max(0.2, (vin * vin - vEnd * vEnd) / (2 * Math.max(0.3, L)))
   const dt = 0.04
   let d = 0
   let v = vin
   let t = 0
-  while (d < L - 1e-4 && t < 3) {
+  while (d < L - 1e-4 && t < 8) {
     v = Math.max(vEnd, v - dec * dt)
     d = Math.min(L, d + v * dt)
     t += dt
@@ -3154,6 +3154,38 @@ function followTo(mv: Mover, fromSec: number, toSec: number, target: (t: number)
 }
 
 /**
+ * animflow r8: hands on - from `t0` he rides the carrier a body's width off on side `u` (contact-
+ * coupled: his momentum goes into the carrier, he never runs on past him), blended in from where he is
+ * over a window long enough for the gap. Ends at `endSec`.
+ */
+function rideOn(tk: Mover, carrier: Mover, t0: number, endSec: number, u: Pt): void {
+  seek(tk, t0)
+  const from = { x: tk.x, y: tk.y }
+  const c0 = posAt(carrier.path, t0)
+  const gap0 = Math.hypot(c0.x + u.x * 0.62 - from.x, c0.y + u.y * 0.62 - from.y)
+  const w = clampN(gap0 / 4, 0.2, 0.6)
+  for (let t = t0 + 0.04; t < endSec + 1e-6; t += 0.04) {
+    const tt = Math.min(t, endSec)
+    const c = posAt(carrier.path, tt)
+    const g = 0.62 - 0.12 * clampN((tt - t0) / 0.5, 0, 1)
+    const e0 = clampN((tt - t0) / w, 0, 1)
+    const e = e0 * e0 * (3 - 2 * e0)
+    tk.path.push({ t: tt, x: from.x + (c.x + u.x * g - from.x) * e, y: from.y + (c.y + u.y * g - from.y) * e })
+  }
+  const last = tk.path[tk.path.length - 1]
+  if (last.t < endSec - 1e-6) {
+    const c = posAt(carrier.path, endSec)
+    tk.path.push({ t: endSec, x: c.x + u.x * 0.5, y: c.y + u.y * 0.5 })
+  }
+  const l = tk.path[tk.path.length - 1]
+  tk.t = l.t
+  tk.x = l.x
+  tk.y = l.y
+  tk.lastStop = true
+  tk.inHeading = undefined
+}
+
+/**
  * animflow r8: the forcer's hands land on the carrier's inside shoulder - from inside the field and
  * a little in front of him (his cut-off angle), whichever way he came - so the carrier is driven
  * out, not chased out. Unit vector from the carrier to the forcer.
@@ -3184,11 +3216,13 @@ function ensurePush(tk: Mover, carrier: Mover, tP: number, endSec: number): void
   if (tk.t >= endSec - 1e-6 && dAt(Math.max(tP, endSec - 0.3)) <= 1.0 && dAt(endSec) <= 1.0) return
   const from = Math.max(0.05, Math.min(tP - 0.3, endSec - 1.0))
   const u = pushSide(carrier, tk, tP)
-  followTo(tk, from, endSec, (t) => {
-    const c = posAt(carrier.path, Math.min(t, endSec))
-    const g = 0.62 - 0.1 * clampN((t - tP) / 0.4, 0, 1)
-    return { x: c.x + u.x * g, y: c.y + u.y * g }
-  }, { acc: Math.max(9, tk.pace.acc * 1.7), w: 6.5 })
+  const tR = Math.max(from + 0.04, Math.min(tP, endSec - 0.35))
+  const hands = (t: number) => {
+    const c = posAt(carrier.path, Math.min(Math.max(t, tR), endSec))
+    return { x: c.x + u.x * 0.62, y: c.y + u.y * 0.62 }
+  }
+  followTo(tk, from, tR, hands, { acc: Math.max(9, tk.pace.acc * 1.7), w: 6.5 })
+  rideOn(tk, carrier, tk.t, endSec, u)
 }
 
 function coverageScheme(play: Play, seed: number): 'man' | 'zone' | 'blitz' | 'twoHigh' | 'stack' {
@@ -4316,6 +4350,25 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       raw = raw.map((w) => ({ ...w, y: 2 * f[k].y - w.y }))
     }
     const pts = raw.map((w) => ({ x: clampX(w.x), y: clampY(w.y) }))
+    // animflow r8: a breaking route caught in stride at the sim's air yards breaks AT that depth (the
+    // stem cut to it, the break leg kept at it), so the ball meets him on the move across the field -
+    // not parked at the top of a stem that runs deeper than the throw while the QB catches up.
+    if (k === tgt && stride && !inc && !int && pts.length >= 3) {
+      const gain = endX0 - los
+      const yacMin = gain > 0 ? Math.min(yacT, Math.max(0, gain - 0.5)) : 0
+      const xCap = endX0 - yacMin - 0.3
+      const bi = pts.length - 2
+      const B = pts[bi]
+      const E = pts[pts.length - 1]
+      const lateral = Math.abs(E.y - B.y) > Math.abs(E.x - B.x)
+      if (lateral && B.x > xCap - 0.5 && xCap - 0.8 > los + 1.5) {
+        const x0 = f[k].x
+        const nb = xCap - 0.8
+        const kx = (nb - x0) / Math.max(1e-6, B.x - x0)
+        for (let i = 0; i <= bi; i++) pts[i] = { x: clampX(x0 + (pts[i].x - x0) * kx), y: pts[i].y }
+        pts[pts.length - 1] = { x: clampX(Math.min(xCap, E.x - (B.x - nb))), y: E.y }
+      }
+    }
     if (k !== tgt || !backShoulder) return pts
     // animflow r8 (J38): a back-shoulder fade - he stems the fade to the throw's depth, then plants
     // and turns back to the ball, which is thrown behind his back (sideline-side) shoulder.
@@ -5076,8 +5129,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     for (let kk = 1; kk >= 0.4 - 1e-9; kk -= 0.06) {
       seek(m[tgt], catchSec)
       m[tgt].pace = { top: saved.top * kk, acc: saved.acc }
-      // Upfield out of the catch, the width taken early on one smooth curve into Q.
-      const ctrl = { x: c0.x + (Q.x - c0.x) * 0.45, y: c0.y + (Q.y - c0.y) * 0.75 }
+      // He turns upfield out of the catch (a tight turn off his catch heading) and runs at the push
+      // point on one smooth curve.
+      const hv = m[tgt].path.length > 1 ? speedVec(m[tgt].path, catchSec) : { x: 1, y: 0 }
+      const hl = Math.hypot(hv.x, hv.y) || 1
+      const reach = Math.min(1.1, Math.hypot(Q.x - c0.x, Q.y - c0.y) * 0.25)
+      const ctrl = { x: c0.x + (hv.x / hl) * reach, y: c0.y + (hv.y / hl) * reach }
       const line = Math.hypot(Q.x - c0.x, Q.y - c0.y) > 1.5 ? quadPts(c0, ctrl, Q, 14) : [Q]
       m[tgt].run(line, { v0: Math.min(catchV0, m[tgt].pace.top), stop: false })
       m[tgt].pace = saved
@@ -5100,8 +5157,8 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
         const g = 0.62 - 0.1 * clampN((t - tQ) / 0.4, 0, 1)
         return { x: c.x + u.x * g, y: c.y + u.y * g }
       }
-      followTo(fk, catchSec, endSec, hands, { acc: Math.max(6.5, fk.pace.acc * 1.3), w: 4.5 })
-      ensurePush(fk, m[tgt], tQ, endSec)
+      followTo(fk, catchSec, Math.max(catchSec + 0.04, tQ - 0.1), hands, { acc: Math.max(6.5, fk.pace.acc * 1.3), w: 4.5 })
+      rideOn(fk, m[tgt], fk.t, endSec, u)
     }
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
