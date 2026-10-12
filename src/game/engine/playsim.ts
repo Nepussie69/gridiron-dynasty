@@ -3660,14 +3660,16 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   vCands.forEach((c, i) => vReadOf.set(c.id, vReadArr[i] ?? 1))
   /** J10a: the score move a candidate's designed read earns him. 0 when off. A
    *  back / tight-end outlet does NOT take the read-step penalty: he is the
-   *  checkdown, whose weight comes from the pocket (pressure) and the QB's AWR. */
+   *  checkdown, whose weight comes from the pocket (pressure) and the QB's AWR.
+   *  A tight end on a real route takes `teReadPen` (see `VISION`). */
   const vReadBias = (id: string, pos: string | undefined): number => {
     if (!vOn) return 0
     const rn = vReadOf.get(id)
     if (rn === undefined) return 0
     const route = vCandRoutes.get(id)
     const outlet = (pos === 'RB' || pos === 'FB' || pos === 'TE') && !!route && isCheckRoute(route)
-    return outlet ? checkdownBias(true, qb!, pressureEdge) : readBias(rn, vReach)
+    return outlet ? checkdownBias(true, qb!, pressureEdge, concept.depth)
+      : readBias(rn, vReach) + (pos === 'TE' ? VISION_CFG.teReadPen : 0)
   }
   // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
   // more looks, but the ball is spread by a softmax draw over those scores rather
@@ -3748,7 +3750,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // depth (byte-identical); ON = the deterministic route-type spread. Every
   // probability formula below keeps using concept.depth, so comp/INT/sack are
   // unchanged by construction.
-  const passAir = DEPTH_AWARE_ON ? airYardsFor(concept, target?.pos, n, offId, yard) : concept.depth
+  let passAir = DEPTH_AWARE_ON ? airYardsFor(concept, target?.pos, n, offId, yard) : concept.depth
+  // J10a: a checkdown is an underneath outlet throw. Its air is taken from J3b's
+  // depth-aware `passAir` (never the concept depth) and compressed into the outlet
+  // band, so an RB outlet behind the line and a TE check on a deep concept both
+  // land at ~2–4 yd. DEPTH_AWARE.depthMix is 0, so the emitted air drives the
+  // animation and the probe only — no outcome moves here.
+  if (vOn && vCheckdown && DEPTH_AWARE_ON) {
+    passAir = clamp(Math.round(passAir), VISION_CFG.chkAirLo, VISION_CFG.chkAirHi)
+  }
 
   if (rng() < sackChance) {
     // R2: a sack costs ≈ 7 yards (real 2015–2024).

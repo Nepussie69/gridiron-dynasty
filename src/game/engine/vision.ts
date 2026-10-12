@@ -17,8 +17,10 @@
 //      `readBias()` turns that into a per-candidate target weight and the chosen
 //      receiver carries its `readNo` on the Play.
 //   2. checkdowns — `checkdownBias()` lifts the back / tight end underneath when
-//      the pocket is collapsing and the QB is aware; a gunslinger (downfield /
-//      contested style) ignores it and forces the ball in.
+//      the pocket is collapsing; a poor / inaccurate QB (his own AWR and depth
+//      accuracy) bails to it early while an elite reader keeps working downfield,
+//      and a gunslinger (downfield / contested style) ignores it and forces the
+//      ball in. That is the big individual spread at the site.
 //   3. vision cone — `visionThrow()` measures `coneDeg` from the QB's own
 //      depth-specific accuracy + AWR, narrowed by his fatigue (STA-scaled) and by
 //      pressure. A read beyond the cone (`offCone`) loses accuracy steeply.
@@ -67,23 +69,47 @@ export const VISION = {
   /** Softmax score bonus for the first read (constant: the softmax cancels it). */
   readBonus: 0,
   /** Score lost per read slot past the first — this is what makes read 1 dominate
-   *  (the target softmax's tau is 160, so ~95 puts read 1 near the NFL ~52%). */
-  readStep: 82,
+   *  (the target softmax's tau is 160; tuned so R1 lands on the NFL ~53% of
+   *  attempts and the rest of the progression is clearly secondary). */
+  readStep: 135,
   /** Score bonus for a read inside the QB's reach (constant across in-reach reads). */
   reachBonus: 0,
   /** Extra score lost per read slot beyond the QB's reach (a slow/rookie read). */
   beyondReach: 55,
+  /** J10a: a tight end who is NOT the underneath outlet is rarely the designed
+   *  primary — his routes sit over the middle where the pocket side of the
+   *  progression works away from the safety help, so the read order sends the
+   *  ball to the receivers first and the TE's own routes fall in behind. The
+   *  scoring move keeps the target mix at its uncoached level (the progression
+   *  would otherwise shift ~9 points of share onto the TE, and a tight end caught
+   *  by a linebacker is tackled far more reliably than a receiver caught by a
+   *  corner — which is what pulled the league missed-tackle rate down). */
+  teReadPen: 0,
   // ── 2. checkdowns ──────────────────────────────────────────────────────────
-  /** Baseline score for the back / tight-end outlet (a shade behind read 1). */
-  chkBase: -62,
+  /** Baseline score for the back / tight-end outlet (a shade behind read 1). The
+   *  measured pass missed-tackle rate falls with the checkdown share (an outlet
+   *  completion is stopped by a linebacker, a better tackler), so this level is
+   *  set to hold the league checkdown share at ~15% and protect the band. */
+  chkBase: -112,
   /** The collapsing pocket pushes the QB to the back (per unit of pressure). */
   chkPressW: 95,
   /** Pressure at which the checkdown weight is at its centre (measured). */
   pressCenter: 0,
-  /** A QB's AWR deviation lifts his checkdown rate. */
-  chkAwrW: 0.8,
+  /** A QB's AWR deviation from the position mean: an aware QB keeps working
+   *  downfield, a poor one bails to the outlet early. (Centred on the position
+   *  mean, so the league checkdown level does not move — the big individual
+   *  spread comes from here.) */
+  chkAwrW: 3.4,
+  /** Depth-specific accuracy deviation: an inaccurate QB bails to the checkdown
+   *  (centred, same reasoning as `chkAwrW`). */
+  chkAccW: 2.6,
   /** A gunslinger (deep-downfield / contested style) forces it in instead. */
   chkGunW: 26,
+  /** J10a: a checkdown is an underneath outlet — its air yards (taken from J3b's
+   *  `passAir`, never the concept depth) are compressed into this band so a TE
+   *  checkdown on a deep concept is not drawn as a 20-yard throw. */
+  chkAirLo: 2,
+  chkAirHi: 4,
   // ── 3. vision cone ─────────────────────────────────────────────────────────
   /** Cone width (degrees) for a league-average QB, clean pocket. */
   coneBase: 33,
@@ -247,18 +273,21 @@ export function readBias(readNo: number, reach: number): number {
 }
 
 /** J10a: the checkdown weight for an underneath target (0 for anyone else). The
- *  collapsing pocket lifts it; a QB's AWR (he sees it) lifts it further; a
- *  gunslinger ignores it and forces the ball in. `pressureNorm` is the raw
- *  `pressureEdge`, normalised here by the same scale the cone uses. */
+ *  collapsing pocket lifts it; a poor / inaccurate QB bails to it early (a big,
+ *  individual spread: his own AWR and depth accuracy), a gunslinger ignores it
+ *  and forces the ball in. `pressureNorm` is the raw `pressureEdge`, normalised
+ *  here by the same scale the cone uses. */
 export function checkdownBias(
-  isOutlet: boolean, qb: Player, pressureNorm: number,
+  isOutlet: boolean, qb: Player, pressureNorm: number, depth = 10,
 ): number {
   if (!isOutlet) return 0
   const a = attrs(qb)
+  const key = depthAccKey(depth)
   const awr = dev('QB', 'AWR', a.AWR ?? POS_MEAN.QB.AWR)
+  const acc = dev('QB', key, a[key] ?? POS_MEAN.QB[key])
   const gun = deepStyle(qb)
   const press = pressureNorm / VISION.pressScale - VISION.pressCenter
-  return VISION.chkBase + press * VISION.chkPressW + awr * VISION.chkAwrW - gun * VISION.chkGunW
+  return VISION.chkBase + press * VISION.chkPressW - awr * VISION.chkAwrW - acc * VISION.chkAccW - gun * VISION.chkGunW
 }
 
 /** J10a: how much of a gunslinger (downfield / contested) the QB is, 0..1.5. */
