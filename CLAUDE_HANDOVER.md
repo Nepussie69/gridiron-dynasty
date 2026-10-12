@@ -1,37 +1,38 @@
-# Claude handover — Gridiron Dynasty (2026-10-12 ~04:10 AEDT, chat 6)
+# Claude handover — Gridiron Dynasty (2026-10-12 ~21:05 AEDT, chat 8)
 
-Read AGENTS.md first. One orchestrator chat at a time. Status to the user as a ranked table (✅ done · 🔄 running · ⏳ queued · ⏸️ on hold); "table green tick"/"table green" = full update table, "check deepseek" = per-job status. Log every user request / landing in PLAYTEST_BACKLOG.md (last row 338).
+Read AGENTS.md first. One orchestrator chat at a time. Status as a ranked table with **expected times** (✅ done · 🔄 running · ⏳ queued · ⏸️ on hold); "table green tick" = full table incl. ETAs, "check deepseek" = per-job status, "cores" = load + sims. Log every user request/landing in PLAYTEST_BACKLOG.md (last row 368). User: "keep going down the list".
 
 ## Goal
-FUTURES + playtest fixes: NFL-realistic play where every effect comes from the individual players on the play (user rule: no team/unit averages; big elite-vs-poor spread) and a realistic 2.5D broadcast animation. DeepSeek implements engine jobs (`~/gridiron-work/ds-wt <name> <abs prompt>`); Claude sub-agents do animation (Opus) and analysis/review (Sonnet).
+FUTURES + playtest fixes: NFL-realistic play where every effect comes from the individual players on the play (no team/unit averages; big elite-vs-poor spread) and a realistic 2.5D broadcast animation. DeepSeek implements engine/feature jobs (`~/gridiron-work/ds-wt <name> <abs prompt>`); Claude sub-agents: Opus for animation, Sonnet for reviews and (user-approved) J10a + QB cone.
 
-## Current state (main 4e8de3a; GitHub/Pages still f250fe3 — nothing pushed; 4173 held)
-- Merged this chat: J8a, J8a-2, J8b, J8c, J8d (all individual-ratings rounds), J9 coach sub-ratings engine + Staff UI (FUTURES #32 ✅), J12 coverage disguise + game plan vs individuals (#34/#35 ✅), J6 kneels/spikes/OOB 10.9%/man 36% (scrambles kept OFF), Round 6c + 6d animation. Main gates ALL ✅: build, lint 4, hex, contrast, check-broadcast 70/70.
-- Main calib (logs/main-calib-j8a.out; post-J6 one queued → logs/main-calib-j6.out): eq 20/20; remaining misses Rushing TD 0.94–0.97 (≤0.92) and Missed tackles 6.85–6.88 (≥7) on 2 seeds.
-- **DeepSeek running (survive the clear):**
-  - J3b (wt/realismj3b, brief prompts/realism-j3b.txt, log logs/realismj3b.log, verify logs/realism-j3b-verify.out): J3 redone on current main — port air-yards model (old diff logs/j3-old.diff) + fix rush TD / missed tackles via individual goal-line and tackler reps. Old wt-realismj3 is abandoned.
-  - J13 try 2 (wt/realismj13, FUTURES #33 pre-snap reads & audibles, prompts/realism-j13.txt + cont2-realism-j13.txt, verify logs/j13-verify.out — a "DRAFT" header = not final).
-- No Claude sub-agents running.
+## Current state (main local ahead of GitHub 345c798 — backlog/J3c/DF1/camlock commits; Pages = 345c798; 4173 held)
+- Merged this chat: J2 4th-down, #29 fog polish, Round 8 part 1 (04f34fc: in-stride, J38 featured drawn, qbFooled, J36 steer, J3b catch point, forced OOB 59/68), J3c recentre (punts 4.42–4.57 still > 4.4 band — residual), #27 DF1 draft philosophy engine, camera lock 91c1b6f (fixed angle; setting gd.view.cameraAngle).
+- **Claude agents running (die on clear → relaunch from briefs if no result):**
+  - J10a on Sonnet, wt/j10s (c7ad535; final 3×500 done) → brief prompts/j10s-relaunch.txt. FINAL goes to logs/j10s-verify.out. Ignore logs/j10a-* (orphan DeepSeek session in wt/realismj10a still writes them).
+  - Camera follow-up on Opus, wt/camlock: one sideline all game + tilt for kicks → prompts/camlock2-relaunch.txt.
+  - Round 8 on Opus, wt/animflow: route speed + sprint gait + launch accel, then tackling + rest of OOB → prompts/anim8-relaunch.txt.
+- **QB cone drawing built** (Sonnet, wt/qbcone f983cc4, off wt-j10s): merge right AFTER J10a merges.
+- **DeepSeek running (relaunched ~20:22 with prompts/cont6-<name>.txt):** realismj13 (audibles re-verify on merged tree), realismj37 (QB–WR chemistry), fut15 (#15 injury decisions phase A), fut28 (#28 coordinators C1; engine probe 34/34). Waiter: `~/gridiron-work/wait-any.sh realismj13 realismj37 fut15 fut28` (background).
 
 ## Decisions and why
-- Merge one job at a time; keep both sides of conflicts (toggle blocks at playsim.ts top; when two jobs edit the same expression, take HEAD's line and add the new job's term — e.g. run `const edge` keeps J8a/J8a-2 terms + J12 `- spyQbRun`; finishTackler = J8c pick if on, else J8a, else uniform).
-- Accept: OFF byte-identical, eq 20/20, no band worse than baseline by >0.2, single-seed misses with pooled 6-seed drift ~±0.1 (points ±0.25 with SE ≥0.2 tolerated as noise), LARGE individual spread. Use a Sonnet sub-agent to read verify files and return verdicts (keeps this chat lean).
-- Stale-base job that gives up: either commit WIP + `git merge main` into its worktree and relaunch with a continuation, or (if conflicts are heavy) save its diff and relaunch fresh off main (J3 → J3b).
-- check-broadcast failures after engine merges are presentation (camera/shed checks are stream-sensitive) → hand to an Opus animation round, don't block engine merges.
+- Merge one at a time; keep both sides of conflicts (playsim.ts toggle blocks; outcome spreads `...j12Fields, ...scoutFields, ...j13Fields/visionFields`; `passDepth: passAir, passConceptDepth`). Stale-base job: commit WIP in worktree, `git merge main`, resolve, then relaunch a continuation.
+- Accept: OFF byte-identical, eq 20/20, no band worse than main >0.2; a drift that IS the intended effect is OK. Never accept shrinking an individual effect to hit bands (J3c tried steerRate 0.03 → restored 0.14).
+- check-broadcast failures after engine merges = presentation → animation round. Full check-broadcast currently aborts early at "DOUBLE shown 19/23" (animflow 6d) on main — pre-existing; new blocks are verified standalone.
+- Push/Pages only on the user's explicit ok for that push (`git push origin main`; `zsh scripts/publish-pages.sh main`). Before push: build, lint 4, `calib.mjs 33333 20 --eq` = 20/20, secret scan.
 
 ## Next steps
-1. Re-arm waiters: `~/gridiron-work/wait-ds6.sh 3b` and `~/gridiron-work/wait-ds6.sh 13` (background).
-2. As each lands: Sonnet review of verify → commit in worktree → merge → gates (build, lint 4, hex, contrast, broadcast) → queue main calib (`zsh calib-slot.sh && REPO=<main> node --import ~/gridiron-work/loader.mjs calib.mjs 33333,2222,5150 500 --eq > logs/main-calib-<job>.out`).
-3. After J3b merges: re-verify parked J2 4th-down (wt-realismj2, 6dcb33f) on main; then write the full J10 brief from prompts/realism-j10-stub.txt + j8-common.txt (QB vision cone/progressions/checkdowns/placement circle/throw power/pocket presence), then J11 (stub) after J10.
-4. Free DeepSeek slots (max 7): next FUTURES #36 scouting reports (needs J9+J12, both in), then #37+ in FUTURES order.
-5. Next animation round (Opus, brief pattern prompts/anim6d.txt): J13 audible/hot-route/slide visuals, J12 "QB fooled" visual, return TDs crossing the goal line (needs an engine-side probe allowance), maxFrameDelta 8.6 on seed 44444 (late pursuit on long runs).
+1. Re-arm the DeepSeek waiter (above). Check the 3 Claude agents' results/commits; relaunch any that died from its brief.
+2. J10a lands → review logs/j10s-verify.out → merge wt-j10s → gates → merge wt-qbcone → backlog row → `rm ~/gridiron-work/.j10s-live` if still there. Then launch J10b (prompts/realism-j10-stub.txt) and the anim round for audible/read visuals.
+3. As DeepSeek jobs land: verify, commit in worktree, merge, gates, backlog. Then queued: realism-jind (prompts/realism-jind.txt — replace 13 relAvg unit averages; also fold in the punts residual), #52 WR reads (prompts/realism-j52.txt, after J10a + J37), phase 2 of #15/#27/#28 (specs NEXT_PHASE_FUT_*.md: B/C, DF2/DF3, C2/C3), J11, #7/#24/#26 (have specs), #39–51.
+4. Keep ≤5 DeepSeek jobs; launch only when load < 8.
 
 ## Gotchas
-- DeepSeek often ends its turn early or hits the 45-min hard timeout: every brief needs STEP 0 "write a DRAFT verify first" + WAITING RULES (≤8-min foreground chunks). Relaunch with a short CONTINUATION prompt naming exactly what is left.
-- A job's verify written after its wrapper died = orphan OpenCode session still editing (J3 did this). Check `pgrep -f 'ds-push-<name> '` and the worktree mtimes before merging.
-- `git stash` is shared across worktrees; jobs must never stash/checkout/reset. Use `pgrep -f … | wc -l`, never `pgrep -fl` on broad patterns.
-- zsh: `grep --include=*.ts` fails (glob) — use plain `grep -rn … src`.
-- Keep the chat lean: grep verify summaries, delegate reviews to Sonnet; this chat hit 235k tokens.
+- **Mass exits (exit 130 on all jobs at once)** happened 3× today. One cause was ds-push `stop_session` (interrupting one OpenCode session kills all) — now commented out in ~/.claude/bin/ds-push. 20:20 happened anyway (unknown cause). Relaunch with prompts/cont6-*.txt (generic continuation header + original brief).
+- ds-push watchdog now IDLE 1800 s / HARD 5400 s (for new launches).
+- Load control: calib-slot.sh = 3 slots at load < 8 (J10a priority via ~/gridiron-work/.j10s-live). **sim-governor.sh** (nohup, MAXRUN=5) SIGSTOPs node sims beyond 5, resumes oldest-first, j10s first (≤4), and keeps sims of dead jobs listed in ~/gridiron-work/.governor-dead paused. Stop it: `touch ~/gridiron-work/.governor-stop`. Restart after reboot if load is high. Claude may NOT kill DeepSeek's leftover node sims (classifier) — add their worktree to .governor-dead or give the user a pkill line.
+- calib.mjs runs sometimes end without the EQUIVALENCE line (killed/paused) — re-run `calib.mjs 33333 20 --eq` alone.
+- Relative paths in `git worktree add` resolve from the repo — always use absolute ~/gridiron-work/wt/<name>.
+- Keep this chat lean: grep verify summaries, delegate reviews; chat 8 hit 280k.
 
 ## Key files
-PLAYTEST_BACKLOG.md rows 323–338 (this chat) · FUTURES.md (#32/#34/#35 ✅) · ~/gridiron-work/prompts/ (briefs: realism-j3b, realism-j13, anim6d, j8-common, realism-j10-stub, realism-j11-stub) · ~/gridiron-work/logs/ (verify, main-calib-*, animflow-report.out) · ~/gridiron-work/wait-ds6.sh (waiter: args = job suffixes) · ~/gridiron-work/calib-slot.sh
+PLAYTEST_BACKLOG.md rows 348–368 · FUTURES.md (#52 WR reads, #53 = J10a) · ~/gridiron-work/prompts/ (relaunch briefs above, cont6-*, realism-jind, realism-j52, j10/j11 stubs) · ~/gridiron-work/logs/ (j10s-*, *-verify.out, animflow-report.out, sim-governor.log) · ~/gridiron-work/{calib-slot.sh, sim-governor.sh, wait-any.sh, ds-wt}

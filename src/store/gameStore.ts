@@ -172,7 +172,15 @@ import {
 } from '../game/engine/faFrenzy'
 import { projectCap } from '../game/engine/capPlan'
 import { buildDraftTradeDownOffers, buildDraftTradeUpTargets, nextUserPickSlot } from '../game/engine/draftTrades'
-import { accessFor } from '../game/engine/access'
+import {
+  DEFAULT_PHILOSOPHY,
+  PHILOSOPHY_STEPS,
+  withAxis,
+  type DraftPhilosophy,
+  type PhilosophyAxis,
+  type PhilosophyStep,
+} from '../game/engine/draftRoom'
+import { accessFor, canAdvise, canDecide } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
 import { STARTERS, depthAt, depthGroup, moveInDepth, resetDepth, setStarterInDepth, topPlayers } from '../game/engine/depth'
@@ -702,6 +710,14 @@ interface GameStore {
   toggleConviction: (prospectId: string) => void
   /** K4: add/remove a prospect from your red-flag list for this draft (max 2). */
   toggleRedFlag: (prospectId: string) => void
+  /**
+   * FUTURES #27 DF1: set one axis of your club's draft philosophy for this
+   * draft. Gated to rungs that can advise on the draft (an Assistant Director
+   * gets heard, the GM decides).
+   */
+  setDraftPhilosophy: (axis: PhilosophyAxis, step: PhilosophyStep) => void
+  /** FUTURES #27 DF4: give AI clubs hashed draft identities (off by default). */
+  setAiDraftIdentities: (on: boolean) => void
   /** K1: pick (or clear) this week's game-plan wrinkle for a side. */
   pickWrinkle: (side: 'off' | 'def', id: string) => void
   /** K2: choose this offseason's install plan for the coming season. */
@@ -2519,6 +2535,33 @@ export const useGame = create<GameStore>((set, get) => ({
       career: { ...career, redFlags: { season: world.season, ids } },
       tick: get().tick + 1,
     })
+    get().save()
+  },
+
+  setDraftPhilosophy: (axis, step) => {
+    const career = get().career
+    if (!career) return
+    // An Assistant Director gets heard; the GM decides. Below advise (or off the
+    // football side) the room is not yours to set.
+    if (!canAdvise(career, 'draft') && !canDecide(career, 'draft')) return
+    // Steps are per axis: reject a value that isn't one of the axis' three steps.
+    if (!(axis in PHILOSOPHY_STEPS)) return
+    if (!PHILOSOPHY_STEPS[axis].includes(step)) return
+    // A vector set for an earlier season has expired; start from the defaults.
+    const live = career.draftPhilosophy?.season === world.season ? career.draftPhilosophy : undefined
+    const base: DraftPhilosophy = live ? { ...DEFAULT_PHILOSOPHY, ...live } : { ...DEFAULT_PHILOSOPHY }
+    set({
+      career: { ...career, draftPhilosophy: { ...withAxis(base, axis, step), season: world.season } },
+      tick: get().tick + 1,
+    })
+    get().save()
+  },
+
+  setAiDraftIdentities: (on) => {
+    const career = get().career
+    if (!career) return
+    set({ career: { ...career, aiDraftIdentities: on }, tick: get().tick + 1 })
+    get().showToast(on ? 'AI draft identities ON — every GM builds his own board.' : 'AI draft identities OFF.')
     get().save()
   },
 
@@ -8075,6 +8118,11 @@ export async function careerSmoke(
         .slice(0, RED_FLAG_TOP_N)
         .find((p) => !top2.some((t) => t.id === p.id) && isRedFlaggable(world, p.id))
       if (flagged) exercise('toggleRedFlag', () => get().toggleRedFlag(flagged.id))
+    }
+    // FUTURES #27 DF1: stand for something in the draft room.
+    if (canAdvise(career, 'draft') || canDecide(career, 'draft')) {
+      exercise('setDraftPhilosophy', () => get().setDraftPhilosophy('board', 'Need'))
+      exercise('setDraftPhilosophy', () => get().setDraftPhilosophy('characterRisk', 'Avoid'))
     }
     // G1: put three players who aren't yours on the shadow board.
     if (canShadow(career)) {

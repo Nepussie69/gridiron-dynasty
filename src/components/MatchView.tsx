@@ -29,9 +29,10 @@ import { usePhone } from '../ui/hooks'
 import { challengeThreshold, type ChallengeState, type PlayReview } from '../game/engine/review'
 import { ReviewCard } from './ReviewCard'
 import BroadcastBoundary from './broadcast/BroadcastBoundary'
+import { QbConeSvg } from './broadcast/visionConeSvg'
 import { buildLivePlay, createLiveBroadcast, latchLiveView, reportFallback, useLiveView, type LiveBroadcast } from './broadcast/liveView'
 import { autoStartLevel } from './broadcast/quality'
-import { deviceKey, setAutoQState, useViewSettings } from './broadcast/viewSettings'
+import { deviceKey, qbConeOn, setAutoQState, useViewSettings } from './broadcast/viewSettings'
 import { gameDayReplay, replayable, type ReplayPlan } from './broadcast/replay'
 import type { BroadcastAnim } from './broadcast/animData'
 import type { LivePlay, LiveReplayPhase } from './broadcast/liveView'
@@ -466,6 +467,7 @@ export function MatchView() {
       hudBottomInset: PILL_CLEAR_PX[view.cameraProfile],
       onFallback: (f) => reportFallback(f),
       onAutoQ: (a) => setAutoQState(a),
+      cameraAngle: vsettings.cameraAngle,
     })
     liveCtlRef.current = ctl
     if (ctl) {
@@ -479,7 +481,7 @@ export function MatchView() {
       ctl?.destroy()
       if (liveCtlRef.current === ctl) liveCtlRef.current = null
     }
-  }, [broadcastLive, liveCanvas, homeId, awayId, view.cameraProfile, view.live, vsettings.quality, reduced])
+  }, [broadcastLive, liveCanvas, homeId, awayId, view.cameraProfile, view.live, vsettings.quality, vsettings.cameraAngle, reduced])
 
   // Load each recorded play into the live view (the PlayAnim is the truth; only
   // the drawing differs from the top-down view).
@@ -585,6 +587,7 @@ export function MatchView() {
       live: 'topdown',
       hudBottomInset: PILL_CLEAR_PX[view.cameraProfile],
       onFallback: (f) => reportFallback(f),
+      cameraAngle: vsettings.cameraAngle,
     })
     if (!ctl) {
       queueMicrotask(close)
@@ -603,7 +606,7 @@ export function MatchView() {
       ctl.destroy()
       if (overlayCtlRef.current === ctl) overlayCtlRef.current = null
     }
-  }, [overlayKey, homeId, awayId, view.cameraProfile, view.quality, reduced])
+  }, [overlayKey, homeId, awayId, view.cameraProfile, view.quality, vsettings.cameraAngle, reduced])
   // DEV-only probe hooks (B8 browser review): jump to a play.
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -951,6 +954,9 @@ export function MatchView() {
                   <line x1={gp.x} y1={CENTER_Y + 3.1} x2={gp.x + gp.dir * 0.9} y2={CENTER_Y + 3.1} />
                 </g>
               ))}
+
+              {/* QB vision cone + placement circle (backlog 303; default on in top-down) */}
+              {anim && qbConeOn(vsettings, 'topdown') && <QbConeSvg play={play} anim={anim} t={t} mx={mx} qb={actorMap?.get('qb')} />}
 
               {/* motion trails: ball carrier + targeted receiver (render only) */}
               {anim && trailKeys.map((k) => {

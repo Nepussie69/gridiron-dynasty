@@ -23,6 +23,15 @@ import { clamp, hash32, makeRng } from './rng'
 
 /** How much wider a future read is than the current-class read (spec: ×1.8 / ×2.6). */
 const READ_WIDTH: Record<number, number> = { 1: 1.8, 2: 2.6 }
+/**
+ * The early fog is not static: it melts as the college season plays out, because
+ * there is more film on every prospect each week. Fractions of the extra width
+ * (READ_WIDTH − 1) that have gone by the end of the regular season, and the
+ * regular-season length used to pace it. Week 0/1 keeps the full early fog, so
+ * the read narrows monotonically as `world.week` advances.
+ */
+const SEASON_SHRINK = 0.5
+const REG_WEEKS = 18
 /** The early confidence ceiling until a class turns current (spec: 60 / 35). */
 const CONF_CAP: Record<number, number> = { 1: 60, 2: 35 }
 /** How much of the gap to the hidden true grade one future scout closes (0.2 / 0.1). */
@@ -42,6 +51,16 @@ function horizon(yearsOut: number): 1 | 2 {
 /** The early confidence ceiling for a horizon: 60 (next year) or 35 (two out). */
 export function futureConfidenceCap(yearsOut: number): number {
   return CONF_CAP[horizon(yearsOut)]
+}
+
+/**
+ * How much of the extra future fog has melted by `week` (0 at the opener, up to
+ * `SEASON_SHRINK` by the finale). Monotone non-decreasing in `week`, clamped to
+ * the regular season, so a probe can step weeks and watch the range tighten
+ * without any scouting.
+ */
+export function seasonNarrowing(week: number): number {
+  return clamp((week - 1) / (REG_WEEKS - 1), 0, 1) * SEASON_SHRINK
 }
 
 // ── Deriving the class (shared seed arithmetic with refresh) ─────────────────
@@ -139,11 +158,16 @@ export function applyFutureOverlay(world: World, p: DraftProspect): DraftProspec
  * `readProspect`, widens the range ×1.8 (next year) or ×2.6 (two years out), caps
  * the confidence at 60 / 35, never reveals the truth, and replaces the raw
  * consensus number with a round band look ("Day 1 / Day 2 / Day 3").
+ *
+ * `week` (from `world.week`) melts part of that extra width as the college season
+ * plays out — see `seasonNarrowing`. The default 0 keeps the full early fog, so
+ * engine callers that pass no week (and the FP1 probe) are unaffected.
  */
-export function readFuture(career: CareerState, p: DraftProspect, yearsOut = 1): FutureRead {
+export function readFuture(career: CareerState, p: DraftProspect, yearsOut = 1, week = 0): FutureRead {
   const n = horizon(yearsOut)
   const base = readProspect(career, p)
-  const width = Math.max(1, base.width * READ_WIDTH[n])
+  const factor = 1 + (READ_WIDTH[n] - 1) * (1 - seasonNarrowing(week))
+  const width = Math.max(1, base.width * factor)
   const center = base.center
   const lo = clamp(Math.round(center - width), 40, 99)
   const hi = clamp(Math.round(center + width), 40, 99)
@@ -174,7 +198,7 @@ export function readFuture(career: CareerState, p: DraftProspect, yearsOut = 1):
 
 /** Convenience: overlay a scouted read first, then wrap it in the future fog. */
 export function futureReadFor(world: World, career: CareerState, p: DraftProspect, yearsOut = 1): FutureRead {
-  return readFuture(career, applyFutureOverlay(world, p), yearsOut)
+  return readFuture(career, applyFutureOverlay(world, p), yearsOut, world.week)
 }
 
 // ── Scouting a future prospect ───────────────────────────────────────────────
