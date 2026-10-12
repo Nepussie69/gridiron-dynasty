@@ -122,7 +122,11 @@ export const FOURTH_RETUNE = {
   zoneAdj: {
     '1': { own: -0.34, mid: 0.22, opp: 0.98, rz: 0.16 },
     '2-3': { own: -0.5, mid: -0.03, opp: 0.8, rz: -0.32 },
-    '4-6': { own: 0.12, mid: 0.3, opp: 1.1, rz: -0.12 },
+    // Mid 4th&4-6 trimmed after the merge onto the newer main (J3b/J9), whose
+    // league runs ~1 point hotter on 4th&4-6 than the tree these were fitted on;
+    // 0.1 puts the 4th&4-6 cell back under its target without touching the other
+    // distances (the punt/points collateral is set by the total go-rate, not here).
+    '4-6': { own: 0.12, mid: 0.1, opp: 1.1, rz: -0.12 },
     '7+': { own: 0.8, mid: 0.7, opp: 1.24, rz: 0.4 },
   } as Record<FourthDist, Record<FourthZone, number>>,
   /** A trailing club in the 4th quarter leans go: bonus per point of deficit,
