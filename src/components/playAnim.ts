@@ -283,39 +283,55 @@ function recMissedTackles(
  * tackling engagements (the recorded tackler and any gang tackle) and the single
  * terminal event. `opts.from` is when the carrier really has the ball.
  */
-/** animflow r8: warp a tackler's last strides so he ends a body's width off the carrier at `endSec`. */
-function closeOnCarrier(tk: Mover, endPos: Pt, endSec: number): void {
-  const q = posAt(tk.path, endSec)
-  const d = Math.hypot(q.x - endPos.x, q.y - endPos.y)
-  if (d <= 1.0) return
-  const ux = (q.x - endPos.x) / d
-  const uy = (q.y - endPos.y) / d
-  const dx = endPos.x + ux * 0.75 - q.x
-  const dy = endPos.y + uy * 0.75 - q.y
+/**
+ * animflow r8: the tackler is ON the carrier for the last beat of a tackle (wrapping and driving him
+ * for ~0.35 s before they go down), on any sim stream - when his own chase leaves him short then, his
+ * path blends (smoothly, from a window before) into a ride a body's width off the carrier on the side
+ * he came from. Results / spot / credited man unchanged.
+ */
+function closeOnCarrier(tk: Mover, carrier: Mover, endSec: number): void {
+  const tA = Math.max(0.05, endSec - 0.35)
+  const q = posAt(tk.path, Math.min(tA, tk.t))
+  const c = posAt(carrier.path, tA)
+  const d = Math.hypot(q.x - c.x, q.y - c.y)
+  const qe = posAt(tk.path, Math.min(endSec, tk.t))
+  const ce = posAt(carrier.path, endSec)
+  if (d <= 0.9 && Math.hypot(qe.x - ce.x, qe.y - ce.y) <= 1.0) return
+  let ux = q.x - c.x
+  let uy = q.y - c.y
+  if (d < 0.3) {
+    const h = speedVec(carrier.path, tA)
+    ux = -h.x
+    uy = -h.y
+  }
+  const ul = Math.hypot(ux, uy) || 1
+  ux /= ul
+  uy /= ul
   const w = clampN(d / 4, 0.35, 1.1)
-  const t0 = Math.max(0, endSec - w)
-  const src: WP[] = tk.path.slice()
-  const lastSrc = src[src.length - 1]
-  if (lastSrc.t < endSec) src.push({ t: endSec, x: lastSrc.x, y: lastSrc.y })
-  const base = src.slice()
-  const knots = new Set(base.map((p) => p.t))
-  // knots through the warp window so it is a smooth ease, not one long straight jump
-  for (let t = t0 + 0.05; t < endSec; t += 0.05) if (!knots.has(t)) src.push({ t, ...posAt(base, t) })
-  if (!knots.has(endSec)) src.push({ t: endSec, ...posAt(base, endSec) })
-  src.sort((a, b) => a.t - b.t)
-  const out: WP[] = src.filter((p) => p.t < t0)
+  const t0 = Math.max(0, tA - w)
+  const base = tk.path.slice()
+  const out: WP[] = base.filter((p) => p.t < t0)
   out.push({ t: t0, ...posAt(base, t0) })
-  for (const p of src) {
-    if (p.t <= t0) continue
-    const u = clampN((p.t - t0) / Math.max(1e-6, endSec - t0), 0, 1)
+  for (let t = t0 + 0.05; t < endSec + 1e-6; t += 0.05) {
+    const tt = Math.min(t, endSec)
+    const b = posAt(base, Math.min(tt, base[base.length - 1].t))
+    const cc = posAt(carrier.path, tt)
+    const g = 0.62 - 0.12 * clampN((tt - tA) / 0.35, 0, 1)
+    const u = clampN((tt - t0) / Math.max(1e-6, tA - t0), 0, 1)
     const e = u * u * (3 - 2 * u)
-    out.push({ t: p.t, x: clampX(p.x + dx * e), y: clampY(p.y + dy * e) })
+    out.push({ t: tt, x: b.x + (cc.x + ux * g - b.x) * e, y: b.y + (cc.y + uy * g - b.y) * e })
+  }
+  if (out[out.length - 1].t < endSec - 1e-6) {
+    const cc = posAt(carrier.path, endSec)
+    out.push({ t: endSec, x: cc.x + ux * 0.5, y: cc.y + uy * 0.5 })
   }
   tk.path = out
   const last = out[out.length - 1]
   tk.x = last.x
   tk.y = last.y
   tk.t = last.t
+  tk.lastStop = true
+  tk.inHeading = undefined
 }
 
 function recClose(
@@ -346,7 +362,7 @@ function recClose(
   // animflow r8: a tackle is never the carrier stopping alone, on any sim stream - when the
   // tackler's own chase leaves him short at the whistle, his last strides close the gap (a lunge
   // into the carrier from the side he came from). Results / spot / credited man unchanged.
-  if (!opts.td && !opts.outOfBounds && m[tackler] && tackler !== carrierKey) closeOnCarrier(m[tackler], endPos, endSec)
+  if (!opts.td && !opts.outOfBounds && m[tackler] && tackler !== carrierKey) closeOnCarrier(m[tackler], carrier, endSec)
   // A man still locked up on a block who brushes the carrier as he goes by is
   // not the first contact (animflow): only free defenders count.
   const blocks = (REC?.eng ?? []).filter((e) => e.kind === 'block' || e.kind === 'double' || e.kind === 'chip')
