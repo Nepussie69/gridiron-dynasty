@@ -268,12 +268,12 @@ export const J3B = {
   /** Yard line at/inside which a would-be scoring run is a real goal-line plunge. */
   glYard: 93,
   /** League-average chance the POA defender stands the carrier up (the tune).
-   *  Fixed at 0.50: the site average is what lands pooled Rushing TD 0.963→0.913
-   *  over 3 seeds × 500 (band 0.68-0.92, main 0.96) and keeps the spread large.
-   *  0.50 is the optimum of points-drift vs the Rushing-TD cap: the removed TDs cost
-   *  ~4 net points each, so lowering glBase to buy back the last of the drift lets
-   *  Rushing TD back out of band (it sits at 0.913, 0.007 under the 0.92 cap). */
-  glBase: 0.5,
+   *  J3c (re-centre after J3b + J36 merged): raised 0.50→0.56. With the 4th down
+   *  included (glMaxDown 4) this lands pooled Rushing TD 0.88-0.91 over 3 seeds ×
+   *  500 (band 0.68-0.92) and keeps Punts on the 3.6 floor while the individual
+   *  spread is unchanged. On the merged tree the pre-J3b 0.50 left Rushing TD
+   *  0.93-0.95 — over the cap — because J36's offence steer already tilts the mean. */
+  glBase: 0.56,
   /** Per rating-point slope on (defender blend − carrier blend); > 0 = defence wins.
    *  Sizes the individual spread: carrier elite-vs-poor TD% 86.8 vs 37.7 (49 pts),
    *  POA defender 37.7 vs 71.7 (34 pts). */
@@ -281,13 +281,13 @@ export const J3B = {
   /** Clamp on the stuff chance. */
   glLo: 0.02,
   glHi: 0.72,
-  /** Down after which a would-be goal-line score is left to the base engine. On a
-   *  fourth-down plunge the base engine's own handling (the short-yardage push, the
-   *  coach's go-for-it call) already owns the conversion; the J3b stand is a
-   *  once-per-series rep. Without this the last-down plunge — the one outcome that
-   *  cannot be recovered on a later down — moved the league's points by ~0.3 a
-   *  team-game for no extra realism. */
-  glMaxDown: 3,
+  /** Down after which a would-be goal-line score is left to the base engine. On the
+   *  pre-merge tree this was 3 (the base engine's short-yardage push owns a fourth-
+   *  down plunge). The merged tree needs the 4th down included too: J36's offence
+   *  steer erodes the goal-line stand's effect on the mean, and glMaxDown 4 — with
+   *  glBase 0.56 — is what brings pooled Rushing TD (0.88-0.91) and Punts (>=3.6)
+   *  both into band on all 3 seeds × 500. */
+  glMaxDown: 4,
   /** Ball spot at/inside which the base engine already owns the plunge: the offence
    *  is on the doorstep, so the stand is not re-rolled down after down. 99 = the
    *  1-yard line (the base model's short-yardage push converts there). */
@@ -309,8 +309,12 @@ export const J3B = {
   /** Fixed centre for the point-of-attack defender blend: the measured site mean of
    *  (BSH·.4 + STR·.3 + TAK·.3) over the DE/DT who play the gap (753 DE, 604 DT). */
   defCenter: 83.3,
-  /** Missed tackles: small league lift added to R5's `missBase`. */
-  mtBase: 0.0012,
+  /** Missed tackles: small league lift added to R5's `missBase`. Lowered from the
+   *  pre-merge +0.0012 — on the merged tree (J36's steer) the lift above about
+   *  -0.0008 is what pushed Missed-tackle % to 13.3 (band 11-13). -0.0008 sits it
+   *  at 13.0 on the worst seed (33333) while Missed tackles stay >= 7.0 on the
+   *  lowest (5150 7.05) and Rushing TD stays inside the cap. */
+  mtBase: -0.0008,
   /** Extra per-rating-point slopes on the tackler and the carrier (on top of R2's). */
   mtDefW: 0.003,
   mtCarW: 0.003,
@@ -3252,8 +3256,14 @@ export const J36 = {
   maxTargets: 2,
   /** AI clubs auto-key the top findings from their own staff's report. */
   autoTargets: 2,
-  /** Share of snaps the targeting side actually keys on the flagged player. */
-  steerRate: 0.14,
+  /** Share of snaps the targeting side actually keys on the flagged player.
+   *  J3c (re-centre after J3b + J36 merged): lowered 0.14→0.03 — J3b's goal-line
+   *  stand already drops Punts, so at 0.14 the merged tree's Punts fell to 3.49 on
+   *  seed 33333 (band 3.6-4.4). 0.03 restores Punts (3.60-3.85 across the 3 seeds)
+   *  without costing the Rushing-TD cap, and is the only value that holds MT% on
+   *  seed 33333 at 13.0. (0.04 keeps the stream-fragile `animflow 6c` check-broadcast
+   *  check green, but pushes 33333 MT% to 13.1 — see logs/j3c-verify.out.) */
+  steerRate: 0.03,
   /** A weak tackle-miss edge → run-yard scale. */
   runYardScale: 8,
   /** Sack-chance multiplier per unit of a weak OT's edge (speed rushers win). */
