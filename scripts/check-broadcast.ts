@@ -88,7 +88,7 @@ import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
 import { carrierMove, effAttrs, effRating, fatigueMap, tackleStyle, tiredness } from '../src/components/animRatings.ts'
-import { attrOf, CRISP_RR } from '../src/components/playAnim.ts'
+import { attrOf, CRISP_RR, paceFor } from '../src/components/playAnim.ts'
 import { creditedIds, offenseKeys, recordedEleven } from '../src/components/jersey.ts'
 import { playerAttrs } from '../src/game/data/ratings.ts'
 import type { Player } from '../src/game/types.ts'
@@ -2605,6 +2605,48 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(spyOff.length >= 5 && med(spyOff) <= 1.5, `spy lateral offset from the QB median ${med(spyOff)?.toFixed(2)} yd (n ${spyOff.length})`)
     assert.ok(keyD.length >= 20 && biteD.length >= 10 && med(keyD) < med(biteD) - 1, `read key ${med(keyD)?.toFixed(2)} vs biters ${med(biteD)?.toFixed(2)} yd from the carrier at 1.0 s`)
     assert.ok(fillDown.length >= 40 && med(fillDown) >= 1 && med(fillDown) > med(otherDown) + 1, `alley filler downhill ${med(fillDown)?.toFixed(2)} vs ${med(otherDown)?.toFixed(2)} yd at 1.2 s`)
+  })
+
+  ok('animflow r8: routes are run at route speed - wideouts\' stems (0.9 s to the first break, running upfield) at a median >= 0.75 x top and >= 75% of those frames in the sprint gait (>= 6 yd/s); WR play-max p50 in the NFL band (7.8-9.6 yd/s); WRs at >= 0.6 x top 1.0 s after the snap', () => {
+    const ratio: number[] = []
+    const mx: number[] = []
+    const launch: number[] = []
+    let spr = 0
+    let all = 0
+    games6d(4, 19, (play, anim, actors) => {
+      if (play.type !== 'pass' || play.result.startsWith('Sack') || play.spike) return
+      const D = anim.duration / 1000
+      const th = (anim.events ?? []).find((e) => e.kind === 'throw')
+      if (!th) return
+      for (const k of ['wr0', 'wr1', 'wr2']) {
+        const a = anim.actors.find((x) => x.key === k)
+        if (!a) continue
+        const sp = (s: number) => { const p0 = posAt(a.path, (s - 0.05) / D); const p1 = posAt(a.path, (s + 0.05) / D); return { v: Math.hypot(p1.x - p0.x, p1.y - p0.y) / 0.1, vx: (p1.x - p0.x) / 0.1 } }
+        const vs: number[] = []
+        let best = 0
+        for (let s = 0.3; s <= th.t * D; s += 0.05) {
+          const q = sp(s)
+          best = Math.max(best, q.v)
+          if (s > 0.9 && q.v < 0.6 * best) break
+          if (s >= 0.9 && q.vx >= 2) vs.push(q.v)
+        }
+        let m2 = 0
+        for (let s = 0.2; s < D - 0.05; s += 0.05) m2 = Math.max(m2, sp(s).v)
+        mx.push(m2)
+        // the launch: at snap + 1.0 s he is well into his stem (NFL: ~60-70% of top)
+        launch.push(sp(1.14).v / paceFor(actors.get(k), a.role).top)
+        if (vs.length < 4) continue
+        vs.sort((x, y) => x - y)
+        ratio.push(vs[Math.floor(vs.length / 2)] / paceFor(actors.get(k), a.role).top)
+        for (const v of vs) { all++; if (v >= 6) spr++ }
+      }
+    })
+    const med = (a: number[]) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]
+    assert.ok(ratio.length >= 200, `coverage ${ratio.length}`)
+    assert.ok(med(ratio) >= 0.75, `stem median ${med(ratio).toFixed(2)} x top`)
+    assert.ok(spr / all >= 0.75, `sprint-gait share of stem frames ${(100 * spr / all).toFixed(1)}%`)
+    assert.ok(med(mx) >= 7.8 && med(mx) <= 9.6, `WR play-max p50 ${med(mx).toFixed(2)} yd/s`)
+    assert.ok(med(launch) >= 0.6, `WR speed at snap + 1.0 s ${med(launch).toFixed(2)} x top`)
   })
 
   ok('animflow r8: an out-of-bounds end (not a clock step-out) is forced - a defender within 2.2 yd, ahead of or inside the carrier, as he goes out', () => {

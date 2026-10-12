@@ -623,6 +623,8 @@ export class ActorLayer {
       f.x = w.x
       f.y = w.y
       f.speed = s.v
+      // animflow r8: the drive phase (accelerating) leans further forward.
+      f.accel = this.D > 0 ? (s.v - this.sample(tr, t - 0.12 / this.D).v) / 0.12 : 0
       f.phase = s.ph
       f.heading = dir === 1 ? s.hd : s.hd + Math.PI
       let st = this.poseFor(tr, t, f)

@@ -283,6 +283,41 @@ function recMissedTackles(
  * tackling engagements (the recorded tackler and any gang tackle) and the single
  * terminal event. `opts.from` is when the carrier really has the ball.
  */
+/** animflow r8: warp a tackler's last strides so he ends a body's width off the carrier at `endSec`. */
+function closeOnCarrier(tk: Mover, endPos: Pt, endSec: number): void {
+  const q = posAt(tk.path, endSec)
+  const d = Math.hypot(q.x - endPos.x, q.y - endPos.y)
+  if (d <= 1.0) return
+  const ux = (q.x - endPos.x) / d
+  const uy = (q.y - endPos.y) / d
+  const dx = endPos.x + ux * 0.75 - q.x
+  const dy = endPos.y + uy * 0.75 - q.y
+  const w = clampN(d / 4, 0.35, 1.1)
+  const t0 = Math.max(0, endSec - w)
+  const src: WP[] = tk.path.slice()
+  const lastSrc = src[src.length - 1]
+  if (lastSrc.t < endSec) src.push({ t: endSec, x: lastSrc.x, y: lastSrc.y })
+  const base = src.slice()
+  const knots = new Set(base.map((p) => p.t))
+  // knots through the warp window so it is a smooth ease, not one long straight jump
+  for (let t = t0 + 0.05; t < endSec; t += 0.05) if (!knots.has(t)) src.push({ t, ...posAt(base, t) })
+  if (!knots.has(endSec)) src.push({ t: endSec, ...posAt(base, endSec) })
+  src.sort((a, b) => a.t - b.t)
+  const out: WP[] = src.filter((p) => p.t < t0)
+  out.push({ t: t0, ...posAt(base, t0) })
+  for (const p of src) {
+    if (p.t <= t0) continue
+    const u = clampN((p.t - t0) / Math.max(1e-6, endSec - t0), 0, 1)
+    const e = u * u * (3 - 2 * u)
+    out.push({ t: p.t, x: clampX(p.x + dx * e), y: clampY(p.y + dy * e) })
+  }
+  tk.path = out
+  const last = out[out.length - 1]
+  tk.x = last.x
+  tk.y = last.y
+  tk.t = last.t
+}
+
 function recClose(
   m: Record<string, Mover>,
   carrierKey: string,
@@ -304,6 +339,10 @@ function recClose(
   if (!carrier || !(endSec > 0)) return
   const from = Math.max(0.05, Math.min(opts.from ?? 0.2, endSec))
   const endPos = posAt(carrier.path, endSec)
+  // animflow r8: a tackle is never the carrier stopping alone, on any sim stream - when the
+  // tackler's own chase leaves him short at the whistle, his last strides close the gap (a lunge
+  // into the carrier from the side he came from). Results / spot / credited man unchanged.
+  if (!opts.td && !opts.outOfBounds && m[tackler] && tackler !== carrierKey) closeOnCarrier(m[tackler], endPos, endSec)
   // A man still locked up on a block who brushes the carrier as he goes by is
   // not the first contact (animflow): only free defenders count.
   const blocks = (REC?.eng ?? []).filter((e) => e.kind === 'block' || e.kind === 'double' || e.kind === 'chip')
@@ -580,9 +619,11 @@ const ACC_CAP: Record<string, number> = {
   OL: 3.6, K: 3.4, P: 3.4, QB: 4.2, RB: 5.3, FB: 5.0, WR: 6.0, SLOT: 6.0, TE: 5.4, DL: 4.8, LB: 5.2, CB: 4.6, S: 4.6,
 }
 const ACC_CAP_K = 1
+// animflow r8: NFL tracking play-max bands (yd/s): WR / CB ~8-9.5 (the fastest ~10), RB ~9-9.8,
+// S ~8.5-9.5, LB / TE ~7.5-9, DL ~7-8.5, OL ~5.5-6.8.
 const ROLE_CAP: Record<string, number> = {
-  OL: 6.4, K: 6.6, P: 6.6, QB: 9.0, RB: 9.3, FB: 7.6,
-  WR: 9.6, TE: 8.4, DL: 8.2, LB: 8.6, CB: 9.4, S: 9.2,
+  OL: 6.8, K: 7.0, P: 7.0, QB: 9.4, RB: 9.9, FB: 8.2,
+  WR: 10.2, SLOT: 10.2, TE: 9.0, DL: 8.6, LB: 9.2, CB: 10.0, S: 9.8,
 }
 
 /**
@@ -593,7 +634,9 @@ export function paceFor(p: Player | undefined, role = ''): Pace {
   const spd = attrOf(p, 'SPD')
   const acc = attrOf(p, 'ACC')
   const cap = ROLE_CAP[role] ?? 9.6
-  const top = clampN(5.6 + (spd - 60) * 0.085, 3.4, cap)
+  // animflow r8: 6.6 + (SPD - 60) x 0.088: 99 ~ 10.0, 90 ~ 9.2, 80 ~ 8.4, 70 ~ 7.5 yd/s (was 5.6 + ...
+  // x 0.085: a 70-speed man topped out at 6.5 yd/s, 13 mph - a jog for an NFL skill player).
+  const top = clampN(6.6 + (spd - 60) * 0.088, 3.4, cap)
   const ramp = clampN(1.1 - (acc - 60) * (0.65 / 39), 0.45, 1.1)
   // animflow r5: real acceleration caps (NFL tracking p95 ~2.3-3.9 yd/s²; the
   // caps sit a little above, ACC still orders players under them).
@@ -616,8 +659,26 @@ function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; vE
   const floor = 0.7
   const acc = Math.max(0.5, pace.acc)
   const vEnd = opts.vEnd
+  // animflow r8 (user: "slow at the very start"): a tapered launch - the drive steps accelerate
+  // hardest (~1.2x the man's rate) and it fades as he nears top speed (~0.5x), as in NFL tracking
+  // (skill players ~60-70% of top in ~1 s, ~90% by ~2 s), instead of one flat rate. ACC still
+  // orders players (it scales the whole curve).
+  const H = 0.05
+  const nH = Math.min(4000, Math.ceil(L / H) + 2)
+  const accV = new Float64Array(nH + 1)
+  accV[0] = v0
+  for (let i = 1; i <= nH; i++) {
+    const v = accV[i - 1]
+    const ai = acc * Math.max(0.35, LAUNCH_HI - LAUNCH_FADE * Math.min(1, v / Math.max(0.1, pace.top)))
+    accV[i] = Math.min(pace.top, Math.sqrt(v * v + 2 * ai * H))
+  }
+  const launch = (s: number) => {
+    const f = Math.max(0, s) / H
+    const i = Math.min(nH - 1, Math.floor(f))
+    return accV[i] + (accV[i + 1] - accV[i]) * Math.min(1, f - i)
+  }
   const speedAt = (s: number) => {
-    const a = Math.min(pace.top, Math.sqrt(v0 * v0 + 2 * acc * Math.max(0, s)))
+    const a = Math.min(pace.top, v0 >= pace.top ? v0 : launch(s))
     // animflow r4: brake into a cut and come out of it at vEnd (a cut costs speed).
     if (!stop && vEnd != null) return Math.max(floor, Math.min(a, Math.sqrt(vEnd * vEnd + 2 * acc * Math.max(0, L - s))))
     if (!stop) return Math.max(floor, a)
@@ -1559,8 +1620,11 @@ const RUN_FREE_MIN = 0.36
 const STRIDE_V = 4.2
 /** animflow r8 (302): the run-up (yd) into an in-stride catch from a settled window. */
 const STRIDE_RUNUP = 3.2
-/** animflow r8 (302): the slowest stem pace (share of top speed) for an in-stride route. */
-const STRIDE_PACE = 0.52
+/** animflow r8: the slowest stem pace (share of top speed) any route is run at (NFL ~0.85-1). */
+const ROUTE_PACE_MIN = 0.85
+/** animflow r8: the tapered launch - acceleration = rate x (LAUNCH_HI - LAUNCH_FADE x v / top). */
+const LAUNCH_HI = 1.2
+const LAUNCH_FADE = 0.55
 /** animflow r6c: a pass rusher's speed coming out of his move (yd/s; BDB 2023 pressures: 3.6 at the shed). */
 const SHED_V0 = 3.6
 const CONTACT = 0.9 // yd between a blocker's and his rusher's centres (hands on, leaning in)
@@ -2764,8 +2828,9 @@ function routeRunRating(p: Player | undefined, depth: number): number {
 }
 
 /** Run a route: high route running = a crisp near-stop cut, low = a rounded drift. */
-function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1, through = 0, flat = false) {
-  const v0 = 0
+function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace = 1, through = 0, flat = false, vIn = 0) {
+  // animflow r8: out of the release he is already moving (no stop between the jab and the stem).
+  const v0 = vIn
   const saved = mv.pace
   // The stem can be run under control (animflow round 2: timed to the drop);
   // out of the break he is at full speed again.
@@ -2799,10 +2864,14 @@ function runRoute(mv: Mover, pts: Pt[], breakIdx: number, rr: number, stemPace =
   // of the league plants and snaps, the lower half rounds the break.
   const crisp = rr >= CRISP_RR
   stem()
-  mv.run(pts.slice(0, breakIdx + 1), { v0, stop: true })
+  // animflow r8: he sinks his hips and cuts at speed - a crisp route runner drops to ~a third of his
+  // speed in the plant and is out of it fast; a rounded break keeps more speed but drifts (was a
+  // full stop at every break: routes read as stop-and-go jogging).
+  const vCut = saved.top * (crisp ? clampN(0.36 - (rr - CRISP_RR) * 0.004, 0.28, 0.36) : 0.5)
+  mv.run(pts.slice(0, breakIdx + 1), { v0, stop: false, vEnd: Math.min(vCut, mv.pace.top) })
+  const vOut = Math.min(vCut, mv.pace.top)
   mv.pace = saved
-  if (crisp) mv.hold(clampN(0.04 + (rr - CRISP_RR) * 0.0055, 0.04, 0.12))
-  mv.run(ext(pts.slice(breakIdx + 1), pts[breakIdx]), { v0: 0, stop: true })
+  mv.run(ext(pts.slice(breakIdx + 1), pts[breakIdx]), { v0: vOut, stop: true, cut: true })
 }
 
 // ── coverage look (backlog 151) ───────────────────────────────────────────────
@@ -4013,8 +4082,10 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const releaseOf = (k: string): number => {
     if (screen || (k === 'rb' && chipped)) return 0
     const rls = attrNum(m[k].player, 'RLS', 70)
-    const base = k === 'rb' || k === 'te' || k === 'fb' ? 0.32 : bucket === 'quick' ? 0.12 : 0.3
-    return clampN(base - (rls - 75) * 0.006 + hash(seed + k.length * 13 + 7) * 0.18, 0.05, 0.65)
+    // animflow r8: a quicker release (he is into his stem at speed ~1 s after the snap, NFL), and
+    // each man his own draw (the hash used to give wr0 / wr1 / wr2 the same one).
+    const base = k === 'rb' || k === 'te' || k === 'fb' ? 0.26 : bucket === 'quick' ? 0.1 : 0.2
+    return clampN(base - (rls - 75) * 0.005 + hash(seed + k.charCodeAt(k.length - 1) * 3.7 + k.length * 13 + 7) * 0.14, 0.05, 0.5)
   }
   /** Run receiver k: the release at the line, then his route at `pace` of his speed. */
   const runRecv = (k: string, pace: number, through = 0, flat = false) => {
@@ -4028,7 +4099,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     }
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const breakIdx = pts.length >= 3 ? pts.length - 2 : -1
-    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace, through, flat)
+    runRoute(m[k], pts, breakIdx, routeRunRating(m[k].player, def.depth), pace, through, flat, rel > 0.04 ? carrySpeed(m[k]) : 0)
     return { pts, breakIdx }
   }
   const endX0 = clampX(10 + play.endYard)
@@ -4121,9 +4192,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // target open when the QB wants to throw.
   let bestPace = 1
   let bestErr = Infinity
-  // animflow r8 (302): an in-stride route is run at >= ~half speed (a 0.36 stem was a ~3 yd/s
-  // walk into the catch); a receiver open early is met as he comes open (relGoal below).
-  for (let pace = 1; pace >= (stride ? STRIDE_PACE : 0.5) - 1e-9; pace -= 0.04) {
+  // animflow r8 (user: "route running looks slow"): routes are run at NFL route speed (>= 85% of
+  // top on the stem); a man open early settles in the window / the ball comes out as he is open.
+  for (let pace = 1; pace >= ROUTE_PACE_MIN - 1e-9; pace -= 0.03) {
     const r = planTarget(pace).rel
     const err = Math.abs(r - Math.max(wantRel, minRel)) + (r < minRel ? 5 + (minRel - r) : 0)
     if (err < bestErr) {
@@ -4156,7 +4227,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       const hl = Math.hypot(hx, hy) || 1
       hx /= hl
       hy /= hl
-      const jog = 4.4
+      const jog = 5.6
       let d = jog * (late - catchSec)
       // Room before the sideline: turn back inside rather than run out.
       const yRoom = hy > 0 ? FIELD_H - 2 - m[tgt].y : m[tgt].y - 2
