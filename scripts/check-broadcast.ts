@@ -2799,7 +2799,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
 }
 
 // QB cone (backlog 303/306/307/309): at the release the cone points within ~10 deg of the target and
-// the ring radius equals the recorded placeRadiusYd; the toggle defaults off in 2.5D, on top-down.
+// the ring radius equals the recorded placeRadiusYd; the toggle defaults on in both views.
 {
   const { qbConeAt } = await import('../src/components/broadcast/visionCone.ts')
   const vs = await import('../src/components/broadcast/viewSettings.ts')
@@ -2808,9 +2808,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   const { buildPlayAnim, posAt } = await import('../src/components/playAnim.ts')
   const { actorPlayers } = await import('../src/components/jersey.ts')
   ok('QB cone: pass plays aim within 10 deg of the target at release; ring radius == placeRadiusYd; defaults off (2.5D) / on (top-down)', () => {
-    assert.equal(vs.qbConeOn({ qbCone: null }, 'broadcast'), false)
+    assert.equal(vs.qbConeOn({ qbCone: null }, 'broadcast'), true)
     assert.equal(vs.qbConeOn({ qbCone: null }, 'topdown'), true)
-    assert.equal(vs.qbConeOn({ qbCone: 'on' }, 'broadcast'), true)
+    assert.equal(vs.qbConeOn({ qbCone: 'off' }, 'broadcast'), false)
     assert.equal(vs.qbConeOn({ qbCone: 'off' }, 'topdown'), false)
     store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
     const world = store.getWorld()

@@ -6,7 +6,7 @@
 //   gd.view.replays  'big' | 'all' | 'off' | 'custom'   (default 'big')
 //   gd.view.quality  'auto' | 'full' | 'lite'           (default 'auto')
 //   gd.view.autoQ    JSON of the last Auto measurement
-//   gd.view.qbCone   'off' | 'on'  (unset: off in 2.5D, on in top-down)
+//   gd.view.qbCone   'off' | 'on'  (unset: on in both views)
 //   gd.view.replayTypes  JSON array of reason ids for 'custom' (default: all)
 //   gd.view.cameraAngle  'fixed' | 'dynamic'            (default 'fixed', backlog 357)
 //
@@ -239,9 +239,12 @@ export function setQbCone(v: 'off' | 'on' | null): void {
   refresh()
 }
 
-/** Is the QB cone drawn in this view? Default: off in the 2.5D broadcast, on in top-down. */
+/** The QB cone's per-view default (user 2026-10-12: on in 2.5D too). */
+const QB_CONE_DEFAULT: Record<'broadcast' | 'topdown', boolean> = { broadcast: true, topdown: true }
+
+/** Is the QB cone drawn in this view? Default: on in both the 2.5D broadcast and top-down. */
 export function qbConeOn(s: Pick<ViewSettings, 'qbCone'>, view: 'broadcast' | 'topdown'): boolean {
-  return s.qbCone ? s.qbCone === 'on' : view === 'topdown'
+  return s.qbCone ? s.qbCone === 'on' : QB_CONE_DEFAULT[view]
 }
 
 export function setAutoQState(a: AutoQState | null): void {
