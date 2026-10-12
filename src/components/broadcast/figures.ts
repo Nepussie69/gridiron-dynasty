@@ -399,6 +399,15 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
   bull: { base: { cr: 0.5, ln: 0.68, af: 1, jos: 0.9, run: 0.75 } },
   // Spin off the blocker's hip (facing 'spin'): compact, arms in, low.
   spinRush: { base: { cr: 0.35, ln: 0.18, af: 0.3, sp: 0.2, run: 0.45 } },
+  // animflow r8 (backlog 354): a push-out - hips sunk, both arms punched out into the carrier's near
+  // shoulder and locked, leaning into him with the legs still driving.
+  pushOut: {
+    base: { cr: 0.34, af: 1, ln: 0.5, jos: 0.7, run: 0.8 },
+    dyn: (age, _len, p) => {
+      p.ln = 0.42 + 0.22 * easeOut(clamp01(age / 0.2))
+      p.cr = 0.4 - 0.1 * clamp01(age / 0.4)
+    },
+  },
   // animflow r6b (item 4): hands on the hips, slightly bent over (a tired man).
   hips: {
     base: { hp: 1, ln: 0.1, cr: 0.05, run: 0.3 },

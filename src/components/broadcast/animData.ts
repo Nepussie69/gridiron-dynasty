@@ -40,7 +40,7 @@ export type PoseState =
   | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold' | 'tackle'
   | 'set' | 'throwQuick' | 'throwDeep' | 'throwRun' | 'throwHurry'
   | 'juke' | 'spin' | 'stiffArm' | 'truck' | 'tackleHit' | 'tackleArm' | 'hips'
-  | 'rip' | 'swim' | 'bull' | 'spinRush'
+  | 'rip' | 'swim' | 'bull' | 'spinRush' | 'pushOut'
 
 /**
  * animflow round 3: how the quarterback throws. playAnim picks it (it knows the
@@ -547,9 +547,22 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   // animflow: men wrapping up the carrier (recorded 'tackle' engagements) are in
   // the tackle pose — arms out, leaning in — until the dive / fall takes over.
   const tackleBy: Record<string, { t0: number; t1: number }[]> = {}
+  // animflow r8 (backlog 354): on a forced out-of-bounds end the men on the carrier are PUSHING him
+  // out (arms locked out into him, legs driving), and he is knocked off balance over the line.
+  const pushEnd = (type === 'run' || type === 'pass') && !!play.outOfBounds && !touchdown && !play.turnover && !sackPlay
+  let pushT0 = Infinity
   for (const e of engagements) {
     if (e.kind !== 'tackle' || !keySet[e.a] || e.a === carrierKey) continue
+    if (pushEnd && e.b === carrierKey && sides[e.a] === 'def') {
+      ;(moveBy[e.a] ??= []).push({ t0: clamp01(e.t0), t1: clamp01(e.t1), state: 'pushOut' })
+      pushT0 = Math.min(pushT0, clamp01(e.t0))
+      continue
+    }
     ;(tackleBy[e.a] ??= []).push({ t0: clamp01(e.t0), t1: clamp01(e.t1) })
+  }
+  if (pushEnd && carrierKey && pushT0 < 1) {
+    const stop = lastT(carrierKey)
+    if (stop - pushT0 > 0.12 / D) stumbleBy[carrierKey] = { t0: Math.min(stop, pushT0 + 0.06 / D), t1: stop }
   }
   const diveBy: Record<string, { t0: number; t1: number }> = {}
   const tackleStyles: Record<string, string> = {}
@@ -845,7 +858,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     // Sitting in a zone (slow, before the throw): eyes on the quarterback.
     if (scrimmage && type === 'pass' && qbKey && keySet[qbKey] && sides[k] === 'def' && !k.startsWith('dl') && (st === 'run' || st === 'stand') &&
       t > SNAP_T && !(flight && t >= flight.t0) && Math.hypot(vx, vy) < 2.5 && !nearCar && Math.hypot(pos.x - ballAtCatch.x, pos.y - ballAtCatch.y) > 8) return { mode: 'actor', key: qbKey }
-    if (st === 'tackle' && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
+    if ((st === 'tackle' || st === 'pushOut') && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
     const bt = beatenBy[k]?.find((w) => t >= w.t0 && t <= w.t1)
     if (bt && keySet[bt.key]) return { mode: 'actor', key: bt.key }
     const bo = blockOther(k, t)

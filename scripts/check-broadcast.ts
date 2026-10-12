@@ -2687,28 +2687,45 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(ns[1] >= 60 && ns[0] >= ns[1] * 0.95, `catch-and-runs turning downfield ${ns[0]}/${ns[1]}: ${nsBad.join('; ')}`)
   })
 
-  ok('animflow r8: an out-of-bounds end (not a clock step-out) is forced - a defender within 2.2 yd, ahead of or inside the carrier, as he goes out', () => {
+  ok('animflow r8 (backlog 354 / 373): every out-of-bounds end that is not a clock step-out is forced - a defender within 2 yd, inside or ahead of the carrier, with his hands on him (push) as he goes over the line, runs and catch-and-runs; a clock step-out angles out on its own (no push)', () => {
     const R = { run: [0, 0], pass: [0, 0] }
+    const C = [0, 0]
     const bad: string[] = []
+    const badC: string[] = []
     games6d(10, 131, (play, anim) => {
-      if (!play.outOfBounds || play.endYard >= 100 || play.turnover || play.result.startsWith('Sack') || play.result.startsWith('Incomplete') || clockStepOut(play)) return
+      if (!play.outOfBounds || play.endYard >= 100 || play.turnover || play.result.startsWith('Sack') || play.result.startsWith('Incomplete') || play.result.startsWith('Interception')) return
       const car = anim.holders[anim.holders.length - 1]?.key
       const ca = car ? anim.actors.find((a) => a.key === car) : undefined
       if (!ca) return
-      const t = Math.max(0, ca.path[ca.path.length - 1].t - 0.12 / (anim.duration / 1000))
+      const D = anim.duration / 1000
+      const tEnd = ca.path[ca.path.length - 1].t
+      const t = Math.max(0, tEnd - 0.12 / D)
       const c = posAt(ca.path, t)
-      const ok2 = anim.actors.some((a) => {
+      const push = (anim.engagements ?? []).some((e) => e.kind === 'tackle' && e.b === car && e.t1 >= tEnd - 0.3 / D && e.t0 <= tEnd)
+      if (clockStepOut(play)) {
+        // a deliberate step-out: angled out (>= 25 deg toward the sideline as he crosses it), untouched
+        const sgn = c.y < 26.65 ? -1 : 1
+        const p0 = posAt(ca.path, Math.max(0, tEnd - 0.35 / D))
+        const ang = Math.atan2(sgn * (c.y - p0.y), Math.max(1e-6, Math.abs(c.x - p0.x)))
+        C[1]++
+        if (ang >= (25 * Math.PI) / 180 && !push) C[0]++
+        else if (badC.length < 4) badC.push(`${play.n} ${play.concept} ${((ang * 180) / Math.PI).toFixed(0)} deg push ${push}`)
+        return
+      }
+      const ok2 = push && anim.actors.some((a) => {
         if (a.side !== 'def') return false
         const q = posAt(a.path, t)
-        return Math.hypot(q.x - c.x, q.y - c.y) <= 2.2 && (q.x >= c.x - 0.5 || Math.abs(q.y - 26.65) < Math.abs(c.y - 26.65))
+        return Math.hypot(q.x - c.x, q.y - c.y) <= 2.0 && (q.x >= c.x - 0.5 || Math.abs(q.y - 26.65) < Math.abs(c.y - 26.65))
       })
       const r = R[play.type as 'run' | 'pass']
       r[1]++
       if (ok2) r[0]++
-      else bad.push(`${play.type} ${play.n} ${play.concept}`)
+      else bad.push(`${play.type} ${play.n} ${play.concept}${push ? '' : ' (no push)'}`)
     })
+    console.log(`      forced out of bounds: runs ${R.run[0]}/${R.run[1]}, catch-and-runs ${R.pass[0]}/${R.pass[1]}; clock step-outs angled out ${C[0]}/${C[1]}`)
     assert.ok(R.run[1] >= 15 && R.pass[1] >= 15, `coverage ${JSON.stringify(R)}`)
-    assert.ok(R.run[0] / R.run[1] >= 0.85 && R.pass[0] / R.pass[1] >= 0.8, `unforced out-of-bounds ends ${JSON.stringify(R)}: ${bad.slice(0, 4).join('; ')}`)
+    assert.ok(R.run[0] === R.run[1] && R.pass[0] === R.pass[1], `unforced out-of-bounds ends ${JSON.stringify(R)}: ${bad.slice(0, 4).join('; ')}`)
+    assert.ok(C[0] >= C[1] * 0.9, `clock step-outs ${C[0]}/${C[1]}: ${badC.join('; ')}`)
   })
 
   ok('animflow r8 (J38 / J12 / J36): featured plays are drawn as themselves (wildcat direct snap, jet motion, back-shoulder turn, TE seam, RB wheel); a fooled QB looks off first; a steered throw goes at the scouted corner', () => {
