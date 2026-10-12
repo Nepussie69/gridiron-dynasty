@@ -2387,6 +2387,8 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
         const q = anim.actors.find((a) => a.key === 'qb')
         if (!q) continue
+        // animflow r8 (J38): a wildcat snaps to the back in the gun spot, the QB split out (r8 check).
+        if (play.featured === 'wildcat' && play.type === 'run') continue
         const los = 10 + play.startYard
         const kind = snapKindFor(play.concept)
         const depth = los - q.path[0].x
@@ -2603,6 +2605,79 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(spyOff.length >= 5 && med(spyOff) <= 1.5, `spy lateral offset from the QB median ${med(spyOff)?.toFixed(2)} yd (n ${spyOff.length})`)
     assert.ok(keyD.length >= 20 && biteD.length >= 10 && med(keyD) < med(biteD) - 1, `read key ${med(keyD)?.toFixed(2)} vs biters ${med(biteD)?.toFixed(2)} yd from the carrier at 1.0 s`)
     assert.ok(fillDown.length >= 40 && med(fillDown) >= 1 && med(fillDown) > med(otherDown) + 1, `alley filler downhill ${med(fillDown)?.toFixed(2)} vs ${med(otherDown)?.toFixed(2)} yd at 1.2 s`)
+  })
+
+  ok('animflow r8 (J38 / J12 / J36): featured plays are drawn as themselves (wildcat direct snap, jet motion, back-shoulder turn, TE seam, RB wheel); a fooled QB looks off first; a steered throw goes at the scouted corner', () => {
+    const seen: Record<string, number> = {}
+    const bad: string[] = []
+    const fooled = { y: 0, n: 0, honest: 0, honestN: 0 }
+    const steer = { y: 0, n: 0 }
+    games6d(10, 101, (play, anim, actors) => {
+      const los = 10 + play.startYard
+      const ev = anim.events ?? []
+      const feat = play.featured
+      if (feat && !play.result.startsWith('Sack') && !play.kneel && !play.spike) {
+        const qb0 = atSec(anim, 'qb', 0)!
+        if (feat === 'wildcat' && play.type === 'run' && play.carrierId && actors.get('rb')?.id === play.carrierId) {
+          seen.wildcat = (seen.wildcat ?? 0) + 1
+          if (anim.holders.find((h) => h.key)?.key !== 'rb') bad.push(`wildcat ${play.n}: snap not to the back`)
+          if (Math.abs(qb0.y - 26.65) < 8) bad.push(`wildcat ${play.n}: QB not split out (${(qb0.y - 26.65).toFixed(1)})`)
+        }
+        if (feat === 'jet' && play.type === 'run' && actors.get('rb')?.id === play.carrierId) {
+          seen.jet = (seen.jet ?? 0) + 1
+          const a = atSec(anim, 'rb', 0.08)!
+          const b = atSec(anim, 'rb', 0.2)!
+          const vy = Math.abs(b.y - a.y) / 0.12
+          if (vy < 4.5) bad.push(`jet ${play.n}: motion man ${vy.toFixed(1)} yd/s across at the snap`)
+        }
+        const c = ev.find((e) => e.kind === 'catch')
+        if (play.type === 'pass' && c && play.endYard - play.startYard >= 4) {
+          const want = feat === 'fade' ? 'fade' : feat === 'seam' ? 'seam' : feat === 'wheel' ? 'wheel' : null
+          if (want) {
+            seen[feat] = (seen[feat] ?? 0) + 1
+            if (anim.catchRoute !== want) bad.push(`${feat} ${play.n}: caught on ${anim.catchRoute}`)
+            if (feat === 'fade') {
+              const D = anim.duration / 1000
+              const k = c.keys[0]
+              const p0 = atSec(anim, k, c.t * D - 0.35)!
+              const p1 = atSec(anim, k, c.t * D - 0.02)!
+              if (p1.x - p0.x > -0.3) bad.push(`fade ${play.n}: no turn back to the ball (${(p1.x - p0.x).toFixed(2)} yd)`)
+            }
+          }
+        }
+        void los
+      }
+      if (play.type === 'pass' && !play.result.startsWith('Sack') && !play.spike) {
+        const th = ev.find((e) => e.kind === 'throw')
+        const D = anim.duration / 1000
+        const fl = anim.flights[0]
+        if (th && fl && th.t * D > 1.6) {
+          const catchY = posAt(anim.ball, fl.t1).y
+          const qbF = (anim.facing.qb ?? []).filter((w) => w.mode === 'angle' && w.t1 > 0.4 / D && w.t0 < th.t)
+          if (play.qbFooled) {
+            fooled.n++
+            if (qbF.some((w) => w.mode === 'angle' && Math.sign(Math.sin(w.angle)) === -Math.sign(catchY - 26.65))) fooled.y++
+          } else {
+            fooled.honestN++
+            if (qbF.length) fooled.honest++
+          }
+        }
+        const cov = play.coverId ? [...actors.entries()].find(([, p]) => p.id === play.coverId)?.[0] : undefined
+        const tk = th?.keys[1]
+        if (play.scoutTarget && play.scoutTarget === play.coverId && cov && /^cb/.test(cov) && tk && /^wr/.test(tk)) {
+          steer.n++
+          const a = atSec(anim, cov, 0)!
+          const b = atSec(anim, tk, 0)!
+          if (Math.abs(a.y - b.y) <= 3) steer.y++
+        }
+      }
+    })
+    const nFeat = Object.values(seen).reduce((x, y) => x + y, 0)
+    assert.ok(nFeat >= 8 && Object.keys(seen).length >= 3, `coverage: featured ${JSON.stringify(seen)}`)
+    assert.ok(bad.length === 0, `${bad.length} featured plays drawn wrong: ${bad.slice(0, 4).join('; ')}`)
+    assert.ok(fooled.n >= 10 && fooled.y / fooled.n >= 0.85, `fooled QB looks off first ${fooled.y}/${fooled.n}`)
+    assert.ok(fooled.honest === 0, `${fooled.honest}/${fooled.honestN} unfooled QBs look off`)
+    assert.ok(steer.n >= 3 && steer.y / steer.n >= 0.9, `steered throws at the scouted corner lined up over the target ${steer.y}/${steer.n}`)
   })
 }
 
