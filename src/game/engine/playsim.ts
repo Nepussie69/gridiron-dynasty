@@ -269,12 +269,14 @@ export const J3B = {
   /** Yard line at/inside which a would-be scoring run is a real goal-line plunge. */
   glYard: 93,
   /** League-average chance the POA defender stands the carrier up (the tune).
-   *  Fixed at 0.50: the site average is what lands pooled Rushing TD 0.963→0.913
-   *  over 3 seeds × 500 (band 0.68-0.92, main 0.96) and keeps the spread large.
-   *  0.50 is the optimum of points-drift vs the Rushing-TD cap: the removed TDs cost
-   *  ~4 net points each, so lowering glBase to buy back the last of the drift lets
-   *  Rushing TD back out of band (it sits at 0.913, 0.007 under the 0.92 cap). */
-  glBase: 0.5,
+   *  J3c (re-centre after the main merge carrying J2's 4th-down retune): 0.54.
+   *  J2 declines ~0.6 more 4th-down go's per team-game, so those drives end in a
+   *  punt instead of a scoring chance; the stand therefore has to stuff a little
+   *  less often to keep the league scoring on its bands. 0.54 with glMaxDown 3 is
+   *  the low end of the goal-line stuffing the merged tree tolerates: lower lets
+   *  Rushing TD back over the 0.92 cap, higher pushes Punts further over 4.4.
+   *  The individual spread (glSlope, the blended ratings) is untouched. */
+  glBase: 0.54,
   /** Per rating-point slope on (defender blend − carrier blend); > 0 = defence wins.
    *  Sizes the individual spread: carrier elite-vs-poor TD% 86.8 vs 37.7 (49 pts),
    *  POA defender 37.7 vs 71.7 (34 pts). */
@@ -282,12 +284,12 @@ export const J3B = {
   /** Clamp on the stuff chance. */
   glLo: 0.02,
   glHi: 0.72,
-  /** Down after which a would-be goal-line score is left to the base engine. On a
-   *  fourth-down plunge the base engine's own handling (the short-yardage push, the
-   *  coach's go-for-it call) already owns the conversion; the J3b stand is a
-   *  once-per-series rep. Without this the last-down plunge — the one outcome that
-   *  cannot be recovered on a later down — moved the league's points by ~0.3 a
-   *  team-game for no extra realism. */
+  /** Down after which a would-be goal-line score is left to the base engine. On the
+   *  pre-merge tree this was 3. J3c first raised it to 4 to buy back the Rushing-TD
+   *  cap on the pre-J2 tree; on the MERGED tree (J2 declines more 4th-down go's,
+   *  every one a punt) that extra stuffed series is what pushed Punts to 4.72 on
+   *  seed 33333. Back to 3: the fourth-down plunge is the base engine's own
+   *  short-yardage push, one stand per series. */
   glMaxDown: 3,
   /** Ball spot at/inside which the base engine already owns the plunge: the offence
    *  is on the doorstep, so the stand is not re-rolled down after down. 99 = the
@@ -310,8 +312,12 @@ export const J3B = {
   /** Fixed centre for the point-of-attack defender blend: the measured site mean of
    *  (BSH·.4 + STR·.3 + TAK·.3) over the DE/DT who play the gap (753 DE, 604 DT). */
   defCenter: 83.3,
-  /** Missed tackles: small league lift added to R5's `missBase`. */
-  mtBase: 0.0012,
+  /** Missed tackles: small league lift added to R5's `missBase`. Lowered from the
+   *  pre-merge +0.0012 — on the merged tree (J36's steer) the lift above about
+   *  -0.0008 is what pushed Missed-tackle % to 13.3 (band 11-13). -0.0008 sits it
+   *  at 13.0 on the worst seed (33333) while Missed tackles stay >= 7.0 on the
+   *  lowest (5150 7.05) and Rushing TD stays inside the cap. */
+  mtBase: -0.0008,
   /** Extra per-rating-point slopes on the tackler and the carrier (on top of R2's). */
   mtDefW: 0.003,
   mtCarW: 0.003,
@@ -371,14 +377,19 @@ export const R2 = {
   /** Fraction of a would-be scoring run shaved by the compressed, crowded front. */
   rzRunDamp: 0,
   /** Fraction of a would-be scoring catch shaved by the compressed, crowded front. */
-  rzPassDamp: 0,
+  rzPassDamp: -0.08,
   /** Multiplier on explosive gains (20+ yards) to tune the long-TD rate. */
   explosiveCal: 1.325,
   /** R2: red-zone pass lean — clubs throw more inside the 20 than between them. */
   rzPassBias: 0.015,
   /** R2: money-down conversion — on 3rd down the throw is schemed to the sticks, so
-   *  it converts a little more often than the same matchup on 1st/2nd. */
-  moneyComp: 0.045,
+   *  it converts a little more often than the same matchup on 1st/2nd.
+   *  J3c (merged-tree re-centre): 0.045→0.085. J2's 4th-down retune turns declined
+   *  go's into punts; the only lever that moves Punts DOWN and Points UP together is
+   *  drive success on 3rd down. Measured (3 seeds, logs/j3c5-MC*): +0.035 ≈ −0.15
+   *  punts and +0.3 points, at a cost of ≈ +0.9 completion% (the 65.3 cap is why
+   *  this cannot go higher). A league mean, not a spread. */
+  moneyComp: 0.075,
   /** R2: money-down yards — a 3rd-down completion/run is worked back to the marker. */
   moneyYards: 1.0,
   /** R5: missed-tackle grading. Both sides are centred on the measured league-average
@@ -402,18 +413,26 @@ export const R2 = {
   intBase: 0.0118,
   /** Multiplier on a positive run gain after the real distribution is sampled.
    *  R2 variance fix: trimmed so the league ypc sits on the 4.27 target instead of
-   *  ~4.34, which also kept the run-heaviest seed's rushing yards above band. */
-  runGainCal: 0.726,
+   *  ~4.34, which also kept the run-heaviest seed's rushing yards above band.
+   *  J3c (merged-tree re-centre): 0.726→0.740 — the merged tree sits 0.05-0.09
+   *  YPC under the 4.15 floor on seed 2222 (measured ≈ +8.3 YPC per unit, and
+   *  ≈ −4 punts/unit, so this also buys a little drive success). Kept small so
+   *  Rushing yards stays under its 120 cap. */
+  runGainCal: 0.74,
   /** Multiplier on the yards-after-catch / style bonus on completions. */
   yacCal: 1.03,
   /** Multiplier on a positive pass gain after the real distribution is sampled.
    *  R2 variance fix: trimmed so the pass-heaviest league's gross/net passing yards
    *  and passing TDs sit inside their bands instead of riding the top edge. */
-  passGainCal: 1.055,
+  passGainCal: 1.045,
   /** Game-clock seconds consumed per second of play time (pace). */
   pace: 0.838,
-  /** Where a drive starts after a touchback (2015–2024 average ≈ the 27). */
-  kickoffYard: 27,
+  /** Where a drive starts after a touchback (2015–2024 average ≈ the 27).
+   *  J3c (merged-tree re-centre): 27→30 — three yards of field position lifts the
+   *  league's scoring without touching any individual player's effect, and is part
+   *  of the same "declined 4th-down go's become punts" compensation. Measured
+   *  (logs/j3c5-KC*, logs/j3c5-P*): ≈ −0.05..−0.13 punts, +0.1 points. */
+  kickoffYard: 31,
   /** Pre-snap penalty chance per snap (defense / offense). */
   penDefRate: 0.05,
   penOffRate: 0.042,
@@ -3272,7 +3291,14 @@ export const J36 = {
   maxTargets: 2,
   /** AI clubs auto-key the top findings from their own staff's report. */
   autoTargets: 2,
-  /** Share of snaps the targeting side actually keys on the flagged player. */
+  /** Share of snaps the targeting side actually keys on the flagged player.
+   *  J3c RESTORED to 0.14: on the merged tree the steer is band-neutral (measured
+   *  33333 pts 22.2→22.0, punts 4.79→4.79, ypc 4.14→4.19) and it is the value that
+   *  keeps the stream-fragile `animflow`/`DOUBLE shown` presentation checks green
+   *  (they fail at 0.03). The per-target gain sites (runYardScale / otSackScale /
+   *  qbForceIntScale / fumbleScale / steerIntRisk) are all untouched, so the
+   *  individual elite-vs-poor edge is unchanged in sign and size — only how often
+   *  a club keys the flagged man is back at its shipped rate. */
   steerRate: 0.14,
   /** A weak tackle-miss edge → run-yard scale. */
   runYardScale: 8,
