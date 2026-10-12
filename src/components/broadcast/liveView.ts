@@ -28,8 +28,9 @@ import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from '.
 import { type CameraAngleMode, type Director, type DirectorProfile } from './director'
 import { createBroadcastDirector } from './directorRules'
 import { ReplayPlayer, type ReplayFrame, type ReplayPhase, type ReplayPlan } from './replay'
-import { TelestratorLayer, attachTelestrator } from './telestrator'
-import { useViewSettings, usePhone, deviceKey, type ViewSettings, type AutoQState, type QualitySetting } from './viewSettings'
+import { TelestratorLayer, attachTelestrator, composeHooks } from './telestrator'
+import { QbConeLayer } from './visionCone'
+import { useViewSettings, usePhone, getViewSettings, qbConeOn, deviceKey, type ViewSettings, type AutoQState, type QualitySetting } from './viewSettings'
 
 // ── B4 hook: the real ball + effects (merged into main after this branch) ────
 //
@@ -181,6 +182,8 @@ export interface LivePlay {
   strongSideY: number
   /** animflow 6b-wx: the game's field weather (null: indoors, weather off or none). */
   weather: FieldWeather | null
+  /** The passer, for the QB cone's rating-derived fallback. */
+  qb?: Player
 }
 
 export interface LivePlayInput {
@@ -292,6 +295,7 @@ export function buildLivePlay(input: LivePlayInput): LivePlay {
     possession: offHome ? 'home' : 'away',
     strongSideY: strongSideWorldY(anim, dir),
     weather: input.weather ?? null,
+    qb: input.actors.get('qb'),
   }
 }
 
@@ -341,6 +345,8 @@ export class LiveBroadcast {
   readonly sideline: SidelineLayer
   /** animflow 6b-wx: rain / snow / breath / wind on the field. */
   readonly weather: WeatherLayer
+  /** QB vision cone + placement circle (ground plane; off by default in 2.5D). */
+  readonly qbCone = new QbConeLayer()
 
   private opts: LiveBroadcastOptions
   private director: Director | null = null
@@ -401,7 +407,7 @@ export class LiveBroadcast {
     this.gfx = new GraphicsLayer(this.layer, readGfxTokens(canvas))
     this.gfx.bottomInset = opts.hudBottomInset ?? 0
     this.renderer.hooks.actors = this.layer.hook
-    this.renderer.hooks.ground = this.weather.ground
+    this.renderer.hooks.ground = composeHooks(this.weather.ground, this.qbCone.hook)
     this.renderer.hooks.weather = this.weather.air
     this.renderer.hooks.overlay = this.gfx.hook
     // B8: telestrations under the HUD, the REPLAY bug + wipe over it. The
@@ -541,6 +547,7 @@ export class LiveBroadcast {
     })
     this.gfx.setTimeline(lp.tl)
     this.weather.weather = lp.weather
+    this.qbCone.set(lp.play, lp.anim, lp.qb)
     this.weather.qtr = lp.play.qtr ?? 1
     this.weather.club = club(this.opts.homeTeamId)
     // B5 director with B5b's special-teams rules (kicks, returns, FG/PAT).
@@ -612,6 +619,8 @@ export class LiveBroadcast {
     const t = inReplay && rf ? rf.t : this.t
     const phase: 'live' | 'replay' = inReplay ? 'replay' : this.opts.phase
     this.layer.t = t
+    this.qbCone.t = t
+    this.qbCone.enabled = qbConeOn(getViewSettings(), 'broadcast')
     // animflow r6b: the live end frame's hold drives the substitutions' jog.
     this.layer.post = inReplay ? 0 : this.endHold
     // Live: once the play ends, the graphics clock runs on into the result

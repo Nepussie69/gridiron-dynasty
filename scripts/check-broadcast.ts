@@ -2798,4 +2798,56 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   })
 }
 
+// QB cone (backlog 303/306/307/309): at the release the cone points within ~10 deg of the target and
+// the ring radius equals the recorded placeRadiusYd; the toggle defaults off in 2.5D, on top-down.
+{
+  const { qbConeAt } = await import('../src/components/broadcast/visionCone.ts')
+  const vs = await import('../src/components/broadcast/viewSettings.ts')
+  const store = await import('../src/store/gameStore.ts')
+  const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
+  const { buildPlayAnim, posAt } = await import('../src/components/playAnim.ts')
+  const { actorPlayers } = await import('../src/components/jersey.ts')
+  ok('QB cone: pass plays aim within 10 deg of the target at release; ring radius == placeRadiusYd; defaults off (2.5D) / on (top-down)', () => {
+    assert.equal(vs.qbConeOn({ qbCone: null }, 'broadcast'), false)
+    assert.equal(vs.qbConeOn({ qbCone: null }, 'topdown'), true)
+    assert.equal(vs.qbConeOn({ qbCone: 'on' }, 'broadcast'), true)
+    assert.equal(vs.qbConeOn({ qbCone: 'off' }, 'topdown'), false)
+    store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    let n = 0
+    let worst = 0
+    let ringN = 0
+    let widthN = 0
+    for (let g = 0; g < 3; g++) {
+      const home = nfl[(g * 5) % nfl.length].id
+      const away = nfl[(g * 5 + 3) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 91 + g * 17)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' || play.result.startsWith('Sack') || play.spike || play.placeRadiusYd == null) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const f = anim.flights[0]
+        if (!f) continue
+        const { cone } = qbConeAt(play, anim, f.t0)
+        const { ring } = qbConeAt(play, anim, (f.t0 + f.t1) / 2)
+        if (!cone || !ring) continue
+        n++
+        const c = posAt(anim.ball, f.t1)
+        let d = Math.atan2(c.y - cone.oy, c.x - cone.ox) - cone.yaw
+        while (d > Math.PI) d -= 2 * Math.PI
+        while (d < -Math.PI) d += 2 * Math.PI
+        worst = Math.max(worst, Math.abs(d) * 180 / Math.PI)
+        if (Math.abs(ring.r - play.placeRadiusYd) < 1e-9) ringN++
+        if (play.coneDeg != null && Math.abs(cone.half * 360 / Math.PI - play.coneDeg) < 1e-6) widthN++
+      }
+    }
+    assert.ok(n >= 40, `coverage: ${n} pass plays with a cone`)
+    assert.ok(worst <= 10, `cone off the target at release by ${worst.toFixed(1)} deg`)
+    assert.equal(ringN, n, `ring radius matches placeRadiusYd on ${ringN}/${n}`)
+    assert.equal(widthN, n, `cone width matches coneDeg on ${widthN}/${n}`)
+  })
+}
+
 console.log(`check-broadcast: PASS (${n} checks)`)

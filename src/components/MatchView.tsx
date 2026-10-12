@@ -29,9 +29,10 @@ import { usePhone } from '../ui/hooks'
 import { challengeThreshold, type ChallengeState, type PlayReview } from '../game/engine/review'
 import { ReviewCard } from './ReviewCard'
 import BroadcastBoundary from './broadcast/BroadcastBoundary'
+import { QbConeSvg } from './broadcast/visionConeSvg'
 import { buildLivePlay, createLiveBroadcast, latchLiveView, reportFallback, useLiveView, type LiveBroadcast } from './broadcast/liveView'
 import { autoStartLevel } from './broadcast/quality'
-import { deviceKey, setAutoQState, useViewSettings } from './broadcast/viewSettings'
+import { deviceKey, qbConeOn, setAutoQState, useViewSettings } from './broadcast/viewSettings'
 import { gameDayReplay, replayable, type ReplayPlan } from './broadcast/replay'
 import type { BroadcastAnim } from './broadcast/animData'
 import type { LivePlay, LiveReplayPhase } from './broadcast/liveView'
@@ -953,6 +954,9 @@ export function MatchView() {
                   <line x1={gp.x} y1={CENTER_Y + 3.1} x2={gp.x + gp.dir * 0.9} y2={CENTER_Y + 3.1} />
                 </g>
               ))}
+
+              {/* QB vision cone + placement circle (backlog 303; default on in top-down) */}
+              {anim && qbConeOn(vsettings, 'topdown') && <QbConeSvg play={play} anim={anim} t={t} mx={mx} qb={actorMap?.get('qb')} />}
 
               {/* motion trails: ball carrier + targeted receiver (render only) */}
               {anim && trailKeys.map((k) => {

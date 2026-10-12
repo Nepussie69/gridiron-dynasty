@@ -6,6 +6,7 @@
 //   gd.view.replays  'big' | 'all' | 'off' | 'custom'   (default 'big')
 //   gd.view.quality  'auto' | 'full' | 'lite'           (default 'auto')
 //   gd.view.autoQ    JSON of the last Auto measurement
+//   gd.view.qbCone   'off' | 'on'  (unset: off in 2.5D, on in top-down)
 //   gd.view.replayTypes  JSON array of reason ids for 'custom' (default: all)
 //   gd.view.cameraAngle  'fixed' | 'dynamic'            (default 'fixed', backlog 357)
 //
@@ -45,6 +46,8 @@ export interface ViewSettings {
   quality: QualitySetting
   autoQ: AutoQState | null
   cameraAngle: CameraAngleSetting
+  /** QB vision cone + placement circle: null = the per-view default (off in 2.5D, on top-down). */
+  qbCone: 'off' | 'on' | null
 }
 
 export const VIEW_KEYS = {
@@ -54,6 +57,7 @@ export const VIEW_KEYS = {
   quality: 'gd.view.quality',
   autoQ: 'gd.view.autoQ',
   cameraAngle: 'gd.view.cameraAngle',
+  qbCone: 'gd.view.qbCone',
 } as const
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
@@ -63,6 +67,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
   quality: 'auto',
   autoQ: null,
   cameraAngle: 'fixed',
+  qbCone: null,
 })
 
 /** Phone breakpoint for the view: below 768 CSS px the live view defaults top-down. */
@@ -167,6 +172,7 @@ function readAll(): ViewSettings {
     quality: pick(readRaw(VIEW_KEYS.quality), ['auto', 'full', 'lite'] as const, 'auto'),
     autoQ: readAutoQ(),
     cameraAngle: pick(readRaw(VIEW_KEYS.cameraAngle), ['fixed', 'dynamic'] as const, 'fixed'),
+    qbCone: (() => { const r = readRaw(VIEW_KEYS.qbCone); return r === 'on' || r === 'off' ? r : null })(),
   }
 }
 
@@ -225,6 +231,17 @@ export function setQualitySetting(v: QualitySetting): void {
 export function setCameraAngle(v: CameraAngleSetting): void {
   writeRaw(VIEW_KEYS.cameraAngle, v)
   refresh()
+}
+
+/** Persist the QB-cone toggle (null clears it back to the per-view default). */
+export function setQbCone(v: 'off' | 'on' | null): void {
+  writeRaw(VIEW_KEYS.qbCone, v)
+  refresh()
+}
+
+/** Is the QB cone drawn in this view? Default: off in the 2.5D broadcast, on in top-down. */
+export function qbConeOn(s: Pick<ViewSettings, 'qbCone'>, view: 'broadcast' | 'topdown'): boolean {
+  return s.qbCone ? s.qbCone === 'on' : view === 'topdown'
 }
 
 export function setAutoQState(a: AutoQState | null): void {

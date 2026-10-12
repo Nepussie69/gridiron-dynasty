@@ -7,7 +7,7 @@ import { SegmentedControl } from '../../ui/Controls'
 import { cn } from '../../lib/cn'
 import { autoQualityHint, useLiveView, type Fallback } from './liveView'
 import { REPLAY_REASON_IDS, type ReplayReasonId } from './replay'
-import { deviceKey, setCameraAngle, setGameView, setQualitySetting, setReplayMode, setReplayTypes, useViewSettings } from './viewSettings'
+import { deviceKey, setCameraAngle, setGameView, setQbCone, setQualitySetting, setReplayMode, setReplayTypes, useViewSettings } from './viewSettings'
 
 const FALLBACK_NOTE: Record<Exclude<Fallback, null>, string> = {
   'no-canvas': 'This device has no 2D canvas — using the top-down view.',
@@ -129,6 +129,24 @@ export function BroadcastSettings({ row }: { row: string }) {
           </div>
         </div>
       )}
+
+      <div className={row}>
+        <div className="min-w-0">
+          <span className="label block">QB vision cone</span>
+          <span className="text-small text-muted">Where the quarterback looks, and the throw's landing circle. Default: off in 2.5D, on in top-down</span>
+        </div>
+        <SegmentedControl
+          label="QB vision cone"
+          size="sm"
+          value={s.qbCone ?? 'default'}
+          onChange={(v) => setQbCone(v === 'default' ? null : v)}
+          options={[
+            { id: 'default', label: 'Default' },
+            { id: 'on', label: 'On' },
+            { id: 'off', label: 'Off' },
+          ]}
+        />
+      </div>
 
       <div className={row}>
         <div className="min-w-0">
