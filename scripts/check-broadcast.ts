@@ -2903,9 +2903,14 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           if (actors.get(plan.target!)?.id === play.targetId && plan.seq[plan.seq.length - 1] === plan.target) c.tgtOk++
           else bad.push(`${play.n}: target ${plan.target} is not the engine's`)
           if (plan.looks.map((l) => l.key).join() !== plan.seq.join()) bad.push(`${play.n}: looks out of read order`)
-          if (!play.checkdown) { c.seqN++; if (plan.seq.length === Math.min(plan.readNo, plan.seq.length) && (plan.seq.length === plan.readNo || plan.seq.length < plan.readNo)) c.seqOk++ }
+          if (!play.checkdown) {
+            // readNo - 1 designed reads before the target (fewer only when fewer men run routes).
+            const runners = ['wr0', 'wr1', 'wr2', 'te', 'rb', 'fb'].filter((k) => k !== plan.target && anim.actors.some((a) => a.key === k) && Math.hypot(at(k, plan.endT).x - at(k, plan.snapT).x, at(k, plan.endT).y - at(k, plan.snapT).y) >= 3.5).length
+            c.seqN++
+            if (plan.seq.length === Math.min(plan.readNo, runners + 1)) c.seqOk++
+          }
         }
-        const lockT = f ? f.t0 - 0.75 / D : plan.endT - 0.25 / D
+        const lockT = f ? f.t0 - (THROW_TIMING[anim.throwStyle ?? 'normal'].wind + 0.45) / D : plan.endT - 0.25 / D
         for (const l of plan.looks) {
           const dw = (l.t1 - l.t0) * D
           c.dwells++
@@ -2914,8 +2919,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           const m = (l.t0 + l.t1) / 2
           const look = (t: number) => (l.role === 'read' ? at(l.key, t) : { x: plan.aimX, y: plan.aimY })
           if (m < lockT && qbSpd(m) <= 2.6 && dw >= 0.2) {
+            // Head + shoulders on the man he is reading (the cone looks ahead to the ball's spot).
             const q = at('qb', m)
-            const r = look(m)
+            const r = at(l.key, m)
             c.faceN++
             if (deg(AD.facingAt(anim, 'qb', m) - Math.atan2(r.y - q.y, r.x - q.x)) <= 20) c.faceOk++
           }
@@ -2932,7 +2938,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           c.chk++
           const los = 10 + play.startYard
           const pre = plan.looks.filter((l) => l.role === 'read')
-          if (pre.length && pre.every((l) => at(l.key, plan.endT).x - los >= 5)) c.chkDown++
+          // (when nobody is 5+ yd downfield at the release he works the first designed reads, then dumps it)
+          const deepMen = ['wr0', 'wr1', 'wr2', 'te', 'rb', 'fb'].filter((k) => k !== plan.target && anim.actors.some((a) => a.key === k) && at(k, plan.endT).x - los >= 5)
+          if (pre.length && (!deepMen.length || pre.every((l) => at(l.key, plan.endT).x - los >= 5))) c.chkDown++
           if (/^(rb|te|fb)$/.test(plan.target ?? '')) c.chkBack++
           const last = pre[pre.length - 1]
           if (last) {
@@ -3007,12 +3015,12 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(bad.length === 0, `${bad.length} bad: ${bad.slice(0, 5).join('; ')}`)
     // 1
     assert.ok(pct(c.seqOk, c.seqN) >= 0.98, `reads shown before the target = readNo - 1 on ${c.seqOk}/${c.seqN}`)
-    assert.ok(pct(c.faceOk, c.faceN) >= 0.9, `QB head/shoulders on the read ${c.faceOk}/${c.faceN}`)
+    assert.ok(pct(c.faceOk, c.faceN) >= 0.97, `QB head/shoulders on the read ${c.faceOk}/${c.faceN}`)
     assert.ok(pct(c.coneOk, c.coneN) >= 0.98, `cone on the read after the turn ${c.coneOk}/${c.coneN}`)
     assert.ok(pct(c.dwellShort, c.dwells) <= 0.05, `reads shorter than 0.15 s: ${c.dwellShort}/${c.dwells}`)
     assert.ok(!dwellBy.hi.length || !dwellBy.lo.length || med(dwellBy.hi) < med(dwellBy.lo), `a quick reader moves faster: dwell hi ${med(dwellBy.hi)} vs lo ${med(dwellBy.lo)}`)
     // 2
-    assert.ok(pct(c.chkDown, c.chk) >= 0.9 && c.chkBack === c.chk, `checkdown: downfield reads first ${c.chkDown}/${c.chk}, ends on the back / TE ${c.chkBack}/${c.chk}`)
+    assert.ok(pct(c.chkDown, c.chk) >= 0.95 && c.chkBack === c.chk, `checkdown: downfield reads first ${c.chkDown}/${c.chk}, ends on the back / TE ${c.chkBack}/${c.chk}`)
     assert.ok(med(c.swings) >= 25, `checkdown eye swing median ${med(c.swings).toFixed(1)} deg`)
     assert.ok(pct(c.backSet, c.backN) >= 0.8, `checkdown back in protection before his release ${c.backSet}/${c.backN}`)
     // 3

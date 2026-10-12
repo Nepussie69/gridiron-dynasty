@@ -550,7 +550,16 @@ export function applyReadPaths(anim: PlayAnim, play: Play, ctx: AnimContext = {}
   const pl = plan.place
   if (pl && (pl.sx || pl.sy)) out.actors = anim.actors.map((a) => (a.key === pl.key ? { ...a, path: adjustPath(a.path, plan) } : a))
   if (pl) out.ball = placeBall(out, play, plan)
-  if (plan.jump) out.actors = anim.actors.map((a) => (a.key === plan!.jump!.key ? { ...a, path: jumpPath(a.path, plan!, anim, play) } : a))
+  if (plan.jump) {
+    const jk = plan.jump.key
+    out.actors = out.actors.map((a) => (a.key === jk ? { ...a, path: jumpPath(a.path, plan!, anim, play) } : a))
+    if (plan.jump.pick && plan.catchT != null) {
+      // The ball rides with the man who picked it off.
+      const C = plan.catchT
+      const np = out.actors.find((a) => a.key === jk)!.path
+      out.ball = [...out.ball.filter((w) => w.t <= C + 1e-9), ...np.filter((w) => w.t > C + 1e-9).map((w) => ({ t: w.t, x: w.x, y: w.y }))]
+    }
+  }
   if (plan.checkdown && plan.target && /^(rb|fb)$/.test(plan.target)) {
     const bk = plan.target
     const src = out.actors.find((a) => a.key === bk)
@@ -700,7 +709,8 @@ function jumpPath(path: WP[], plan: ReadPlan, anim: PlayAnim, play: Play): WP[] 
     return { x: h00 * p0.x + h10 * T * va.x + h01 * P.x + h11 * T * vb.x, y: h00 * p0.y + h10 * T * va.y + h01 * P.y + h11 * T * vb.y }
   }
   const chord = { x: (P.x - p0.x) / T, y: (P.y - p0.y) / T }
-  const vEnd = { x: chord.x * 1.15, y: chord.y * 1.15 }
+  // The pick: he gathers the ball in (slowing into it), then his return starts.
+  const vEnd = j.pick ? { x: chord.x * 0.35, y: chord.y * 0.35 } : { x: chord.x * 1.15, y: chord.y * 1.15 }
   const maxV = (va: Pt): number => {
     let m = 0
     let prev = p0
@@ -723,7 +733,20 @@ function jumpPath(path: WP[], plan: ReadPlan, anim: PlayAnim, play: Play): WP[] 
   const orig = posAt(path, C)
   const after = path.filter((w) => w.t > C + 1e-9)
   if (j.pick) {
-    for (const w of after) out.push({ ...w })
+    // The builder's run to the ball may land after the catch: hold the ball at the spot until
+    // his return leaves from it (same return, same end spot).
+    const land = after.find((w) => Math.hypot(w.x - P.x, w.y - P.y) < 0.3)
+    if (land) {
+      if (land.t > C + 1e-6) out.push({ t: land.t, x: P.x, y: P.y })
+      for (const w of after) if (w.t > land.t + 1e-9) out.push({ ...w })
+    } else {
+      const dx = P.x - orig.x
+      const dy = P.y - orig.y
+      for (const w of after) {
+        const u = clamp01(((w.t - C) * D) / 0.6)
+        out.push({ t: w.t, x: w.x + dx * (1 - u), y: w.y + dy * (1 - u) })
+      }
+    }
   } else if (play.result === 'Incomplete') {
     // Through the ball and pulling up.
     const vl = Math.hypot(vEnd.x, vEnd.y) || 1
