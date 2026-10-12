@@ -5,7 +5,8 @@
 // coneDeg, placeRadiusYd, ballOffsetYd) plus the recorded PlayAnim (QB path,
 // throw event, flight, catch point) and works out, for any time t (0..1 of the
 // play), where the QB's head is turned and how wide his cone is, and the ring at
-// the catch point. When a field is absent (vision layer off / older save) the
+// the catch point. The read schedule, the pressure-narrowed width and the ball
+// placement come from qbReads.ts (shared with the 2.5D QB facing). When a field is absent (vision layer off / older save) the
 // cone is derived from the QB's own ratings with vision.ts's pure `visionThrow`
 // (clean pocket) or its league-average constants. No engine code is touched.
 //
@@ -15,9 +16,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Play } from '../../game/engine/playsim'
 import type { Player } from '../../game/types'
-import { playbookPlay } from '../../game/data/playbookData'
-import { readOrder, routeForCandidate, visionThrow, VISION } from '../../game/engine/vision'
-import { posAt, type PlayAnim } from '../playAnim'
+import type { PlayAnim } from '../playAnim'
+import { coneWidthAt, qbLook, radiusAt, readPlanOf } from './qbReads'
 import { offenseToWorld, project, type Camera } from './camera'
 import type { BroadcastFrame, LayerHook } from './renderer'
 
@@ -46,141 +46,46 @@ export interface RingShape {
   by: number
   alpha: number
   outside: boolean
+  /** Before the release: the circle only (no ball spot yet). */
+  noBall?: boolean
 }
-
-export interface ConePlan {
-  snapT: number
-  relT: number
-  catchT: number
-  /** Receiver keys in the order he looks at them; the last is the target. */
-  seq: string[]
-  coneDeg: number
-  radius: number
-  offset: number
-  offAngle: number
-  catchX: number
-  catchY: number
-  tgtX: number
-  tgtY: number
-}
-
-const SKILL = ['wr0', 'wr1', 'wr2', 'te', 'rb']
-const plans = new WeakMap<PlayAnim, { play: Play; qb: Player | undefined; plan: ConePlan | null }>()
 
 const sm = (u: number) => { const v = u < 0 ? 0 : u > 1 ? 1 : u; return v * v * (3 - 2 * v) }
-const hash01 = (n: number) => { const s = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return s - Math.floor(s) }
 
-/** The read plan for a pass play, or null when there is nothing to draw (runs, sacks, kicks, spikes). */
-export function conePlan(play: Play, anim: PlayAnim, qb?: Player): ConePlan | null {
-  const hit = plans.get(anim)
-  if (hit && hit.play === play && hit.qb === qb) return hit.plan
-  const plan = buildPlan(play, anim, qb)
-  plans.set(anim, { play, qb, plan })
-  return plan
-}
-
-function buildPlan(play: Play, anim: PlayAnim, qb?: Player): ConePlan | null {
-  if (play.type !== 'pass') return null
-  const f = anim.flights[0]
-  const q = anim.actors.find((a) => a.key === 'qb')
-  const th = (anim.events ?? []).find((e) => e.kind === 'throw')
-  if (!f || !q || !th) return null
-  const tgt = th.keys[1] ?? null
-  const snapT = (anim.events ?? []).find((e) => e.kind === 'snap')?.t ?? 0
-  const relT = f.t0
-  const catchPt = posAt(anim.ball, f.t1)
-  const tgtActor = tgt ? anim.actors.find((a) => a.key === tgt) : undefined
-  const tgtPt = tgtActor ? posAt(tgtActor.path, f.t1) : catchPt
-  // The designed read order over the receivers on this play (same table the engine used).
-  const keys = SKILL.filter((k) => anim.actors.some((a) => a.key === k))
-  const concept = play.concept
-  let wr = 0
-  const routes = keys.map((k) => (k.startsWith('wr') ? routeForCandidate(concept, 'WR', wr++) : k === 'te' ? routeForCandidate(concept, 'TE', 0) : routeForCandidate(concept, 'RB', 0)))
-  const rank = playbookPlay(concept) ? readOrder(concept, routes) : keys.map((_, i) => i + 1)
-  const others = keys.map((k, i) => ({ k, r: rank[i] })).filter((e) => e.k !== tgt).sort((a, b) => a.r - b.r).map((e) => e.k)
-  const readNo = Math.max(1, Math.min(4, play.readNo ?? 1))
-  const before = others.slice(0, play.checkdown ? Math.min(2, others.length) : readNo - 1)
-  const seq = tgt ? [...before, tgt] : before
-  // Cone width / ring radius: the recorded values, else the QB's own ratings (clean pocket).
-  let coneDeg = play.coneDeg
-  let radius = play.placeRadiusYd
-  let offset = play.ballOffsetYd
-  if ((coneDeg == null || radius == null) && qb) {
-    const v = visionThrow(qb, play.passDepth ?? 10, readNo, null, 0, 0, 0, 0.5, 0)
-    coneDeg ??= v.coneDeg
-    radius ??= v.placeRadiusYd
-    offset ??= v.ballOffsetYd
-  }
-  return {
-    snapT, relT: Math.max(relT, snapT + 0.02), catchT: f.t1, seq,
-    coneDeg: coneDeg ?? VISION.coneBase, radius: radius ?? VISION.radiusBase, offset: offset ?? (radius ?? VISION.radiusBase) * 0.66,
-    offAngle: hash01(play.n * 7.31) * Math.PI * 2,
-    catchX: catchPt.x, catchY: catchPt.y, tgtX: tgtPt.x, tgtY: tgtPt.y,
-  }
-}
-
-/** Where he looks for `key` at time t (the target is the catch point itself). */
-function lookPoint(plan: ConePlan, anim: PlayAnim, key: string, t: number, last: boolean): { x: number; y: number } {
-  if (last) return { x: plan.catchX, y: plan.catchY }
-  const a = anim.actors.find((x) => x.key === key)
-  return a ? posAt(a.path, Math.min(t, plan.relT)) : { x: plan.catchX, y: plan.catchY }
-}
-
+/** The drawn cone + circle at time t (0..1 of the play). The schedule, the widths and the
+ *  placement come from the shared read plan (qbReads.ts) so the cone turns with the QB's
+ *  head in 2.5D and the shoulder bar on top-down. */
 export function qbConeAt(play: Play, anim: PlayAnim, t: number, qb?: Player): { cone: ConeShape | null; ring: RingShape | null } {
-  const plan = conePlan(play, anim, qb)
-  const qa = anim.actors.find((a) => a.key === 'qb')
-  if (!plan || !qa) return { cone: null, ring: null }
-  const { snapT, relT, catchT, seq } = plan
+  const plan = readPlanOf(anim, play, qb)
+  if (!plan || !anim.actors.some((a) => a.key === 'qb')) return { cone: null, ring: null }
+  const { snapT, endT, catchT, D } = plan
   let cone: ConeShape | null = null
-  const fadeEnd = relT + 0.1
+  const fadeEnd = endT + 0.1
   if (t >= snapT && t < fadeEnd) {
-    const tc = Math.min(t, relT)
-    const q = posAt(qa.path, tc)
-    // Dwell windows: the earlier reads share the first 65 % of the time he has, the target the rest.
-    const span = Math.max(1e-4, relT - snapT)
-    const n = seq.length
-    const bounds: number[] = [snapT]
-    for (let i = 0; i < n - 1; i++) bounds.push(snapT + (span * 0.65 * (i + 1)) / Math.max(1, n - 1))
-    bounds.push(relT)
-    let seg = 0
-    while (seg < n - 1 && tc >= bounds[seg + 1]) seg++
-    const aimAt = (i: number) => {
-      const p = lookPoint(plan, anim, seq[i], tc, i === n - 1)
-      return { yaw: Math.atan2(p.y - q.y, p.x - q.x), d: Math.hypot(p.x - q.x, p.y - q.y) }
-    }
-    const cur = aimAt(seg)
-    const prevYaw = seg === 0 ? 0 : aimAt(seg - 1).yaw
-    const segLen = Math.max(1e-4, bounds[seg + 1] - bounds[seg])
-    const turn = sm((tc - bounds[seg]) / (segLen * 0.3))
-    let dy = cur.yaw - prevYaw
-    while (dy > Math.PI) dy -= 2 * Math.PI
-    while (dy < -Math.PI) dy += 2 * Math.PI
-    const yaw = prevYaw + dy * turn
-    let len = 0
-    for (let i = 0; i <= seg; i++) len = Math.max(len, aimAt(i).d)
+    const tc = Math.min(t, endT)
+    const look = qbLook(plan, anim, tc)
     const fadeIn = sm((t - snapT) / 0.03)
-    const fadeOut = t <= relT ? 1 : 1 - sm((t - relT) / 0.1)
+    const fadeOut = t <= endT ? 1 : 1 - sm((t - endT) / 0.1)
     cone = {
-      ox: q.x, oy: q.y, yaw, half: (plan.coneDeg * Math.PI) / 360,
-      len: Math.min(50, Math.max(10, len + 2.5)), alpha: fadeIn * fadeOut, locked: seg === n - 1 && turn >= 1,
+      ox: look.ox, oy: look.oy, yaw: look.yaw, half: (coneWidthAt(plan, tc) * Math.PI) / 360,
+      len: Math.min(50, Math.max(10, look.dist + 2.5)), alpha: fadeIn * fadeOut, locked: look.locked,
     }
   }
   let ring: RingShape | null = null
-  if (t > relT && t < catchT + 0.14) {
-    const grow = sm((t - relT) / Math.max(0.02, (catchT - relT) * 0.25))
+  const tl = plan.looks.find((l) => l.role !== 'read')
+  if (catchT != null && tl && t >= tl.t0 && t < catchT + 0.14) {
+    // On the target from the moment his eyes settle there; the circle grows as the rush
+    // closes (exactly placeRadiusYd from the release on); the ball spot once it is thrown.
+    const pl = plan.place
+    const cx = pl ? pl.ix : plan.aimX
+    const cy = pl ? pl.iy : plan.aimY
+    const grow = sm(((t - tl.t0) * D) / 0.15)
     const out = t <= catchT + 0.06 ? 1 : 1 - sm((t - catchT - 0.06) / 0.08)
-    let bx = plan.catchX
-    let by = plan.catchY
-    const apart = Math.hypot(plan.catchX - plan.tgtX, plan.catchY - plan.tgtY)
-    let cx = plan.tgtX
-    let cy = plan.tgtY
-    if (apart < 0.3) {
-      cx = plan.catchX
-      cy = plan.catchY
-      bx = cx + Math.cos(plan.offAngle) * plan.offset
-      by = cy + Math.sin(plan.offAngle) * plan.offset
-    }
-    ring = { cx, cy, r: plan.radius, bx, by, alpha: grow * out, outside: Math.hypot(bx - cx, by - cy) > plan.radius }
+    const thrown = t > endT
+    const bx = pl ? pl.ix + pl.dx : plan.aimX
+    const by = pl ? pl.iy + pl.dy : plan.aimY
+    const r = radiusAt(plan, Math.min(t, endT))
+    ring = { cx, cy, r, bx, by, alpha: grow * out * (thrown ? 1 : 0.6), outside: Math.hypot(bx - cx, by - cy) > r, ...(thrown ? {} : { noBall: true }) }
   }
   return { cone, ring }
 }
@@ -269,7 +174,7 @@ export class QbConeLayer {
         ctx.lineWidth = 1.6 * lw
         ctx.stroke()
       }
-      const b = proj({ x: ring.bx, y: ring.by })
+      const b = ring.noBall ? null : proj({ x: ring.bx, y: ring.by })
       if (b) {
         ctx.beginPath()
         ctx.arc(b.x, b.y, 3.2 * lw, 0, Math.PI * 2)
