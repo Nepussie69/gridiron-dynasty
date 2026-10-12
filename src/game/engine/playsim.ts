@@ -16,7 +16,7 @@ import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, coverUnit, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, SCHEME_MENUS_REALISM, MENU_REALISM, PLAYBOOK, conceptFromPlaybook, formationForConcept, type Personnel } from '../data/playbookData'
@@ -32,6 +32,7 @@ import {
   readOrder, routeForCandidate, qbReach, readBias, checkdownBias, visionThrow, eyeSkill,
   isCheckRoute, visionOn, VISION as VISION_CFG, type VisionThrow,
 } from './vision'
+import { FEATURED_CONCEPT, electFeatured, featuredPassEdge, featuredRunEdge, featuredIntMult, featuredOn, type FeaturedPlay } from './featured'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -326,6 +327,11 @@ export const J3B = {
   mtDefW: 0.003,
   mtCarW: 0.003,
 } as const
+// J38 (FUTURES #38): featured plays for stars. The flag lives in featured.ts (so
+// the pure elector can be imported without a cycle); re-exported here so the OFF
+// calibration copy shares one switch (the J1/J8d pattern). Default ON; OFF elects
+// no featured play and applies no edge, so the engine is byte-identical to main.
+export { setFeatured, getFeatured } from './featured'
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
     // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
@@ -912,6 +918,10 @@ export interface Play {
   /** J36: the opponent player the play was steered at (a targeted report finding). */
   scoutTarget?: string
   timeUsed?: number
+  /** J38: the featured-play key when this snap is a featured play (animation). */
+  featured?: string
+  /** J38: the star the featured play is built around (animation). */
+  featuredPlayerId?: string
   /** J5: this snap used pre-snap motion (animation use is a later job). */
   motion?: boolean
   // ── J10a: QB progressions, vision cone & placement circle (animation) ───────
@@ -2222,6 +2232,12 @@ export interface Concept {
   description: string
   /** R15: offensive personnel grouping (11/12/21/21/22/GL); defaults to 11. */
   personnel?: Personnel
+  /** J38: the featured-play key when this snap is a featured play (animation). */
+  featured?: string
+  /** J38: the star the featured play is built around. */
+  featuredPlayerId?: string
+  /** J38: the star's edge multiplier after diminishing returns / a scouting flag. */
+  featuredRelief?: number
 }
 
 interface OffenseStyle {
@@ -2337,6 +2353,10 @@ export interface PlayOutcome {
   bigPlay?: boolean
   /** J36: the opponent player the play was steered at (a targeted report finding). */
   scoutTarget?: string
+  /** J38: the featured-play key when this snap is a featured play (animation). */
+  featured?: string
+  /** J38: the star the featured play is built around (animation). */
+  featuredPlayerId?: string
   /** J5: this snap used pre-snap motion (set when the play is pushed). */
   motion?: boolean
   // ── J10a: QB progressions, vision cone & placement circle (animation) ───────
@@ -3345,6 +3365,37 @@ function j36TargetIds(world: World, myId: string, oppId: string, plan: import('.
   return j36Report(world, myId, oppId).slice(0, J36.autoTargets).map((f) => ({ id: f.playerId, tag: f.tag }))
 }
 
+// ── J38 (FUTURES #38): featured plays for stars — the call ────────────────────
+// The playcaller (AI and the user's standing/auto call) may dial up a play built
+// for one qualifying star instead of the drawn concept. Deterministic (hash only,
+// no rng() draw). `relief` folds in the diminishing returns of a repeatedly-called
+// featured play and a J36 scouting report that flagged the star. With the toggle
+// off the drawn concept is returned untouched.
+function applyFeatured(world: World, s: GameState, concept: Concept, offId: string, defId: string): Concept {
+  if (!featuredOn()) return concept
+  const calls = s.featuredCount ?? (s.featuredCount = {})
+  const flagged = new Set<string>()
+  if (J36_ON) {
+    for (const t of j36TargetIds(world, defId, offId, planFor(defId, 'def'))) flagged.add(t.id)
+  }
+  const oc = (world.staff[offId] ?? []).find((x) => x.role === 'Offensive Coordinator')
+  const pcRel = getCoachSubs() ? centeredSub(world, 'Offensive Coordinator', 'playCalling', oc) : 0
+  const fp: FeaturedPlay | null = electFeatured(world, offId, s.n, calls, flagged, pcRel)
+  if (!fp) return concept
+  const def = FEATURED_CONCEPT[fp.key]
+  return {
+    name: def.name,
+    type: def.type,
+    depth: def.depth,
+    yac: def.yac,
+    description: def.description,
+    personnel: def.personnel as Personnel,
+    featured: fp.key,
+    featuredPlayerId: fp.playerId,
+    featuredRelief: fp.relief,
+  }
+}
+
 
 // J12 #34: the league mean of the pre-snap read margin (disguise quality minus QB
 // read) across the NFL's coordinators/players, cached per world (the WX_CENTER
@@ -3723,6 +3774,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   }
   // L12.10 B0: an occasional fullback checkdown on a short concept (deterministic; no rng).
   if (fb && concept.depth <= 4 && hash32(`${n}:${offId}:fbflat`) % 100 < 4) { target = fb; readRank = scored.length }
+  // J38: a featured pass is built for one star — he is the target (the fade
+  // receiver, the move TE on the seam, the receiving back on the wheel).
+  if (featuredOn() && concept.featuredPlayerId) {
+    const star = offEleven.find((p) => p.id === concept.featuredPlayerId)
+    if (star) { target = star; readRank = 0 }
+  }
   // J10a: the designed read the ball went to and whether it was a checkdown. Both
   // are bookkeeping for the animation / probe; no outcome moves here.
   const vReadNo = target ? (vReadOf.get(target.id) ?? vCands.length + 1) : 1
@@ -4098,6 +4155,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // reads the disguise through throws with a small, matched edge. Zero-mean (the
   // per-snap read noise is symmetric), so the league completion rate holds.
   compProb = clamp(compProb - disgAdj * J12.foolComp, MU.compMin, MU.compMax)
+  // J38: the featured throw's star — his own contested-catch ratings (the fade's
+  // CIT/SPC/JMP, the seam/wheel's SPD/CTH/CIT) plus, on the fade, the QB's DAC
+  // against the covering CB's own PRC. Centred on a fixed league centre.
+  if (featuredOn() && concept.featured) {
+    compProb = clamp(compProb + featuredPassEdge(concept.featured, target, qbA, coverA, covPos, concept.featuredRelief ?? 1), MU.compMin, MU.compMax)
+  }
   if (J8C_STAT.on) { J8C_STAT.cov2 += coverage * coverage; J8C_STAT.compProb += compProb }
   // G7 hurry: a faster offense forces riskier throws.
   // L12 E2: JMP+PRC replace part of the trait-only ball-hawk in the pick rate.
@@ -4127,7 +4190,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const vEyeSkill = coverA && covPos ? 1 + eyeSkill(covPos, coverA.PRC, coverA.AWR) * 0.04 : 1
   const vEye = vThrow ? clamp(vThrow.offCone * VISION_CFG.eyeIntW * vEyeSkill, 0, VISION_CFG.eyeMax) : 0
   const eyeJumpId = vEye > 0 && coverPlayer ? coverPlayer.id : undefined
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye), 0.005, 0.06)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1), 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -4396,6 +4459,12 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   else if (rbPool[1]) carrier = rbPool[1]
   // L12.10 B0: an occasional fullback dive on short yardage (deterministic; no rng).
   if (fbBase && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fbBase
+  // J38: a featured run is built for one star — he takes the snap/carry. The
+  // direct-snap back and the jet-motion receiver are the specific men on the play.
+  if (featuredOn() && concept.featuredPlayerId) {
+    const star = offBase.find((p) => p.id === concept.featuredPlayerId) ?? rbPool.find((p) => p.id === concept.featuredPlayerId)
+    if (star) carrier = star
+  }
   // R15: now that the rep is decided, field the actual eleven (the repped back
   // replaces the nominal starter) and take every resolver group from it.
   const offEleven = fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, carrier?.pos === 'RB' ? carrier.id : undefined, env?.fat, offCounts), OFF_FILL)
@@ -4497,6 +4566,14 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1 + rmean('QB', 'RUN', cA.RUN ?? 70) * 0.4 * E2_W
     : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
 
+  // J38: a featured run's edge is the star's own composite (SPD/AGI/BCV/THP for a
+  // wildcat direct snap; SPD/ACC for a jet sweep) — a direct, centred yardage gain
+  // (the generic `edge` route is tilt-capped, so a featured star's own skill is
+  // applied to the gain itself), scaled by the diminishing-returns/scouting relief.
+  const featRun = featuredOn() && concept.featured && carrier
+    ? featuredRunEdge(concept.featured, carrier, concept.featuredRelief ?? 1)
+    : 0
+
   // Real NFL run distribution, tilted by line + back vs. front seven, plus back style.
   const styleEdge = cStyle.power * 14 + cStyle.elusiveness * 10 + (cFit - 0.5) * 12
   // A pass-heavy offense runs against lighter boxes — make them pay on the ground.
@@ -4519,6 +4596,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (gain > 0) gain = Math.round(gain * R2.runGainCal)
   if (distance <= 2) gain += (rng() < 0.35 ? 2 : 1) + Math.round(cStyle.power * 1.5)
   gain += rbAfterContact(carrier?.pos, cA, gain)
+  // J38: the featured star's own run skill in yards (centred; the specific man's
+  // composite vs the league centre — never a unit mean, and applied once).
+  if (featRun) gain += Math.round(featRun)
   // L12.10 B0: a fullback's lead block earns a little extra on the ground (centered; no rng).
   if (fb) {
     const fA = mkAttrs(fb)
@@ -5207,6 +5287,8 @@ export interface GameState {
   review?: PendingReview | null
   /** Red-flag challenges left / won / lost per club. Not reset at halftime. */
   challenges?: Record<string, ChallengeState>
+  /** J38: featured plays called so far this game, per key (diminishing returns). */
+  featuredCount?: Record<string, number>
 }
 
 const MAX_PLAYS = 210
@@ -5365,7 +5447,21 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const sit: Situation = { yard: s.yard, down: 4, distance: s.distance, qtr: s.qtr, clockSec: s.clock, margin }
   const ev = fourthDownEV(sit, kickPower)
-  const chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  let chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  // J2: the actual call adds a per-play hash dither on the style's go
+  // propensity, so the league go-rate matches the NFL cells instead of every
+  // coach of a style making the identical call. Deterministic (no rng draw) and
+  // skipped for the user's own club (whose standing recommendation stays the
+  // deterministic fourthDownChoice) and for the last-two-minute Q4 override.
+  const q4Override = sit.qtr === 4 && sit.clockSec <= 120 && sit.margin <= -1 && sit.margin >= -8
+  if (getFourthRetune() && !isUser && !q4Override) {
+    const pGo = fourthGoPropensity(sheet.fourth, sit, kickPower)
+    // When the retuned model declines to go, the kick fallback is EV-ranked
+    // exactly as the OFF path ranks it: range alone would add long FGs the old
+    // rule correctly punted (that inflated FG attempts and scoring).
+    const kick: 'fg' | 'punt' = ev.fg != null && ev.fg >= ev.punt ? 'fg' : 'punt'
+    chosen = h01(`${s.n}:${s.offId}:4th`) < pGo ? 'go' : kick
+  }
   // R17: a fake is a rare, situational surprise from 4th & short in plus
   // territory — likelier for a trailing or aggressive club. In this sim the EV
   // already says "go" there, so the fake is that call executed from a kicking
@@ -6072,6 +6168,8 @@ function applyScrimmageOutcome(
     const rate = pers === '11' && gun ? MENU_REALISM.motionRate + MENU_REALISM.motionGun11Bump : MENU_REALISM.motionRate
     motion = h01(`${s.n}:${offId}:motion`) < rate
   }
+  // J38: a featured jet sweep carries jet motion regardless of the hash roll.
+  if (out.motion) motion = true
   const motionFields = motion === undefined ? {} : { motion }
   pushPlay(s, { ...out, ...motionFields, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(out.type === 'run' ? 'run' : 'pass', DEPTH_AWARE_ON ? (conceptFromPlaybook(out.concept)?.depth ?? out.passDepth ?? 0) : (out.passDepth ?? 0)), defCall })
 
@@ -6430,6 +6528,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     let standing = s.callConcepts[id]
     if (!standing) {
       standing = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
+      // J38: the standing/auto call may be a featured play for a qualifying star.
+      standing = applyFeatured(world, s, standing, offId, defId)
       s.callConcepts[id] = standing
     }
     const read = tendencyRead(world, s, s.defId, 'def', bucket)
@@ -6465,6 +6565,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     userDefCall = choice as DefCall
     const aiCls = drawAIOffClass(world, s, s.offId, bucket)
     concept = pickConceptOfClass(s.rng, style, aiCls)
+    // J38: the AI playcaller mixes in a featured play for a qualifying star.
+    concept = applyFeatured(world, s, concept, offId, defId)
     const last = s.decisions[s.decisions.length - 1]
     if (last && last.momentId === id && last.source === 'user') {
       call = callEffect(aiCls, userDefCall)
@@ -6490,6 +6592,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       s.scriptUsed += 1
     } else {
       concept = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
+      // J38: the playcaller mixes in a featured play for a qualifying star.
+      concept = applyFeatured(world, s, concept, offId, defId)
     }
   }
 
@@ -6619,6 +6723,15 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const out = concept.type === 'pass'
     ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0)
     : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery)
+  // J38: record the featured play + its star (animation), count it for the
+  // diminishing returns, and flag jet motion. No rng draw.
+  if (featuredOn() && concept.featured) {
+    out.featured = concept.featured
+    out.featuredPlayerId = concept.featuredPlayerId
+    if (FEATURED_CONCEPT[concept.featured]?.motion) out.motion = true
+    s.featuredCount = s.featuredCount ?? {}
+    s.featuredCount[concept.featured] = (s.featuredCount[concept.featured] ?? 0) + 1
+  }
   // animflow r6b: record (read-only) how tired each man was at the snap, for the broadcast.
   if (out.onFieldOff && out.onFieldDef) out.fatOn = [...out.onFieldOff, ...out.onFieldDef].map((id) => Math.round((s.fat[id] ?? 0) * 100))
   // R15: charge the snap (and its stamina cost) to the players actually on the field.
