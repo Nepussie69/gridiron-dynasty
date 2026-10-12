@@ -3806,8 +3806,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // the concept's air-yards bucket (nflverse pbp 2021-25: share tackled at the
   // catch, then an exponential tail at the bucket's mean), and the catch is
   // drawn that far short of the recorded end spot, so catch + YAC = the spot.
-  const yacT = inc || int ? 0 : yacTarget(simDepth, gainYds, hash(seed + 71))
-  const catchDepth = inc || int ? depth : clampN(gainYds - yacT, Math.min(gainYds, simDepth <= 0 ? simDepth - 1 : simDepth >= 5 ? 2 : 0), Math.max(Math.min(gainYds, simDepth <= 0 ? simDepth - 1 : simDepth >= 5 ? 2 : 0), simDepth + 1))
+  // animflow r8 (J3b): with the sim's per-throw air yards (passDepth, emitted with passConceptDepth
+  // while the air model is on) the ball is caught AT those air yards (capped by the gain) and the
+  // run after it is the rest of the gain; without them the drawn YAC follows the NFL shape (r5).
+  const simAir = !inc && !int && play.passConceptDepth != null && play.passDepth != null
+  const yacT = inc || int ? 0 : simAir ? Math.max(0, gainYds - Math.min(simDepth, gainYds)) : yacTarget(simDepth, gainYds, hash(seed + 71))
+  const catchDepth = inc || int ? depth : simAir ? Math.min(simDepth, gainYds) : clampN(gainYds - yacT, Math.min(gainYds, simDepth <= 0 ? simDepth - 1 : simDepth >= 5 ? 2 : 0), Math.max(Math.min(gainYds, simDepth <= 0 ? simDepth - 1 : simDepth >= 5 ? 2 : 0), simDepth + 1))
   const tgt = targetKey(play, ctx)
   // animflow r8 (J36): a throw steered at a scouted cover defender (scoutTarget = the recorded cover
   // man) goes at HIM: he is the corner lined up over the receiver the ball is thrown to.
@@ -3967,7 +3971,14 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const routePts = (k: string): Pt[] => {
     const def = ROUTES[routeMap[k]] ?? ROUTES.check
     const inw = inwOf(k)
-    const pts = def.wps(f[k].y, los, 1, inw, -inw, side).map((w) => ({ x: clampX(w.x), y: clampY(w.y) }))
+    let raw = def.wps(f[k].y, los, 1, inw, -inw, side)
+    // animflow r8 (302): a crosser drawn into the sideline (a mesh / cross from an outside spot ran
+    // its lateral leg out of the field and braked against the line) crosses the field instead.
+    const endY = raw[raw.length - 1]?.y ?? f[k].y
+    if (/^(meshIn|cross|drag|shallow)$/.test(routeMap[k] ?? '') && (endY < 1.2 - 1.5 || endY > FIELD_H - 1.2 + 1.5)) {
+      raw = raw.map((w) => ({ ...w, y: 2 * f[k].y - w.y }))
+    }
+    const pts = raw.map((w) => ({ x: clampX(w.x), y: clampY(w.y) }))
     if (k !== tgt || !backShoulder) return pts
     // animflow r8 (J38): a back-shoulder fade - he stems the fade to the throw's depth, then plants
     // and turns back to the ball, which is thrown behind his back (sideline-side) shoulder.
