@@ -621,7 +621,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
         const b = posAt(paths[carrierKey], t)
         return Math.hypot(a.x - b.x, a.y - b.y)
       }
-      if (style !== 'dive' && gap(fs) > 1.35) style = 'dive'
+      if (style !== 'dive' && Math.max(gap(fs), gap(Math.max(0, tackleT - 0.25 / D))) > 1.3) style = 'dive'
       tackleStyles[tk] = style
       if (style === 'dive') {
         diveBy[tk] = { t0: Math.max(0, tackleT - 0.4 / D), t1: tackleT }

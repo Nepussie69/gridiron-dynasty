@@ -1629,7 +1629,7 @@ const STRIDE_V = 4.2
 /** animflow r8 (302): the run-up (yd) into an in-stride catch from a settled window. */
 const STRIDE_RUNUP = 3.2
 /** animflow r8: the slowest stem pace (share of top speed) any route is run at (NFL ~0.85-1). */
-const ROUTE_PACE_MIN = 0.85
+const ROUTE_PACE_MIN = 0.92
 /** animflow r8: the tapered launch - acceleration = rate x (LAUNCH_HI - LAUNCH_FADE x v / top). */
 const LAUNCH_HI = 1.35
 const LAUNCH_FADE = 0.65
@@ -3147,7 +3147,8 @@ function pushSide(carrier: Mover, tk: Mover, t: number): Pt {
   const q = posAt(tk.path, Math.min(t, tk.t))
   const { s } = sidelineOf(c.y)
   const d = Math.hypot(q.x - c.x, q.y - c.y) || 1
-  const ux = 0.4 + 0.35 * Math.max(0, (q.x - c.x) / d)
+  // In front of him when he comes from in front (the cut-off), square inside when he trails (driven out).
+  const ux = clampN(0.55 * ((q.x - c.x) / d) + 0.15, -0.25, 0.6)
   const uy = -s + 0.25 * ((q.y - c.y) / d)
   const l = Math.hypot(ux, uy) || 1
   return { x: ux / l, y: uy / l }
@@ -5030,12 +5031,21 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     // (a catch already tight to the sideline is met where he is, not after a step back inside)
     const qy = sd < 0 ? Math.min(c0.y, yS + 2.0) : Math.max(c0.y, yS - 2.0)
     const Q = { x: clampX(Math.max(c0.x + 0.3, endX - qx)), y: clampY(qy) }
-    const cut = { x: clampX(Q.x + 0.4), y: clampY(Q.y - sd * 0.7) }
+    // Where his hands land: in front of / inside the receiver for a man coming from in front, square
+    // inside for one trailing him (the cover man on a sideline catch).
+    const cutFor = (k: string): Pt => {
+      const q = posAt(m[k].path, catchSec)
+      const d = Math.hypot(q.x - Q.x, q.y - Q.y) || 1
+      const ux = clampN(0.55 * ((q.x - Q.x) / d) + 0.15, -0.25, 0.6)
+      const l = Math.hypot(ux, 1)
+      return { x: clampX(Q.x + (ux / l) * 0.7), y: clampY(Q.y - (sd / l) * 0.7) }
+    }
+    const covK = coverKey && pursuers.includes(coverKey) && coverKey !== credK ? coverKey : undefined
     const forcerOf = (tQ: number, any: boolean): string | undefined => {
-      const cand = (credK ? [credK] : []).concat(pursuers.filter((k) => k !== credK && m[k]))
+      const cand = [...(credK ? [credK] : []), ...(covK ? [covK] : []), ...pursuers.filter((k) => k !== credK && k !== covK && m[k])]
       let best: { k: string; slack: number } | undefined
       for (const k of cand) {
-        const slack = tQ - 0.1 - (catchSec + natTo(m[k], cut, catchSec))
+        const slack = tQ - 0.1 - (catchSec + natTo(m[k], cutFor(k), catchSec))
         if (slack >= 0 && k === credK) return k
         if (!best || slack > best.slack) best = { k, slack }
       }
