@@ -4260,7 +4260,10 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const yacPlan = Math.max(0, gainYds - catchDepth)
     const room = (name: string) => {
       const w = ROUTES[name]?.wps(f[tgt].y, los, 1, inwOf(tgt), -inwOf(tgt), side) ?? []
-      const y = w[w.length - 1]?.y ?? f[tgt].y
+      let y = w[w.length - 1]?.y ?? f[tgt].y
+      // (a crosser drawn into the sideline is flipped to cross the field - routePts)
+      if (/^(meshIn|cross|drag|shallow)$/.test(name) && (y < 1.2 - 1.5 || y > FIELD_H - 1.2 + 1.5)) y = 2 * f[tgt].y - y
+      y = clampY(y)
       return Math.min(y, FIELD_H - y)
     }
     const allow = Math.max(4, yacPlan * 0.8) + 1.6

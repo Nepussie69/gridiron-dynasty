@@ -2660,8 +2660,8 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         if (vs.length >= 10) peak.push(vs[vs.length - 1] / top)
         for (const v of vs) { all++; if (v >= 6) spr++ }
       }
-      // north-south after the catch (in-bounds catch-and-runs; out-of-bounds ends have their own check)
-      if (tc?.kind === 'catch' && !play.turnover && !play.outOfBounds) {
+      // north-south after the catch (every catch-and-run, out-of-bounds ones too)
+      if (tc?.kind === 'catch' && !play.turnover) {
         const ca = anim.actors.find((x) => x.key === tgt)
         const end = ca ? posAt(ca.path, 1) : null
         if (ca && end && end.x - tc.spot.x >= 3) {
