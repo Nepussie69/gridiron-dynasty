@@ -331,7 +331,37 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
     fallDir: 'live',
   },
   down: { base: { af: 0.2, fall: 1, run: 0 }, fallDir: 'start' },
-  tackle: { base: { af: 1, ln: 0.62, cr: 0.3, jos: 0.5, run: 0.6 } },
+  // animflow r8 (item b): the wrap - hips sink into the contact (crouch, arms cocked), then the arms
+  // close round him and he leans in with the legs still driving.
+  tackle: {
+    base: { af: 1, ln: 0.62, cr: 0.3, jos: 0.5, run: 0.6 },
+    dyn: (age, _len, p) => {
+      const u = ease(clamp01(age / 0.18))
+      p.cr = 0.48 - 0.18 * u
+      p.af = 0.6 + 0.4 * u
+      p.ln = 0.45 + 0.2 * u
+    },
+  },
+  // animflow r8 (item b): he takes the carrier down and goes down with him, arms still round him.
+  tackleFall: {
+    base: { af: 1, ln: 0.6, cr: 0.25, jos: 0.3, run: 0 },
+    dyn: (age, len, p) => {
+      p.fall = ease(clamp01(age / Math.max(0.15, len)))
+    },
+    fallDir: 'live',
+  },
+  // animflow r8 (item b): a missed tackle - a lunge at the carrier, the arms closing on air, half a
+  // fall forward and back up.
+  lunge: {
+    base: { af: 1, ln: 0.85, cr: 0.35, run: 0.4 },
+    dyn: (age, len, p) => {
+      const u = clamp01(age / Math.max(0.15, len))
+      p.af = 1 - 0.55 * ease(clamp01((u - 0.35) / 0.3))
+      p.sp = 0.35 * ease(clamp01((u - 0.35) / 0.3))
+      p.fall = 0.32 * Math.sin(Math.PI * u)
+    },
+    fallDir: 'live',
+  },
   kick: {
     base: { ln: 0.12, sp: 0.8, run: 0.3 },
     dyn: (age, _len, p) => {

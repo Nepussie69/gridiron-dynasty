@@ -2025,7 +2025,7 @@ ok('animflow r6b (item 5): the broken-tackle move follows the carrier\'s best sk
     const actors = new Map<string, Player>([['rb', rb], ['lb0', r6bPlayer('L0', 'LB', 80)], ['lb1', r6bPlayer('L1', 'LB', 80, { TAK: 85, HPW: 70 })]])
     return presentAnim(anim, play, { actors })
   }
-  for (const [o, move, react] of [[{ JKM: 97 }, 'juke', 'tackleArm'], [{ SPM: 95 }, 'spin', 'stumble'], [{ SFA: 95 }, 'stiffArm', 'stumble'], [{ TRK: 97 }, 'truck', 'fall']] as const) {
+  for (const [o, move, react] of [[{ JKM: 97 }, 'juke', 'lunge'], [{ SPM: 95 }, 'spin', 'lunge'], [{ SFA: 95 }, 'stiffArm', 'stumble'], [{ TRK: 97 }, 'truck', 'fall']] as const) {
     const pa = mk(back(o))
     assert.ok(pa.poses.rb.some((w) => w.state === move && w.t0 <= 0.5 && w.t1 >= 0.5), `${move}: ${JSON.stringify(pa.poses.rb)}`)
     assert.ok(pa.poses.lb0.some((w) => w.state === react && w.t0 <= 0.5 && w.t1 >= 0.5), `${move} → beaten man ${react}: ${JSON.stringify(pa.poses.lb0)}`)
@@ -2334,7 +2334,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       }
     }
     assert.ok(tackles >= 40 && tds >= 5, `coverage: ${tackles} long tackles, ${tds} long scores`)
-    assert.ok(alone / tackles <= 0.1, `${alone}/${tackles} long plays end with nobody on the carrier: ${bad.slice(0, 3).join('; ')}`)
+    assert.ok(alone / tackles <= 0.01, `${alone}/${tackles} long plays end with nobody on the carrier: ${bad.slice(0, 3).join('; ')}`)
     assert.ok(cred / tackles >= 0.7, `drawn tackler is the credited man on ${cred}/${tackles}`)
     assert.ok(slowTd === 0, `${slowTd} scores stop on the line: ${bad.filter((b) => /goal/.test(b)).slice(0, 3).join('; ')}`)
   })
@@ -2685,6 +2685,42 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(med(launch) >= 0.6, `WR speed at snap + 1.0 s ${med(launch).toFixed(2)} x top`)
     assert.ok(stopGo <= routes * 0.03, `stop-and-go on ${stopGo}/${routes} routes: ${sgBad.join('; ')}`)
     assert.ok(ns[1] >= 60 && ns[0] >= ns[1] * 0.95, `catch-and-runs turning downfield ${ns[0]}/${ns[1]}: ${nsBad.join('; ')}`)
+  })
+
+  ok('animflow r8 (b): a tackle is a motion, not a touch and a freeze - the tackler is on the carrier (<= 1.3 yd) >= 0.25 s before the whistle (or dives at his legs), both bodies are going down as it ends and down on the spot at the end, the tackler within 1.5 yd; tackle variants drawn (wrap / hit / arm / dive / gang)', () => {
+    let n = 0
+    let late = 0
+    let upright = 0
+    let far = 0
+    const styles: Record<string, number> = {}
+    let gang = 0
+    const bad: string[] = []
+    const FALLING = new Set(['tackleFall', 'dive', 'fall', 'down'])
+    games6d(6, 47, (play, anim) => {
+      const ev = anim.events ?? []
+      const end = ev.find((e) => e.kind === 'tackle' || e.kind === 'sack')
+      if (!end || ev.some((e) => e.kind === 'fumble' || e.kind === 'interception')) return
+      const car = end.keys[1]
+      const tk = Object.keys(anim.skill?.tackles ?? {})[0] ?? end.keys[0]
+      if (!tk || !car || tk === car) return
+      const D = anim.duration / 1000
+      const tE = end.t
+      const at = (k: string, t: number) => { const a = anim.actors.find((x) => x.key === k)!; return posAt(a.path, t) }
+      const gap = (t: number) => { const a = at(tk, t); const b = at(car, t); return Math.hypot(a.x - b.x, a.y - b.y) }
+      n++
+      const style = anim.skill?.tackles?.[tk] ?? '?'
+      styles[style] = (styles[style] ?? 0) + 1
+      if (style !== 'dive' && gap(Math.max(0, tE - 0.25 / D)) > 1.3) { late++; if (bad.length < 4) bad.push(`${play.n} ${play.concept} ${tk} late (${gap(Math.max(0, tE - 0.25 / D)).toFixed(1)} yd 0.25 s out)`) }
+      const tq = Math.max(0, tE - 0.03 / D)
+      if (!FALLING.has(poseAt6d(anim, tk, tq)) || !FALLING.has(poseAt6d(anim, car, tq)) || poseAt6d(anim, car, 1) !== 'down') { upright++; if (bad.length < 4) bad.push(`${play.n} ${play.concept} ${tk} ${poseAt6d(anim, tk, tq)} / ${car} ${poseAt6d(anim, car, tq)} at the whistle`) }
+      if (gap(tE) > 1.5) far++
+      if (anim.actors.some((a) => a.side === 'def' && a.key !== tk && poseAt6d(anim, a.key, tq) === 'tackleFall')) gang++
+    })
+    console.log(`      tackles ${n}: late ${late}, not going down together ${upright}, tackler > 1.5 yd ${far}; styles ${JSON.stringify(styles)}, gang ${gang}`)
+    assert.ok(n >= 150, `coverage ${n}`)
+    assert.ok(upright === 0 && far === 0, `touch-and-freeze: ${upright} / ${far} of ${n}: ${bad.join('; ')}`)
+    assert.ok(late <= n * 0.05, `tackler arrives at the whistle on ${late}/${n}: ${bad.join('; ')}`)
+    assert.ok((styles.wrap ?? 0) > 0 && (styles.hit ?? 0) > 0 && (styles.arm ?? 0) > 0 && (styles.dive ?? 0) > 0 && gang > 0, `variants ${JSON.stringify(styles)} gang ${gang}`)
   })
 
   ok('animflow r8 (backlog 354 / 373): every out-of-bounds end that is not a clock step-out is forced - a defender within 2 yd, inside or ahead of the carrier, with his hands on him (push) as he goes over the line, runs and catch-and-runs; a clock step-out angles out on its own (no push)', () => {
