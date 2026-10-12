@@ -7,6 +7,7 @@
 //   gd.view.quality  'auto' | 'full' | 'lite'           (default 'auto')
 //   gd.view.autoQ    JSON of the last Auto measurement
 //   gd.view.replayTypes  JSON array of reason ids for 'custom' (default: all)
+//   gd.view.cameraAngle  'fixed' | 'dynamic'            (default 'fixed', backlog 357)
 //
 // Every read and write is wrapped in try/catch; a missing OR corrupt value
 // falls back to its default and never throws. A tiny external store
@@ -20,6 +21,8 @@ export type GameView = 'auto' | 'broadcast' | 'topdown'
 export type ReplayMode = 'big' | 'all' | 'off' | 'custom'
 export type QualitySetting = 'auto' | 'full' | 'lite'
 export type QualityLevel = 'full' | 'lite'
+/** Backlog 357: 'fixed' holds one broadcast angle (pan + zoom only); 'dynamic' = the re-angling director. */
+export type CameraAngleSetting = 'fixed' | 'dynamic'
 
 /** The last Auto-quality measurement, keyed to the device it was taken on. */
 export interface AutoQState {
@@ -41,6 +44,7 @@ export interface ViewSettings {
   replayTypes: ReplayReasonId[]
   quality: QualitySetting
   autoQ: AutoQState | null
+  cameraAngle: CameraAngleSetting
 }
 
 export const VIEW_KEYS = {
@@ -49,6 +53,7 @@ export const VIEW_KEYS = {
   replayTypes: 'gd.view.replayTypes',
   quality: 'gd.view.quality',
   autoQ: 'gd.view.autoQ',
+  cameraAngle: 'gd.view.cameraAngle',
 } as const
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
@@ -57,6 +62,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
   replayTypes: [...DEFAULT_REPLAY_TYPES],
   quality: 'auto',
   autoQ: null,
+  cameraAngle: 'fixed',
 })
 
 /** Phone breakpoint for the view: below 768 CSS px the live view defaults top-down. */
@@ -160,6 +166,7 @@ function readAll(): ViewSettings {
     replayTypes: readReplayTypes(),
     quality: pick(readRaw(VIEW_KEYS.quality), ['auto', 'full', 'lite'] as const, 'auto'),
     autoQ: readAutoQ(),
+    cameraAngle: pick(readRaw(VIEW_KEYS.cameraAngle), ['fixed', 'dynamic'] as const, 'fixed'),
   }
 }
 
@@ -212,6 +219,11 @@ export function setReplayTypes(v: readonly ReplayReasonId[]): void {
 
 export function setQualitySetting(v: QualitySetting): void {
   writeRaw(VIEW_KEYS.quality, v)
+  refresh()
+}
+
+export function setCameraAngle(v: CameraAngleSetting): void {
+  writeRaw(VIEW_KEYS.cameraAngle, v)
   refresh()
 }
 

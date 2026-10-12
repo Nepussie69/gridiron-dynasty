@@ -466,6 +466,7 @@ export function MatchView() {
       hudBottomInset: PILL_CLEAR_PX[view.cameraProfile],
       onFallback: (f) => reportFallback(f),
       onAutoQ: (a) => setAutoQState(a),
+      cameraAngle: vsettings.cameraAngle,
     })
     liveCtlRef.current = ctl
     if (ctl) {
@@ -479,7 +480,7 @@ export function MatchView() {
       ctl?.destroy()
       if (liveCtlRef.current === ctl) liveCtlRef.current = null
     }
-  }, [broadcastLive, liveCanvas, homeId, awayId, view.cameraProfile, view.live, vsettings.quality, reduced])
+  }, [broadcastLive, liveCanvas, homeId, awayId, view.cameraProfile, view.live, vsettings.quality, vsettings.cameraAngle, reduced])
 
   // Load each recorded play into the live view (the PlayAnim is the truth; only
   // the drawing differs from the top-down view).
@@ -585,6 +586,7 @@ export function MatchView() {
       live: 'topdown',
       hudBottomInset: PILL_CLEAR_PX[view.cameraProfile],
       onFallback: (f) => reportFallback(f),
+      cameraAngle: vsettings.cameraAngle,
     })
     if (!ctl) {
       queueMicrotask(close)
@@ -603,7 +605,7 @@ export function MatchView() {
       ctl.destroy()
       if (overlayCtlRef.current === ctl) overlayCtlRef.current = null
     }
-  }, [overlayKey, homeId, awayId, view.cameraProfile, view.quality, reduced])
+  }, [overlayKey, homeId, awayId, view.cameraProfile, view.quality, vsettings.cameraAngle, reduced])
   // DEV-only probe hooks (B8 browser review): jump to a play.
   useEffect(() => {
     if (!import.meta.env.DEV) return

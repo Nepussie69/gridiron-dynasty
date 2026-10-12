@@ -2606,4 +2606,97 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   })
 }
 
+// ── Backlog 357 (camera lock): with cameraAngle 'fixed' the live / replay / phone
+// camera holds ONE angle — yaw, height and pitch constant (< 1e-6) on every frame of
+// every play — while pan + zoom keep the action (the holder, else the ball; a ball
+// above the fixed rig's reach, FIXED_WATCH_Z, by its ground spot) in the safe frame.
+{
+  const { fileURLToPath } = await import('node:url')
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const rj = (n: string) => JSON.parse(readFileSync(`${repo}public/data/${n}.json`, 'utf8'))
+  ;(await import('../src/game/data/realData.ts')).setRealData({ nfl: rj('madden26').players, cfb: rj('cfb26').teams, source: { madden: 'local', cfb: 'local' } })
+  ;(await import('../src/game/data/calibration.ts')).setCalibration(rj('calibration'))
+  const store = await import('../src/store/gameStore.ts')
+  const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
+  const { buildPlayAnim, holderAt, posAt } = await import('../src/components/playAnim.ts')
+  const { actorPlayers } = await import('../src/components/jersey.ts')
+  const cam = await import('../src/components/broadcast/camera.ts')
+  const { createBroadcastDirector } = await import('../src/components/broadcast/directorRules.ts')
+  const { FIXED_WATCH_Z } = await import('../src/components/broadcast/director.ts')
+  const pc = await import('../src/components/broadcast/phoneCamera.ts')
+  ok('backlog 357 camera lock: fixed angle — yaw / height / pitch constant < 1e-6 (live, replay, phone), the action in the safe frame >= 99% of frames', () => {
+    store.useGame.getState().startCareer({ name: 'C', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const sim = simulatePlayByPlay(world, nfl[0].id, nfl[1].id, world.seed + 13)
+    const out: string[] = []
+    let dynamicMoves = 0
+    for (const [profile, W, H, clear] of [['live', 1280, 720, 48], ['phone', 351, 620, 68]] as const) {
+      let ref: { yaw: number; pitch: number; z: number } | null = null
+      let dAng = 0
+      let frames = 0
+      let inside = 0
+      let passBall = 0
+      let passBallIn = 0
+      let plays = 0
+      const applier = pc.createProfileApplier(pc.CAMERA_PROFILES.phone, { fixed: true })
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (!['run', 'pass', 'kickoff', 'punt', 'fg', 'pat'].includes(play.type)) continue
+        const other = play.offId === nfl[0].id ? nfl[1].id : nfl[0].id
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const d = createBroadcastDirector({ profile, viewport: { w: W, h: H }, bottomClearPx: clear, angle: 'fixed' })
+        d.reset(play, anim)
+        plays++
+        const nf = Math.ceil((anim.duration / 1000) * 60)
+        applier.reset()
+        for (let j = 0; j <= nf; j++) {
+          const t = j / nf
+          let pose = d.toCamera(d.shotAt(t))
+          const key = holderAt(anim, t)
+          const a = key ? anim.actors.find((x) => x.key === key) : null
+          const b = posAt(anim.ball, t)
+          const bz = ballZAt(anim as BroadcastAnim, t)
+          const car = a ? posAt(a.path, t) : null
+          if (profile === 'phone') {
+            pose = applier.apply(pose, { strongSideY: 32.5, carrier: car, ball: { x: b.x, y: b.y, z: Math.min(bz, FIXED_WATCH_Z) }, losX: 10 + play.startYard, direction: 1, phase: 'live', viewport: { w: W, h: H }, wide: Math.max(0, Math.min(1, 1 - (t * anim.duration / 1000 - 0.14))), bottomClear: clear }, `${i}`)
+          }
+          const c = cam.makeCamera(pose, { width: W, height: H })
+          const ang = { yaw: Math.atan2(c.fy, c.fx), pitch: Math.asin(Math.max(-1, Math.min(1, c.fz))), z: c.pz }
+          ref ??= ang
+          dAng = Math.max(dAng, Math.abs(ang.yaw - ref.yaw), Math.abs(ang.pitch - ref.pitch), Math.abs(ang.z - ref.z))
+          const safe = (p: { x: number; y: number } | null) => !!p && p.x >= W * 0.06 - 2 && p.x <= W * 0.94 + 2 && p.y >= H * 0.06 - 2 && p.y <= H - Math.max(clear + 14, H * 0.06) + 2
+          const pt = car ? { x: car.x, y: car.y, z: 0 } : { x: b.x, y: b.y, z: bz > FIXED_WATCH_Z ? 0 : bz }
+          frames++
+          if (safe(cam.project(c, pt.x, pt.y, pt.z))) inside++
+          if (profile === 'live' && play.type === 'pass' && !key) {
+            passBall++
+            if (safe(cam.project(c, b.x, b.y, bz))) passBallIn++
+          }
+        }
+        if (profile === 'live' && dynamicMoves === 0) {
+          const dd = createBroadcastDirector({ profile, viewport: { w: W, h: H }, bottomClearPx: clear, angle: 'dynamic' })
+          dd.reset(play, anim)
+          const z0 = dd.shotAt(0).z ?? 0
+          for (let j = 0; j <= 60; j++) if (Math.abs((dd.shotAt(j / 60).z ?? 0) - z0) > 0.5) dynamicMoves++
+        }
+      }
+      assert.ok(plays > 100 && frames > 20000, `${profile} coverage ${plays} plays / ${frames} frames`)
+      assert.ok(dAng < 1e-6, `${profile}: the fixed camera angle moved by ${dAng}`)
+      assert.ok(inside / frames >= 0.99, `${profile}: the action in the safe frame on only ${((inside / frames) * 100).toFixed(2)}% of ${frames} frames`)
+      if (profile === 'live') assert.ok(passBall > 1000 && passBallIn / passBall >= 0.99, `passes in the air framed by pan / zoom ${passBallIn}/${passBall}`)
+      out.push(`${profile} ${((inside / frames) * 100).toFixed(2)}% of ${frames}`)
+    }
+    // The replay director keeps the live rig under a fixed angle (no higher replay angle).
+    const p0 = sim.plays.find((p) => p.type === 'pass')!
+    const a0 = buildPlayAnim(p0, { actors: actorPlayers(world, p0, p0.offId === nfl[0].id ? nfl[1].id : nfl[0].id, null) })
+    const live = createBroadcastDirector({ profile: 'live', angle: 'fixed' })
+    live.reset(p0, a0)
+    const pl = cam.makeCamera(live.toCamera(live.shotAt(0.5)), { width: 1280, height: 720 })
+    assert.ok(Math.abs(pl.fz - Math.sin(-Math.atan2(14, 27))) < 1e-9, 'fixed angle = the live rig at the snap (height 14, back 27)')
+    assert.ok(dynamicMoves > 0, "'dynamic' still re-angles (height eases on some play)")
+    console.log(`      camera lock: ${out.join(', ')}`)
+  })
+}
+
 console.log(`check-broadcast: PASS (${n} checks)`)
