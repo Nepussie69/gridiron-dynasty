@@ -77,18 +77,108 @@ export function fourthDownEV(s: Situation, kickPower: number): { go: number; fg:
   const p = convertProb(s.distance)
   const q = fgProb(s.yard, kickPower)
   // Modern fourth-down analytics value possession a touch higher than the raw
-  // expected-points curve implies; the flat bonus keeps the CALIBRATED go-rate
-  // near the 2015–2024 NFL norm across every field zone instead of only in plus
-  // territory. It is a decision-model knob, not a play-outcome change.
-  const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard) + GO_BONUS
+  // expected-points curve implies. J2 replaces the old flat bonus with a
+  // situation-shaped one (see goBonus) so the go-rate lands on the nflverse
+  // 2021–25 norms; with the retune off the original flat GO_BONUS is used.
+  const go = p * epAt(Math.min(99, s.yard + s.distance)) - (1 - p) * epAt(100 - s.yard) +
+    (FOURTH_RETUNE_ON ? goBonus(s) : GO_BONUS)
   const fg = s.yard < fgRangeYard(kickPower) ? null : q * (3 - epAt(25)) - (1 - q) * epAt(100 - s.yard)
   // A 40-yard net punt, touchback at the 20.
   const punt = -epAt(100 - Math.min(80, s.yard + 40))
   return { go, fg, punt }
 }
 
-/** R2: flat 4th-down possession bonus (see fourthDownEV). */
+/** R2: flat 4th-down possession bonus (see fourthDownEV). The OFF-path value. */
 export const GO_BONUS = 0.8
+
+// ── J2: 4th-down go-for-it retune ────────────────────────────────────────────
+// The nflverse 2021–25 play-by-play says the sim goes for it far too often on
+// 4th & 2–6 (48% vs 15%) and in its own half; the flat R2 GO_BONUS was the
+// culprit. J2 keeps the decision model (no play-outcome change) but
+//   (a) shapes the possession bonus goBonus(s) by distance and field zone, and
+//   (b) turns each coach style's go decision into a log-odds threshold on the
+//       resulting EV margin, with a per-play hash dither in chooseFourth.
+// Every number below is fitted to the NFL go-rate cells in play-realism.json.
+// Toggled off, the module is exactly the old flat-GO_BONUS behaviour.
+
+/** Distance buckets (4th & 1 / 2–3 / 4–6 / 7+). */
+type FourthDist = '1' | '2-3' | '4-6' | '7+'
+/** Field zones by the offense's own yard line (0–39 own … 80–99 red zone). */
+type FourthZone = 'own' | 'mid' | 'opp' | 'rz'
+
+export const FOURTH_RETUNE = {
+  /** Smooth distance decay of the bonus: ≈0.49 at 4th & 1 → ≈0.03 at 4th & 7+. */
+  base: 0.62,
+  midDist: 2.6,
+  decay: 0.85,
+  /** Per-zone residual on top of `base`: the own half is shrunk (NFL almost
+   *  never goes on 4th & 2–6 from its own side) and plus territory lifted on
+   *  4th & 1 and medium distances, fitted cell-by-cell to the NFL go-rates.
+   *  The own/mid cells sit near the low end of their tolerances and the opp
+   *  cells at target: the sim carries ~0.7 more 4th downs/team-game than the
+   *  NFL, so every point of go-rate cut is a punt or FG, and the calibration
+   *  kick bands are tight — plus territory is lifted most so the retained go's
+   *  come from kicks that would have been FGs rather than punts. */
+  zoneAdj: {
+    '1': { own: -0.34, mid: 0.22, opp: 0.98, rz: 0.16 },
+    '2-3': { own: -0.5, mid: -0.03, opp: 0.8, rz: -0.32 },
+    // Mid 4th&4-6 trimmed after the merge onto the newer main (J3b/J9), whose
+    // league runs ~1 point hotter on 4th&4-6 than the tree these were fitted on;
+    // 0.1 puts the 4th&4-6 cell back under its target without touching the other
+    // distances (the punt/points collateral is set by the total go-rate, not here).
+    '4-6': { own: 0.12, mid: 0.1, opp: 1.1, rz: -0.12 },
+    '7+': { own: 0.8, mid: 0.7, opp: 1.24, rz: 0.4 },
+  } as Record<FourthDist, Record<FourthZone, number>>,
+  /** A trailing club in the 4th quarter leans go: bonus per point of deficit,
+   *  capped at `urgencyCap` points. */
+  urgency: 0.03,
+  urgencyCap: 14,
+  /** Log-odds threshold on the EV margin (points) and the logistic slope. The
+   *  aggressive coach widens the range ~2 fourth-down yards beyond standard
+   *  (aggressive θ −0.55) and the conservative one is ~2 yards tighter. */
+  theta: { conservative: 1.9, standard: 1.35, aggressive: 0.8 } as Record<FourthStyle, number>,
+  logisticSlope: 0.5,
+}
+
+let FOURTH_RETUNE_ON = true
+/** Dev-only toggle (default on): off is the unmodified R2 decision model. */
+export function setFourthRetune(on: boolean) {
+  FOURTH_RETUNE_ON = on
+}
+export function getFourthRetune(): boolean {
+  return FOURTH_RETUNE_ON
+}
+
+function fourthZone(yard: number): FourthZone {
+  return yard < 40 ? 'own' : yard < 60 ? 'mid' : yard < 80 ? 'opp' : 'rz'
+}
+function fourthDist(distance: number): FourthDist {
+  return distance <= 1 ? '1' : distance <= 3 ? '2-3' : distance <= 6 ? '4-6' : '7+'
+}
+
+/** J2: the shaped possession bonus that replaces the flat GO_BONUS. */
+export function goBonus(s: Situation): number {
+  const t = FOURTH_RETUNE
+  const base = t.base / (1 + Math.exp((s.distance - t.midDist) * t.decay))
+  const adj = t.zoneAdj[fourthDist(s.distance)][fourthZone(s.yard)]
+  const urgency = s.qtr === 4 && s.margin < 0 ? t.urgency * Math.min(-s.margin, t.urgencyCap) : 0
+  return base + adj + urgency
+}
+
+/**
+ * J2: probability (0–1) that this coach style goes for it on this situation.
+ * A logistic in the EV margin over the best kick, so a short distance, plus
+ * territory and a late deficit all push the margin (and the chance) up. The
+ * styles sit at different thresholds, so the same snap can be a go for an
+ * aggressive coach and a kick for a conservative one.
+ */
+export function fourthGoPropensity(style: FourthStyle, s: Situation, kickPower: number): number {
+  const ev = fourthDownEV(s, kickPower)
+  const bestKick = ev.fg == null ? ev.punt : Math.max(ev.fg, ev.punt)
+  const margin = ev.go - bestKick
+  const u = (margin - FOURTH_RETUNE.theta[style]) / FOURTH_RETUNE.logisticSlope
+  return 1 / (1 + Math.exp(-u))
+}
 
 export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: number): 'go' | 'fg' | 'punt' {
   const ev = fourthDownEV(s, kickPower)
@@ -97,6 +187,12 @@ export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: nu
   if (s.qtr === 4 && s.clockSec <= 120 && s.margin <= -1 && s.margin >= -8) {
     // A FG that ties or wins gets the call; otherwise go.
     return inRange && s.margin >= -3 ? 'fg' : 'go'
+  }
+  // J2: the modal call of the style's propensity model (the sim's actual call
+  // adds the per-play hash dither in playsim.chooseFourth; the probe grid and
+  // the user's standing recommendation use this deterministic threshold).
+  if (FOURTH_RETUNE_ON) {
+    return fourthGoPropensity(style, s, kickPower) >= 0.5 ? 'go' : inRange ? 'fg' : 'punt'
   }
   const val = (id: 'go' | 'fg' | 'punt') => (id === 'go' ? ev.go : id === 'fg' ? (ev.fg as number) : ev.punt)
   const ranked: ('go' | 'fg' | 'punt')[] = inRange ? ['go', 'fg', 'punt'] : ['go', 'punt']
