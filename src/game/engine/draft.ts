@@ -7,6 +7,7 @@ import { pushLedger } from './ledger'
 import { departmentGrade } from './department'
 import { convictionPick } from './conviction'
 import { redFlagIds } from './redflag'
+import { roomNote, roomTilt, roomWinner } from './draftRoom'
 import { makeCharacter } from './character'
 import { type World, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
@@ -142,6 +143,7 @@ export function bestAvailableFor(
   teamId: string,
   advice?: BoardAdvice,
   gradeOf?: (p: DraftProspect) => number,
+  tilt?: (p: DraftProspect) => number,
 ): DraftProspect | null {
   const available = world.draft.filter((p) => !p.draftedBy)
   if (!available.length) return null
@@ -154,7 +156,10 @@ export function bestAvailableFor(
       const idx = advice.board.indexOf(p.id)
       if (idx >= 0) adviceBonus = advice.weight * Math.max(4, 30 - idx * 4)
     }
-    return { p, score: (gradeOf ? gradeOf(p) : p.grade) + needBonus + posPremium + adviceBonus }
+    // FUTURES #27 DF1: the draft room's blended tilt. Absent (the default) the
+    // score is byte-identical to before.
+    const roomBonus = tilt ? tilt(p) : 0
+    return { p, score: (gradeOf ? gradeOf(p) : p.grade) + needBonus + posPremium + adviceBonus + roomBonus }
   })
   scored.sort((a, b) => b.score - a.score)
   return scored[0].p
@@ -406,7 +411,10 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
         gradeOf = (p: DraftProspect) => (flagged.includes(p.id) ? -999 : base(p))
       }
     }
-    let prospect = bestAvailableFor(world, teamId, advice, gradeOf)
+    // FUTURES #27 DF1: on your club's picks the room's blended stance tilts the
+    // board (red flag first, then the tilt, then a conviction call can still win).
+    const tilt = career && teamId === career.teamId ? roomTilt(world, career) : undefined
+    let prospect = bestAvailableFor(world, teamId, advice, gradeOf, tilt)
     // G2: in advise mode the Director may pound the table for a conviction call.
     if (prospect && career && teamId === career.teamId && !canDraft(career)) {
       const roll = makeRng(world.seed + world.season * 97 + world.draftState.pickIndex)()
@@ -417,7 +425,25 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
       break
     }
     const round = currentRound(world)
+    // The room note is read off the board the pick was made from.
+    const winner = tilt && career ? roomWinner(world, career, prospect.id) : null
     const player = makePick(world, prospect, teamId)
+    if (tilt && career && teamId === career.teamId) {
+      pushLedger(career, {
+        kind: 'advice',
+        prospectId: prospect.id,
+        playerId: player.id,
+        name: prospect.name,
+        pos: prospect.pos,
+        college: prospect.college,
+        myGrade: prospect.myGrade ?? prospect.grade,
+        round,
+        pick: prospect.draftPick ?? undefined,
+        truth: prospect.trueGrade,
+        accepted: true,
+        note: roomNote(winner),
+      })
+    }
     if (advising && advice && career) {
       const onBoard = advice.board.includes(prospect.id)
       pushLedger(career, {
@@ -450,13 +476,35 @@ export function simulateRestOfDraft(world: World, career: CareerState | null) {
     const teamId = currentTeamId(world)
     if (!teamId) break
     // The user's club is on the clock but the user chose to auto-finish: take best available for them.
-    const gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
-    const prospect = bestAvailableFor(world, teamId, undefined, gradeOf)
+    const mine = !!career && teamId === career.teamId
+    const gradeOf = mine ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    // FUTURES #27 DF1: an auto/clock pick uses your own vector at 0.7 plus the
+    // room's at 0.3 — you still hear the building before the card goes in.
+    const tilt = mine ? roomTilt(world, career, { auto: true }) : undefined
+    const prospect = bestAvailableFor(world, teamId, undefined, gradeOf, tilt)
     if (!prospect) {
       world.draftState.complete = true
       break
     }
-    makePick(world, prospect, teamId, career && teamId === career.teamId ? career.gmName : null)
+    const winner = tilt && career ? roomWinner(world, career, prospect.id) : null
+    const round = currentRound(world)
+    const player = makePick(world, prospect, teamId, mine ? career!.gmName : null)
+    if (tilt && career) {
+      pushLedger(career, {
+        kind: 'advice',
+        prospectId: prospect.id,
+        playerId: player.id,
+        name: prospect.name,
+        pos: prospect.pos,
+        college: prospect.college,
+        myGrade: prospect.myGrade ?? prospect.grade,
+        round,
+        pick: prospect.draftPick ?? undefined,
+        truth: prospect.trueGrade,
+        accepted: true,
+        note: roomNote(winner),
+      })
+    }
   }
   return world.draftState.complete
 }

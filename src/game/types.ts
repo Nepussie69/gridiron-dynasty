@@ -727,6 +727,15 @@ export interface CareerState {
   conviction?: { season: number; ids: string[] }
   /** K4: the prospects you've red-flagged this draft (max 2). */
   redFlags?: { season: number; ids: string[] }
+  /**
+   * FUTURES #27 DF1: your club's draft philosophy for the current draft. The
+   * room argues all season; the tilt only applies when the stored `season`
+   * matches the live season (i.e. you set it for this draft). Optional — an old
+   * save has none and picks exactly as before.
+   */
+  draftPhilosophy?: import('./engine/draftRoom').DraftPhilosophy & { season: number }
+  /** FUTURES #27 DF4: give AI clubs hashed draft identities (off by default). */
+  aiDraftIdentities?: boolean
   /** K1: this week's game-plan wrinkle per side, plus the last few weeks of film. */
   wrinkles?: {
     season: number
