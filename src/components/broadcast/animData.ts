@@ -811,6 +811,15 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     | { mode: 'backpedal' }
     | { mode: 'spin'; dir: 1 | -1; s0: number; s1: number }
 
+  // animflow r8 (J12): the fooled QB's first look (window, 0..1) and where he looks (field yd).
+  const fooledWin: { t0: number; t1: number; x: number; y: number } | null = (() => {
+    if (!scrimmage || type !== 'pass' || sackPlay || !play.qbFooled || !throwWin || !flight || !qbKey) return null
+    const t0 = SNAP_T + 0.35 / D
+    const t1 = Math.min(SNAP_T + 1.4 / D, throwWin.t0 - 0.5 / D)
+    if ((t1 - t0) * D < 0.3) return null
+    const q = posAt(paths[qbKey] ?? [], t0)
+    return { t0, t1, x: q.x + 14, y: ballAtCatch.y < MID_Y ? MID_Y + 11 : MID_Y - 11 }
+  })()
   const facingFor = (k: string, t: number, st: PoseState, hKey: string | null, pos: Pt, hPos: Pt | null, nearCar: boolean, vx = 0, vy = 0): FMode => {
     if (kickerKey && k === kickerKey && kickDir != null && (st === 'kick' || fgPlay || puntPlay)) {
       return { mode: 'angle', angle: kickDir }
@@ -841,6 +850,12 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     if (bt && keySet[bt.key]) return { mode: 'actor', key: bt.key }
     const bo = blockOther(k, t)
     if (bo) return { mode: 'actor', key: bo }
+    // animflow r8 (J12 qbFooled): fooled by the disguise, his first look goes where the SHOWN shell
+    // said the ball should go - the side away from the throw - and holds there while the defence
+    // rotates late, before his eyes come back to the real target for the throw.
+    if (fooledWin && qbKey && k === qbKey && hKey === k && t >= fooledWin.t0 && t < fooledWin.t1) {
+      return { mode: 'angle', angle: Math.atan2(fooledWin.y - pos.y, Math.max(6, fooledWin.x - pos.x)) }
+    }
     // Shoulders to the target from the set through the follow-through, then he
     // watches the ball to the catch (on the run too: the shoulders turn).
     if (qbKey && k === qbKey && throwWin && targetKey && keySet[targetKey] && targetKey !== k &&
@@ -868,6 +883,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const N = Math.max(4, Math.ceil(D / 0.04))
   for (let i = 1; i < N; i++) addCut(i / N)
   if (throwWin) { addCut(throwWin.t0); addCut(throwWin.t1) }
+  if (fooledWin) { addCut(fooledWin.t0); addCut(fooledWin.t1) }
   if (fakeWin) { addCut(fakeWin.t0); addCut(fakeWin.t1) }
   if (kickWin) { addCut(kickWin.t0); addCut(kickWin.t1) }
   if (flight) { addCut(flight.t0); addCut(flight.t1) }

@@ -97,7 +97,7 @@ const DEF_FIT: Record<string, string[]> = {
 }
 
 /** 0..1 how well the player fits the scheme (1 = perfect, 0.7 = workable off-fit). */
-export function schemeFit(p: Player, scheme?: string, side: 'OFF' | 'DEF' = 'OFF'): number {
+export function schemeFit(p: Pick<Player, 'traits'>, scheme?: string, side: 'OFF' | 'DEF' = 'OFF'): number {
   if (!scheme) return 0.75
   const table = side === 'OFF' ? OFF_FIT : DEF_FIT
   const rewards = table[scheme] ?? []
