@@ -67,6 +67,8 @@ export function FutureClasses({ yearsOut }: { yearsOut: 1 | 2 }) {
   const cls = futureClass(world, yearsOut)
   const reads = useMemo(
     () => new Map(cls.map((p) => [p.id, futureReadFor(world, career, p, yearsOut)])),
+    // `career` changes every week, so this recomputes as the college season plays
+    // out and the early fog melts (`world.week` inside `futureReadFor`).
     [cls, world, career, yearsOut],
   )
   const sorted = useMemo(
