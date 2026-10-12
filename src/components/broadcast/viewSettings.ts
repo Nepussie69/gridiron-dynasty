@@ -6,6 +6,7 @@
 //   gd.view.replays  'big' | 'all' | 'off' | 'custom'   (default 'big')
 //   gd.view.quality  'auto' | 'full' | 'lite'           (default 'auto')
 //   gd.view.autoQ    JSON of the last Auto measurement
+//   gd.view.qbCone   'off' | 'on'  (unset: off in 2.5D, on in top-down)
 //   gd.view.replayTypes  JSON array of reason ids for 'custom' (default: all)
 //
 // Every read and write is wrapped in try/catch; a missing OR corrupt value
@@ -41,6 +42,8 @@ export interface ViewSettings {
   replayTypes: ReplayReasonId[]
   quality: QualitySetting
   autoQ: AutoQState | null
+  /** QB vision cone + placement circle: null = the per-view default (off in 2.5D, on top-down). */
+  qbCone: 'off' | 'on' | null
 }
 
 export const VIEW_KEYS = {
@@ -49,6 +52,7 @@ export const VIEW_KEYS = {
   replayTypes: 'gd.view.replayTypes',
   quality: 'gd.view.quality',
   autoQ: 'gd.view.autoQ',
+  qbCone: 'gd.view.qbCone',
 } as const
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
@@ -57,6 +61,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
   replayTypes: [...DEFAULT_REPLAY_TYPES],
   quality: 'auto',
   autoQ: null,
+  qbCone: null,
 })
 
 /** Phone breakpoint for the view: below 768 CSS px the live view defaults top-down. */
@@ -160,6 +165,7 @@ function readAll(): ViewSettings {
     replayTypes: readReplayTypes(),
     quality: pick(readRaw(VIEW_KEYS.quality), ['auto', 'full', 'lite'] as const, 'auto'),
     autoQ: readAutoQ(),
+    qbCone: (() => { const r = readRaw(VIEW_KEYS.qbCone); return r === 'on' || r === 'off' ? r : null })(),
   }
 }
 
@@ -213,6 +219,17 @@ export function setReplayTypes(v: readonly ReplayReasonId[]): void {
 export function setQualitySetting(v: QualitySetting): void {
   writeRaw(VIEW_KEYS.quality, v)
   refresh()
+}
+
+/** Persist the QB-cone toggle (null clears it back to the per-view default). */
+export function setQbCone(v: 'off' | 'on' | null): void {
+  writeRaw(VIEW_KEYS.qbCone, v)
+  refresh()
+}
+
+/** Is the QB cone drawn in this view? Default: off in the 2.5D broadcast, on in top-down. */
+export function qbConeOn(s: Pick<ViewSettings, 'qbCone'>, view: 'broadcast' | 'topdown'): boolean {
+  return s.qbCone ? s.qbCone === 'on' : view === 'topdown'
 }
 
 export function setAutoQState(a: AutoQState | null): void {
