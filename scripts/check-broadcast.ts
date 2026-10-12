@@ -2151,7 +2151,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   ;(await import('../src/game/data/calibration.ts')).setCalibration(rj('calibration'))
   const store = await import('../src/store/gameStore.ts')
   const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
-  const { buildPlayAnim, holderAt, posAt, snapKindFor } = await import('../src/components/playAnim.ts')
+  const { buildPlayAnim, holderAt, posAt, snapKindFor, clockStepOut } = await import('../src/components/playAnim.ts')
   const { actorPlayers } = await import('../src/components/jersey.ts')
   const { createBroadcastDirector } = await import('../src/components/broadcast/directorRules.ts')
   const { FAST_SPAN_MAX } = await import('../src/components/broadcast/director.ts')
@@ -2605,6 +2605,30 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(spyOff.length >= 5 && med(spyOff) <= 1.5, `spy lateral offset from the QB median ${med(spyOff)?.toFixed(2)} yd (n ${spyOff.length})`)
     assert.ok(keyD.length >= 20 && biteD.length >= 10 && med(keyD) < med(biteD) - 1, `read key ${med(keyD)?.toFixed(2)} vs biters ${med(biteD)?.toFixed(2)} yd from the carrier at 1.0 s`)
     assert.ok(fillDown.length >= 40 && med(fillDown) >= 1 && med(fillDown) > med(otherDown) + 1, `alley filler downhill ${med(fillDown)?.toFixed(2)} vs ${med(otherDown)?.toFixed(2)} yd at 1.2 s`)
+  })
+
+  ok('animflow r8: an out-of-bounds end (not a clock step-out) is forced - a defender within 2.2 yd, ahead of or inside the carrier, as he goes out', () => {
+    const R = { run: [0, 0], pass: [0, 0] }
+    const bad: string[] = []
+    games6d(10, 131, (play, anim) => {
+      if (!play.outOfBounds || play.endYard >= 100 || play.turnover || play.result.startsWith('Sack') || play.result.startsWith('Incomplete') || clockStepOut(play)) return
+      const car = anim.holders[anim.holders.length - 1]?.key
+      const ca = car ? anim.actors.find((a) => a.key === car) : undefined
+      if (!ca) return
+      const t = Math.max(0, ca.path[ca.path.length - 1].t - 0.12 / (anim.duration / 1000))
+      const c = posAt(ca.path, t)
+      const ok2 = anim.actors.some((a) => {
+        if (a.side !== 'def') return false
+        const q = posAt(a.path, t)
+        return Math.hypot(q.x - c.x, q.y - c.y) <= 2.2 && (q.x >= c.x - 0.5 || Math.abs(q.y - 26.65) < Math.abs(c.y - 26.65))
+      })
+      const r = R[play.type as 'run' | 'pass']
+      r[1]++
+      if (ok2) r[0]++
+      else bad.push(`${play.type} ${play.n} ${play.concept}`)
+    })
+    assert.ok(R.run[1] >= 15 && R.pass[1] >= 15, `coverage ${JSON.stringify(R)}`)
+    assert.ok(R.run[0] / R.run[1] >= 0.85 && R.pass[0] / R.pass[1] >= 0.8, `unforced out-of-bounds ends ${JSON.stringify(R)}: ${bad.slice(0, 4).join('; ')}`)
   })
 
   ok('animflow r8 (J38 / J12 / J36): featured plays are drawn as themselves (wildcat direct snap, jet motion, back-shoulder turn, TE seam, RB wheel); a fooled QB looks off first; a steered throw goes at the scouted corner', () => {

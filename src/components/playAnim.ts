@@ -788,6 +788,16 @@ class Mover {
   }
 }
 
+/**
+ * animflow r8: a deliberate step-out to stop the clock (end of a half, two minutes or less) -
+ * any other out-of-bounds end is drawn as forced by a defender.
+ */
+export function clockStepOut(play: Play): boolean {
+  const [mm, ss] = String(play.clock ?? '').split(':').map(Number)
+  const secs = Number.isFinite(mm) && Number.isFinite(ss) ? mm * 60 + ss : Infinity
+  return (play.qtr === 2 || play.qtr >= 4) && secs <= 120
+}
+
 /** Truncate a mover at time t, returning the speed it was carrying into t. */
 function seek(mv: Mover, t: number): number {
   if (mv.t <= t) {
@@ -4676,9 +4686,59 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     })
   }
 
+  if (!isTD && play.outOfBounds && !clockStepOut(play)) {
+    // animflow r8: a catch-and-run out of bounds is FORCED - a defender takes his cut-off angle and
+    // is in front of / inside the receiver by the spot; the receiver bends to the sideline under
+    // that pressure and is shoved out at the spot (x, result and the credited man unchanged).
+    const credK = creditKey && pursuers.includes(creditKey) ? creditKey : undefined
+    const outward = endY < MID_Y ? -1 : 1
+    const forcerOf = (endSec: number): string | undefined => {
+      const P = { x: endX + 0.6, y: endY - outward * 1.0 }
+      const cand = (credK ? [credK] : []).concat(pursuers.filter((k) => k !== credK && m[k]))
+      let best: { k: string; slack: number } | undefined
+      for (const k of cand) {
+        const slack = endSec - 0.15 - (catchSec + natTo(m[k], P, catchSec))
+        if (slack >= 0 && k === credK) return k
+        if (!best || slack > best.slack) best = { k, slack }
+      }
+      return best && best.slack >= 0 ? best.k : undefined
+    }
+    const c0 = { ...catchPt }
+    const saved = m[tgt].pace
+    let forcer: string | undefined
+    for (let kk = 1; kk >= 0.45 - 1e-9; kk -= 0.07) {
+      seek(m[tgt], catchSec)
+      m[tgt].pace = { top: saved.top * kk, acc: saved.acc }
+      // Upfield first, then he is turned toward the sideline as the cut-off man arrives.
+      const mid = { x: clampX(c0.x + (endX - c0.x) * 0.62), y: clampY(c0.y + (endY - c0.y) * 0.3) }
+      m[tgt].run(Math.abs(endX - c0.x) > 3 ? [mid, { x: endX, y: endY }] : [{ x: endX, y: endY }], { v0: Math.min(catchV0, m[tgt].pace.top), stop: true })
+      m[tgt].pace = saved
+      forcer = forcerOf(m[tgt].t)
+      if (forcer) break
+    }
+    const endSec0 = m[tgt].t
+    const others = pursuers.filter((k) => k !== forcer)
+    angleChase(m, others, catchSec, m[tgt], endSec0, seed)
+    if (forcer) hitAndRide(m[forcer], m[tgt], catchSec, Math.max(catchSec + 0.1, endSec0 - 0.3), endSec0, 3.0)
+    stepOut(m[tgt], forcer ? [m[forcer]] : [])
+    const endSec = m[tgt].t
+    capAll(m, ALL_KEYS(f), endSec)
+    ball.push(...shadow(m[tgt].path, catchSec).slice(1))
+    recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
+    if (forcer) recEv(Math.max(catchSec + 0.1, endSec0 - 0.3), 'contact', [tgt, forcer], posAt(m[tgt].path, Math.max(catchSec + 0.1, endSec0 - 0.3)))
+    recEv(endSec, 'outOfBounds', [tgt], posAt(m[tgt].path, endSec))
+    return finishPass({ ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
+  }
+
   if (isTD || play.outOfBounds) {
     // A score or a step out of bounds: he keeps the ball to the spot and the
     // coverage chases, but nothing forces a tackle.
+    // animflow r8: a deliberate step-out (clock) angles to the sideline early, on purpose.
+    if (!isTD && Math.abs(endX - catchPt.x) > 4) {
+      const early = { x: clampX(catchPt.x + (endX - catchPt.x) * 0.45), y: clampY(endY - (endY < MID_Y ? -1 : 1) * 1.2) }
+      m[tgt].run([early], { v0: catchV0, stop: false })
+      catchV0 = carrySpeed(m[tgt])
+    }
     m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: !isTD })
     // animflow r6c2 (297): through the goal line at speed; the coverage takes
     // real pursuit angles (the fast men close, the rest angle at the pylon).
