@@ -60,6 +60,6 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 50 | **Market & fans** (user 2026-10-11) | City size, ticket and jersey sales, revenue feeding the budget | #25 | ⏳ |
 | 51 | **Former players become coaches** (user 2026-10-11) | Retired players enter coaching with sub-ratings informed by their playing ratings (a smart QB → OC with high Play calling) | J9, #13 | ⏳ |
 | 52 | **WR reads** (user 2026-10-12) | Receivers read the coverage after the snap: option routes and sight adjustments (sit vs zone, keep running vs man, convert vs press/rolled safety, hot route vs blitz) by the WR's own AWR/route running/experience and his chemistry with the QB (J37); a missed read = wrong route, incompletion or INT; the broadcast shows the conversion | J37, J13, J10a | ⏳ |
-| 53 | **QB progressions** (user 2026-10-12) | The QB works the concept's read order (1st → 2nd → 3rd → checkdown) at a pace set by his own AWR/experience/processing and the pressure on him; who he finds open decides the target; the broadcast shows his head/shoulders moving through the reads | J10a (vision part 1), J10b | ⏳ |
+| 53 | **QB progressions** (user 2026-10-12) | Already in J10a (running): designed read order per concept, read speed by the QB's own AWR/experience, defenders read his eyes, checkdowns, readNo on the Play. Left: broadcast visuals (head/shoulders through the reads) in the next animation round | J10a | 🔄 J10a |
 
 NFL statistical retuning is approved and running in `wt-realism`.
