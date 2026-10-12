@@ -2462,6 +2462,64 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     return a ? posAt(a.path, Math.min(1, (sec * 1000) / anim.duration)) : null
   }
 
+  ok('animflow 7a: no weaving — after the line (runs, QB keepers, catch-and-runs) or the catch (returns) the carrier\'s lateral velocity changes sign at most once on >= 90% of carries (median <= 1, never > 3)', () => {
+    store.useGame.getState().startCareer({ name: 'W', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const rev: Record<string, number[]> = { run: [], yac: [], ret: [] }
+    const bad: string[] = []
+    const DT = 0.05
+    for (let g = 0; g < 6; g++) {
+      const home = nfl[(g * 5 + 1) % nfl.length].id
+      const away = nfl[(g * 5 + 3) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 61 + g * 433)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        const ret = (play.type === 'kickoff' || play.type === 'punt') && play.returnKind === 'return' && !!play.returnerId
+        if (!ret && play.type !== 'run' && (play.type !== 'pass' || play.result !== 'Complete' || play.turnover)) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const D = anim.duration / 1000
+        const ev = anim.events ?? []
+        const holder = anim.holders.filter((h) => h.key).at(-1)
+        if (!holder?.key) continue
+        const a = anim.actors.find((x) => x.key === holder.key)
+        if (!a) continue
+        const endE = ev.find((e) => ['tackle', 'outOfBounds', 'score', 'safety', 'down', 'fumble'].includes(e.kind) && e.t > holder.t)
+        let s0 = holder.t * D + (ret ? 0.3 : 0)
+        if (!ret) {
+          const los = 10 + play.startYard
+          while (s0 < D && posAt(a.path, s0 / D).x <= los + 0.3) s0 += DT
+        }
+        const contact = ev.find((e) => e.kind === 'contact' && e.t * D > s0)
+        const s1 = Math.min(endE ? endE.t * D : D, contact ? contact.t * D + 0.1 : D)
+        if (s1 - s0 < 0.6) continue
+        let n = 0
+        let last = 0
+        let prev = posAt(a.path, s0 / D)
+        for (let s = s0 + DT; s <= s1 + 1e-9; s += DT) {
+          const p = posAt(a.path, s / D)
+          const vy = (p.y - prev.y) / DT
+          prev = p
+          if (Math.abs(vy) <= 0.5) continue
+          const sg = Math.sign(vy)
+          if (last && sg !== last) n++
+          last = sg
+        }
+        const k = ret ? 'ret' : play.type === 'run' ? 'run' : 'yac'
+        rev[k].push(n)
+        if (n > 3) bad.push(`play ${i} ${play.concept} (${k}): ${n} lateral reversals`)
+      }
+    }
+    for (const [k, v] of Object.entries(rev)) {
+      const le1 = v.filter((x) => x <= 1).length / Math.max(1, v.length)
+      const med = [...v].sort((x, y) => x - y)[Math.floor(v.length / 2)] ?? 0
+      assert.ok(v.length >= (k === 'ret' ? 25 : 60), `coverage: ${v.length} ${k} carries`)
+      assert.ok(le1 >= 0.9 && med <= 1, `${k}: only ${(le1 * 100).toFixed(0)}% of carries reverse laterally <= 1 time (median ${med})`)
+    }
+    assert.ok(bad.length === 0, `${bad.length} weaving carries: ${bad.slice(0, 4).join('; ')}`)
+  })
+
   ok('animflow 6d (J6): a kneel is a victory formation and the QB ends on a knee at the spot; a spike goes into the turf off the snap; a carrier out of bounds crosses the sideline', () => {
     let kneels = 0
     let spikes = 0
