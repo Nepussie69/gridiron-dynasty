@@ -393,7 +393,8 @@ function placement(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan)
   const cp = pathOf(anim, coverK)
   const contest = !!cp && !play.eyeJumpId && (() => { const d = posAt(cp, C); return Math.hypot(d.x - ideal.x, d.y - ideal.y) <= 1.3 })()
   let pose: PoseState
-  let dive = (inc || ends) && hz > 1.6
+  // Wide of him and nothing after it: he lays out for it (a high ball is a leap, not a dive).
+  let dive = (inc || ends) && hz > 1.6 && cls !== 'high'
   if (dive) pose = 'dive'
   else if (cls === 'high') pose = dz >= 0.45 ? 'catchHigh' : 'catch'
   else if (cls === 'low') { dive = dz <= -0.9 && (inc || ends); pose = dive ? 'dive' : 'catchLow' }
@@ -560,7 +561,8 @@ export function applyReadPaths(anim: PlayAnim, play: Play, ctx: AnimContext = {}
       out.ball = [...out.ball.filter((w) => w.t <= C + 1e-9), ...np.filter((w) => w.t > C + 1e-9).map((w) => ({ t: w.t, x: w.x, y: w.y }))]
     }
   }
-  if (plan.checkdown && plan.target && /^(rb|fb)$/.test(plan.target)) {
+  // (not on play action: the run fake is his delay)
+  if (plan.checkdown && plan.target && /^(rb|fb)$/.test(plan.target) && !(anim.events ?? []).some((e) => e.kind === 'playAction')) {
     const bk = plan.target
     const src = out.actors.find((a) => a.key === bk)
     const np = src ? backCheckPath(src.path, plan) : null

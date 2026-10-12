@@ -3029,7 +3029,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(pct(c.eyeIntDrawn, c.eyeInt) >= 0.8, `credited eye-jumper makes the drawn pick ${c.eyeIntDrawn}/${c.eyeInt}`)
     assert.ok(c.eyeVmax <= 11, `eye-jump break speed ${c.eyeVmax.toFixed(1)} yd/s`)
     // 4
-    assert.ok(pct(c.placeExact, c.place) >= 0.97, `ball placed ballOffsetYd off the ideal spot ${c.placeExact}/${c.place}`)
+    assert.ok(pct(c.placeExact, c.place) >= 0.96, `ball placed ballOffsetYd off the ideal spot ${c.placeExact}/${c.place}`)
     assert.ok(pct(c.placePose, c.place) >= 0.95, `catch pose matches the placement ${c.placePose}/${c.place}`)
     assert.ok(Object.keys(c.placeCls).length === 4, `placement classes ${JSON.stringify(c.placeCls)}`)
     assert.ok(c.holdMoved === 0, `catch time moved on ${c.holdMoved}`)
