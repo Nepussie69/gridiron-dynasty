@@ -257,6 +257,9 @@ export interface Player {
   teamId: string | null
   morale: number // 1-100
   fatigue?: number
+  /** Backlog 408 (2c): weeks this free agent has been unsigned this season. Drives
+   *  his falling ask; absent on a legacy save (treated as 0). */
+  faWeeks?: number
   injured?: { games: number; note: string }
   /**
    * L15 (FUTURES #15): set only for the duration of a game the user chose to play

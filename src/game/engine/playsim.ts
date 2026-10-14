@@ -16,7 +16,9 @@ import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, coverUnit, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, getPuntFix, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+// J-PUNTS: the individual-coach 4th-down model's toggle (setStamina pattern).
+export { setPuntFix, getPuntFix } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, SCHEME_MENUS_REALISM, MENU_REALISM, PLAYBOOK, conceptFromPlaybook, formationForConcept, type Personnel } from '../data/playbookData'
@@ -6207,7 +6209,10 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const sit: Situation = { yard: s.yard, down: 4, distance: s.distance, qtr: s.qtr, clockSec: s.clock, margin }
   const ev = fourthDownEV(sit, kickPower)
-  let chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  // J-PUNTS: the specific head coach's own aggression (his gameManagement sub),
+  // never the 3-bucket style and never a unit mean. Undefined when the fix is off.
+  const aggro = getPuntFix() ? coachTendency(world, s.offId).aggro : undefined
+  let chosen = fourthDownChoice(sheet.fourth, sit, kickPower, aggro)
   // J2: the actual call adds a per-play hash dither on the style's go
   // propensity, so the league go-rate matches the NFL cells instead of every
   // coach of a style making the identical call. Deterministic (no rng draw) and
@@ -6215,7 +6220,7 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   // deterministic fourthDownChoice) and for the last-two-minute Q4 override.
   const q4Override = sit.qtr === 4 && sit.clockSec <= 120 && sit.margin <= -1 && sit.margin >= -8
   if (getFourthRetune() && !isUser && !q4Override) {
-    const pGo = fourthGoPropensity(sheet.fourth, sit, kickPower)
+    const pGo = fourthGoPropensity(sheet.fourth, sit, kickPower, aggro)
     // When the retuned model declines to go, the kick fallback is EV-ranked
     // exactly as the OFF path ranks it: range alone would add long FGs the old
     // rule correctly punted (that inflated FG attempts and scoring).
