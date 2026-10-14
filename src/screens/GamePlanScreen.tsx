@@ -9,6 +9,7 @@ import { coachTendency, DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, 
 import { capabilities } from '../game/engine/capabilities'
 import { coordinatorAdvice } from '../game/engine/advice'
 import { PlanEditor } from '../components/PlanEditor'
+import { InjuryReport } from '../components/InjuryReport'
 import { PersonnelCard } from '../components/PersonnelCard'
 import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
@@ -218,6 +219,10 @@ export function GamePlanScreen() {
         <WeatherCard teamId={career.teamId} week={next.week} home={next.home} />
         </div>
       )}
+
+      {/* FUTURES #15: this week's injury report, above the plan sheet, so the
+          Play hurt / Sit calls are made before the orders are set. */}
+      <InjuryReport className="mt-6" disabled={readOnly} />
 
       {/* ── This week: the orders the side switch edits. ──────────────────────── */}
       <section className="mt-6">
