@@ -149,6 +149,67 @@ export function getFourthRetune(): boolean {
   return FOURTH_RETUNE_ON
 }
 
+// ── J-PUNTS: the coach's OWN aggression drives the 4th-down go decision ──────
+// The J2 retune decided the go threshold from one of three coarse `FourthStyle`
+// buckets (theta conservative/standard/aggressive). That is a coach-level
+// aggregate: two coaches 10 rating points apart inside a bucket made the SAME
+// call. J-PUNTS replaces the bucket threshold with the specific head coach's own
+// continuous aggression (`coachTendency().aggro`, itself built from his own
+// gameManagement sub-rating, never a team/roster mean):
+//
+//   theta(coach) = thetaBase − (aggro − aggroCenter) · thetaSlope
+//
+// centred on the measured league coach-population mean `aggroCenter`, so an
+// average coach keeps the identical go propensity and the league mean does not
+// drift; the spread between the most and least aggressive coaches widens. The
+// logistic slope and the situation-shaped `goBonus` are untouched. `thetaBase`
+// is the single league-centre constant this job tunes. Everything is pure (no
+// rng; the per-play hash dither in playsim.chooseFourth is unchanged), so OFF is
+// byte-identical to the J2 model.
+export const PUNT_FIX = {
+  /** League-centre go threshold on the EV margin (points). The J2 'standard'
+   *  theta was 1.35; the individual model's measured fit sits a touch lower
+   *  because the sim reaches ~0.7 more own-half 4th downs per team-game than the
+   *  NFL (its early-down conversion is short), so the analyst EV favours the go
+   *  a little more often there. This single constant is the job's punt/points
+   *  knob; everything else is the coach's own rating. */
+  thetaBase: 1.25,
+  /** FG-range hold: when the specific KICKER'S OWN leg puts the snap in range
+   *  (`ev.fg != null`, i.e. `yard >= fgRangeYard(kickPower)`), the club takes the
+   *  points a touch more readily. The range itself is the individual kicker's
+   *  (KPW/KAC via kickPowerOf), so this is the brief's "kicker's own range for
+   *  FG-vs-punt" site: a big leg converts 4th downs its owner can make, a short
+   *  leg punts/goes. It also keeps the go retune from stealing makeable FG
+   *  attempts (which cost points). */
+  fgHold: 0.18,
+  /** Aggression slope: each point of the coach's own `aggro` moves his threshold
+   *  0.45 pts, so the measured p10–p90 aggro (−2.15…0.61) spans ≈ ±0.6 theta —
+   *  a wide, individual go/punt personality, not three buckets. */
+  thetaSlope: 0.45,
+  /** Measured league coach-population mean of `coachTendency().aggro` (96 NFL
+   *  club-seeds in the probe). The centre keeps an average coach exactly on the
+   *  league threshold. */
+  aggroCenter: -0.62,
+  /** Bounds so an outlier coach cannot run away with the threshold. */
+  aggroLo: -3.4,
+  aggroHi: 2.4,
+}
+
+let PUNTFIX_ON = true
+/** J-PUNTS: dev-only toggle (default on). OFF = the unmodified J2 bucket model. */
+export function setPuntFix(on: boolean) {
+  PUNTFIX_ON = on
+}
+export function getPuntFix(): boolean {
+  return PUNTFIX_ON
+}
+
+/** J-PUNTS: the individual coach's go threshold (see PUNT_FIX). */
+export function puntFixTheta(aggro: number): number {
+  const a = clamp(aggro - PUNT_FIX.aggroCenter, PUNT_FIX.aggroLo - PUNT_FIX.aggroCenter, PUNT_FIX.aggroHi - PUNT_FIX.aggroCenter)
+  return PUNT_FIX.thetaBase - a * PUNT_FIX.thetaSlope
+}
+
 function fourthZone(yard: number): FourthZone {
   return yard < 40 ? 'own' : yard < 60 ? 'mid' : yard < 80 ? 'opp' : 'rz'
 }
@@ -172,15 +233,20 @@ export function goBonus(s: Situation): number {
  * styles sit at different thresholds, so the same snap can be a go for an
  * aggressive coach and a kick for a conservative one.
  */
-export function fourthGoPropensity(style: FourthStyle, s: Situation, kickPower: number): number {
+export function fourthGoPropensity(style: FourthStyle, s: Situation, kickPower: number, aggro?: number): number {
   const ev = fourthDownEV(s, kickPower)
   const bestKick = ev.fg == null ? ev.punt : Math.max(ev.fg, ev.punt)
   const margin = ev.go - bestKick
-  const u = (margin - FOURTH_RETUNE.theta[style]) / FOURTH_RETUNE.logisticSlope
+  // J-PUNTS: the coach's own continuous aggression replaces the 3-bucket style
+  // when the fix is on and his aggro score is supplied (playsim.chooseFourth).
+  let theta = PUNTFIX_ON && aggro !== undefined ? puntFixTheta(aggro) : FOURTH_RETUNE.theta[style]
+  // J-PUNTS: the specific kicker's own range holds the FG (see PUNT_FIX.fgHold).
+  if (PUNTFIX_ON && ev.fg != null) theta += PUNT_FIX.fgHold
+  const u = (margin - theta) / FOURTH_RETUNE.logisticSlope
   return 1 / (1 + Math.exp(-u))
 }
 
-export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: number): 'go' | 'fg' | 'punt' {
+export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: number, aggro?: number): 'go' | 'fg' | 'punt' {
   const ev = fourthDownEV(s, kickPower)
   const inRange = ev.fg != null
   // Any style: down 4 in Q4, last two minutes, trailing by 1–8.
@@ -192,7 +258,7 @@ export function fourthDownChoice(style: FourthStyle, s: Situation, kickPower: nu
   // adds the per-play hash dither in playsim.chooseFourth; the probe grid and
   // the user's standing recommendation use this deterministic threshold).
   if (FOURTH_RETUNE_ON) {
-    return fourthGoPropensity(style, s, kickPower) >= 0.5 ? 'go' : inRange ? 'fg' : 'punt'
+    return fourthGoPropensity(style, s, kickPower, aggro) >= 0.5 ? 'go' : inRange ? 'fg' : 'punt'
   }
   const val = (id: 'go' | 'fg' | 'punt') => (id === 'go' ? ev.go : id === 'fg' ? (ev.fg as number) : ev.punt)
   const ranked: ('go' | 'fg' | 'punt')[] = inRange ? ['go', 'fg', 'punt'] : ['go', 'punt']

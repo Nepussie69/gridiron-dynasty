@@ -749,7 +749,7 @@ function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; vE
 /** cos of the turn angle that counts as a plant (≈ 40°). */
 const TURN_COS = Math.cos(0.7)
 /** animflow r8: braking rate (yd/s^2) of a planted turn out of a catch (an NFL plant-and-cut decelerates harder than it accelerates). */
-const PIVOT_DECEL = 8
+const PIVOT_DECEL = 10.5
 /** animflow r5: share of the cornering speed kept through a cut (0 = the old stop at every corner). */
 const CORNER_KEEP = 1
 
@@ -877,6 +877,16 @@ class Mover {
           this.t += k[k.length - 1].t
           this.x = k[k.length - 1].x
           this.y = k[k.length - 1].y
+          // (the braking carried him past the first knots of the line: he drives out to the first knot AHEAD
+          // of him along the line's overall direction - never back to one he has overrun, that was a weave)
+          const ox = pts[pts.length - 1].x - pts[0].x
+          const oy = pts[pts.length - 1].y - pts[0].y
+          const ol = Math.hypot(ox, oy)
+          if (ol > 1e-6) {
+            let sk = 0
+            while (sk < pts.length - 1 && ((pts[sk].x - this.x) * ox + (pts[sk].y - this.y) * oy) / ol < 0.3) sk++
+            if (sk) pts = pts.slice(sk)
+          }
         }
         v0 = vc
       } else if (hl > 1e-6 && nl > 1e-6 && cosT < TURN_COS) {
@@ -2362,12 +2372,17 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   if (jet) f.rb = { x: jetMeshX, y: clampY(MID_Y - side0 * 6.5), side: 'off', role: carRole }
   const m = startMovers(f, ctx)
   recSnap(los)
-  const wide = /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
+  // animflow r8 ("still runs sideways"): a run the sim ends out of bounds is bounced to the edge BEHIND the
+  // line (the lateral travel is spent there, like a stretch / toss) and goes up the sideline past it - it
+  // used to cross the line at the middle and run 20+ yd sideways across the field to the touchline.
+  const oobEarly = !!play.outOfBounds && !play.turnover && 10 + play.endYard < 110
+  const wide = oobEarly || /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
   const power = /Power|Counter|Trap|Iso|Dive/.test(play.concept)
   const side = hash(seed) < 0.5 ? -1 : 1
   // Inside holes sit between the guards and tackles (NFL R4: inside runs cross
   // the line ~1.5 yd from the ball); designed outside runs bend to the edge.
-  const holeY = MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
+  const edgeIn = 2.5 + hash(seed + 1) * 0.8
+  const holeY = oobEarly ? (side < 0 ? edgeIn : FIELD_H - edgeIn) : MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
   const endX = clampX(10 + play.endYard)
   const fumble = !!play.turnover
   // ── the carrier's line (animflow r4: NFL tracking targets, logs/nfl-motion-reference.out) ──
@@ -2833,7 +2848,8 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   const cPt = posAt(m[carrier].path, contactT)
   // animflow r5: with real acceleration caps the credited man is often a beat
   // late; on a run he still makes it (hitAndRide meets the pile where it is).
-  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2)
+  // (a forced out-of-bounds end needs a man who can really get there: the credited one gets no extra slack)
+  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2, oobRun ? TACKLE_SLACK_PASS : TACKLE_SLACK)
   // A touchdown is chased, never forced: the closest man just runs with him.
   // animflow r6c: a credited man who shed inside the tackle phase closes from his rip.
   let hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
@@ -3772,12 +3788,14 @@ function natTo(mv: Mover, pt: Pt, fromSec: number): number {
 
 /** The tackler who can make the contact in time: the credited man when he can, else the quickest. */
 /** How late (s) the sim's credited tackler may be and still be drawn making the tackle. */
-const TACKLE_SLACK = 0.6
-function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number): string {
+const TACKLE_SLACK = 1.0
+/** A catch-and-run gives the credited man less slack: every beat he is late the carrier is slowed or bowed wide to wait for him, and that reads as sideways running / a crawl. */
+const TACKLE_SLACK_PASS = 0.6
+function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number, slack = TACKLE_SLACK): string {
   const cand = keys.filter((k) => m[k]).map((k) => ({ k, nat: natTo(m[k], c, fromSec) })).sort((a, b) => a.nat - b.nat)
   if (!cand.length) return keys[0]
   const pk = prefer ? cand.find((x) => x.k === prefer) : undefined
-  if (pk && pk.nat <= window + TACKLE_SLACK) return pk.k
+  if (pk && pk.nat <= window + slack) return pk.k
   return cand[0].k
 }
 
@@ -4195,11 +4213,13 @@ function resolveCarry(opts: {
   // 5-15 yd off a catch tackled at once is not drawn diving at nobody; the man who arrives first is.
   // (a catch tackled within a couple of yards of where he took it: he picks his way at a crawl, down to
   // 0.12 x his top, so the nearest man can arrive; a longer run slows to 0.32 x at most)
-  const kMin = total < 3 ? 0.12 : 0.32
+  // (a man catching on the run is never slowed to a crawl from 9 yd/s in one stride: a long run keeps >= 0.6 x his top,
+  // and the credited tackler is judged on that, so the pace he is drawn at is the pace the window assumed)
+  const kMin = total < 3 ? 0.12 : cV0 > 6 ? 0.6 : 0.32
   const slowNat = opts.northSouth && pre.length
     ? timedLine([cPos, ...pre], { top: carrier.pace.top * kMin, acc: carrier.pace.acc }, { v0: Math.min(cV0, carrier.pace.top * kMin), stop: false }).slice(-1)[0]?.t ?? 0
     : Infinity
-  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, Math.min(preNat + (opts.northSouth ? 2.0 : 1.4), slowNat + 0.3))
+  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, Math.min(preNat + (opts.northSouth ? 2.0 : 1.4), slowNat + 0.3), opts.northSouth ? TACKLE_SLACK_PASS : TACKLE_SLACK)
   const need = natTo(m[tk], c, fromSec)
   if (need > preNat + 0.05 && pre.length && opts.northSouth) {
     // A catch-and-run stays north-south: he runs it slower (picking his way,
@@ -5421,7 +5441,11 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       catchV0 = carrySpeed(m[tgt])
     }
     if (isTD) {
-      m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: false, pivot: true })
+      // (a score caught at the goal line turns into the end zone: the first leg runs a couple of yards in with a
+      // lateral drift of at most half its length - not 7 yd sideways for 4 downfield)
+      const tdX = clampX(Math.max(endX, catchPt.x + 3))
+      const tdLat = 0.5 * (tdX - catchPt.x)
+      m[tgt].run([{ x: tdX, y: clampY(catchPt.y + clampN(endY - catchPt.y, -tdLat, tdLat)) }], { v0: catchV0, stop: false, pivot: true })
       // animflow r6c2 (297): through the goal line at speed; the coverage takes
       // real pursuit angles (the fast men close, the rest angle at the pylon).
       runThroughGoal(m[tgt], 110, 1)
@@ -5496,7 +5520,10 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   // A sack takes 2.5-3.5 s of real time: give the pocket a realistic duration so
   // the recorded rusher can actually get home (a 1.7 s drop would make any rush
   // arrive "late"). The drop shape and the final spot are unchanged.
-  const pocketT = clampN(2.3 + (los - endX) * 0.09, 2.3, 3.5)
+  // animflow r8: ...and long enough for the recorded sacker to be there even when he is a man the
+  // blitz package never sent (a corner credited with the sack starts 20 yd wide: his run takes what it takes).
+  const rushNeed = rusherKey && m[rusherKey] ? natTo(m[rusherKey], { x: endX, y: MID_Y }, 0) * 1.3 + 0.4 : 0
+  const pocketT = clampN(Math.max(2.3 + (los - endX) * 0.09, rushNeed), 2.3, 5.2)
   // animflow round 2: a real drop first (done ~1.2 s), a set with his feet
   // alive while he looks downfield, then the escape attempt into the sack spot.
   const dropPt: Pt = { x: f.qb.x - (snapK === 'under' ? 6 : snapK === 'pistol' ? 3.2 : 2.6), y: MID_Y }

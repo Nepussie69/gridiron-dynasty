@@ -323,14 +323,17 @@ export function FreeAgency() {
           <PlayerTable
             players={agents}
             showCollege
+            showContract={false}
             right={(p) => {
               // W1: a released player's stored contract is zeroed; the real cost
               // is the priced one-year deal (pro-rated during the season).
-              // L12.9 K2: a winning-culture club gets a small discount on the ask.
+              // Backlog 408: the open market shows his falling ASK, never a
+              // leftover cap hit, and declines week by week while he is unsigned.
               const { deal, disc } = dealFor(league, career, p)
               return (
                 <div className="flex flex-col items-end justify-end gap-1">
                   <div className="flex items-center justify-end gap-1.5">
+                    <span className="font-cond text-small font-600 text-ink-2 tnum">{money(deal.annual)}/yr</span>
                     <ShadowStar playerId={p.id} />
                     {signControl(p, deal.capHit, deal.annual)}
                   </div>

@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { cn } from '../lib/cn'
+import { money } from '../lib/format'
 import { useGame, useWorld } from '../store/gameStore'
-import { usePhone } from '../ui/hooks'
+import { useAccessLevel, usePhone } from '../ui/hooks'
 import { Badge, Button, Card, PageHeader, SegmentedControl, Sheet } from '../ui/kit'
+import type { StaffOffer } from '../game/engine/staffMarket'
 
 type CatTone = 'neutral' | 'loss'
 
@@ -13,7 +15,79 @@ const CAT_TONE: Record<string, CatTone> = {
 
 type InboxItem = ReturnType<typeof useWorld>['news'][number]
 
-function MessageDetail({ item, season }: { item: InboxItem; season: number }) {
+/**
+ * FUTURES #28 §7/§9: match a news item to an open staff offer. Re-sign items are
+ * filed under Career, poach offers under League; both name the coach in the headline.
+ */
+function offerFor(item: InboxItem, offers: StaffOffer[]): StaffOffer | undefined {
+  return offers.find(
+    (o) =>
+      (o.kind === 'resign' ? item.category === 'Career' : item.category === 'League') &&
+      item.headline.includes(o.name),
+  )
+}
+
+/** The re-sign / let-walk (or match / let-go) actions for an open staff offer. */
+function StaffOfferActions({ offer }: { offer: StaffOffer }) {
+  const resignStaff = useGame((s) => s.resignStaff)
+  const matchStaffOffer = useGame((s) => s.matchStaffOffer)
+  const level = useAccessLevel('staff')
+  const canAct = level === 'decide'
+  const money1 = (n: number) => `$${(n / 1_000_000).toFixed(1)}M`
+
+  if (!canAct) {
+    return (
+      <div className="mt-5 rounded-[var(--r-md)] border border-line bg-surface-2 p-3 text-small text-muted">
+        {offer.kind === 'resign' ? 'Contract expiring' : 'Rival offer'} · {offer.message}
+        <br />
+        The GM handles staff moves at your rung.
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-5 rounded-[var(--r-md)] border border-line bg-surface-2 p-3">
+      <div className="label mb-1.5">{offer.kind === 'resign' ? 'Contract expiring' : 'Rival offer'}</div>
+      <p className="text-small text-ink-2">{offer.message}</p>
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        {offer.kind === 'resign' ? (
+          <>
+            <Button size="sm" onClick={() => resignStaff(offer.id, true)}>
+              Re-sign · {money1(offer.annual)}/yr
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => resignStaff(offer.id, false)}>
+              Let {offer.name.split(' ').slice(-1)[0]} walk
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button size="sm" onClick={() => matchStaffOffer(offer.id, true)}>
+              Match · {money1(offer.annual)}/yr
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => matchStaffOffer(offer.id, false)}>
+              Let him go
+            </Button>
+          </>
+        )}
+      </div>
+      {offer.kind === 'poach' && (
+        <p className="mt-2 text-small text-muted">
+          {offer.lateral
+            ? 'A lateral move: matching with a raise of 15% or more blocks it.'
+            : 'A promotion — you cannot block it. Matching only softens the exit.'}
+        </p>
+      )}
+      {offer.kind === 'resign' && offer.annual > 0 && (
+        <p className="mt-2 text-small text-muted tnum">
+          His deal is up. Re-sign at {money(offer.annual)}/yr, or let him walk into the market.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function MessageDetail({ item, season, offers }: { item: InboxItem; season: number; offers: StaffOffer[] }) {
+  const offer = offerFor(item, offers)
   return (
     <>
       <div className="mb-4 flex items-center gap-3 border-b border-line pb-4">
@@ -26,6 +100,7 @@ function MessageDetail({ item, season }: { item: InboxItem; season: number }) {
         {item.headline}
       </h2>
       <p className="mt-4 max-w-2xl text-body leading-relaxed text-ink-2">{item.body}</p>
+      {offer && <StaffOfferActions offer={offer} />}
     </>
   )
 }
@@ -116,7 +191,7 @@ export function Inbox() {
 
         {!phone && open && (
           <Card>
-            <MessageDetail item={open} season={career.season} />
+            <MessageDetail item={open} season={career.season} offers={career.staffOffers ?? []} />
           </Card>
         )}
       </div>
@@ -128,7 +203,7 @@ export function Inbox() {
           eyebrow={open ? `${open.category} · Week ${open.week}` : undefined}
           title={open?.headline ?? ''}
         >
-          {open && <MessageDetail item={open} season={career.season} />}
+          {open && <MessageDetail item={open} season={career.season} offers={career.staffOffers ?? []} />}
         </Sheet>
       )}
     </div>

@@ -72,6 +72,7 @@ import {
   freeAgentContract,
   refreshProspectClass,
   runAIFreeAgency,
+  runInSeasonFreeAgency,
   marketPrice,
   ROSTER_FLOOR,
   runAIResign,
@@ -1524,6 +1525,10 @@ export const useGame = create<GameStore>((set, get) => ({
     const waiverMoments = waiveNews(world, career.teamId, openWaivers, waiveResult)
     // L11 W3: AI clubs replace injured starters from the free-agent pool.
     aiInjuryMoves(world, career.teamId)
+    // Backlog 408 (2b): the in-season market — after the injuries, clubs sign the
+    // free agent who most improves their depth chart (their asks having fallen
+    // while unsigned), and stale 34+ vets retire (2c).
+    runInSeasonFreeAgency(world, career.teamId)
     // Apply the saved pre-game plan to the user's game this week.
     const plan = get().defaultPlan
     const userGameForPlan = world.schedule.find(
@@ -3261,6 +3266,7 @@ export const useGame = create<GameStore>((set, get) => ({
     world.freeAgents.splice(idx, 1)
     p.teamId = career.teamId
     p.contract = contract
+    p.faWeeks = 0
     p.origin = { kind: 'freeAgent', season: world.season, by: career.gmName, fromTeamId: null }
     if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
     world.roster[career.teamId].push(p)

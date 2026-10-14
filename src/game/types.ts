@@ -189,6 +189,8 @@ export interface GameStatLine {
   defTDAllowed?: number
   /** L12 R4b: interceptions made on plays this defender was the cover man. */
   defIntsCov?: number
+  /** 405: passes defensed — break-ups (plus interceptions) credited to the cover man. */
+  passDef?: number
   /** R5: tackles the defender failed to finish. */
   missedTackles?: number
   /** R5: missed tackles a carrier/receiver forced. */
@@ -255,6 +257,9 @@ export interface Player {
   teamId: string | null
   morale: number // 1-100
   fatigue?: number
+  /** Backlog 408 (2c): weeks this free agent has been unsigned this season. Drives
+   *  his falling ask; absent on a legacy save (treated as 0). */
+  faWeeks?: number
   injured?: { games: number; note: string }
   /**
    * L15 (FUTURES #15): set only for the duration of a game the user chose to play

@@ -14,7 +14,7 @@ import { useState, type ReactNode } from 'react'
 import { ChevronDown, LayoutGrid, List, Search, SlidersHorizontal, Star, UserMinus, UserRound, Compass } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { ELITE, money, mult, signed, STAFF_BASELINE } from '../lib/format'
-import type { StaffMember, StaffRole } from '../game/types'
+import type { CareerState, StaffMember, StaffRole } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
 import {
   AccessBanner,
@@ -42,6 +42,7 @@ import {
   Sheet,
   Tabs,
   TierLegend,
+  TierPips,
   TierScale,
   VacantSeat,
   VerdictChip,
@@ -53,7 +54,7 @@ import { gateMenuItem, useAccessLevel, useMediaQuery, usePhone, WIDE_QUERY } fro
 import { DataTable, type Column } from '../components/DataTable'
 import { CoachSubRatings } from '../components/CoachSubRatings'
 import { isSubKey, SUB_FLOOR, SUB_META, subsForRole, subValue, type SubKey } from '../components/coachSubsUi'
-import { staffGrade, type CoachEffect } from '../game/engine/coaching'
+import { staffGrade, coordinatorEdge, type CoachEffect } from '../game/engine/coaching'
 import {
   ANALYTICS_ROLE,
   DEF_SCHEMES,
@@ -66,21 +67,39 @@ import {
   schemesForRole,
   type HireCandidate,
 } from '../game/engine/hiring'
-import { ownerStaffBudgetBonus, ownerStaffFundOpen } from '../game/engine/ownerMeeting'
+import { ownerStaffBudgetBonus } from '../game/engine/ownerMeeting'
+import {
+  canAffordHire,
+  cheapestStaffAsk,
+  coachProfile,
+  contractYearsForSalary,
+  staffBudget as staffBudgetEngine,
+  staffBuyout,
+  type StaffBudget,
+} from '../game/engine/staffMarket'
 import { ACCESS_META, type AccessLevel } from '../game/engine/access'
 import type { Reputation } from '../game/engine/career'
 import type { World } from '../game/engine/generate'
 import {
+  boostText,
+  buyoutPlan,
+  callPreview,
+  callsText,
   COACH_UNIT,
   cultureLines,
   devPace,
   engineLimits,
+  EXPLOIT_LABEL,
+  groupEffectFor,
   impactText,
   inGroup,
+  installCost,
+  interimProjection,
   leagueRank,
   liveSchemes,
   memberEffect,
   onFieldState,
+  poachRisk,
   schemeStateOf,
   seatHolds,
   staffChangeImpact,
@@ -98,7 +117,7 @@ import {
 
 // ── Seats, labels, persistence ───────────────────────────────────────────────
 
-/** The 11 seats on a club staff (the vacant count is out of these, not 10). */
+/** The 13 seats on a user club staff (the vacant count is out of these, not 10). */
 const SEATS = [
   'Head Coach',
   'Offensive Coordinator',
@@ -108,6 +127,10 @@ const SEATS = [
   'OL Coach',
   'DL Coach',
   'Secondary Coach',
+  // FUTURES #28 §3: market-only seats; the AI never holds them, so their dev
+  // multiplier stays 1. Optional, but they count as (initially) vacant seats here.
+  'WR Coach',
+  'LB Coach',
   'Scout',
   'Director of Player Personnel',
   ANALYTICS_ROLE,
@@ -133,6 +156,8 @@ const MARKET_ROLES: { id: string; label: string }[] = [
   { id: 'OL Coach', label: 'OL' },
   { id: 'DL Coach', label: 'DL' },
   { id: 'Secondary Coach', label: 'DB' },
+  { id: 'WR Coach', label: 'WR' },
+  { id: 'LB Coach', label: 'LB' },
   { id: 'Scout', label: 'Scout' },
   { id: 'Director of Player Personnel', label: 'DPP' },
   { id: ANALYTICS_ROLE, label: 'Analytics' },
@@ -141,6 +166,7 @@ const MARKET_ROLES: { id: string; label: string }[] = [
 const SORTS = [
   { id: 'ovr', label: 'OVR' },
   { id: 'fit', label: 'Scheme fit' },
+  { id: 'teach', label: 'Best teacher' },
   { id: 'salary', label: 'Salary' },
   { id: 'age', label: 'Age' },
   { id: 'value', label: 'OVR / $M' },
@@ -187,6 +213,8 @@ const SHORT_ROLE: Record<string, string> = {
   'OL Coach': 'OL Coach',
   'DL Coach': 'DL Coach',
   'Secondary Coach': 'Secondary Coach',
+  'WR Coach': 'WR Coach',
+  'LB Coach': 'LB Coach',
   Scout: 'Scout',
   'Director of Player Personnel': 'Dir. Player Personnel',
   Analytics: 'Analytics',
@@ -203,6 +231,8 @@ const ROLE_TAG: Record<string, string> = {
   'OL Coach': 'OL',
   'DL Coach': 'DL',
   'Secondary Coach': 'DB',
+  'WR Coach': 'WR',
+  'LB Coach': 'LB',
   Scout: 'SC',
   'Director of Player Personnel': 'DPP',
   Analytics: 'AN',
@@ -218,6 +248,8 @@ const FIND_LABEL: Record<string, string> = {
   'OL Coach': 'OL coach',
   'DL Coach': 'DL coach',
   'Secondary Coach': 'secondary coach',
+  'WR Coach': 'WR coach',
+  'LB Coach': 'LB coach',
   Scout: 'scout',
   'Director of Player Personnel': 'personnel director',
   Analytics: 'analyst',
@@ -225,11 +257,14 @@ const FIND_LABEL: Record<string, string> = {
 
 const lastName = (n: string) => n.split(' ').slice(-1)[0]
 
+/** §66: the floor edge a vacant coordinator seat costs (coaching.ts coordinatorEdge(null)). */
+const VACANCY_EDGE = signed(coordinatorEdge(null))
+
 type Unit = 'Head coach' | 'Offense' | 'Defense' | 'Special teams' | 'Front office'
 function unitOf(role: string): Unit {
   if (role === 'Head Coach') return 'Head coach'
-  if (role === 'Offensive Coordinator' || role === 'QB Coach' || role === 'OL Coach') return 'Offense'
-  if (role === 'Defensive Coordinator' || role === 'DL Coach' || role === 'Secondary Coach') return 'Defense'
+  if (role === 'Offensive Coordinator' || role === 'QB Coach' || role === 'OL Coach' || role === 'WR Coach') return 'Offense'
+  if (role === 'Defensive Coordinator' || role === 'DL Coach' || role === 'Secondary Coach' || role === 'LB Coach') return 'Defense'
   if (role === 'Special Teams Coordinator') return 'Special teams'
   return 'Front office'
 }
@@ -244,6 +279,12 @@ function gateReason(level: AccessLevel): string {
 interface Ctx {
   world: World
   teamId: string
+  /** The live career — the budget/buyout engine reads it. */
+  career: CareerState
+  /** §8: the club's staff budget and where it stands (payroll + dead money). */
+  budget: StaffBudget
+  /** §8: the cheapest available ask — the always-reachable escape hatch. */
+  cheapestAsk: number
   /** Your reputation, so the market can show live interest as the offer moves. */
   rep: Reputation
   staff: StaffMember[]
@@ -273,6 +314,7 @@ export function Staff() {
   const hireStaff = useGame((s) => s.hireStaff)
   const fireStaff = useGame((s) => s.fireStaff)
   const setStaffFocus = useGame((s) => s.setStaffFocus)
+  const promoteInterimAction = useGame((s) => s.promoteInterim)
   const level = useAccessLevel('staff')
   const gate: AccessLevel = level === 'advise' ? 'view' : level
   const canAct = gate === 'decide'
@@ -287,12 +329,15 @@ export function Staff() {
   const [marketRole, setMarketRole] = useState<string>(() => load(KEY_MROLE, MARKET_ROLES.map((r) => r.id), 'all'))
   const [schemeFilter, setSchemeFilter] = useState<string>('all')
   const [minOvr, setMinOvr] = useState(0)
+  const [minTeaching, setMinTeaching] = useState(0)
   const [maxSalary, setMaxSalary] = useState(0) // 0 = no cap
   const [fitsOnly, setFitsOnly] = useState(false)
+  const [fitsBudget, setFitsBudget] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('ovr')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [firing, setFiring] = useState<StaffMember | null>(null)
   const [focusing, setFocusing] = useState<StaffMember | null>(null)
+  const [interim, setInterim] = useState<'off' | 'def' | null>(null)
   const [hiring, setHiring] = useState<{ c: HireCandidate; salary: number; scheme?: string } | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [sysOpen, setSysOpen] = useState(false)
@@ -338,17 +383,20 @@ export function Staff() {
   const bestId = sorted.length > 1 ? sorted[0].id : null
   const lowestId = sorted.length > 1 ? sorted[sorted.length - 1].id : null
 
-  // Display-only staff budget (prestige pot + owner top-up) — unchanged maths.
+  // FUTURES #28 §8: the staff budget now comes from the engine (staffMarket.staffBudget),
+  // so headroom counts payroll AND dead staff money, and the personality multiplier.
+  const budget: StaffBudget = staffBudgetEngine(league, career)
+  const staffBudget = budget.budget
+  const headroom = budget.headroom
   const ownerBonus = ownerStaffBudgetBonus(career, league.season)
-  const staffBudget = Math.round((18 + league.byId[career.teamId].prestige * 0.3) * 1_000_000) + ownerBonus
-  const headroom = staffBudget - payroll
-  const ownerFundedHire = ownerStaffFundOpen(career, league.season)
+  const ownerFundedHire = budget.ownerFund
+  const cheapestAsk = cheapestStaffAsk(league)
 
   // ── Market (display filters only; the hire action is unchanged) ──
   const candidates = openCandidates(league, career.teamId, career.reputation, marketRole === 'all' ? undefined : marketRole)
   const schemesInMarket = Array.from(new Set(candidates.map((c) => c.scheme).filter(Boolean))).sort()
   const mySchemeFor = (role: string): string | null => {
-    const wantsDef = role.includes('Defensive') || role === 'DL Coach' || role === 'Secondary Coach'
+    const wantsDef = role.includes('Defensive') || role === 'DL Coach' || role === 'Secondary Coach' || role === 'LB Coach'
     return (wantsDef ? live.def : live.off)?.scheme ?? null
   }
   const fitsMyScheme = (role: string, scheme: string): boolean => {
@@ -356,14 +404,19 @@ export function Staff() {
     const mine = mySchemeFor(role)
     return !mine || mine === scheme
   }
+  /** §66: does the asking price fit the club's real headroom (owner fund covers anything)? */
+  const fitsClubBudget = (c: HireCandidate): boolean => ownerFundedHire || c.askingSalary <= headroom
   const visibleCandidates = candidates
     .filter((c) => marketRole === 'all' || c.role === marketRole)
     .filter((c) => (schemeFilter === 'all' ? true : c.scheme === schemeFilter))
     .filter((c) => c.rating >= minOvr)
+    .filter((c) => coachProfile(c).teaching >= minTeaching)
     .filter((c) => (maxSalary === 0 ? true : c.askingSalary <= maxSalary))
     .filter((c) => (fitsOnly ? fitsMyScheme(c.role, c.scheme) : true))
+    .filter((c) => (fitsBudget ? fitsClubBudget(c) : true))
     .sort((a, b) => {
       if (isSubKey(sortKey)) return subValue(b, sortKey) - subValue(a, sortKey)
+      if (sortKey === 'teach') return coachProfile(b).teaching - coachProfile(a).teaching
       if (sortKey === 'salary') return a.askingSalary - b.askingSalary
       if (sortKey === 'age') return a.age - b.age
       if (sortKey === 'value') return b.rating / b.askingSalary - a.rating / a.askingSalary
@@ -378,8 +431,10 @@ export function Staff() {
     (marketRole !== 'all' ? 1 : 0) +
     (schemeFilter !== 'all' ? 1 : 0) +
     (minOvr > 0 ? 1 : 0) +
+    (minTeaching > 0 ? 1 : 0) +
     (maxSalary > 0 ? 1 : 0) +
-    (fitsOnly ? 1 : 0)
+    (fitsOnly ? 1 : 0) +
+    (fitsBudget ? 1 : 0)
   // Base sorts + one per sub the picked role reads (FUTURES #32 follow-up).
   const sortOptions = marketSorts(marketRole)
 
@@ -456,6 +511,9 @@ export function Staff() {
   const ctx: Ctx = {
     world: league,
     teamId: activeTeamId,
+    career,
+    budget,
+    cheapestAsk,
     rep: career.reputation,
     staff,
     eff,
@@ -478,11 +536,22 @@ export function Staff() {
   // ── Fire review (decide only) ──
   const fireConsequences = (m: StaffMember): Consequence[] => {
     const rows = staffChangeImpact(league, activeTeamId, m.role, { removeId: m.id }, seat)
+    const plan = buyoutPlan(m, league.season)
     const out: Consequence[] = [
-      { label: 'Remaining contract', value: `${money(m.annual * m.contractYears)} (${m.contractYears} yr) · no buyout` },
       { label: 'Staff payroll', value: `${money(payroll)} → ${money(payroll - m.annual)}` },
-      { label: `${SHORT_ROLE[m.role] ?? m.role} seat`, value: 'Vacant until hired', tone: 'warn' },
+      {
+        label: 'Buyout (dead money)',
+        value: plan.total > 0 ? `${money(plan.total)} · 50% of remaining years` : 'None — the deal is expiring',
+        tone: plan.total > 0 ? 'warn' : undefined,
+      },
     ]
+    if (plan.years > 0) {
+      out.push({
+        label: `Dead money · ${plan.years} season${plan.years === 1 ? '' : 's'}`,
+        value: plan.perSeason.map((p) => `${p.season}: ${money(p.amount)}`).join('  ·  '),
+      })
+    }
+    out.push({ label: `${SHORT_ROLE[m.role] ?? m.role} seat`, value: 'Vacant until hired', tone: 'warn' })
     for (const r of rows) {
       out.push({
         label: r.label,
@@ -491,6 +560,8 @@ export function Staff() {
       })
     }
     if (!rows.length) out.push({ label: 'Sim effect', value: vacancyCost(m.role, seatHolds(seat, m.role)) })
+    if (m.role === 'Offensive Coordinator' || m.role === 'Defensive Coordinator')
+      out.push({ label: 'Install reset', value: 'Tenure back to year 1 · cohesion and mastery dip' })
     out.push({ label: 'Who decides', value: 'You (Decision Maker)' })
     return out
   }
@@ -500,18 +571,21 @@ export function Staff() {
     const cur = holderOf(c.role)
     const after = payroll - (cur?.annual ?? 0) + salary
     const rows = staffChangeImpact(league, activeTeamId, c.role, { add: { ...c, scheme: scheme ?? c.scheme } }, seat)
+    const years = contractYearsForSalary(salary)
+    const dead = cur ? staffBuyout(cur) : 0
     const out: Consequence[] = [
-      { label: 'Offer', value: `${money(salary)}/yr × 3 yr` },
+      { label: 'Offer', value: `${money(salary)}/yr × ${years} yr` },
       cur
         ? { label: 'Replaces', value: `${cur.name} (${cur.rating}) leaves the club`, tone: 'warn' }
         : { label: 'Seat', value: 'Fills a vacant seat' },
       { label: 'Staff payroll', value: `${money(payroll)} → ${money(after)}` },
       {
         label: 'Budget headroom',
-        value: staffBudget - after >= 0 ? `${money(staffBudget - after)} left` : `Over by ${money(after - staffBudget)}`,
-        tone: staffBudget - after >= 0 ? undefined : 'warn',
+        value: headroom - (after - payroll) >= 0 ? `${money(headroom - (after - payroll))} left` : `Over by ${money(after - payroll - headroom)}`,
+        tone: headroom - (after - payroll) >= 0 ? undefined : 'warn',
       },
     ]
+    if (dead > 0) out.push({ label: 'Their buyout', value: `${money(dead)} dead staff money`, tone: 'warn' })
     for (const r of rows) {
       out.push({
         label: r.label,
@@ -519,7 +593,7 @@ export function Staff() {
         tone: r.better === false ? 'loss' : r.better ? 'win' : undefined,
       })
     }
-    if (scheme) out.push({ label: 'Installs', value: scheme })
+    if (scheme) out.push({ label: 'Installs', value: `${scheme} · tenure resets to year 1` })
     out.push({ label: 'His interest', value: `${c.interest}% · he can still turn it down` })
     return out
   }
@@ -616,10 +690,16 @@ export function Staff() {
       <KpiTile
         label="Staff payroll"
         value={money(payroll)}
-        verdict={headroom < 0 ? { label: 'Over budget', tone: 'warn' } : undefined}
+        verdict={headroom < 0 ? { label: `Over by ${money(-headroom)}`, tone: 'warn' } : { label: `${money(headroom)} left`, tone: 'neutral' }}
         why={
           <span className="text-muted">
-            Budget is advisory · separate from the player cap
+            Budget {money(staffBudget)} · {money(headroom)} headroom
+            {budget.deadMoney > 0 && (
+              <>
+                <br />
+                <span className="text-warn">{money(budget.deadMoney)} dead money</span> (buyouts) also counts
+              </>
+            )}
             <span className="sm:hidden">
               <br />
               {filled} of {SEATS.length} seats · {elite} elite
@@ -627,7 +707,7 @@ export function Staff() {
           </span>
         }
       >
-        <BudgetMeter used={payroll} total={staffBudget} />
+        <BudgetMeter used={payroll + budget.deadMoney} total={staffBudget} />
       </KpiTile>
     </KpiStrip>
   )
@@ -735,6 +815,8 @@ export function Staff() {
               ctx={ctx}
               holderOf={holderOf}
               onVacant={openMarket}
+              onInterim={setInterim}
+              canAct={canAct}
               frontOpen={frontOpen}
               onFrontOpen={setFrontOpen}
             />
@@ -754,6 +836,8 @@ export function Staff() {
           visible={visibleCandidates}
           total={candidates.length}
           headroomText={money(Math.max(0, headroom))}
+          deadMoney={budget.deadMoney}
+          ownerFund={ownerFundedHire}
           filtersOpen={filtersOpen}
           onFiltersOpen={setFiltersOpen}
           activeFilters={activeFilters}
@@ -766,10 +850,14 @@ export function Staff() {
               schemes={schemesInMarket}
               minOvr={minOvr}
               onMinOvr={setMinOvr}
+              minTeaching={minTeaching}
+              onMinTeaching={setMinTeaching}
               maxSalary={maxSalary}
               onMaxSalary={setMaxSalary}
               fitsOnly={fitsOnly}
               onFits={setFitsOnly}
+              fitsBudget={fitsBudget}
+              onFitsBudget={setFitsBudget}
               sortKey={sortKey}
               onSort={setSortKey}
               sorts={sortOptions}
@@ -780,8 +868,10 @@ export function Staff() {
             pickMarketRole('all')
             setSchemeFilter('all')
             setMinOvr(0)
+            setMinTeaching(0)
             setMaxSalary(0)
             setFitsOnly(false)
+            setFitsBudget(false)
           }}
           sortLabel={sortOptions.find((s) => s.id === sortKey)?.label ?? 'OVR'}
           renderCard={(c) => (
@@ -790,7 +880,6 @@ export function Staff() {
               candidate={c}
               ctx={ctx}
               current={holderOf(c.role)}
-              staffBudget={staffBudget}
               onHire={(salary, scheme) => {
                 // Same call as before; a replacement goes through the review sheet first.
                 if (holderOf(c.role)) setHiring({ c, salary, scheme })
@@ -834,8 +923,14 @@ export function Staff() {
           setFiring(null)
         }}
       >
-        {firing && (firing.role === 'Offensive Coordinator' || firing.role === 'Defensive Coordinator' || firing.role === 'Head Coach') && (
-          <p className="mt-2 text-small text-muted">An empty seat counts as league average in the sim until you hire.</p>
+        {firing && (firing.role === 'Offensive Coordinator' || firing.role === 'Defensive Coordinator') && (
+          <p className="mt-2 text-small text-muted">
+            An empty coordinator seat costs the floor (<b className="font-600 text-ink-2 tnum">{VACANCY_EDGE} edge</b>) until you
+            fill it, and the side's tenure resets to year 1.
+          </p>
+        )}
+        {firing && firing.role === 'Head Coach' && (
+          <p className="mt-2 text-small text-muted">4th downs, timeouts and discipline play at the floor until you hire.</p>
         )}
       </ConfirmSheet>
 
@@ -855,6 +950,19 @@ export function Staff() {
           setHiring(null)
         }}
       />
+
+      {/* Promote interim — fill a vacant OC/DC from the best position coach (decide only). */}
+      {canAct && (
+        <InterimSheet
+          seat={interim}
+          ctx={ctx}
+          onClose={() => setInterim(null)}
+          onConfirm={() => {
+            if (interim) promoteInterimAction(interim)
+            setInterim(null)
+          }}
+        />
+      )}
 
       {/* Front-office focus (once per season, decide level). */}
       <Sheet
@@ -935,6 +1043,36 @@ function MemberEffect({ m, ctx }: { m: StaffMember; ctx: Ctx }) {
     return <span className="text-small text-muted">{isFrontOfficeRole(m.role) ? `Focus: ${m.focus ?? 'none'}` : 'No sim effect'}</span>
   }
   return <Effect value={e.value} kind={e.kind} label={e.label} clamp={e.clamp} className="text-small" />
+}
+
+/** FUTURES #28 §5: how the coach in this chair actually calls games (coachTendency). */
+function CallsReadout({ m, ctx, className }: { m: StaffMember; ctx: Ctx; className?: string }) {
+  const p = callPreview(ctx.world, ctx.teamId, m)
+  return (
+    <span className={cn('text-small text-muted', className)} title="decisions.ts coachTendency() with this coach in the seat — the live game-day calls">
+      Calls {callsText(p)}
+      {p.exploit ? ` · ${EXPLOIT_LABEL[p.exploit]}` : ''}
+    </span>
+  )
+}
+
+/** FUTURES #28: the seat's C1 group-dev readout + boost chip, from staffMarket.ts. */
+function GroupEffectChip({ m, ctx }: { m: StaffMember; ctx: Ctx }) {
+  const ge = groupEffectFor(ctx.world, ctx.teamId, m)
+  if (!ge) return null
+  const boost = boostText(m)
+  return (
+    <>
+      <span className="whitespace-nowrap text-small text-muted tnum" title={`staffMarket.ts groupDevMultiplier() for ${ge.group}`}>
+        {ge.group} group ×{ge.g.toFixed(3)}
+      </span>
+      {boost && (
+        <VerdictChip tone="win" className="tnum">
+          {boost}
+        </VerdictChip>
+      )}
+    </>
+  )
 }
 
 function SchemeFor({ m, ctx }: { m: StaffMember; ctx: Ctx }) {
@@ -1054,36 +1192,69 @@ function OrgChart({
   ctx,
   holderOf,
   onVacant,
+  onInterim,
+  canAct,
   frontOpen,
   onFrontOpen,
 }: {
   ctx: Ctx
   holderOf: (role: string) => StaffMember | undefined
   onVacant: (role: string) => void
+  onInterim: (seat: 'off' | 'def') => void
+  canAct: boolean
   frontOpen: boolean
   onFrontOpen: (v: boolean) => void
 }) {
   const hc = holderOf('Head Coach')
   const frontFilled = FRONT_SEATS.filter((r) => holderOf(r))
   const frontVacant = FRONT_SEATS.filter((r) => !holderOf(r))
-  const vacantSeat = (role: string, compact = false) => (
-    <VacantSeat
-      key={role}
-      role={SHORT_ROLE[role] ?? role}
-      consequence={
-        <>
-          {vacancyCost(role, seatHolds(ctx.seat, role))}
-          {subsForRole(role as StaffRole).length > 0 && (
-            <>
-              {' · '}plays at floor <b className="font-600 text-ink-2 tnum">{SUB_FLOOR}</b>
-            </>
-          )}
-        </>
-      }
-      compact={compact}
-      action={{ label: 'Find a hire', onClick: () => onVacant(role) }}
-    />
-  )
+  const isCoord = (role: string) => role === 'Offensive Coordinator' || role === 'Defensive Coordinator'
+  const vacantSeat = (role: string, compact = false) => {
+    const held = seatHolds(ctx.seat, role)
+    // §66: an empty OC/DC chair costs the floor (−4.5) until it is filled.
+    const showFloor = isCoord(role) && !held
+    return (
+      <VacantSeat
+        key={role}
+        role={SHORT_ROLE[role] ?? role}
+        consequence={
+          <>
+            {showFloor && (
+              <>
+                <b className="font-600 text-ink-2 tnum">{VACANCY_EDGE} edge</b> until filled
+                {' · '}
+              </>
+            )}
+            {vacancyCost(role, held)}
+            {subsForRole(role as StaffRole).length > 0 && (
+              <>
+                {' · '}plays at floor <b className="font-600 text-ink-2 tnum">{SUB_FLOOR}</b>
+              </>
+            )}
+          </>
+        }
+        compact={compact}
+        action={
+          isCoord(role) ? (
+            <span className="flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" onClick={() => onVacant(role)}>
+                Find a hire
+              </Button>
+              {canAct ? (
+                <Button variant="quiet" size="sm" onClick={() => onInterim(role === 'Offensive Coordinator' ? 'off' : 'def')}>
+                  Promote interim
+                </Button>
+              ) : (
+                <span className="text-small text-muted">Promote interim: {gateReason(ctx.level).toLowerCase()}</span>
+              )}
+            </span>
+          ) : (
+            { label: 'Find a hire', onClick: () => onVacant(role) }
+          )
+        }
+      />
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -1098,7 +1269,7 @@ function OrgChart({
           title="Offense"
           coordinatorRole="Offensive Coordinator"
           coordLine="calls your offense"
-          coachRoles={['QB Coach', 'OL Coach']}
+          coachRoles={['QB Coach', 'OL Coach', 'WR Coach']}
           ctx={ctx}
           holderOf={holderOf}
           vacantSeat={vacantSeat}
@@ -1108,7 +1279,7 @@ function OrgChart({
           title="Defense"
           coordinatorRole="Defensive Coordinator"
           coordLine="calls your defense"
-          coachRoles={['DL Coach', 'Secondary Coach']}
+          coachRoles={['DL Coach', 'Secondary Coach', 'LB Coach']}
           ctx={ctx}
           holderOf={holderOf}
           vacantSeat={vacantSeat}
@@ -1238,6 +1409,7 @@ function UnitColumn({
               {coordinatorRole === 'Special Teams Coordinator' && <SchemeFor m={coord} ctx={ctx} />}
               <MemberEffect m={coord} ctx={ctx} />
               <StaffTags m={coord} ctx={ctx} />
+              {coordinatorRole !== 'Special Teams Coordinator' && <CallsReadout m={coord} ctx={ctx} />}
             </div>
             <CoachSubRatings m={coord} className="col-span-2" />
             <div className="col-span-2 flex items-center justify-between gap-2">
@@ -1269,6 +1441,7 @@ function UnitColumn({
                     <>
                       <SchemeFor m={m} ctx={ctx} />
                       <MemberEffect m={m} ctx={ctx} />
+                      <GroupEffectChip m={m} ctx={ctx} />
                       <span className="text-small text-muted">feeds program {mult(ctx.eff.development)}</span>
                     </>
                   }
@@ -1441,6 +1614,59 @@ function StaffTable({
 
 // ── Inspector ────────────────────────────────────────────────────────────────
 
+/** §7/§66: "Promote interim" review — the engine's own projection, before → after. */
+function InterimSheet({
+  seat,
+  ctx,
+  onClose,
+  onConfirm,
+}: {
+  seat: 'off' | 'def' | null
+  ctx: Ctx
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const proj = seat ? interimProjection(ctx.world, ctx.teamId, seat) : null
+  const roleLabel = seat === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
+  const who = proj?.member
+  const consequences: Consequence[] = proj
+    ? [
+        { label: 'Edge now', value: `${signed(proj.edgeBefore)} / snap`, tone: proj.edgeBefore < 0 ? 'loss' : undefined },
+        {
+          label: 'Edge with interim',
+          value: `${signed(proj.edgeAfter)} / snap`,
+          tone: proj.edgeAfter > proj.edgeBefore ? 'win' : proj.edgeAfter < proj.edgeBefore ? 'loss' : undefined,
+        },
+        {
+          label: 'Promotes',
+          value: who ? `${who.name} · ${who.rating} OVR (his own seat −4)` : 'No position coach available',
+          tone: who ? undefined : 'warn',
+        },
+        { label: 'His old seat', value: proj.vacated ? `${proj.vacated} opens · group dev → ×1.000` : '—', tone: 'warn' },
+        { label: 'Install reset', value: 'Tenure back to year 1 · cohesion and mastery dip' },
+      ]
+    : []
+  return (
+    <ConfirmSheet
+      open={!!seat}
+      onClose={onClose}
+      eyebrow="Vacant coordinator"
+      title={`Promote an interim ${roleLabel}?`}
+      subtitle="The best position coach takes the chair at rating −4 until you hire a full-time coordinator."
+      consequences={consequences}
+      confirmLabel={who ? `Promote ${lastName(who.name)}` : 'Promote interim'}
+      destructive={false}
+      ledgerNote={null}
+      onConfirm={onConfirm}
+    >
+      <p className="mt-2 text-small text-muted">
+        He keeps his salary and his old seat becomes vacant — he can no longer coach his own group, so that group's
+        development falls back to ×1.000.
+      </p>
+    </ConfirmSheet>
+  )
+}
+
 function InspectorBody({
   m,
   ctx,
@@ -1459,6 +1685,9 @@ function InspectorBody({
   const opts = focusOptions(m.role)
   const used = m.focusChanged === ctx.world.season
   const share = ctx.payroll ? Math.round((m.annual / ctx.payroll) * 100) : 0
+  const plan = buyoutPlan(m, ctx.world.season)
+  const risk = poachRisk(ctx.teamId, m)
+  const ge = groupEffectFor(ctx.world, ctx.teamId, m)
   let schemeLine: string
   if (!s) schemeLine = `Front office: works the ${m.focus ?? 'general'} lane; no scheme reaches the sim.`
   else if (s.state === 'live') schemeLine = `His ${m.scheme} is the live scheme: it drives your play-calling.`
@@ -1483,6 +1712,17 @@ function InspectorBody({
           {tenure && <div className="text-muted">{tenure}</div>}
         </div>
       </div>
+
+      {risk.eligible && (
+        <div className="flex flex-wrap items-center gap-2">
+          <VerdictChip tone={risk.hot ? 'warn' : 'neutral'}>
+            {risk.hot ? `Hot name — ${risk.clubs} clubs asking` : `${risk.clubs} club asking`}
+          </VerdictChip>
+          <span className="text-small text-muted">
+            Rivals can offer a promotion: rating 78+, one year left. A lateral move you can block; a promotion you cannot.
+          </span>
+        </div>
+      )}
       <TierScale value={m.rating} label="Staff rating" />
 
       <section>
@@ -1509,11 +1749,32 @@ function InspectorBody({
         </section>
       )}
 
+      {ge && (
+        <section>
+          <div className="label mb-1.5">Teaching &amp; boost</div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="flex items-center gap-2 text-small text-ink-2">
+              Teaching <b className="font-600 text-ink tnum">{ge.teaching}</b>
+              <TierPips value={ge.teaching} />
+            </span>
+            {boostText(m) && <VerdictChip tone="win">{boostText(m)}</VerdictChip>}
+            <span className="text-small text-muted tnum">
+              {ge.group} group ×{ge.g.toFixed(3)} · install {ge.install} wk
+            </span>
+          </div>
+        </section>
+      )}
+
       <section>
         <div className="label mb-1">Contract</div>
         <p className="text-small text-ink-2 tnum">
           <b className="font-600 text-ink">{money(m.annual)}/yr</b> · {m.contractYears} yr left ·{' '}
           {money(m.annual * m.contractYears)} remaining · {share}% of staff payroll
+        </p>
+        <p className="mt-1 text-small text-muted tnum">
+          Buyout if let go now:{' '}
+          <b className="font-600 text-ink">{plan.total > 0 ? money(plan.total) : 'none — deal expiring'}</b>
+          {plan.years > 0 && ` · dead money ${plan.perSeason.map((p) => `${p.season}: ${money(p.amount)}`).join('  ·  ')}`}
         </p>
       </section>
 
@@ -1559,6 +1820,8 @@ function Market({
   visible,
   total,
   headroomText,
+  deadMoney,
+  ownerFund,
   filters,
   filtersOpen,
   onFiltersOpen,
@@ -1571,6 +1834,8 @@ function Market({
   visible: HireCandidate[]
   total: number
   headroomText: string
+  deadMoney: number
+  ownerFund: boolean
   filters: ReactNode
   filtersOpen: boolean
   onFiltersOpen: (v: boolean) => void
@@ -1584,7 +1849,14 @@ function Market({
       <p className="mb-3 max-w-3xl text-small text-ink-2">
         Coaches weigh your <b className="font-600 text-ink">destination</b>, your <b className="font-600 text-ink">reputation</b> and
         the <b className="font-600 text-ink">money</b>. Elite coaches turn down weak programs; offer above the ask to land
-        them. Budget headroom: <b className="font-600 text-ink tnum">{headroomText}</b>.
+        them. Budget headroom: <b className="font-600 text-ink tnum">{headroomText}</b>
+        {deadMoney > 0 && (
+          <>
+            {' '}
+            <span className="text-warn">after {money(deadMoney)} of dead staff money</span>
+          </>
+        )}
+        {ownerFund && <> · the owner fund covers one hire this season.</>}.
       </p>
 
       {phone ? (
@@ -1653,10 +1925,14 @@ function MarketFilters({
   schemes,
   minOvr,
   onMinOvr,
+  minTeaching,
+  onMinTeaching,
   maxSalary,
   onMaxSalary,
   fitsOnly,
   onFits,
+  fitsBudget,
+  onFitsBudget,
   sortKey,
   onSort,
   sorts,
@@ -1669,10 +1945,14 @@ function MarketFilters({
   schemes: string[]
   minOvr: number
   onMinOvr: (n: number) => void
+  minTeaching: number
+  onMinTeaching: (n: number) => void
   maxSalary: number
   onMaxSalary: (n: number) => void
   fitsOnly: boolean
   onFits: (v: boolean) => void
+  fitsBudget: boolean
+  onFitsBudget: (v: boolean) => void
   sortKey: SortKey
   onSort: (k: SortKey) => void
   /** Base sorts + the picked role's sub-ratings (FUTURES #32 follow-up). */
@@ -1716,6 +1996,19 @@ function MarketFilters({
           <span className="w-7 text-right text-small font-600 text-ink tnum">{minOvr}</span>
         </label>
         <label className="flex items-center gap-2">
+          <span className="label w-20 sm:w-auto">Teaching ≥</span>
+          <input
+            type="range"
+            min={0}
+            max={95}
+            step={1}
+            value={minTeaching}
+            onChange={(e) => onMinTeaching(Number(e.target.value))}
+            className="h-9 min-w-0 flex-1 accent-[var(--team-accent)] max-sm:h-11 sm:w-28 sm:flex-none"
+          />
+          <span className="w-7 text-right text-small font-600 text-ink tnum">{minTeaching}</span>
+        </label>
+        <label className="flex items-center gap-2">
           <span className="label w-20 sm:w-auto">Max salary</span>
           <select value={maxSalary} onChange={(e) => onMaxSalary(Number(e.target.value))} className={cn(field, 'min-w-0 flex-1 sm:flex-none')}>
             <option value={0}>Any</option>
@@ -1728,6 +2021,9 @@ function MarketFilters({
         </label>
         <FilterChip pressed={fitsOnly} onChange={onFits} className="self-start">
           Fits my scheme
+        </FilterChip>
+        <FilterChip pressed={fitsBudget} onChange={onFitsBudget} className="self-start">
+          Fits budget
         </FilterChip>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -1744,13 +2040,11 @@ function MarketCard({
   candidate,
   ctx,
   current,
-  staffBudget,
   onHire,
 }: {
   candidate: HireCandidate
   ctx: Ctx
   current?: StaffMember
-  staffBudget: number
   onHire: (salary: number, scheme?: string) => void
 }) {
   const schemes = schemesForRole(candidate.role)
@@ -1770,8 +2064,16 @@ function MarketCard({
         ? { label: 'Warm', tone: 'neutral' as const }
         : { label: 'Cold', tone: 'warn' as const }
 
+  // FUTURES #28 §1/§4/§5: the C1 profile, the call preview and the install cost.
+  const profile = coachProfile(candidate)
+  const calls = callPreview(ctx.world, ctx.teamId, candidate)
+  const cost = installCost(ctx.world, ctx.teamId, candidate)
+  const boost = boostText(candidate)
+
   const payrollAfter = ctx.payroll - (current?.annual ?? 0) + salary
-  const headroom = staffBudget - payrollAfter
+  const budget = ctx.budget
+  const headroom = budget.budget - budget.deadMoney - payrollAfter
+  const affordable = canAffordHire(ctx.world, ctx.career, salary, ctx.cheapestAsk)
   const impact = staffChangeImpact(
     ctx.world,
     ctx.teamId,
@@ -1815,11 +2117,25 @@ function MarketCard({
         ) : null}
       </div>
 
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-small">
+        <span className="flex items-center gap-1.5 text-ink-2" title="staffMarket.ts coachProfile().teaching — scales his group's boost and the install speed">
+          Teaching <b className="font-600 text-ink tnum">{profile.teaching}</b>
+          <TierPips value={profile.teaching} />
+        </span>
+        {boost && <VerdictChip tone="win">{boost}</VerdictChip>}
+        {!front && (
+          <span className="text-muted" title="decisions.ts coachTendency() with this candidate in the seat">
+            Calls {callsText(calls)}
+            {calls.exploit ? ` · ${EXPLOIT_LABEL[calls.exploit]}` : ''}
+          </span>
+        )}
+      </div>
+
       <dl className="mt-3 grid grid-cols-4 gap-2 text-center">
         <MiniStat label="Age" value={candidate.age} />
         <MiniStat label={front ? 'Focus' : 'Scheme'} value={front ? (candidate.focus ?? '—') : candidate.scheme.split(' ')[0]} />
         <MiniStat label="Asking" value={money(candidate.askingSalary)} />
-        <MiniStat label="Deal" value="3 yr" />
+        <MiniStat label="Deal" value={`${contractYearsForSalary(candidate.askingSalary)} yr`} />
       </dl>
 
       <CoachSubRatings m={candidate} className="mt-2" />
@@ -1829,6 +2145,7 @@ function MarketCard({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="text-muted">vs {lastName(current.name)}</span>
             <Delta value={candidate.rating - current.rating} suffix="OVR" />
+            <Delta value={profile.teaching - coachProfile(current).teaching} suffix="teach" />
             <Effect value={candidate.askingSalary - current.annual} kind="money" goodWhen="down" unit="/yr" />
           </div>
         ) : (
@@ -1845,13 +2162,29 @@ function MarketCard({
             {r.note && <span className="text-muted">· {r.note}</span>}
           </div>
         ))}
+        {cost && (
+          <div className="flex flex-wrap items-center gap-x-2">
+            <span className="text-muted">Install</span>
+            <span className="font-600 text-ink tnum">
+              {cost.resets ? `tenure y${cost.tenureBefore} → y1` : 'tenure holds'} · mastery {cost.masteryBefore}% → {cost.masteryAfter}%
+            </span>
+            <span className="text-muted">· {cost.weeks} wk to full · teaching {cost.teaching}</span>
+          </div>
+        )}
       </div>
 
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <VerdictChip tone={headroom >= 0 ? 'neutral' : 'warn'}>
-          {headroom >= 0 ? `Fits · ${money(headroom)} left` : `Over budget by ${money(-headroom)}`}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <VerdictChip tone={headroom >= 0 ? 'neutral' : affordable ? 'neutral' : 'warn'}>
+          {headroom >= 0
+            ? `Fits · ${money(headroom)} left`
+            : affordable
+              ? 'Over budget — owner notified'
+              : `Over budget by ${money(-headroom)}`}
         </VerdictChip>
-        {current && <span className="text-small text-muted">replaces {money(current.annual)}/yr</span>}
+        <span className="flex flex-wrap items-center gap-2 text-small text-muted">
+          {budget.ownerFund && headroom < 0 && <span className="text-ink-2">owner fund open</span>}
+          {current && <span>replaces {money(current.annual)}/yr</span>}
+        </span>
       </div>
 
       <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">

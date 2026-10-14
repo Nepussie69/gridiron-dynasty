@@ -10,13 +10,15 @@ import type { Player, Position, MatchupSet, UsageSet, PersonnelSet } from '../ty
 import { playerAttrs } from '../data/ratings'
 import { unscaleOvr } from './ovrScale'
 import { POS_MEAN } from './ratingMeans'
-import { bucketYards, CFB_CHUNK_DAMP, getCalibration, sampleBucket } from '../data/calibration'
+import { bucketYards, CFB_CHUNK_DAMP, completionCdf, getCalibration, sampleBucket } from '../data/calibration'
 import { NO_USER_BONUS, coachEffect } from './coaching'
 import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, coverUnit, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, getPuntFix, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+// J-PUNTS: the individual-coach 4th-down model's toggle (setStamina pattern).
+export { setPuntFix, getPuntFix } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, SCHEME_MENUS_REALISM, MENU_REALISM, PLAYBOOK, conceptFromPlaybook, formationForConcept, type Personnel } from '../data/playbookData'
@@ -481,11 +483,19 @@ export const R2 = {
   /** Multiplier on a positive run gain after the real distribution is sampled.
    *  R2 variance fix: trimmed so the league ypc sits on the 4.27 target instead of
    *  ~4.34, which also kept the run-heaviest seed's rushing yards above band.
-   *  J3c (merged-tree re-centre): 0.726→0.740 — the merged tree sits 0.05-0.09
-   *  YPC under the 4.15 floor on seed 2222 (measured ≈ +8.3 YPC per unit, and
-   *  ≈ −4 punts/unit, so this also buys a little drive success). Kept small so
-   *  Rushing yards stays under its 120 cap. */
-  runGainCal: 0.74,
+   *  J3c (merged-tree re-centre): 0.726→0.740.
+   *  realismloss: the CDF walk was scrambled by Object.entries, so the run loss
+   *  buckets were unreachable (negative runs ≈0.1%) and the positive tail was
+   *  trimmed hard (0.740) to hold the sampled mean. The walk is fixed now and the
+   *  real losses are back (probe ≈8.5% of runs lose yards), so the true run mean
+   *  falls and this trim is unwound to restore it. The box-score rushYds now also
+   *  keeps the negative carries (stats.ts), so this multiplier moves the box YPC
+   *  the same way it moves the on-field mean.
+   *
+   *  NB: the multiplier has Math.round cliffs (round(g×cal) flips at cal=0.5/g),
+   *  so YPC vs cal is a staircase, not a smooth line — tune only with the
+   *  probe/calib. 0.780 lands the calib YPC ≈4.17 and the probe YPC ≈4.28. */
+  runGainCal: 0.78,
   /** Multiplier on the yards-after-catch / style bonus on completions. */
   yacCal: 1.03,
   /** Multiplier on a positive pass gain after the real distribution is sampled.
@@ -2158,6 +2168,42 @@ function glDefResist(p: Player | undefined): number {
   if (!p) return 0
   return eff(p, 'BSH') * J3B.defBshW + eff(p, 'STR') * J3B.defStrW + eff(p, 'TAK') * J3B.defTakW - J3B.defCenter
 }
+/**
+ * Jind run penetration: the real CDF decides what SHARE of runs lose yards; the
+ * men on the play decide WHICH runs lose yards and who gets the TFL. The
+ * point-of-attack defender (J3B/J8a's own gap pick) wins the rep with his own
+ * block shed / first-step power / pursuit against the point-of-attack blocker's
+ * run block, resisted by the back's own vision / elusiveness / tackle-breaking.
+ * A winning rep stuffs an otherwise-short run — that defender takes the tackle
+ * and the TFL (stats.ts credits a run with yards < 0 and a credited tackler) —
+ * while an elite back keeps a poor defender off the play. Every pick is a
+ * deterministic hash (no rng() draw is added or removed), and every term is
+ * centred on the fixed 72 league anchor, so a league-average rep is exactly the
+ * pre-Jind level. Tune only this block.
+ */
+export const PEN = {
+  /** League-average penetration chance over the eligible (0..3 yd) reps. */
+  base: 0.07,
+  /** Per rating-point slope on the defender-vs-blocker-vs-back differential. */
+  slope: 0.007,
+  lo: 0,
+  hi: 0.34,
+  /** Yards of penetration per rating point of a winning differential. */
+  mag: 0.09,
+}
+/** The point-of-attack defender's penetration blend (his own ratings). */
+function penDefBlend(p: Player): number {
+  return eff(p, 'BSH') * 0.4 + eff(p, 'PMV') * 0.2 + eff(p, 'FMV') * 0.1 + eff(p, 'PUR') * 0.15 + eff(p, 'STR') * 0.15
+}
+/** The point-of-attack blocker's run-block blend (his own ratings). */
+function penBlkBlend(p: Player): number {
+  return eff(p, 'RBK') * 0.65 + eff(p, 'IMP') * 0.2 + eff(p, 'STR') * 0.15
+}
+/** The carrier's own vision / elusiveness / tackle-breaking blend. */
+function penBackBlend(a: Record<string, number>): number {
+  return (a.BCV ?? 72) * 0.4 + (a.JKM ?? 72) * 0.25 + (a.TRK ?? 72) * 0.35
+}
+
 /** J3b: chance the POA defender stands the carrier up short of the goal line. */
 function glStuffChance(carrier: Player | undefined, defs: Array<Player | undefined>): number {
   const ds = defs.filter((p): p is Player => !!p)
@@ -2482,7 +2528,10 @@ function restFatigue(s: GameState, frac: number) {
  */
 function sampleYards(rng: Rng, isPass: boolean, edge: number, stack: string[], yard: number, tier: 'NFL' | 'FBS' = 'NFL'): number {
   const cal = getCalibration(tier)
-  const cdf = isPass ? cal.passCdf : cal.runCdf
+  // Runs sample the real run CDF (losses included). Passes sample the completion
+  // CDF: the mined pass distribution counts sacks in its loss buckets, and sacks
+  // are the pressure path's, so sampling them here would double-count.
+  const cdf = isPass ? completionCdf(cal.passCdf) : cal.runCdf
   let r = rng()
   // Talent tilt: a bounded, mass-preserving tilt of the real distribution. A
   // positive edge (better offence / faster back) shifts mass toward the explosive
@@ -5368,6 +5417,25 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     const fA = mkAttrs(fb)
     gain += Math.round(rmean('FB', 'RBK', fA.RBK ?? 70) * 0.06 + rmean('FB', 'IBL', fA.IBL ?? 70) * 0.04)
   }
+  // Jind run penetration (see PEN): the individual rep decides which short runs
+  // are stuffed. The point-of-attack defender's own shed/power/pursuit against
+  // his blocker's run block, resisted by the back's own vision/elusiveness —
+  // deterministic hashes, no rng() draw, centred on the fixed 72 anchor.
+  const penWinner = hashPick(
+    [poiDl, poiLb].filter((p): p is Player => !!p),
+    (p) => Math.max(1, penDefBlend(p)),
+    hash32(`${n}:${defId}:penwin`),
+  )
+  const penBackV = penBackBlend(cA)
+  const penDiff = penWinner
+    ? (penDefBlend(penWinner) - 72) - (poiOl ? penBlkBlend(poiOl) - 72 : 0) - (penBackV - 72) * 0.5
+    : 0
+  let penTacklerId: string | undefined
+  if (penWinner && gain >= 0 && gain <= 3 &&
+    h01(`${n}:${defId}:pen`) < clamp(PEN.base + penDiff * PEN.slope, PEN.lo, PEN.hi)) {
+    gain = -Math.max(1, Math.min(6, Math.round(1 + Math.max(0, penDiff) * PEN.mag)))
+    penTacklerId = penWinner.id
+  }
   gain = clamp(gain, -10, 90)
   // J36: the flagged tackler's miss is worth a little extra ground.
   if (J36_ON && scoutGain) gain = clamp(gain + scoutGain, -10, 90)
@@ -5455,6 +5523,12 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // J8a: on a long gain the man who ran him down (the fastest of the hash-picked
   // pursuers) is the deciding player, so he takes the credit.
   if (J8A_ON && (!oob || CLOCK_ON) && gain > 20 && runClose.chaser) tackler = runClose.chaser.id
+  // Jind: on a loss the point-of-attack penetrator takes the tackle — and the TFL
+  // in stats.ts (a run with yards < 0 and a credited tackler). `penTacklerId` is
+  // the man who won the penetration rep outright; on a sampled CDF loss it is the
+  // same gap pick that led `runTackler`. Never overrides an out-of-bounds marker
+  // with no tackler (unless the clock layer credits one).
+  if ((!oob || CLOCK_ON) && penWinner && (penTacklerId || gain < 0)) tackler = penTacklerId ?? penWinner.id
   let missedTackleIds: string[] | undefined
   let forcedMissedIds: string[] | undefined
   // R5: the first defender attempts the tackle. A deterministic miss adds yards
@@ -6223,7 +6297,10 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const sit: Situation = { yard: s.yard, down: 4, distance: s.distance, qtr: s.qtr, clockSec: s.clock, margin }
   const ev = fourthDownEV(sit, kickPower)
-  let chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  // J-PUNTS: the specific head coach's own aggression (his gameManagement sub),
+  // never the 3-bucket style and never a unit mean. Undefined when the fix is off.
+  const aggro = getPuntFix() ? coachTendency(world, s.offId).aggro : undefined
+  let chosen = fourthDownChoice(sheet.fourth, sit, kickPower, aggro)
   // J2: the actual call adds a per-play hash dither on the style's go
   // propensity, so the league go-rate matches the NFL cells instead of every
   // coach of a style making the identical call. Deterministic (no rng draw) and
@@ -6231,7 +6308,7 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   // deterministic fourthDownChoice) and for the last-two-minute Q4 override.
   const q4Override = sit.qtr === 4 && sit.clockSec <= 120 && sit.margin <= -1 && sit.margin >= -8
   if (getFourthRetune() && !isUser && !q4Override) {
-    const pGo = fourthGoPropensity(sheet.fourth, sit, kickPower)
+    const pGo = fourthGoPropensity(sheet.fourth, sit, kickPower, aggro)
     // When the retuned model declines to go, the kick fallback is EV-ranked
     // exactly as the OFF path ranks it: range alone would add long FGs the old
     // rule correctly punted (that inflated FG attempts and scoring).
@@ -6917,7 +6994,12 @@ function applyScrimmageOutcome(
     } else if (out.result !== 'Incomplete' && !out.spike) { offS.passComp += 1; offS.passYds += out.yards }
   } else {
     offS.rushAtt += 1
-    offS.rushYds += out.kneel ? out.yards : Math.max(0, out.yards)
+    // realismloss: the team stat line counts the lost yards too (as the real NFL
+    // book does), so the acceptance YPC tracks the on-field run mean once the CDF
+    // walk fix restores the loss buckets. Before, every non-kneel run was floored
+    // at 0 here, which detached the band from the play-by-play. Kneels already
+    // counted their negative yards; now every carry does.
+    offS.rushYds += out.yards
     if (out.turnover) offS.fumbles += 1
   }
   offS.top += out.timeUsed * s.pace

@@ -13,7 +13,8 @@ import { gmTargetNeed, monthKeyOf } from '../game/engine/gmDesk'
 import { useGame, useWorld } from '../store/gameStore'
 import { ContractExplainer } from './ContractExplainer'
 import { PlayerSilhouette } from './PlayerCard'
-import { InjuryChip, MORALE } from './PlayerTable'
+import { MORALE } from './PlayerTable'
+import { InjuryStatusBadge } from './InjuryReport'
 import {
   Badge,
   Button,
@@ -147,7 +148,8 @@ export function PlayerProfile() {
           </div>
           <div className="mt-4 flex flex-wrap gap-1.5">
             <DevBadge dev={player.dev} />
-            <InjuryChip player={player} />
+            {/* FUTURES #15: the injury status, and "playing hurt" once the club sends him out. */}
+            <InjuryStatusBadge player={player} world={league} />
             {player.traits.map((t) => (
               <span
                 key={t}

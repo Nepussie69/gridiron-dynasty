@@ -1,6 +1,6 @@
 import type {
   DraftPick, DraftProspect, JobOffer, NewsItem, Player, Position, Side, StaffMember, StaffRole,
-  Team, TeamRecord, CareerPath, LeagueTier, Rival,
+  Team, TeamRecord, CareerPath, LeagueTier, Rival, Contract,
 } from '../types'
 import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
@@ -644,6 +644,13 @@ function realNflPlayer(rng: Rng, teamId: string, p: RealNflPlayer, season: numbe
  * Cut an NFL roster down to 53 by moving its lowest-rated surplus players to free
  * agency — a realistic roster cutdown that keeps every player a real, exact-rated one.
  */
+/** Backlog 408 (2d): a released player leaves with no contract. Dead money is
+ *  booked against the old club, so the man himself shows as a clean free agent
+ *  instead of a leftover "$715K · 4 yr" deal. */
+function clearContract(c: Contract): Contract {
+  return { ...c, years: 0, length: 0, base: [0], signingBonus: 0, proration: 0, guaranteed: 0, capHit: 0, annual: 0 }
+}
+
 function cutTo53(players: Player[], freeAgents: Player[], rawOvr?: Map<Player, number>) {
   if (players.length <= 53) return
   const FLOOR: Record<string, number> = {
@@ -663,8 +670,73 @@ function cutTo53(players: Player[], freeAgents: Player[], rawOvr?: Map<Player, n
     players.splice(idx, 1)
     counts[p.pos] -= 1
     p.teamId = null
+    // Backlog 408 (2d): a cut player carries no contract into free agency.
+    p.contract = clearContract(p.contract)
     freeAgents.push(p)
   }
+}
+
+/**
+ * Backlog 408 (2a): the NFL street free-agent pool. In real life, in-season the
+ * open market is several hundred bodies — released vets, camp cuts, UDFAs — with
+ * a position mix that tracks roster depth (WR/CB/LB/OL/DL most common) and a
+ * per-player rating spread, not a league average. Generated from its OWN stream
+ * (`generateStreetPool` is handed a separate rng) so the main world rng — and
+ * every rostered player and season-1 sim — is byte-identical to before.
+ */
+const STREET_MIX: [Position, number][] = [
+  ['QB', 6], ['RB', 18], ['FB', 3], ['WR', 26], ['TE', 12], ['OT', 16], ['OG', 16],
+  ['C', 7], ['DE', 16], ['DT', 16], ['LB', 22], ['CB', 22], ['S', 14], ['K', 3], ['P', 3],
+]
+
+/** Per-player street rating (raw scale): mostly fringe, with a real tail. */
+function streetOvrRaw(rng: Rng): number {
+  const r = rng()
+  if (r < 0.6) return rint(rng, 46, 66) // camp bodies / fringe
+  if (r < 0.86) return rint(rng, 66, 78) // replacement depth
+  if (r < 0.97) return rint(rng, 78, 88) // starter-quality vets
+  return rint(rng, 88, 97) // released stars
+}
+
+/** One unsigned street player: mixed age (young fringe + released vets), no
+ *  contract (2d), own rating. */
+export function makeStreetPlayer(rng: Rng, pos: Position, season: number): Player {
+  const vet = rng() < 0.46
+  const age = vet ? rint(rng, 27, 38) : rint(rng, 22, 26)
+  const rawOvr = streetOvrRaw(rng)
+  const ovr = rescaleOvr(rawOvr)
+  const rawPot = Math.min(99, rawOvr + (age < 26 ? rint(rng, 0, 10) : rint(rng, 0, 2)))
+  const pot = Math.max(ovr, rescaleOvr(rawPot))
+  return {
+    id: nextPid(),
+    name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
+    pos,
+    side: POS_SIDE[pos],
+    age,
+    height: heightFor(rng, pos),
+    weight: weightFor(rng, pos),
+    college: rpick(rng, CFB_TEAMS).name,
+    ovr,
+    pot,
+    dev: devFor(ovr, pot),
+    traits: traitsFor(rng, pos, ovr),
+    contract: clearContract({ years: 0, length: 0, base: [0], signingBonus: 0, proration: 0, guaranteed: 0, capHit: 0, annual: 0, signedThrough: season, voidYears: 0 }),
+    teamId: null,
+    morale: rint(rng, 55, 95),
+    generated: true,
+    origin: { kind: 'freeAgent', season, by: null },
+  }
+}
+
+/** `total` street free agents under the NFL position mix (2a). */
+export function generateStreetPool(rng: Rng, season: number, total = 200): Player[] {
+  const sum = STREET_MIX.reduce((s, [, w]) => s + w, 0)
+  const out: Player[] = []
+  for (const [pos, w] of STREET_MIX) {
+    const k = Math.round((total * w) / sum)
+    for (let i = 0; i < k; i++) out.push(makeStreetPlayer(rng, pos, season))
+  }
+  return out
 }
 
 /** Build the draft/scouting class from real CFB final-year players. */
@@ -768,6 +840,13 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     )
     standings[t.id] = zeroRecord(t.id)
     deadMoney[t.id] = Math.round(rng() * 22_000_000)
+  }
+
+  // Backlog 408 (2a): add the street free-agent pool from a SEPARATE hash-seeded
+  // stream. Nothing above (rosters, the cut list, the main rng) changes.
+  {
+    const streetRng = makeRng(hash32(`street|${seed}|${season}`))
+    for (const p of generateStreetPool(streetRng, season, 200)) freeAgents.push(p)
   }
 
   // Backlog 227: the old random builder still runs so the main world rng stream
