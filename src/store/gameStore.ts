@@ -218,6 +218,15 @@ import { pushLedger, gradeLedger, logCoachCalls } from '../game/engine/ledger'
 import { CHARACTER_FACETS, FACET_LABEL, revealFacet } from '../game/engine/character'
 import { learnedBias, scoutReport, isEvaluator } from '../game/engine/scoutBias'
 import { currentDilemma, applyDilemma } from '../game/engine/dilemma'
+import {
+  activatePlayHurt,
+  gameStatus,
+  normalizeInjuryState,
+  restorePlayHurt,
+  type InjuryCall,
+  type InjuryRestoreResult,
+} from '../game/engine/injuryCalls'
+import { injuryProbe } from '../game/engine/injuryProbe'
 import { recordGhostSeason } from '../game/engine/ghost'
 import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
@@ -744,6 +753,12 @@ interface GameStore {
   /** Resolve this season's annual set piece (#6). */
   resolveSetPiece: (choice: string) => void
   resolveDilemma: (choice: string) => void
+  /**
+   * L15 (FUTURES #15): this week's call for one injured player — sit him (the
+   * default) or play him hurt. Only a Questionable/Doubtful player on your club
+   * can be sent out; an Out (or IR) player is never a choice.
+   */
+  setInjuryCall: (playerId: string, call: InjuryCall) => void
   pickAmbition: (id: string) => void
   dropAmbition: (id: string) => void
   /** Accept/decline a stretch assignment (#8). */
@@ -1460,6 +1475,20 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const week = world.week
+    // L15 (FUTURES #15): a coached game was already played, so its injury calls
+    // are settled HERE — before the week's heal — so `healPlayers` sees the same
+    // `injured` set (and the same rng draw count) a Sit week would. The effect on
+    // the career (owner security, morale, the story) is applied with the rest of
+    // the week below.
+    let injuryRestore: InjuryRestoreResult | null = null
+    if (opts?.userSim) {
+      const g = world.schedule.find(
+        (x) => x.week === week && (x.homeId === career.teamId || x.awayId === career.teamId),
+      )
+      const isHome = !g || g.homeId === career.teamId
+      const won = isHome ? opts.userSim.homeScore > opts.userSim.awayScore : opts.userSim.awayScore > opts.userSim.homeScore
+      injuryRestore = restorePlayHurt(world, career, won)
+    }
     // L11 W2/W4: Waiver Tuesday — AI clubs add claims to entries from an earlier
     // week, then those entries resolve before any game is simulated. Snapshot the
     // open entries first so the result can be reported back to the user's inbox.
@@ -1510,6 +1539,11 @@ export const useGame = create<GameStore>((set, get) => ({
     let rbInjuryLine: string | null = null
     let keysRepDelta = 0
     if (userGame) {
+      // L15 (FUTURES #15): the fast path heals the club above (in `simWeek`), so a
+      // chosen "play" call goes out now — the injury moves to `hurtSaved` and the
+      // player carries reduced ratings for this game only. (A coached game already
+      // activated at kickoff and was settled at the top of this function.)
+      if (!opts?.userSim) activatePlayHurt(world, career)
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
       sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101, userCtx(career), weatherForGame(userGame))
@@ -1577,6 +1611,16 @@ export const useGame = create<GameStore>((set, get) => ({
           }
         }
       }
+      // L15 (FUTURES #15): the played-hurt state lasts exactly one game. Put the
+      // injuries back (rolling the aggravation) once the game is recorded — after
+      // the user-game post-processing above, with the rest of the week's effects
+      // applied below. No-op when nothing was played hurt, so a normal week is
+      // byte-identical.
+      if (!opts?.userSim) {
+        const isHome = userGame.homeId === career.teamId
+        const won = isHome ? sim.homeScore > sim.awayScore : sim.awayScore > sim.homeScore
+        injuryRestore = restorePlayHurt(world, career, won)
+      }
     }
     // K1: fold this week's wrinkles into the film history, then clear the pick.
     if (career.wrinkles?.pick && career.wrinkles.pick.week === week) {
@@ -1600,7 +1644,7 @@ export const useGame = create<GameStore>((set, get) => ({
       set({ scoutingPoints: MAX_SCOUT_POINTS })
     }
     const c = get().career!
-    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, weekFlags: {} }
+    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, weekFlags: {}, injuryCalls: undefined }
     // L12.9 H1: the weekly hours card is gone; its effects arrive passively.
     nextCareer = applyPassiveGains(nextCareer, world)
     // FUTURES 17: a Self-scout bye sets up a sharp read on next week's opponent.
@@ -1686,6 +1730,46 @@ export const useGame = create<GameStore>((set, get) => ({
         }
       }
     }
+    // L15 (FUTURES #15): this week's injury calls — the aggravation or "played
+    // through it" story, the owner's read in a push, the room's morale and the
+    // club's culture. Every effect was computed from that player's own injury,
+    // ratings and the club's medical staff (engine side); here they land on the
+    // existing security / reputation / morale / culture paths.
+    if (injuryRestore) {
+      const r = injuryRestore
+      for (const m of r.moments) nextCareer = logMoment(nextCareer, { week, text: m.text, tone: m.tone })
+      if (r.security) {
+        nextCareer = { ...nextCareer, jobSecurity: clamp(nextCareer.jobSecurity + r.security, 0, 100) }
+      }
+      if (r.leadership) {
+        nextCareer = {
+          ...nextCareer,
+          reputation: { ...nextCareer.reputation, leadership: clamp(nextCareer.reputation.leadership + r.leadership, 0, 100) },
+        }
+      }
+      if (r.morale.length) {
+        // Mutate in place: roster entries must stay the canonical world.players objects.
+        for (const m of r.morale) {
+          const p = world.players.find((x) => x.id === m.playerId)
+          if (p) p.morale = clamp(p.morale + m.delta, 1, 100)
+        }
+      }
+      if (r.culture !== 0) {
+        // Culture is character-derived, so it lands on the people it affects — the
+        // club's leaders (the same shape as a resolved dilemma card).
+        const leaders = [...(world.roster[career.teamId] ?? [])].sort((a, b) => b.ovr - a.ovr).slice(0, 8)
+        const step = r.culture * 0.6
+        for (const p of leaders) {
+          if (!p.character) continue
+          p.character = {
+            ...p.character,
+            maturity: clamp(p.character.maturity + step, 0, 100),
+            workEthic: clamp(p.character.workEthic + step, 0, 100),
+          }
+        }
+      }
+      for (const n of r.news) pushCareerNews(world, nextCareer, { category: 'Injury', headline: n.headline, body: n.body })
+    }
     // The week's ONE big decision (#2). Generated from the new week's state.
     nextCareer = { ...nextCareer, dilemma: currentDilemma(world, nextCareer) ?? undefined }
     // Offer a stretch assignment from the rung above (once a season).
@@ -1765,6 +1849,9 @@ export const useGame = create<GameStore>((set, get) => ({
       const game = world.schedule.find((g) => g.id === gd.gameId)
       if (keepPlays !== undefined && game && keepPlays < old.plays.length && !old.done) {
         const switches = (gd.callSwitches ?? []).filter((w) => w.at <= keepPlays)
+        // L15: keep the injured-availability state live across the rebuild (a
+        // no-op for a player whose injury was already moved to `hurtSaved`).
+        activatePlayHurt(world, career)
         const rebuilt = createGame(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, { ...oldCtx, callAll: gd.callStart }, old.weather)
         let ok = true
         let guard = 4000
@@ -1815,6 +1902,10 @@ export const useGame = create<GameStore>((set, get) => ({
     const plan = { off: { ...off }, def: { ...def } }
     setLivePlan({ teamId: career.teamId, off: plan.off, def: plan.def })
     applyUserCoaching(career)
+    // L15 (FUTURES #15): a chosen "play" call puts the player on the field for
+    // this game with reduced ratings (the game day is where the coached path
+    // activates; the fast path does it in `advanceWeek`).
+    activatePlayHurt(world, career)
     // L12.6: "call every play" only applies to a coached game, never to fast sim.
     const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, { ...ctx, callAll: career.callMode }, weatherForGame(game))
     // L11.5 Q2: run out the first drive so the user sees the game start.
@@ -1896,6 +1987,9 @@ export const useGame = create<GameStore>((set, get) => ({
 
   abandonGameDay: () => {
     // Nothing is recorded — the week is exactly as it was before kickoff.
+    // L15: an abandoned game never happened, so any playing-hurt state simply
+    // reverts (the injury comes back untouched — no aggravation).
+    normalizeInjuryState(world)
     setLivePlan(null)
     set({ gameDay: null, match: null, tick: get().tick + 1 })
   },
@@ -2877,6 +2971,25 @@ export const useGame = create<GameStore>((set, get) => ({
     pushLedger(nextCareer, { kind: 'advice', name: card.title, pos: '—', college: '—', note: chosen.outcome })
     set({ career: withFlag(nextCareer, 'dilemma'), tick: get().tick + 1 })
     get().showToast(chosen.outcome)
+    get().save()
+  },
+
+  setInjuryCall: (playerId, call) => {
+    const career = get().career
+    if (!career) return
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+    if (!p) return
+    // Only a Questionable/Doubtful player is ever a choice: an Out (or IR) player
+    // cannot be sent out, and a healthy one has no call to make.
+    if (call === 'play') {
+      const status = gameStatus(p, world, career)
+      if (status !== 'Q' && status !== 'D') return
+    }
+    const calls: Record<string, InjuryCall> = { ...(career.injuryCalls ?? {}) }
+    // Sit is the default, so it clears the entry rather than storing a 'sit'.
+    if (call === 'play') calls[playerId] = 'play'
+    else delete calls[playerId]
+    set({ career: { ...career, injuryCalls: calls }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -5107,10 +5220,16 @@ function applyRuntime(set: (partial: Partial<GameStore>) => void, snap: RuntimeS
 function restoreSaveData(p: SaveData): Partial<GameStore> {
   const careerWasScaled = p.world.ovrScaleV2 === true
   world = migrateWorld(p.world)
+  // L15 (FUTURES #15): a save written mid-game can carry a leaked playing-hurt
+  // state. The game day never survives a load, so the state reverts with the
+  // injury untouched — activation is not an outcome, and nothing was recorded.
+  normalizeInjuryState(world)
   // L12.16 H0: the league database and award history travel with the save.
   statDb = restoreStatsDb(p.statDb, world, !careerWasScaled)
   awards = restoreAwards(p.awards)
-  const career = reconcileCareerTeam(world, migrateCareer(p.career!, !careerWasScaled))
+  // L15: this week's injury calls belonged to the dropped game day, so they go
+  // with it; the report is rebuilt from the (restored) injuries on the new week.
+  const career = { ...reconcileCareerTeam(world, migrateCareer(p.career!, !careerWasScaled)), injuryCalls: undefined }
   return {
     career,
     activeTeamId: p.activeTeamId && world.byId[p.activeTeamId] ? p.activeTeamId : career.teamId,
@@ -9253,6 +9372,19 @@ export function penaltyProbe(games = 300) {
     falseStartAwayPerGame: per(fsAway),
     homeWinPct: +((homeWins / games) * 100).toFixed(1),
   }
+}
+
+/**
+ * Dev-only probe (L15 / FUTURES #15): the phase-A injury-decision report for the
+ * LIVE career, exposed to the browser as `__injuryCallProbe(n)` and to the node
+ * acceptance probe as `store.injuryCallProbe(n)`. The engine probe clones the
+ * world for every mutation, so this never perturbs the live career. `n` is the
+ * number of forced aggravation trials (default grade C).
+ */
+export function injuryCallProbe(n = 1200) {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  return injuryProbe(world, career, n)
 }
 
 /**
