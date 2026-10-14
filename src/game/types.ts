@@ -887,6 +887,13 @@ export interface CareerState {
   deadlineAI?: boolean
   /** L14: draft-day pick clock (off by default; when on, the clock auto-takes your pick). */
   draftClock?: boolean
+  /**
+   * Head-coach careers only: who holds the pen on trades. Missing or 'gm' = the
+   * GM decides (the coach advises and asks the GM); 'coach' = the head coach
+   * proposes, accepts and executes trades himself, and the club's AI GM makes
+   * none involving his club on its own. Old saves load as 'gm'.
+   */
+  tradeControl?: 'gm' | 'coach'
   /** L12.8 V3: the clubs scouted this week (once per club per week; resets each week). */
   scoutedClubs?: { season: number; week: number; teamIds: string[] }
   /** The starting situation this career began from (F3). */

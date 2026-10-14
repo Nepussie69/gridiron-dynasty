@@ -6,7 +6,7 @@ import { playerById } from '../game/selectors'
 import { assetValue, type TradeAsset } from '../game/engine/trade'
 import { deadlineAssetName, type DeadlineOffer } from '../game/engine/deadline'
 import type { World } from '../game/engine/generate'
-import { accessFor } from '../game/engine/access'
+import { accessFor, isHeadCoachCareer } from '../game/engine/access'
 import { useGame, useWorld } from '../store/gameStore'
 import { PlayerHoverCard } from './PlayerHoverCard'
 import { Badge, Button, Card, ConfirmSheet, OvrBadge, SectionTitle, TeamCrest } from '../ui/kit'
@@ -100,6 +100,7 @@ export function DeadlinePanel({ className }: { className?: string }) {
           <div className="mb-3 flex items-center gap-2 rounded-[var(--r-sm)] bg-warn-soft px-3 py-2 text-small font-600 text-warn">
             <Lock size={14} aria-hidden /> You do not have trade authority at this rung — the club&apos;s GM handles the
             calls, so Accept and Pass are locked here.
+            {career && isHeadCoachCareer(career) && ' Take the pen with the Trades switch in the Trade Center header.'}
           </div>
         )}
 

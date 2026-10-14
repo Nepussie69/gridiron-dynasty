@@ -119,6 +119,7 @@ import {
   simUntilUser,
   simulateRestOfDraft,
   userOnClock,
+  userOnTradeClock,
   awardCompensatoryPicks,
   stageOf,
   draftOpen,
@@ -180,7 +181,7 @@ import {
   type PhilosophyAxis,
   type PhilosophyStep,
 } from '../game/engine/draftRoom'
-import { accessFor, canAdvise, canDecide } from '../game/engine/access'
+import { accessFor, canAdvise, canDecide, coachHoldsTradePen, isHeadCoachCareer } from '../game/engine/access'
 import { capabilities } from '../game/engine/capabilities'
 import { aiInjuryMoves, aiWaiverClaims, clearWaivers, placeOnWaivers, processWaivers, waiverBlockedReason } from '../game/engine/waivers'
 import { STARTERS, depthAt, depthGroup, moveInDepth, resetDepth, setStarterInDepth, topPlayers } from '../game/engine/depth'
@@ -850,6 +851,8 @@ interface GameStore {
   declineDeadlineOffer: (id: string) => void
   /** L14: let AI clubs make their own deadline trades (off by default; changes league rosters). */
   setDeadlineAI: (v: boolean) => void
+  /** Head coach only: take the trade pen from the GM ('coach') or hand it back ('gm'). */
+  setTradeControl: (v: 'gm' | 'coach') => void
   /** L14: accept a rival's draft-day offer for the pick on your clock (you move back). */
   acceptDraftTradeOffer: (id: string) => void
   /** L14: pay a package for an earlier pick while your own pick is still ahead (you move up). */
@@ -2036,7 +2039,7 @@ export const useGame = create<GameStore>((set, get) => ({
       }
       world.offseasonStage = 'camp'
       if (!done.trades) {
-        runAITrades(world)
+        runAITrades(world, coachHoldsTradePen(career) ? career.teamId : null)
         done.trades = true
       }
       pushCareerNews(world, career, {
@@ -3031,7 +3034,10 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('The draft is in April — scout the class now.')
       return
     }
-    simUntilUser(world, get().career)
+    // A head coach holding the trade pen gets the draft paused on his pick; pressing
+    // Sim there lets the GM make the selection and run on to the next one.
+    const pen = get().career
+    simUntilUser(world, pen, 0, !!pen && coachHoldsTradePen(pen) && userOnTradeClock(world, pen))
     const career = get().career
     if (career) logConvictionPicks(world, career)
     if (career) logRedFlags(world, career)
@@ -3566,6 +3572,10 @@ export const useGame = create<GameStore>((set, get) => ({
   requestGmTrade: (playerId) => {
     const career = get().career
     if (!career) return null
+    if (coachHoldsTradePen(career)) {
+      get().showToast('You hold the pen on trades — make the deal yourself in the Trade Center.')
+      return null
+    }
     const target = world.players.find((p) => p.id === playerId)
     const blocked = gmRequestGate(career, target?.pos ?? null, playerId)
     if (blocked) {
@@ -3991,6 +4001,27 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  // Head coach: who holds the pen on trades. Only the NFL head coach has the choice.
+  setTradeControl: (v) => {
+    const career = get().career
+    if (!career || !isHeadCoachCareer(career)) return
+    if ((career.tradeControl ?? 'gm') === v) return
+    let next: CareerState = { ...career, tradeControl: v }
+    // Taking the pen on deadline day: the phones were silent while the GM held it, so put this week's offers on the table now.
+    const dl = career.deadline
+    if (v === 'coach' && dl && dl.season === world.season && dl.week === world.week && !dl.offers.length && !dl.resolved.length) {
+      next = { ...next, deadline: { ...dl, offers: buildDeadlineOffers(world, career.teamId) } }
+    }
+    set({ career: next })
+    bump(set, get)
+    get().showToast(
+      v === 'coach'
+        ? 'You now hold the pen on trades — the GM stays out of it.'
+        : 'The GM handles trades again — you advise and ask.',
+    )
+    get().save()
+  },
+
   setDeadlineAI: (v) => {
     const career = get().career
     if (!career) return
@@ -4025,7 +4056,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('You do not have trade authority yet — keep climbing.')
       return
     }
-    if (!userOnClock(world, career)) {
+    if (!userOnTradeClock(world, career)) {
       get().showToast('You are not on the clock.')
       return
     }
@@ -4079,11 +4110,11 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('You do not have trade authority yet — keep climbing.')
       return
     }
-    if (accessFor(career, 'draft') !== 'decide') {
+    if (accessFor(career, 'draft') !== 'decide' && !coachHoldsTradePen(career)) {
       get().showToast('You do not make the draft calls at this rung.')
       return
     }
-    if (userOnClock(world, career)) {
+    if (userOnTradeClock(world, career)) {
       get().showToast('You are on the clock — make the pick or trade back.')
       return
     }
@@ -5294,7 +5325,7 @@ function completeOffseasonStages(world: World, career: CareerState | null) {
   }
   if (!done.draft) completeDraft(world, career)
   if (!done.trades) {
-    runAITrades(world)
+    runAITrades(world, career && coachHoldsTradePen(career) ? career.teamId : null)
     done.trades = true
   }
   // The draft + UDFAs can push rosters over 53; the FA trim ran before them, so
@@ -6395,7 +6426,8 @@ export function aiManagerProbe() {
   const before = clone.freeAgents.length
   runAIResign(clone)
   runAIFreeAgency(clone)
-  runAITrades(clone)
+  const pen = useGame.getState().career
+  runAITrades(clone, pen && coachHoldsTradePen(pen) ? pen.teamId : null)
   const tradeNews = clone.news.filter((n) => n.id.startsWith('aitrade_'))
   return {
     freeAgentsBefore: before,
