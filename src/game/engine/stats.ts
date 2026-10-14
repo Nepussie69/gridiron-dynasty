@@ -112,17 +112,24 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       continue
     }
 
+    // A sack is a dropback, not an attempt. The result text is decorated by the
+    // game layer ("Fake kick — Sack…", "Sack in the end zone — Safety!"), so the
+    // pressure classification is checked as well as the text.
+    const isSackPlay = play.type === 'pass' && (play.pressureType === 'sack' || /(^|— )Sack/.test(play.result))
     // R16: a reception is a caught pass (including a catch that later came loose).
     // A deflected/muffed INTERCEPTION keeps `reception` unset, so it is never
     // credited as a completion; metadata alone distinguishes the two. The result
     // text is only a legacy fallback for play logs without the flag.
-    const isComp = play.reception ?? (!play.intId && (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId || !!play.muffedCatch))
+    // An attempt (below) is every non-sack pass play, so a completion can never
+    // outnumber attempts. Attempts used to be a whitelist of result strings, which
+    // missed "Complete (out of bounds)" / "Explosive play! (out of bounds)" and
+    // "Fake kick — Complete": the catch still counted via `reception`, so the QB
+    // box showed more completions than attempts (e.g. C/ATT 14/13).
+    const isComp = !isSackPlay && (play.reception ?? (!play.intId && (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'TOUCHDOWN!' || !!play.fumbleId || !!play.muffedCatch)))
     if (play.type === 'pass') {
       const qb = play.qbId
       if (qb) {
-        if (play.result === 'Complete' || play.result === 'Explosive play!' || play.result === 'Incomplete' || play.result.startsWith('Interception') || play.result === 'TOUCHDOWN!' || play.fumbleId || play.muffedCatch || play.spike) {
-          add(qb, off, 'passAtt', 1)
-        }
+        if (!isSackPlay) add(qb, off, 'passAtt', 1)
         if (isComp) {
           add(qb, off, 'passComp', 1)
           add(qb, off, 'passYds', play.yards)
@@ -131,7 +138,7 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         if (play.intId || play.result.startsWith('Interception')) add(qb, off, 'ints', 1)
         // R8: sacks taken by the QB (SK) and sack yards lost (SKY). A sack is not
         // a pass attempt and its yards are not subtracted from passing yards.
-        if (/^Sack/.test(play.result)) {
+        if (isSackPlay) {
           add(qb, off, 'sk', 1)
           add(qb, off, 'sky', Math.abs(play.yards ?? 0))
         }

@@ -37,7 +37,7 @@ export function PlanEditor({
 
   const dial = (
     label: string,
-    key: keyof GamePlan,
+    key: 'passBias' | 'tempo' | 'aggression' | 'coverage',
     min: number,
     max: number,
     step: number,

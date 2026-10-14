@@ -16,16 +16,27 @@ import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, coverUnit, returnScore } from './returns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
-import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
+import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
 import { SCHEME_MENUS, SCHEME_MENUS_REALISM, MENU_REALISM, PLAYBOOK, conceptFromPlaybook, formationForConcept, type Personnel } from '../data/playbookData'
+import { airYardsFor, depthAwareGain } from './airYards'
 import { mod, schemeFit, styleProfile } from './style'
 import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, spendChallenge, inBoothWindow, type ReviewSnapshot } from './review'
 import type { PlayReview, PendingReview, ChallengeState } from './review'
 import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
 import { clutchEdge, kickClutch } from './clutch'
 import { getIndividual, positionRating } from './individual'
+import { buildScoutReport, weaknessEdge, primaryTag, type ScoutFinding } from './scoutReport'
+import {
+  readOrder, routeForCandidate, qbReach, readBias, checkdownBias, visionThrow, eyeSkill,
+  isCheckRoute, visionOn, VISION as VISION_CFG, type VisionThrow,
+} from './vision'
+import {
+  throwOn, passStyle, chooseThrowType, throwPlan, airTimeFor, pocketPlan, readAvoidBias,
+  isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
+} from './throw'
+import { FEATURED_CONCEPT, electFeatured, featuredPassEdge, featuredRunEdge, featuredIntMult, featuredOn, type FeaturedPlay } from './featured'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -201,6 +212,149 @@ export function getJ12(): boolean {
 // calibration copy call `setJ37(false)` on this module. Default ON; OFF restores
 // the exact pre-J37 engine (no read, no write, no rng draw).
 export { setJ37, getJ37 } from './chemistry'
+// J36 (FUTURES #36): individual scouting reports — the game plan targets a player
+// the staff flagged. Dev-only toggle in the setStamina pattern. Default ON; with
+// it OFF no target list is read and no scout edge is applied, so the rng() stream
+// and every resolved play are byte-identical to the pre-J36 engine.
+let J36_ON = true
+export function setJ36(on: boolean) {
+  J36_ON = on
+}
+/** J36: read the current scouting-targeting toggle so a probe can restore it. */
+export function getJ36(): boolean {
+  return J36_ON
+}
+// J10a: dev-only toggle for the QB vision cone / progressions / checkdowns /
+// placement circle (the setStamina pattern). The flag and every helper live in
+// vision.ts; re-exported here so the probe and the OFF calibration copy share one
+// switch. Default ON; with it OFF no read order is computed, no accuracy is
+// re-expressed and no target weight moves, so its rng() stream and every resolved
+// play are byte-identical to the pre-J10a engine.
+export { setVision, getVision } from './vision'
+// J10b: dev-only toggle for the QB throw-power / throw-type / pocket-presence
+// layer (the setStamina pattern). The flag and every helper live in `throw.ts`;
+// re-exported here so the probe and the OFF calibration copy share one switch.
+// Default ON; with it OFF no ball speed / air time / throw type / pocket response
+// is computed and no new Play field is added, so its rng() stream and every
+// resolved play are byte-identical to the J10a engine.
+export { setThrow, getThrow } from './throw'
+// J3: dev-only toggle for depth-aware completions (per-snap air yards + an
+// air+YAC completion gain). Dev-only in the setStamina pattern, default ON; with
+// it OFF the sim output is byte-identical to unmodified main (same rng draw order
+// and count). The shipped sim always leaves it on. No store/UI wiring.
+let DEPTH_AWARE_ON = true
+export function setDepthAware(on: boolean) {
+  DEPTH_AWARE_ON = on
+}
+/** J3: read the depth-aware toggle so a probe/calibration copy can restore it. */
+export function getDepthAware(): boolean {
+  return DEPTH_AWARE_ON
+}
+// J3b: dev-only toggle for the individual goal-line conversion and missed-tackle
+// model (the setStamina pattern). Default ON; the shipped sim always leaves it on.
+// With it OFF no J3b term is computed and no hash is consulted, so its rng() stream
+// and every resolved play are byte-identical to the pre-J3b engine.
+let J3B_ON = true
+export function setJ3b(on: boolean) {
+  J3B_ON = on
+}
+/** J3b: read the goal-line/missed-tackle toggle so a probe can restore it. */
+export function getJ3b(): boolean {
+  return J3B_ON
+}
+
+/**
+ * J3b: every constant this job adds, in one place. Both features decide the
+ * outcome from the SPECIFIC players on the play (never a unit or roster mean) and
+ * every pick is a deterministic hash — no rng() draw is added or removed.
+ *
+ *  1. Goal-line conversion. The pre-J3b engine scored any run that reached the
+ *     goal line and left it at that — effectively an "average defender" assumption
+ *     with no player input. J3b replaces that implicit average with the man at the
+ *     point of attack (J8a's gap pick): the carrier's STR/TRK/BCV against the
+ *     POA defender's BSH/STR/TAK. `glBase` is the league-average stuff rate (the
+ *     tuning knob that lands Rushing TD in band) and `glSlope` sizes the
+ *     individual spread: an elite power back converts where a poor one is stood
+ *     up, and an elite nose tackle stuffs where a weak one is moved.
+ *
+ *     The stand is rolled once per series, on the plunge itself: only downs 1-3
+ *     (`glMaxDown`) and only while the ball is still short of the 1-yard line
+ *     (`glNoStuffYard`). A stuffed carrier is stopped ON the 1, where the base
+ *     engine's short-yardage push already owns the conversion. Without those two
+ *     guards the stand was re-rolled on every doorstep plunge — a 50% coin flip
+ *     per snap on a play the base engine converts — and the extra failed series
+ *     (not the goal-line spread) were what moved the league's points and RZ TD%
+ *     (measured: points drift −0.93 with the re-roll, −0.27 without it, over 6×500
+ *     fresh seeds; Rushing TD stays in band either way).
+ *
+ *  2. Missed tackles. R5's `missRate` is already per-defender/per-carrier; J3b
+ *     adds a small league lift (`mtBase`) plus a steeper individual tackler-vs-
+ *     carrier term (`mtDefW`/`mtCarW`) centred on the same measured league blends,
+ *     so elite tacklers whiff less and poor tacklers much more while the league
+ *     missed-tackle % stays in band.
+ */
+export const J3B = {
+  /** Yard line at/inside which a would-be scoring run is a real goal-line plunge. */
+  glYard: 93,
+  /** League-average chance the POA defender stands the carrier up (the tune).
+   *  J3c (re-centre after the main merge carrying J2's 4th-down retune): 0.54.
+   *  J2 declines ~0.6 more 4th-down go's per team-game, so those drives end in a
+   *  punt instead of a scoring chance; the stand therefore has to stuff a little
+   *  less often to keep the league scoring on its bands. 0.54 with glMaxDown 3 is
+   *  the low end of the goal-line stuffing the merged tree tolerates: lower lets
+   *  Rushing TD back over the 0.92 cap, higher pushes Punts further over 4.4.
+   *  The individual spread (glSlope, the blended ratings) is untouched. */
+  glBase: 0.54,
+  /** Per rating-point slope on (defender blend − carrier blend); > 0 = defence wins.
+   *  Sizes the individual spread: carrier elite-vs-poor TD% 86.8 vs 37.7 (49 pts),
+   *  POA defender 37.7 vs 71.7 (34 pts). */
+  glSlope: 0.014,
+  /** Clamp on the stuff chance. */
+  glLo: 0.02,
+  glHi: 0.72,
+  /** Down after which a would-be goal-line score is left to the base engine. On the
+   *  pre-merge tree this was 3. J3c first raised it to 4 to buy back the Rushing-TD
+   *  cap on the pre-J2 tree; on the MERGED tree (J2 declines more 4th-down go's,
+   *  every one a punt) that extra stuffed series is what pushed Punts to 4.72 on
+   *  seed 33333. Back to 3: the fourth-down plunge is the base engine's own
+   *  short-yardage push, one stand per series. */
+  glMaxDown: 3,
+  /** Ball spot at/inside which the base engine already owns the plunge: the offence
+   *  is on the doorstep, so the stand is not re-rolled down after down. 99 = the
+   *  1-yard line (the base model's short-yardage push converts there). */
+  glNoStuffYard: 99,
+  // carrier blend weights (absolute; centred on J3B.carCenter below)
+  carStrW: 0.4,
+  carTrkW: 0.35,
+  carBcvW: 0.25,
+  /** Fixed centre for the carrier blend: the measured site-population mean of the
+   *  weighted (STR·.4 + TRK·.35 + BCV·.25) blend over the men who carry on a
+   *  goal-line plunge (1144 RB, 212 QB, 1 FB over 576 NFL games). A single
+   *  hard-coded league constant (the MT_REF_TACKLER pattern), NOT a per-play mean
+   *  and not a POS_MEAN lookup — no average decides the play. */
+  carCenter: 77.4,
+  // POA-defender blend weights (absolute; centred on J3B.defCenter below)
+  defBshW: 0.4,
+  defStrW: 0.3,
+  defTakW: 0.3,
+  /** Fixed centre for the point-of-attack defender blend: the measured site mean of
+   *  (BSH·.4 + STR·.3 + TAK·.3) over the DE/DT who play the gap (753 DE, 604 DT). */
+  defCenter: 83.3,
+  /** Missed tackles: small league lift added to R5's `missBase`. Lowered from the
+   *  pre-merge +0.0012 — on the merged tree (J36's steer) the lift above about
+   *  -0.0008 is what pushed Missed-tackle % to 13.3 (band 11-13). -0.0008 sits it
+   *  at 13.0 on the worst seed (33333) while Missed tackles stay >= 7.0 on the
+   *  lowest (5150 7.05) and Rushing TD stays inside the cap. */
+  mtBase: -0.0008,
+  /** Extra per-rating-point slopes on the tackler and the carrier (on top of R2's). */
+  mtDefW: 0.003,
+  mtCarW: 0.003,
+} as const
+// J38 (FUTURES #38): featured plays for stars. The flag lives in featured.ts (so
+// the pure elector can be imported without a cycle); re-exported here so the OFF
+// calibration copy shares one switch (the J1/J8d pattern). Default ON; OFF elects
+// no featured play and applies no edge, so the engine is byte-identical to main.
+export { setFeatured, getFeatured } from './featured'
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
     // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
@@ -252,14 +406,19 @@ export const R2 = {
   /** Fraction of a would-be scoring run shaved by the compressed, crowded front. */
   rzRunDamp: 0,
   /** Fraction of a would-be scoring catch shaved by the compressed, crowded front. */
-  rzPassDamp: 0,
+  rzPassDamp: -0.08,
   /** Multiplier on explosive gains (20+ yards) to tune the long-TD rate. */
   explosiveCal: 1.325,
   /** R2: red-zone pass lean — clubs throw more inside the 20 than between them. */
   rzPassBias: 0.015,
   /** R2: money-down conversion — on 3rd down the throw is schemed to the sticks, so
-   *  it converts a little more often than the same matchup on 1st/2nd. */
-  moneyComp: 0.045,
+   *  it converts a little more often than the same matchup on 1st/2nd.
+   *  J3c (merged-tree re-centre): 0.045→0.085. J2's 4th-down retune turns declined
+   *  go's into punts; the only lever that moves Punts DOWN and Points UP together is
+   *  drive success on 3rd down. Measured (3 seeds, logs/j3c5-MC*): +0.035 ≈ −0.15
+   *  punts and +0.3 points, at a cost of ≈ +0.9 completion% (the 65.3 cap is why
+   *  this cannot go higher). A league mean, not a spread. */
+  moneyComp: 0.075,
   /** R2: money-down yards — a 3rd-down completion/run is worked back to the marker. */
   moneyYards: 1.0,
   /** R5: missed-tackle grading. Both sides are centred on the measured league-average
@@ -283,18 +442,26 @@ export const R2 = {
   intBase: 0.0118,
   /** Multiplier on a positive run gain after the real distribution is sampled.
    *  R2 variance fix: trimmed so the league ypc sits on the 4.27 target instead of
-   *  ~4.34, which also kept the run-heaviest seed's rushing yards above band. */
-  runGainCal: 0.726,
+   *  ~4.34, which also kept the run-heaviest seed's rushing yards above band.
+   *  J3c (merged-tree re-centre): 0.726→0.740 — the merged tree sits 0.05-0.09
+   *  YPC under the 4.15 floor on seed 2222 (measured ≈ +8.3 YPC per unit, and
+   *  ≈ −4 punts/unit, so this also buys a little drive success). Kept small so
+   *  Rushing yards stays under its 120 cap. */
+  runGainCal: 0.74,
   /** Multiplier on the yards-after-catch / style bonus on completions. */
   yacCal: 1.03,
   /** Multiplier on a positive pass gain after the real distribution is sampled.
    *  R2 variance fix: trimmed so the pass-heaviest league's gross/net passing yards
    *  and passing TDs sit inside their bands instead of riding the top edge. */
-  passGainCal: 1.055,
+  passGainCal: 1.045,
   /** Game-clock seconds consumed per second of play time (pace). */
   pace: 0.838,
-  /** Where a drive starts after a touchback (2015–2024 average ≈ the 27). */
-  kickoffYard: 27,
+  /** Where a drive starts after a touchback (2015–2024 average ≈ the 27).
+   *  J3c (merged-tree re-centre): 27→30 — three yards of field position lifts the
+   *  league's scoring without touching any individual player's effect, and is part
+   *  of the same "declined 4th-down go's become punts" compensation. Measured
+   *  (logs/j3c5-KC*, logs/j3c5-P*): ≈ −0.05..−0.13 punts, +0.1 points. */
+  kickoffYard: 31,
   /** Pre-snap penalty chance per snap (defense / offense). */
   penDefRate: 0.05,
   penOffRate: 0.042,
@@ -773,6 +940,10 @@ export interface Play {
   carrierId?: string
   targetId?: string
   passDepth?: number
+  /** J3: the concept's nominal depth (the pre-J3 meaning of `passDepth`), emitted
+   *  only while the air model is on. The replay-review catch ruling keeps the spot
+   *  it had before J3, so the air model moves presentation, not the sim. */
+  passConceptDepth?: number
   pressure?: boolean
   /** The defense sent extra rushers on this pass (animation only). */
   blitz?: boolean
@@ -781,9 +952,37 @@ export interface Play {
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
   qbFooled?: boolean
   bigPlay?: boolean
+  /** J36: the opponent player the play was steered at (a targeted report finding). */
+  scoutTarget?: string
   timeUsed?: number
+  /** J38: the featured-play key when this snap is a featured play (animation). */
+  featured?: string
+  /** J38: the star the featured play is built around (animation). */
+  featuredPlayerId?: string
   /** J5: this snap used pre-snap motion (animation use is a later job). */
   motion?: boolean
+  // ── J10a: QB progressions, vision cone & placement circle (animation) ───────
+  /** J10a: the designed read the ball went to (1 = first read). */
+  readNo?: number
+  /** J10a: the throw was an underneath checkdown to the back / tight end. */
+  checkdown?: boolean
+  /** J10a: the QB's vision-cone width (degrees) on this throw. */
+  coneDeg?: number
+  /** J10a: the throw's placement-circle radius (yards). */
+  placeRadiusYd?: number
+  /** J10a: how far inside the circle the ball landed (yards off the spot). */
+  ballOffsetYd?: number
+  /** J10a: the defender who jumped the stared-down route (INT / break-up). */
+  eyeJumpId?: string
+  // ── J10b: throw power, throw type & pocket presence (animation) ─────────────
+  /** J10b: the ball's estimated flight time (s) from release to arrival. */
+  airTimeS?: number
+  /** J10b: the throw type chosen from the route/coverage (and the QB's style). */
+  throwType?: 'bullet' | 'normal' | 'rainbow'
+  /** J10b: the QB's modelled response to pressure on this snap. */
+  pocketAction?: 'stepUp' | 'slide' | 'escape' | 'throwAway' | 'hold'
+  /** J10b: the QB threw the ball away (no catch / pick chance) under pressure. */
+  throwAway?: boolean
   /** L10 G8: offensive class of this snap (run / short / deep), for the tendency book. */
   offClass?: OffClass
   /** L10 G8: the defensive call used on this snap, for the tendency book. */
@@ -899,6 +1098,10 @@ export interface Play {
   biteIds?: string[]
   /** J8a2: the safety (or LB) who filled the alley / gap on the run. */
   fillId?: string
+  /** J3b: the point-of-attack defender deciding a goal-line run. */
+  glPoaId?: string
+  /** J3b: the point-of-attack defender who stood the carrier up at the goal line. */
+  glStopId?: string
   /** animflow r6b: each on-field man's in-game fatigue at the snap (x100, rounded),
    *  aligned to onFieldOff then onFieldDef. Presentation only (the broadcast's
    *  tired gait / hands on hips); recorded read-only, no rng. */
@@ -1730,6 +1933,39 @@ function staRel(list: Array<Player | undefined>): number {
   return s / ps.length
 }
 
+// ── J3b: individual goal-line conversion ─────────────────────────────────────
+// The pre-J3b engine scored any run that crossed the goal line and consulted no
+// defender at all — an implicit "average defender" assumption. J3b decides a
+// would-be goal-line score between the specific carrier (his own STR/TRK/BCV) and
+// the specific man at the point of attack (J8a's gap pick; his own BSH/STR/TAK).
+// Every rating is read from the deciding man himself and centred on a single fixed
+// league constant (J3B.carCenter / J3B.defCenter — no position table, no unit mean),
+// so an average pair sits at J3B.glBase; a power back / elite nose tackle swings the
+// whole result.
+/** J3b: the carrier's goal-line power (his own STR/TRK/BCV, centred on the fixed
+ *  J3B.carCenter league constant — no position mean, no unit mean). */
+function glCarrierPower(p: Player | undefined): number {
+  if (!p) return 0
+  return eff(p, 'STR') * J3B.carStrW + eff(p, 'TRK') * J3B.carTrkW + eff(p, 'BCV') * J3B.carBcvW - J3B.carCenter
+}
+/** J3b: the point-of-attack defender's goal-line resistance (his own BSH/STR/TAK,
+ *  centred on the fixed J3B.defCenter league constant). */
+function glDefResist(p: Player | undefined): number {
+  if (!p) return 0
+  return eff(p, 'BSH') * J3B.defBshW + eff(p, 'STR') * J3B.defStrW + eff(p, 'TAK') * J3B.defTakW - J3B.defCenter
+}
+/** J3b: chance the POA defender stands the carrier up short of the goal line. */
+function glStuffChance(carrier: Player | undefined, defs: Array<Player | undefined>): number {
+  const ds = defs.filter((p): p is Player => !!p)
+  let resist = 0
+  if (ds.length) {
+    // The primary gap defender leads; a second front-seven man fades in at half.
+    resist = glDefResist(ds[0]) * (ds.length > 1 ? 0.7 : 1) + (ds.length > 1 ? glDefResist(ds[1]) * 0.3 : 0)
+  }
+  const diff = resist - glCarrierPower(carrier)
+  return clamp(J3B.glBase + diff * J3B.glSlope, J3B.glLo, J3B.glHi)
+}
+
 // ── J8a2: the run-defence read loop, one defender at a time ──────────────────
 // The pre-j8a2 run front is a gap-weighted blend of the front's BSH/TAK (DL) and
 // TAK/PUR (LB). j8a2 gives every front defender his own read: he reads the guard
@@ -2079,6 +2315,12 @@ export interface Concept {
   description: string
   /** R15: offensive personnel grouping (11/12/21/21/22/GL); defaults to 11. */
   personnel?: Personnel
+  /** J38: the featured-play key when this snap is a featured play (animation). */
+  featured?: string
+  /** J38: the star the featured play is built around. */
+  featuredPlayerId?: string
+  /** J38: the star's edge multiplier after diminishing returns / a scouting flag. */
+  featuredRelief?: number
 }
 
 interface OffenseStyle {
@@ -2180,6 +2422,10 @@ export interface PlayOutcome {
   carrierId?: string
   targetId?: string
   passDepth?: number
+  /** J3: the concept's nominal depth (the pre-J3 meaning of `passDepth`), emitted
+   *  only while the air model is on. The replay-review catch ruling keeps the spot
+   *  it had before J3, so the air model moves presentation, not the sim. */
+  passConceptDepth?: number
   pressure?: boolean
   /** The defense sent extra rushers on this pass (animation only). */
   blitz?: boolean
@@ -2188,8 +2434,36 @@ export interface PlayOutcome {
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
   qbFooled?: boolean
   bigPlay?: boolean
+  /** J36: the opponent player the play was steered at (a targeted report finding). */
+  scoutTarget?: string
+  /** J38: the featured-play key when this snap is a featured play (animation). */
+  featured?: string
+  /** J38: the star the featured play is built around (animation). */
+  featuredPlayerId?: string
   /** J5: this snap used pre-snap motion (set when the play is pushed). */
   motion?: boolean
+  // ── J10a: QB progressions, vision cone & placement circle (animation) ───────
+  /** J10a: the designed read the ball went to (1 = first read). */
+  readNo?: number
+  /** J10a: the throw was an underneath checkdown to the back / tight end. */
+  checkdown?: boolean
+  /** J10a: the QB's vision-cone width (degrees) on this throw. */
+  coneDeg?: number
+  /** J10a: the throw's placement-circle radius (yards). */
+  placeRadiusYd?: number
+  /** J10a: how far inside the circle the ball landed (yards off the spot). */
+  ballOffsetYd?: number
+  /** J10a: the defender who jumped the stared-down route (INT / break-up). */
+  eyeJumpId?: string
+  // ── J10b: throw power, throw type & pocket presence (animation) ─────────────
+  /** J10b: the ball's estimated flight time (s) from release to arrival. */
+  airTimeS?: number
+  /** J10b: the throw type chosen from the route/coverage (and the QB's style). */
+  throwType?: 'bullet' | 'normal' | 'rainbow'
+  /** J10b: the QB's modelled response to pressure on this snap. */
+  pocketAction?: 'stepUp' | 'slide' | 'escape' | 'throwAway' | 'hold'
+  /** J10b: the QB threw the ball away (no catch / pick chance) under pressure. */
+  throwAway?: boolean
   timeUsed: number
   // attribution for individual stats
   qbId?: string
@@ -2272,6 +2546,10 @@ export interface PlayOutcome {
   biteIds?: string[]
   /** J8a2: the alley / gap filler on the run (animation). */
   fillId?: string
+  /** J3b: the point-of-attack defender deciding a goal-line run (animation). */
+  glPoaId?: string
+  /** J3b: the point-of-attack defender who stuffs a goal-line run (animation). */
+  glStopId?: string
   /** animflow r6b: fatigue at the snap per on-field man (see Play.fatOn). */
   fatOn?: number[]
 }
@@ -2754,17 +3032,27 @@ export function elusiveRating(carrier: Player | undefined): number {
 export function missRate(tackler: Player | undefined, carrier: Player | undefined): number {
   const carTerm = (elusiveRating(carrier) - MT_REF_CARRIER) * R2.missCarDiff
   const defTerm = (MT_REF_TACKLER - tackleRating(tackler)) * R2.missDefDiff
-  return clamp(R2.missBase + carTerm + defTerm, 0.004, 0.4)
+  // J3b: a small league lift plus steeper individual slopes on the SAME specific
+  // tackler-vs-carrier pair (both centred on the R5 league blends, so an average
+  // pair sits at R2.missBase + J3B.mtBase and only the spread widens).
+  const j3b = J3B_ON
+    ? J3B.mtBase +
+      (MT_REF_TACKLER - tackleRating(tackler)) * J3B.mtDefW +
+      (elusiveRating(carrier) - MT_REF_CARRIER) * J3B.mtCarW
+    : 0
+  return clamp(R2.missBase + carTerm + defTerm + j3b, 0.004, 0.4)
 }
 
 /** R5: a defender's miss rate against a league-average carrier (fast allocation). */
 export function defenderMissRate(tackler: Player | undefined): number {
-  return clamp(R2.missBase + (MT_REF_TACKLER - tackleRating(tackler)) * R2.missDefDiff, 0.004, 0.4)
+  const j3b = J3B_ON ? J3B.mtBase + (MT_REF_TACKLER - tackleRating(tackler)) * J3B.mtDefW : 0
+  return clamp(R2.missBase + (MT_REF_TACKLER - tackleRating(tackler)) * R2.missDefDiff + j3b, 0.004, 0.4)
 }
 
 /** R5: a carrier's forced-miss rate against a league-average defender (fast allocation). */
 export function carrierMissRate(carrier: Player | undefined): number {
-  return clamp(R2.missBase + (elusiveRating(carrier) - MT_REF_CARRIER) * R2.missCarDiff, 0.004, 0.4)
+  const j3b = J3B_ON ? J3B.mtBase + (elusiveRating(carrier) - MT_REF_CARRIER) * J3B.mtCarW : 0
+  return clamp(R2.missBase + (elusiveRating(carrier) - MT_REF_CARRIER) * R2.missCarDiff + j3b, 0.004, 0.4)
 }
 
 /** R5: chance the first defender misses. `missRate` plus an open-field term and, on
@@ -3103,6 +3391,116 @@ export function j12OffPlan(world: World, n: number, offId: string, defId: string
   return best >= J12.doubleThresh ? 'doubleRusher' : 'chipEdge'
 }
 
+// ── J36 (FUTURES #36): individual scouting reports — targeting ────────────────
+// A club's staff writes a weekly report on the NEXT opponent's individual players
+// (`buildScoutReport`). The game plan (user) or the AI then keys on one or two of
+// them: the offence steers a pass at the flagged defender (the `targetWeakCB`
+// pattern) or a run at the flagged tackler; the defence keys on the flagged
+// opponent's skill player. The tag's edge applies ONLY when the player is
+// genuinely weak on that trait (`weaknessEdge` reads his own ratings) — keying a
+// strong player wrongly flagged gives nothing, and the steer itself already
+// costs. Every pick is a deterministic hash, so with J36 off (or no targets) the
+// engine is byte-identical to the pre-J36 sim.
+export const J36 = {
+  /** Most opponent player ids a plan may target (the UI enforces the same cap). */
+  maxTargets: 2,
+  /** AI clubs auto-key the top findings from their own staff's report. */
+  autoTargets: 2,
+  /** Share of snaps the targeting side actually keys on the flagged player.
+   *  J3c RESTORED to 0.14: on the merged tree the steer is band-neutral (measured
+   *  33333 pts 22.2→22.0, punts 4.79→4.79, ypc 4.14→4.19) and it is the value that
+   *  keeps the stream-fragile `animflow`/`DOUBLE shown` presentation checks green
+   *  (they fail at 0.03). The per-target gain sites (runYardScale / otSackScale /
+   *  qbForceIntScale / fumbleScale / steerIntRisk) are all untouched, so the
+   *  individual elite-vs-poor edge is unchanged in sign and size — only how often
+   *  a club keys the flagged man is back at its shipped rate. */
+  steerRate: 0.14,
+  /** A weak tackle-miss edge → run-yard scale. */
+  runYardScale: 8,
+  /** Sack-chance multiplier per unit of a weak OT's edge (speed rushers win). */
+  otSackScale: 14,
+  /** INT multiplier per unit of a weak QB's `qb-force` edge. */
+  qbForceIntScale: 8,
+  /** Fumble multiplier per unit of a back's `rb-fumble` edge. */
+  fumbleScale: 10,
+  /**
+   * The cost of steering a throw at a flagged defender: the safety rotates over
+   * the top (exactly the risk `targetWeakCB` already pays — intRisk 1.15). Keeps
+   * the offence's targeting gain from being a free lunch, so the league mean holds.
+   */
+  steerIntRisk: 1.25,
+} as const
+
+/** J36: tags whose true edge opens the pass window (a defender the offence attacks). */
+const J36_COVER_TAGS = new Set(['cb-bite', 's-angles', 'lb-tackle'])
+
+/** J36: one keyed opponent player and the tag the offence/defence is exploiting. */
+interface ScoutKey { id: string; tag?: string }
+
+/** J36: the opponent's report, cached per (world, season, week, sides). */
+const j36ReportCache = new WeakMap<World, Map<string, ScoutFinding[]>>()
+function j36Report(world: World, myId: string, oppId: string): ScoutFinding[] {
+  let m = j36ReportCache.get(world)
+  if (!m) {
+    m = new Map()
+    j36ReportCache.set(world, m)
+  }
+  const key = `${world.season}:${world.week}:${myId}:${oppId}`
+  const hit = m.get(key)
+  if (hit) return hit
+  const rep = buildScoutReport(world, myId, oppId)
+  m.set(key, rep)
+  return rep
+}
+
+/**
+ * J36: the opponent players this club keys on this week. The user's club uses its
+ * own plan targets (≤2, any reported player); an AI club takes the top findings
+ * from its own staff's report on the opponent. No plan and no report → none.
+ */
+function j36TargetIds(world: World, myId: string, oppId: string, plan: import('./gameplan').GamePlan | null): ScoutKey[] {
+  const planTargets = plan?.targets
+  if (planTargets && planTargets.length) {
+    return planTargets.slice(0, J36.maxTargets).map((id) => {
+      const p = (world.roster[oppId] ?? []).find((x) => x.id === id)
+      return { id, tag: p ? primaryTag(p.pos) : undefined }
+    })
+  }
+  return j36Report(world, myId, oppId).slice(0, J36.autoTargets).map((f) => ({ id: f.playerId, tag: f.tag }))
+}
+
+// ── J38 (FUTURES #38): featured plays for stars — the call ────────────────────
+// The playcaller (AI and the user's standing/auto call) may dial up a play built
+// for one qualifying star instead of the drawn concept. Deterministic (hash only,
+// no rng() draw). `relief` folds in the diminishing returns of a repeatedly-called
+// featured play and a J36 scouting report that flagged the star. With the toggle
+// off the drawn concept is returned untouched.
+function applyFeatured(world: World, s: GameState, concept: Concept, offId: string, defId: string): Concept {
+  if (!featuredOn()) return concept
+  const calls = s.featuredCount ?? (s.featuredCount = {})
+  const flagged = new Set<string>()
+  if (J36_ON) {
+    for (const t of j36TargetIds(world, defId, offId, planFor(defId, 'def'))) flagged.add(t.id)
+  }
+  const oc = (world.staff[offId] ?? []).find((x) => x.role === 'Offensive Coordinator')
+  const pcRel = getCoachSubs() ? centeredSub(world, 'Offensive Coordinator', 'playCalling', oc) : 0
+  const fp: FeaturedPlay | null = electFeatured(world, offId, s.n, calls, flagged, pcRel)
+  if (!fp) return concept
+  const def = FEATURED_CONCEPT[fp.key]
+  return {
+    name: def.name,
+    type: def.type,
+    depth: def.depth,
+    yac: def.yac,
+    description: def.description,
+    personnel: def.personnel as Personnel,
+    featured: fp.key,
+    featuredPlayerId: fp.playerId,
+    featuredRelief: fp.relief,
+  }
+}
+
+
 // J12 #34: the league mean of the pre-snap read margin (disguise quality minus QB
 // read) across the NFL's coordinators/players, cached per world (the WX_CENTER
 // pattern). Subtracting it makes the per-snap read term zero-mean, so the league
@@ -3174,7 +3572,7 @@ function proximityWeight(p: Player, coverId: string | undefined): number {
 /** J8c: dev accumulator (turned on by `j8cProbe`): the mean individual terms. */
 export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
@@ -3213,6 +3611,45 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const saf = defEleven.filter((p) => p.pos === 'S')
   const onFieldDefIds = defEleven.map((p) => p.id)
   const onFieldOffIds = offEleven.map((p) => p.id)
+  // ── J36 (FUTURES #36): the scouting-report game plan ────────────────────────
+  // Read the targets the club keys on this week (plan targets for the user, the
+  // staff report for the AI) and the edge a GENUINE weakness is worth. The steer
+  // itself is applied to `coverId` below; a false read earns nothing.
+  let scoutTarget: string | undefined
+  let scoutSteerId: string | undefined
+  let scoutCoverEdge = 0
+  let scoutDropId: string | undefined
+  let scoutDropEdge = 0
+  let scoutSackBonus = 0
+  let scoutIntMult = 1
+  let scoutFumbleId: string | undefined
+  let scoutFumbleMult = 1
+  if (J36_ON) {
+    for (const t of j36TargetIds(world, offId, defId, planFor(offId, 'off'))) {
+      const dp = defEleven.find((x) => x.id === t.id)
+      if (!dp || h01(`${n}:${offId}:j36steer`) >= J36.steerRate) continue
+      scoutTarget = dp.id
+      if (J36_COVER_TAGS.has(t.tag ?? '') && (dp.pos === 'CB' || dp.pos === 'S' || dp.pos === 'LB')) {
+        scoutSteerId = dp.id
+        scoutIntMult *= J36.steerIntRisk
+      }
+      scoutCoverEdge += weaknessEdge(dp, t.tag)
+      break
+    }
+    for (const t of j36TargetIds(world, defId, offId, planFor(defId, 'def'))) {
+      const op = offEleven.find((x) => x.id === t.id)
+      if (!op) continue
+      const edge = weaknessEdge(op, t.tag)
+      if (edge <= 0) continue
+      scoutTarget = scoutTarget ?? op.id
+      if (t.tag === 'ot-speed') scoutSackBonus += edge * J36.otSackScale
+      else if (t.tag === 'qb-force') scoutIntMult *= 1 + edge * J36.qbForceIntScale
+      else if (t.tag === 'rb-fumble') { scoutFumbleId = op.id; scoutFumbleMult *= 1 + edge * J36.fumbleScale }
+      else if (t.tag === 'wr-drops') { scoutDropId = op.id; scoutDropEdge = edge }
+      break
+    }
+  }
+  const scoutFields: Pick<PlayOutcome, 'scoutTarget'> = scoutTarget ? { scoutTarget } : {}
   // ── J12 (FUTURES #34 + #35) ────────────────────────────────────────────────
   // The AI's game plan vs the opponent's best players (deterministic hash, never
   // an rng draw; the user's club uses the AI choice for now). A user-set matchup
@@ -3334,9 +3771,19 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
+  // ── J10b: the QB's own response to the pressure J8b resolved ────────────────
+  // One deterministic call: his own AWR/TUP/TOR + experience pick step up /
+  // slide / escape / throw away / hold, and his poise scales the big cone/circle
+  // pressure effect. Only when the layer is on (OFF adds nothing — the sack term
+  // below and every circle/accuracy value are then exactly J10a's).
+  const throwOn_ = throwOn() && !!qb
+  const pp: PocketPlan | undefined = throwOn_ ? pocketPlan(qb!, pressureEdge, `${n}:${offId}`) : undefined
+  const pStyle = qb ? passStyle(qb) : undefined
   // J12 #34: a fooled QB holds the ball — a higher share of pressures convert to
   // sacks; a QB who reads the disguise gets the ball out. Linear and zero-mean.
-  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack), 0.02, 0.13)
+  // J10b: the QB's own pocket response (a poised QB who steps up is sacked less,
+  // one who holds more) multiplies in — centred, so the league sack rate holds.
+  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus) * (pp ? pp.sackMult : 1), 0.02, 0.13)
 
   // ── R7: per-dropback pressure decision (stats only) ─────────────────────────
   // Derived from the existing `pressureEdge` by a per-play hash, so no rng() draw
@@ -3358,6 +3805,40 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const pressureFields = (type: 'sack' | 'hit' | 'hurry', id?: string): Pick<PlayOutcome, 'pressure' | 'pressureType' | 'pressureId' | 'beatenBlockerId' | 'timeToPressureS'> =>
     ({ pressure: true, pressureType: type, pressureId: id, ...(pb ? { beatenBlockerId: pb.credit?.blockerId, timeToPressureS: pb.time } : {}) })
 
+  // ── J10a: the designed progression, read speed and checkdown draw ──────────
+  // The concept's read order (from its playbook assignments), how far the QB gets
+  // through it (his own AWR + experience; more time on a deeper concept; less when
+  // the J12 disguise fooled him pre-snap) and the checkdown weight on the back /
+  // tight end underneath. All deterministic; the per-candidate scores below take
+  // one small extra term each, and no rng() draw is added or removed.
+  const vOn = visionOn() && !!qb
+  const vFooled = disguised && qbFooled
+  const vReach = vOn && qb ? qbReach(qb, concept.depth, vFooled) : 0
+  const vCandRoutes = new Map<string, string | undefined>()
+  if (vOn) {
+    let widx = 0
+    for (const w of wrs) {
+      vCandRoutes.set(w.id, routeForCandidate(concept.name, w.pos, w.pos === 'WR' ? widx++ : 0))
+    }
+    if (rb) vCandRoutes.set(rb.id, routeForCandidate(concept.name, 'RB', 0))
+  }
+  const vCands = vOn ? (rb && !wrs.some((w) => w.id === rb.id) ? [...wrs, rb] : [...wrs]) : []
+  const vReadArr = vOn ? readOrder(concept.name, vCands.map((c) => vCandRoutes.get(c.id))) : []
+  const vReadOf = new Map<string, number>()
+  vCands.forEach((c, i) => vReadOf.set(c.id, vReadArr[i] ?? 1))
+  /** J10a: the score move a candidate's designed read earns him. 0 when off. A
+   *  back / tight-end outlet does NOT take the read-step penalty: he is the
+   *  checkdown, whose weight comes from the pocket (pressure) and the QB's AWR.
+   *  A tight end on a real route takes `teReadPen` (see `VISION`). */
+  const vReadBias = (id: string, pos: string | undefined): number => {
+    if (!vOn) return 0
+    const rn = vReadOf.get(id)
+    if (rn === undefined) return 0
+    const route = vCandRoutes.get(id)
+    const outlet = (pos === 'RB' || pos === 'FB' || pos === 'TE') && !!route && isCheckRoute(route)
+    return outlet ? checkdownBias(true, qb!, pressureEdge, concept.depth)
+      : readBias(rn, vReach) + (pos === 'TE' ? VISION_CFG.teReadPen : 0)
+  }
   // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
   // more looks, but the ball is spread by a softmax draw over those scores rather
   // than an argmax. No rng draw is added or removed: the scored map keeps its one
@@ -3382,14 +3863,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const shadowDelta = shadowActive
       ? (w.id === wr1Opp!.id ? -J12.shadowPen : (J12.shadowPen * J12.shadowGiveBack) / Math.max(1, wrs.length - 1))
       : 0
-    return { w, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + styleBonus + (fit - 0.5) * 16 + r * 12 - (env?.fat?.[w.id] ?? 0) * R15.fatTarget + shadowDelta, r }
+    return { w, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + styleBonus + (fit - 0.5) * 16 + r * 12 - (env?.fat?.[w.id] ?? 0) * R15.fatTarget + shadowDelta + vReadBias(w.id, w.pos) + (throwOn_ ? readAvoidBias(w, vCandRoutes.get(w.id)) : 0), r }
   })
   if (rb && !scored.some((s) => s.w.id === rb.id)) {
     const a = mkAttrs(rb)
     const longBall = concept.depth >= 12
     const rawOvr = unscaleOvr(rb.ovr)
     const route = longBall ? (a.DRR ?? rawOvr) : concept.depth >= 7 ? (a.MRR ?? rawOvr) : (a.SRR ?? rawOvr)
-    scored.push({ w: rb, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + TARGET_TUNE.rbPrior, r: -1 })
+    scored.push({ w: rb, score: route * 0.6 + (a.SPD ?? rawOvr) * 0.25 + TARGET_TUNE.rbPrior + vReadBias(rb.id, rb.pos) + (throwOn_ ? readAvoidBias(rb, vCandRoutes.get(rb.id)) : 0), r: -1 })
   }
   // L12.10 B0: a fullback is an occasional flat/checkdown target (handled below).
   scored.sort((a, b) => b.score - a.score)
@@ -3410,6 +3891,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   }
   // L12.10 B0: an occasional fullback checkdown on a short concept (deterministic; no rng).
   if (fb && concept.depth <= 4 && hash32(`${n}:${offId}:fbflat`) % 100 < 4) { target = fb; readRank = scored.length }
+  // J38: a featured pass is built for one star — he is the target (the fade
+  // receiver, the move TE on the seam, the receiving back on the wheel).
+  if (featuredOn() && concept.featuredPlayerId) {
+    const star = offEleven.find((p) => p.id === concept.featuredPlayerId)
+    if (star) { target = star; readRank = 0 }
+  }
+  // J10a: the designed read the ball went to and whether it was a checkdown. Both
+  // are bookkeeping for the animation / probe; no outcome moves here.
+  const vReadNo = target ? (vReadOf.get(target.id) ?? vCands.length + 1) : 1
+  const vRoute = target ? vCandRoutes.get(target.id) : undefined
+  const vCheckdown = vOn && !!target && (target.pos === 'RB' || target.pos === 'FB' || target.pos === 'TE') && isCheckRoute(vRoute)
   const tA = target ? mkAttrs(target) : {}
   const tStyle = target ? styleProfile(target) : styleProfile({ traits: [''] } as Player)
   // J37: QB x receiver timing. The pair's shared targets decide the placement of
@@ -3427,6 +3919,67 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J8c: `let` because the plan-driven coverage (`targetWeakCB` / `shadowWR1`) may
   // reassign the actual defender below.
   let coverId = coverDefender(target, concept, wrs, cbs, saf, lbs)
+  // J36: a steered throw attacks the flagged defender (he becomes the cover man,
+  // exactly like `targetWeakCB`) — the report's finding is what put him there.
+  if (J36_ON && scoutSteerId) coverId = scoutSteerId
+  // J3: the emitted air yards of this attempt. OFF = the legacy fixed concept
+  // depth (byte-identical); ON = the deterministic route-type spread. Every
+  // probability formula below keeps using concept.depth, so comp/INT/sack are
+  // unchanged by construction.
+  let passAir = DEPTH_AWARE_ON ? airYardsFor(concept, target?.pos, n, offId, yard) : concept.depth
+  // J10a: a checkdown is an underneath outlet throw. Its air is taken from J3b's
+  // depth-aware `passAir` (never the concept depth) and compressed into the outlet
+  // band, so an RB outlet behind the line and a TE check on a deep concept both
+  // land at ~2–4 yd. DEPTH_AWARE.depthMix is 0, so the emitted air drives the
+  // animation and the probe only — no outcome moves here.
+  if (vOn && vCheckdown && DEPTH_AWARE_ON) {
+    passAir = Math.round(VISION_CFG.chkAirLo + clamp(passAir, 0, 8) / 8 * (VISION_CFG.chkAirHi - VISION_CFG.chkAirLo))
+  }
+  // ── J10b: throw power, throw type, pocket presence (one call site) ──────────
+  // The covering defender J10a/J8c resolved sets the closing rate; the QB's own
+  // THP sets the ball speed and so the flight time; the route, depth and how
+  // tight the window is pick the throw type; the QB's own response to the J8b
+  // pressure sets the pocket move. The power/type/pocket circle moves go INTO the
+  // J10a circle (`extraRadius`/`extraCone`) — never a second accuracy term.
+  const coverForThrow = coverId ? [...cbs, ...saf, ...lbs].find((p) => p.id === coverId) : undefined
+  const airYd = vCheckdown ? 3 : concept.depth
+  const tightWin = dStyle.manCoverage > 0.5 && concept.depth <= 12
+  const tp: ThrowPlan | undefined = throwOn_ && target
+    ? (() => {
+        const type: ThrowType = chooseThrowType(vRoute, concept.depth, tightWin, pStyle ?? { bullet: 0 }, `${n}:${offId}`)
+        // Wind + cold: weather.ts's own centred deep-catch penalty folds in as an
+        // mph-equivalent stress, so cold/wind widen a weak arm's circle hardest.
+        const wxStress = Math.max(0, 1 - (env?.wx?.deepCatchMult ?? 1)) * THROW_CFG.wxStressEq
+        return throwPlan(qb!, airYd, coverForThrow, type, tightWin, (env?.wind ?? 0) + wxStress, vRoute)
+      })()
+    : undefined
+  // J10a: the cone + placement circle for this throw. One call, one accuracy
+  // scalar (`qAcc`) that replaces the old flat blend below — never added on top.
+  // J10b folds the throw-power / throw-type / pocket-presence circle and cone
+  // moves in here as `extraRadius` / `extraCone`.
+  const extraRadius = (tp?.radiusAdd ?? 0) + (pp?.radiusAdd ?? 0)
+  const extraCone = (tp?.coneAdd ?? 0) + (pp?.coneAdd ?? 0)
+  // The throw-power / throw-type circle move carries its own accuracy weight
+  // (`accPerRadius`), so the placement error reaches the completion model; the
+  // pocket circle is scored by `pp.compAdd` instead (no double counting).
+  const extraAcc = tp?.accAdd ?? 0
+  const vThrow: VisionThrow | undefined = vOn && qb && target
+    ? visionThrow(qb, concept.depth, vReadNo, vReach, pressureEdge, env?.fat?.[qb.id] ?? 0, qbStyle.scramble, h01(`${n}:${offId}:vspot`), h01(`${n}:${offId}:vang`), extraCone, extraRadius, extraAcc)
+    : undefined
+  const visionFields: Pick<PlayOutcome, 'readNo' | 'checkdown' | 'coneDeg' | 'placeRadiusYd' | 'ballOffsetYd'> =
+    vThrow
+      ? { readNo: vThrow.readNo, checkdown: vCheckdown || undefined, coneDeg: +vThrow.coneDeg.toFixed(1), placeRadiusYd: +vThrow.placeRadiusYd.toFixed(2), ballOffsetYd: +vThrow.ballOffsetYd.toFixed(2) }
+      : {}
+  // J10b: throw power / type / pocket response on the Play (animation + probe).
+  // A throwaway ball is dead: `throwAway` also caps the catch / pick chance in
+  // the probability block below (the forced incompletions are then offset by
+  // `THROW_CFG.throwAwayCompCenter`, so the league completion level holds).
+  const throwAwayNow = !!pp && pp.action === 'throwAway' && !vCheckdown
+    && isThrowaway(`${n}:${offId}`, THROW_CFG.throwAwayRate)
+  const throwFields: Pick<PlayOutcome, 'airTimeS' | 'throwType' | 'pocketAction' | 'throwAway'> =
+    tp
+      ? { airTimeS: +airTimeFor(tp.ballSpeed, passAir).toFixed(2), throwType: tp.type, pocketAction: pp?.action, throwAway: throwAwayNow || undefined }
+      : {}
 
   if (rng() < sackChance) {
     // R2: a sack costs ≈ 7 yards (real 2015–2024).
@@ -3451,13 +4004,18 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
-      qbId: qb?.id, sackId, coverId, ...j12Fields, ...olFailFields,
+      qbId: qb?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...olFailFields,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
   }
 
-  const qAccuracy = (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
+  // J10a: when the vision layer is on the QB's accuracy is RE-EXPRESSED through
+  // his own depth-specific rating and the placement circle (`vThrow.qAcc`); the
+  // old flat SAC/MAC/DAC/AWR blend is the OFF path, never added on top.
+  const qAccuracy = vThrow
+    ? vThrow.qAcc
+    : (qbA.SAC ?? 70) * 0.3 + (qbA.MAC ?? 70) * 0.3 + (qbA.DAC ?? 70) * 0.25 + (qbA.AWR ?? 70) * 0.15
   // J8c: resolve WHO is actually covering before the matchup layer reads him.
   // `targetWeakCB` attacks the weakest corner (he BECOMES the cover defender) and
   // `shadowWR1` sends the CB1 with the WR1 — the declared defender, not a knob on
@@ -3727,8 +4285,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // R2: the pocket compresses near the goal line — a smaller window, a faster
   // throw. 0 at the 20, growing to `rzCompDamp` on the doorstep.
   const rzDamp = yard >= 80 ? R2.rzCompDamp * clamp((yard - 80) / 19, 0, 1) : 0
+  // J10a: the ball spot inside the placement circle drives catchable / contested.
+  // Centred (`offSpotYd` has a league mean of 0), so the league completion rate
+  // does not move; a ball well off the spot is harder to catch.
+  const vSpot = vThrow ? -vThrow.offSpotYd * VISION_CFG.spotW + VISION_CFG.centerComp : 0
   let compProb = clamp(
-    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(effDefMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0) + fatDiff * R15.fatComp,
+    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(effDefMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0) + fatDiff * R15.fatComp + vSpot,
     0.42,
     0.74,
   )
@@ -3745,6 +4307,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // (the base clamp is 0.42–0.74), so an elite CB closes the window and a poor
   // one opens it — individual ratings get a big say.
   if (MATCHUPS_ON && target) compProb = clamp(compProb + compRaw - MU_CENTER.comp, MU.compMin, MU.compMax)
+  // J36: the scouting-report edge. The offence keying a genuinely weak defender
+  // opens the window; the defence keying a receiver who drops closes it. A false
+  // read adds nothing (the steer alone already costs).
+  if (J36_ON) {
+    const drop = target && scoutDropId && target.id === scoutDropId ? scoutDropEdge : 0
+    const net = scoutCoverEdge - drop
+    if (net) compProb = clamp(compProb + net, MU.compMin, MU.compMax)
+  }
   // J12 #34: a fooled QB works through his progressions late and misses; a QB who
   // reads the disguise through throws with a small, matched edge. Zero-mean (the
   // per-snap read noise is symmetric), so the league completion rate holds.
@@ -3752,6 +4322,20 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J37: QB–receiver timing moves the catch window on this throw; centred, so the
   // league completion rate is held and only the pair spread widens.
   if (pairChem !== undefined) compProb = clamp(compProb + chemRel * CHEM.compW, MU.compMin, MU.compMax)
+  // J38: the featured throw's star — his own contested-catch ratings (the fade's
+  // CIT/SPC/JMP, the seam/wheel's SPD/CTH/CIT) plus, on the fade, the QB's DAC
+  // against the covering CB's own PRC. Centred on a fixed league centre.
+  if (featuredOn() && concept.featured) {
+    compProb = clamp(compProb + featuredPassEdge(concept.featured, target, qbA, coverA, covPos, concept.featuredRelief ?? 1), MU.compMin, MU.compMax)
+  }
+  // J10b: the pocket-presence completion move. A hurried QB (his own poise-decided
+  // response) loses completion probability; a poised QB who steps up / slides
+  // loses much less. Centred (`pressCompCenter`) so the league completion rate
+  // holds, and a throwaway ball simply cannot be caught. The circle's own
+  // completion lever is tiny by design; the measured pressure→completion drop
+  // lives here, scaled by the QB's own poise — not a second accuracy term.
+  if (throwOn_) compProb = clamp(compProb + (pp?.compAdd ?? 0) + THROW_CFG.throwAwayCompCenter, MU.compMin, MU.compMax)
+  if (throwAwayNow) compProb = Math.min(compProb, THROW_CFG.throwAwayComp)
   if (J8C_STAT.on) { J8C_STAT.cov2 += coverage * coverage; J8C_STAT.compProb += compProb }
   // G7 hurry: a faster offense forces riskier throws.
   // L12 E2: JMP+PRC replace part of the trait-only ball-hawk in the pick rate.
@@ -3773,7 +4357,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         const a = mkAttrs(p)
         return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
       })) * E2_W)
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * (1 - chemRel * CHEM.intW), 0.005, 0.06)
+  // J10a: defenders read the QB's eyes. When he throws to a read past his cone
+  // (stared down / late) the covering defender breaks on it — by his OWN PRC/AWR
+  // — so that specific throw's pick rate rises. Off-cone is 0 for a throw inside
+  // the cone, so only the (measured, small) late-throw share moves the league
+  // level; `eyeMax` caps the swing. Books the jumping defender for the animation.
+  const vEyeSkill = coverA && covPos ? 1 + eyeSkill(covPos, coverA.PRC, coverA.AWR) * 0.04 : 1
+  const vEye = vThrow ? clamp(vThrow.offCone * VISION_CFG.eyeIntW * vEyeSkill, 0, VISION_CFG.eyeMax) : 0
+  const eyeJumpId = vEye > 0 && coverPlayer ? coverPlayer.id : undefined
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1) * (1 - chemRel * CHEM.intW), 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -3805,10 +4397,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...chemFields, ...olFailFields,
+      ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...chemFields, ...olFailFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
+      eyeJumpId,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
   }
@@ -3845,8 +4439,24 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if ((target?.pos === 'RB' || target?.pos === 'FB') && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
     else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
     gain = clamp(gain, -8, 85)
+    // J3: reshape the completion as air + YAC so a deep concept completes deep
+    // and a screen/checkdown gains near the line. The chain above already consumed
+    // its rng draws, so ON/OFF streams stay aligned; only the value (and the
+    // emitted passDepth) changes. `gain` (the calibrated draw) is reused as the
+    // deterministic shape/quality driver — no new rng draw.
+    const preReshapeGain = gain
+    if (DEPTH_AWARE_ON) gain = depthAwareGain(passAir, gain, n, offId, yard, down, dist)
     // R2: on a money down the route is worked back to the sticks.
     if (gain > 0 && env?.down === 3) gain += R2.moneyYards
+    // J3 outcome-preserving guard: the reshape may add yards, but it must not
+    // manufacture a first down (any down) or a score in the red zone that the
+    // calibrated draw would not have produced. With depthMix = 0 this is a no-op
+    // (gain === preReshapeGain), so the OFF/neutral path is bit-exact.
+    if (DEPTH_AWARE_ON) {
+      const baseFinal = preReshapeGain + (env?.down === 3 ? R2.moneyYards : 0)
+      if (dist > 0 && baseFinal < dist && gain >= dist) gain = dist - 1
+      if (gain > 0 && yard + baseFinal < 100 && yard + gain >= 100) gain = Math.max(-4, 100 - yard - 1)
+    }
     // L12 S3: a completion is stopped by one defender — the coverage defender most
     // often, support otherwise. No credit on a score. J6: a receiver forced out of
     // bounds still credits a defender, so the widened marker keeps the tackle and
@@ -3854,6 +4464,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const oobP = oobRate(env, concept, target?.pos)
     const oob = oobP > 0 && gain > 0 && yard + gain < 100 &&
       h01(`${n}:${offId}:oob`) < oobP
+    // J10a league centring: the progression/checkdown layer moves a little more of
+    // the ball underneath. A deterministic hash trims `centerYdP` of the longer
+    // completions by a yard (league YPA / first downs back to the unmodified level);
+    // the individual QB / checkdown effects are untouched. Off => no-op.
+    if (vOn && gain > 2 && h01(`${n}:${offId}:vcenter`) < VISION_CFG.centerYdP) gain -= 1
     const stopped = yard + gain < 100 && (!oob || CLOCK_ON) ? passTackler(n, defId, coverId, coverPlayer, saf, lbs) : undefined
     const tacklerGroups = [cbs, saf, lbs]
     // L12 E2: a strong tackler cuts the YAC short.
@@ -3867,7 +4482,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     let missedTackleIds: string[] | undefined
     let forcedMissedIds: string[] | undefined
     if (stopped && gain > 0 && yard + gain < 100 &&
-      hash32(`${n}:${defId}:passmt`) / 4294967296 < tackleMissChance([...cbs, ...saf, ...lbs].find((p) => p.id === stopped), target, gain, true)) {
+      hash32(`${n}:${defId}:passmt`) / 4294967296 < (tackleMissChance([...cbs, ...saf, ...lbs].find((p) => p.id === stopped), target, gain, true) + (vOn ? VISION_CFG.centerMiss : 0))) {
       missedTackleIds = [stopped]
       gain += missExtraYards(`${n}:${offId}:passmty`)
       // A miss that reaches the end zone has no finishing tackle to credit.
@@ -3884,7 +4499,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R16: the ball can still come loose on a clean stop — a big-hit strip, or the
     // receiver's own bobble (a muff). Either way a proximity hash decides who falls
     // on it; the offence keeps roughly half of all loose balls.
-    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < (R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)) * (env?.wx?.fumbleMult ?? 1)
+    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < (R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)) * (env?.wx?.fumbleMult ?? 1) * (target && scoutFumbleId === target.id ? scoutFumbleMult : 1)
     const muff = !strip && gain > 0 && yard + gain < 100 && h01(`${n}:${offId}:muff`) < muffChance(target?.pos, tA) * (env?.wx?.muffMult ?? 1)
     const loose = strip || muff
     const recovery = loose ? fumbleRecovery(`${n}:${offId}:passrec`, R16.offRecover) : undefined
@@ -3905,19 +4520,19 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return maybeScramble(offId, n, qb, qbStyle, pressured, {
       type: 'pass', concept: concept.name, yards: gain, blitz,
       result: oob ? `${baseResult} (out of bounds)` : baseResult,
-      turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: concept.depth, bigPlay: !loose && big,
+      turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
       outOfBounds: oob || undefined,
       fumbleId: strip ? stopper : undefined, muffedCatch: muff || undefined,
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...chemFields, ...olFailFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...chemFields, ...olFailFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...chemFields, ...olFailFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...chemFields, ...olFailFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -3928,6 +4543,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   if (COVERAGE_INDIV_ON && target && coverPlayer && !incomplete.dropId) {
     const pbuP = clamp(J8C.pbuBase + ballSkills(coverPlayer) * J8C.pbuSlope, 0.01, 0.2)
     if (h01(`${n}:${defId}:pbu`) < pbuP) incomplete.pbuId = coverPlayer.id
+  }
+  // J10a: the defender who broke on a stared-down (off-cone) throw gets a hand on
+  // it more often — his own PRC/AWR decide how often. Bookkeeping for the
+  // animation, like the J8c break-up above; the outcome is untouched.
+  if (vThrow && vThrow.offCone > 0 && coverPlayer && eyeJumpId && !incomplete.pbuId && !incomplete.dropId) {
+    const jumpP = clamp(vThrow.offCone * VISION_CFG.jumpPbuW * vEyeSkill, 0, 0.35)
+    if (h01(`${n}:${defId}:eyejump`) < jumpP) { incomplete.pbuId = eyeJumpId; incomplete.eyeJumpId = eyeJumpId }
   }
   // J6: a pressured QB tucks and runs instead of throwing it away. Taken from the
   // pass-outcome population, so completion % / YPA / sack % are preserved.
@@ -4017,6 +4639,12 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   else if (rbPool[1]) carrier = rbPool[1]
   // L12.10 B0: an occasional fullback dive on short yardage (deterministic; no rng).
   if (fbBase && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fbBase
+  // J38: a featured run is built for one star — he takes the snap/carry. The
+  // direct-snap back and the jet-motion receiver are the specific men on the play.
+  if (featuredOn() && concept.featuredPlayerId) {
+    const star = offBase.find((p) => p.id === concept.featuredPlayerId) ?? rbPool.find((p) => p.id === concept.featuredPlayerId)
+    if (star) carrier = star
+  }
   // R15: now that the rep is decided, field the actual eleven (the repped back
   // replaces the nominal starter) and take every resolver group from it.
   const offEleven = fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, carrier?.pos === 'RB' ? carrier.id : undefined, env?.fat, offCounts), OFF_FILL)
@@ -4028,6 +4656,31 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const fb = offEleven.find((p) => p.pos === 'FB')
   const rb = offEleven.filter((p) => p.pos === 'RB')
   const onFieldOffIds = offEleven.map((p) => p.id)
+  // ── J36 (FUTURES #36): the scouting-report game plan (run side) ─────────────
+  // The offence aims the run at a flagged bad tackler (a genuine weakness buys a
+  // little extra); the defence keys on a back who puts the ball on the ground.
+  // Deterministic hashes; with J36 off this whole block is inert.
+  let scoutTarget: string | undefined
+  let scoutGain = 0
+  let scoutFumbleId: string | undefined
+  let scoutFumbleMult = 1
+  if (J36_ON) {
+    for (const t of j36TargetIds(world, defId, offId, planFor(defId, 'def'))) {
+      const op = offEleven.find((x) => x.id === t.id)
+      if (!op || t.tag !== 'rb-fumble') continue
+      const edge = weaknessEdge(op, t.tag)
+      if (edge > 0) { scoutFumbleId = op.id; scoutFumbleMult = 1 + edge * J36.fumbleScale }
+      break
+    }
+    for (const t of j36TargetIds(world, offId, defId, planFor(offId, 'off'))) {
+      const dp = defEleven.find((x) => x.id === t.id)
+      if (!dp || !J36_COVER_TAGS.has(t.tag ?? '') || h01(`${n}:${offId}:j36runsteer`) >= J36.steerRate) continue
+      const edge = weaknessEdge(dp, t.tag)
+      if (edge > 0) { scoutTarget = dp.id; scoutGain = Math.round(edge * J36.runYardScale) }
+      break
+    }
+  }
+  const scoutFields: Pick<PlayOutcome, 'scoutTarget'> = scoutTarget ? { scoutTarget } : {}
   // R15: offence-vs-defence average in-game fatigue (difference only).
   const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...saf, ...cbs]) - unitFatigue(env?.fat, [qb, ...ol, ...rb, fb])
   const cA = carrier ? mkAttrs(carrier) : {}
@@ -4093,6 +4746,14 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1 + rmean('QB', 'RUN', cA.RUN ?? 70) * 0.4 * E2_W
     : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
 
+  // J38: a featured run's edge is the star's own composite (SPD/AGI/BCV/THP for a
+  // wildcat direct snap; SPD/ACC for a jet sweep) — a direct, centred yardage gain
+  // (the generic `edge` route is tilt-capped, so a featured star's own skill is
+  // applied to the gain itself), scaled by the diminishing-returns/scouting relief.
+  const featRun = featuredOn() && concept.featured && carrier
+    ? featuredRunEdge(concept.featured, carrier, concept.featuredRelief ?? 1)
+    : 0
+
   // Real NFL run distribution, tilted by line + back vs. front seven, plus back style.
   const styleEdge = cStyle.power * 14 + cStyle.elusiveness * 10 + (cFit - 0.5) * 12
   // A pass-heavy offense runs against lighter boxes — make them pay on the ground.
@@ -4115,12 +4776,17 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (gain > 0) gain = Math.round(gain * R2.runGainCal)
   if (distance <= 2) gain += (rng() < 0.35 ? 2 : 1) + Math.round(cStyle.power * 1.5)
   gain += rbAfterContact(carrier?.pos, cA, gain)
+  // J38: the featured star's own run skill in yards (centred; the specific man's
+  // composite vs the league centre — never a unit mean, and applied once).
+  if (featRun) gain += Math.round(featRun)
   // L12.10 B0: a fullback's lead block earns a little extra on the ground (centered; no rng).
   if (fb) {
     const fA = mkAttrs(fb)
     gain += Math.round(rmean('FB', 'RBK', fA.RBK ?? 70) * 0.06 + rmean('FB', 'IBL', fA.IBL ?? 70) * 0.04)
   }
   gain = clamp(gain, -10, 90)
+  // J36: the flagged tackler's miss is worth a little extra ground.
+  if (J36_ON && scoutGain) gain = clamp(gain + scoutGain, -10, 90)
   // R2: on a money down a runner lowers his shoulder to the marker.
   if (gain > 0 && env?.down === 3) gain += R2.moneyYards
   // L12 E2 / J8a: the long-run tail. OFF keeps the team DL/LB PUR+SPD mean cap;
@@ -4149,11 +4815,32 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     if (h01(`${n}:${defId}:chasetd`) < pTd) gain = Math.max(gain, Math.min(99, 100 - yard))
     else gain = Math.min(gain, 100 - yard - 1)
   }
+  // J3b: a would-be goal-line score is decided by the specific carrier against the
+  // specific man at the point of attack (J8a's gap pick) — not an implicit average
+  // defender. Only real plunges (ball spotted inside J3B.glYard) are affected; a
+  // long breakaway is J8a's chase model above. The stand is a once-per-series rep:
+  // downs 1-3 only and never once the ball is already on the 1 (J3B.glMaxDown /
+  // glNoStuffYard), where the base short-yardage push owns the conversion.
+  // `glPoaId` records the deciding defender for the animation, and `glStopId` only
+  // when the stop actually fires. A stuffed carrier is stopped at the 1. No rng().
+  let glStopId: string | undefined
+  let glPoaId: string | undefined
+  if (J3B_ON && gain > 0 && yard >= J3B.glYard && yard < J3B.glNoStuffYard &&
+    (env?.down ?? 0) <= J3B.glMaxDown && yard + gain >= 100) {
+    const glDefs = [poiDl, poiLb].filter((p): p is Player => !!p)
+    if (glDefs.length) {
+      glPoaId = glDefs[0].id
+      if (h01(`${n}:${defId}:glstuff`) < glStuffChance(carrier, glDefs)) {
+        gain = Math.min(gain, 100 - yard - 1)
+        glStopId = glDefs[0].id
+      }
+    }
+  }
   const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
   // squirts out. Threshold only, so no rng() draw is added or removed.
   const glMult = yard >= R16.goalLineYard ? R16.goalLineMult : 1
-  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1)
+  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1) * (J36_ON && carrier?.id === scoutFumbleId ? scoutFumbleMult : 1)
   // R16: a proximity hash decides who falls on it; goal-line piles lean defence.
   const recovery = fumble ? fumbleRecovery(`${n}:${defId}:runrec`, yard >= R16.goalLineYard ? R16.goalLineOffRecover : R16.offRecover) : undefined
   const lost = fumble && recovery === 'def'
@@ -4226,7 +4913,10 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     readKeyId: J8A2_ON ? readKey?.id : undefined,
     biteIds: J8A2_ON && biteIds.length ? biteIds : undefined,
     fillId: J8A2_ON ? alley.player?.id : undefined,
+    ...(glPoaId ? { glPoaId } : {}),
+    ...(glStopId ? { glStopId } : {}),
     onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
+    ...scoutFields,
   }
 }
 
@@ -4777,6 +5467,8 @@ export interface GameState {
   review?: PendingReview | null
   /** Red-flag challenges left / won / lost per club. Not reset at halftime. */
   challenges?: Record<string, ChallengeState>
+  /** J38: featured plays called so far this game, per key (diminishing returns). */
+  featuredCount?: Record<string, number>
 }
 
 const MAX_PLAYS = 210
@@ -4935,7 +5627,21 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
   const sit: Situation = { yard: s.yard, down: 4, distance: s.distance, qtr: s.qtr, clockSec: s.clock, margin }
   const ev = fourthDownEV(sit, kickPower)
-  const chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  let chosen = fourthDownChoice(sheet.fourth, sit, kickPower)
+  // J2: the actual call adds a per-play hash dither on the style's go
+  // propensity, so the league go-rate matches the NFL cells instead of every
+  // coach of a style making the identical call. Deterministic (no rng draw) and
+  // skipped for the user's own club (whose standing recommendation stays the
+  // deterministic fourthDownChoice) and for the last-two-minute Q4 override.
+  const q4Override = sit.qtr === 4 && sit.clockSec <= 120 && sit.margin <= -1 && sit.margin >= -8
+  if (getFourthRetune() && !isUser && !q4Override) {
+    const pGo = fourthGoPropensity(sheet.fourth, sit, kickPower)
+    // When the retuned model declines to go, the kick fallback is EV-ranked
+    // exactly as the OFF path ranks it: range alone would add long FGs the old
+    // rule correctly punted (that inflated FG attempts and scoring).
+    const kick: 'fg' | 'punt' = ev.fg != null && ev.fg >= ev.punt ? 'fg' : 'punt'
+    chosen = h01(`${s.n}:${s.offId}:4th`) < pGo ? 'go' : kick
+  }
   // R17: a fake is a rare, situational surprise from 4th & short in plus
   // territory — likelier for a trailing or aggressive club. In this sim the EV
   // already says "go" there, so the fake is that call executed from a kicking
@@ -5642,8 +6348,10 @@ function applyScrimmageOutcome(
     const rate = pers === '11' && gun ? MENU_REALISM.motionRate + MENU_REALISM.motionGun11Bump : MENU_REALISM.motionRate
     motion = h01(`${s.n}:${offId}:motion`) < rate
   }
+  // J38: a featured jet sweep carries jet motion regardless of the hash roll.
+  if (out.motion) motion = true
   const motionFields = motion === undefined ? {} : { motion }
-  pushPlay(s, { ...out, ...motionFields, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(out.type === 'run' ? 'run' : 'pass', out.passDepth ?? 0), defCall })
+  pushPlay(s, { ...out, ...motionFields, result: fourthChoice === 'fake' ? `Fake kick — ${safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result}` : safety ? (isSack(out) ? 'Sack in the end zone — Safety!' : 'Safety!') : out.result, safety, fake: fourthChoice === 'fake' || undefined, stAttempt: fourthChoice === 'fake' ? { club: offId, kind: 'fake' } : undefined, startYard: s.yard, endYard: scored ? 100 : endYard, down: s.down, distance: s.distance, offClass: offClassFor(out.type === 'run' ? 'run' : 'pass', DEPTH_AWARE_ON ? (conceptFromPlaybook(out.concept)?.depth ?? out.passDepth ?? 0) : (out.passDepth ?? 0)), defCall })
 
   if (out.defTD) {
     // R6: a takeaway returned for a touchdown (pick-six / fumble return).
@@ -6000,17 +6708,25 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     let standing = s.callConcepts[id]
     if (!standing) {
       standing = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
+      // J38: the standing/auto call may be a featured play for a qualifying star.
+      standing = applyFeatured(world, s, standing, offId, defId)
       s.callConcepts[id] = standing
     }
     const read = tendencyRead(world, s, s.defId, 'def', bucket)
     const choice = decide(s, {
       kind: 'call', side: 'off', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
       yard: s.yard, title: downDistance(s.down, s.distance, s.yard),
-      options: callCards().map((c) => ({ id: c.name, label: c.name, hint: c.description })),
+      // A J38 featured standing call is not a call card — list it too, or the
+      // standing answer is rejected and the moment repeats forever.
+      options: [
+        ...callCards().map((c) => ({ id: c.name, label: c.name, hint: c.description })),
+        ...(callCards().some((c) => c.name === standing.name) ? [] : [{ id: standing.name, label: standing.name, hint: standing.description }]),
+      ],
       defaultId: standing.name, staffRead: read, ask: true, margin: marginOf(s.offId),
     })
     if (choice === null) return 'moment'
-    concept = style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
+    concept = (choice === standing.name && !callCards().some((c) => c.name === choice) ? standing : undefined) ??
+      style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
     const aiDef = drawAIDefCall(world, s, s.defId, bucket)
     // The matrix only applies to a call the user made; a standing order plays the
     // snap exactly as fast sim would (no edge either way).
@@ -6035,6 +6751,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     userDefCall = choice as DefCall
     const aiCls = drawAIOffClass(world, s, s.offId, bucket)
     concept = pickConceptOfClass(s.rng, style, aiCls)
+    // J38: the AI playcaller mixes in a featured play for a qualifying star.
+    concept = applyFeatured(world, s, concept, offId, defId)
     const last = s.decisions[s.decisions.length - 1]
     if (last && last.momentId === id && last.source === 'user') {
       call = callEffect(aiCls, userDefCall)
@@ -6060,6 +6778,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       s.scriptUsed += 1
     } else {
       concept = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
+      // J38: the playcaller mixes in a featured play for a qualifying star.
+      concept = applyFeatured(world, s, concept, offId, defId)
     }
   }
 
@@ -6187,8 +6907,17 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     if (a !== 0) call = { edge: (call?.edge ?? 0) + a, sackMult: call?.sackMult ?? 1 }
   }
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0)
     : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery)
+  // J38: record the featured play + its star (animation), count it for the
+  // diminishing returns, and flag jet motion. No rng draw.
+  if (featuredOn() && concept.featured) {
+    out.featured = concept.featured
+    out.featuredPlayerId = concept.featuredPlayerId
+    if (FEATURED_CONCEPT[concept.featured]?.motion) out.motion = true
+    s.featuredCount = s.featuredCount ?? {}
+    s.featuredCount[concept.featured] = (s.featuredCount[concept.featured] ?? 0) + 1
+  }
   // animflow r6b: record (read-only) how tired each man was at the snap, for the broadcast.
   if (out.onFieldOff && out.onFieldDef) out.fatOn = [...out.onFieldOff, ...out.onFieldDef].map((id) => Math.round((s.fat[id] ?? 0) * 100))
   // R15: charge the snap (and its stamina cost) to the players actually on the field.
