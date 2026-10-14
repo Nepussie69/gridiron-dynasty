@@ -6,14 +6,15 @@ import { capSummary, playerById, rosterOf } from '../game/selectors'
 import { picksOwnedBy } from '../game/engine/picks'
 import {
   assetValue,
+  contractSurplusMultiplier,
   evaluateTrade,
   findDeals,
   findPackagesFor,
   findTargetsAtPosition,
   isTradeablePick,
+  pickAssetLabel,
   pickTradeValue,
   playerTradeValue,
-  upcomingDraftSeason,
   type DealOffer,
   type TradeAsset,
 } from '../game/engine/trade'
@@ -716,6 +717,7 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
                     </div>
                     <div className="text-label tnum text-muted">
                       Age {p.age} · {money(p.contract.capHit)} · value {playerTradeValue(p).toLocaleString()} pts
+                      {(() => { const s = contractSurplusMultiplier(p); return Math.abs(s - 1) >= 0.015 ? <span title="Contract surplus: cheap/rookie years add trade value, an above-market deal subtracts."> · deal ×{s.toFixed(2)}</span> : null })()}
                     </div>
                   </div>
                   <OvrBadge value={p.ovr} pot={p.pot} size={28} />
@@ -855,7 +857,7 @@ function DealAssetRow({ world, asset }: { world: World; asset: TradeAsset }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-600 text-ink">
-          {pk.season} Round {pk.round} Pick{pk.comp ? ' (comp)' : ''}
+          {pickAssetLabel(world, pk)}
         </div>
         <div className="truncate text-label text-muted">via {via?.abbr ?? pk.originalTeam}</div>
       </div>
@@ -884,9 +886,9 @@ function assetsFor(world: World, teamId: string): Asset[] {
   const pickAssets: Asset[] = picksOwnedBy(world, teamId).filter((pk) => isTradeablePick(world, pk)).map((pk) => ({
     id: pk.id,
     kind: 'pick' as const,
-    label: `${pk.season} Round ${pk.round} Pick${pk.comp ? ' (comp)' : ''}`,
+    label: pickAssetLabel(world, pk),
     sub: pk.originalTeam === teamId ? 'Own pick' : `via ${world.byId[pk.originalTeam]?.abbr ?? pk.originalTeam}`,
-    value: pickTradeValue(pk, upcomingDraftSeason(world)),
+    value: pickTradeValue(world, pk),
     round: pk.round,
     season: pk.season,
   }))

@@ -9,7 +9,7 @@
 
 import type { CareerState, Player, TradeAssetSnap, TradeRecord } from '../types'
 import type { World } from './generate'
-import { playerTradeValue, pickTradeValue, upcomingDraftSeason, type TradeAsset } from './trade'
+import { pickAssetLabel, playerTradeValue, pickTradeValue, type TradeAsset } from './trade'
 
 function findPlayer(world: World, id: string): Player | undefined {
   return world.players.find((p) => p.id === id)
@@ -26,11 +26,10 @@ export function snapAsset(world: World, a: TradeAsset): TradeAssetSnap {
     }
   }
   const pick = world.draftPicks.find((p) => p.id === a.id)
-  const abbr = pick ? world.byId[pick.originalTeam]?.abbr ?? pick.originalTeam : a.id
   return {
     kind: 'pick',
     id: a.id,
-    label: pick ? `${pick.season} Rd ${pick.round} (${abbr})${pick.comp ? ' comp' : ''}` : a.id,
+    label: pick ? pickAssetLabel(world, pick) : a.id,
   }
 }
 
@@ -94,7 +93,7 @@ export function sideValue(world: World, snaps: TradeAssetSnap[]): number {
       }
     }
     const pick = world.draftPicks.find((p) => p.id === snap.id)
-    if (pick) total += pickTradeValue(pick, upcomingDraftSeason(world))
+    if (pick) total += pickTradeValue(world, pick)
   }
   return total
 }

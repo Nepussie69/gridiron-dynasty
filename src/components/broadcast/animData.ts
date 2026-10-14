@@ -42,7 +42,7 @@ export type PoseState =
   | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold' | 'tackle'
   | 'set' | 'throwQuick' | 'throwDeep' | 'throwRun' | 'throwHurry'
   | 'juke' | 'spin' | 'stiffArm' | 'truck' | 'tackleHit' | 'tackleArm' | 'hips'
-  | 'rip' | 'swim' | 'bull' | 'spinRush'
+  | 'rip' | 'swim' | 'bull' | 'spinRush' | 'pushOut' | 'tackleFall' | 'lunge'
 
 /**
  * animflow round 3: how the quarterback throws. playAnim picks it (it knows the
@@ -120,6 +120,12 @@ export interface AnimPresentation {
   camera: CameraHint
   /** animflow r6b: the broken-tackle moves and tackle styles drawn (checks / probes). */
   skill?: { moves: { key: string; move: CarrierMove; t: number; missed: string | null }[]; tackles: Record<string, string> }
+  /**
+   * animflow r8 (item c): a scorer still at speed when the play ends (a return touchdown ends on the
+   * goal line - the probe's exact spot) carries on into the end zone after the whistle: his speed
+   * (yd/s) and heading (offense frame, unit) at the end. The renderer runs it out during the hold.
+   */
+  runOn?: { key: string; v: number; hx: number; hy: number }
 }
 
 export type BroadcastAnim = PlayAnim & AnimPresentation
@@ -511,8 +517,10 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       if (move === 'spin') spinBy[carrierKey] = { ...w, dir: hashSide(play.n ?? 0, i) }
       const mk = ev.missed
       if (mk && keySet[mk] && mk !== carrierKey) {
-        const st: PoseState = move === 'juke' ? 'tackleArm' : move === 'truck' ? 'fall' : 'stumble'
-        const len = (move === 'truck' ? 0.3 : 0.32) / D
+        // animflow r8 (item b): beaten by a juke or a spin he lunges and grabs air (arms closing on
+        // nothing, half falling, then back up); shoved off by the stiff arm; run over by the truck.
+        const st: PoseState = move === 'juke' || move === 'spin' ? 'lunge' : move === 'truck' ? 'fall' : 'stumble'
+        const len = (move === 'truck' ? 0.3 : move === 'stiffArm' ? 0.32 : 0.45) / D
         ;(moveBy[mk] ??= []).push({ t0: Math.max(0, ev.t - 0.08 / D), t1: Math.min(1, ev.t + len), state: st })
       }
     })
@@ -549,9 +557,22 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   // animflow: men wrapping up the carrier (recorded 'tackle' engagements) are in
   // the tackle pose — arms out, leaning in — until the dive / fall takes over.
   const tackleBy: Record<string, { t0: number; t1: number }[]> = {}
+  // animflow r8 (backlog 354): on a forced out-of-bounds end the men on the carrier are PUSHING him
+  // out (arms locked out into him, legs driving), and he is knocked off balance over the line.
+  const pushEnd = (type === 'run' || type === 'pass') && !!play.outOfBounds && !touchdown && !play.turnover && !sackPlay
+  let pushT0 = Infinity
   for (const e of engagements) {
     if (e.kind !== 'tackle' || !keySet[e.a] || e.a === carrierKey) continue
+    if (pushEnd && e.b === carrierKey && sides[e.a] === 'def') {
+      ;(moveBy[e.a] ??= []).push({ t0: clamp01(e.t0), t1: clamp01(e.t1), state: 'pushOut' })
+      pushT0 = Math.min(pushT0, clamp01(e.t0))
+      continue
+    }
     ;(tackleBy[e.a] ??= []).push({ t0: clamp01(e.t0), t1: clamp01(e.t1) })
+  }
+  if (pushEnd && carrierKey && pushT0 < 1) {
+    const stop = lastT(carrierKey)
+    if (stop - pushT0 > 0.12 / D) stumbleBy[carrierKey] = { t0: Math.min(stop, pushT0 + 0.06 / D), t1: stop }
   }
   const diveBy: Record<string, { t0: number; t1: number }> = {}
   const tackleStyles: Record<string, string> = {}
@@ -559,10 +580,24 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const downBy: Record<string, { t0: number; t1: number }> = {}
   const tackleT = carrierKey && tackled ? Math.min(lastT(carrierKey), 1 - 1e-4) : null
   if (tackleT != null && carrierKey) {
-    const fs = Math.max(0, tackleT - 0.15 / D)
-    if (tackleT - fs > 1e-6) fallBy[carrierKey] = { t0: fs, t1: tackleT }
-    downBy[carrierKey] = { t0: tackleT, t1: 1 }
-    const tk = keyForId(play.tackleIds?.[0]) ?? keyForId(play.sackId) ??
+    // animflow r8 (item b): the tackle is a motion, not a touch and a freeze. The tackler closes
+    // (hips sinking into the contact), wraps and drives, and the two bodies go down TOGETHER over the
+    // last ~0.35-0.55 s, landing as the play ends (the frame holds at the end: both on the ground on
+    // the spot). How depends on the man (TAK / HPW, animRatings.tackleStyle) and the angle: a form
+    // tackle (TAK >= 80) is short and square, a wrap-and-drive keeps the legs going, a big hit puts
+    // him down at once, an arm tackle drags him down slowly, a chase from behind (or a man still a
+    // step short) is a dive at the legs; a second man on the pile goes down with them (gang).
+    let fallLen = 0.42
+    let fs = Math.max(0, tackleT - fallLen / D)
+    // (the man the animation actually sends to make the tackle - the credited one only when he is
+    // the one who arrives: the chase picks the credited man only if he can get there, else the
+    // fastest, and the pose / dive / fall belongs to the man on the carrier)
+    const evTk = (() => {
+      const e = events.find((x) => x.kind === 'tackle' || x.kind === 'sack')
+      const k = e?.keys[0]
+      return k && k !== carrierKey && keySet[k] && sides[k] === 'def' ? k : null
+    })()
+    const tk = evTk ?? keyForId(play.tackleIds?.[0]) ?? keyForId(play.sackId) ??
       nearestOf(keys.filter((k) => sides[k] === 'def'), posAt(paths[carrierKey], tackleT), tackleT)
     if (tk && tk !== carrierKey) {
       // animflow r6a: how he brings him down follows the angle and speed of the
@@ -585,21 +620,61 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
         : 90
       const fromBehind = ang < 50
       // animflow r6b (item 5): the tackle by the tackler's TAK / HPW (animRatings.tackleStyle).
-      const style = tackleStyle(ctx.actors?.get(tk), { fromBehind, carrierSpeed: cs, tacklerSpeed: Math.hypot(tv.x, tv.y), seed: (play.n ?? 0) * 3.1 + (play.startYard ?? 0) })
+      let style = tackleStyle(ctx.actors?.get(tk), { fromBehind, carrierSpeed: cs, tacklerSpeed: Math.hypot(tv.x, tv.y), seed: (play.n ?? 0) * 3.1 + (play.startYard ?? 0) })
+      const form = style === 'wrap' && effRating(ctx.actors?.get(tk), 'TAK', 70) >= 80
+      fallLen = style === 'dive' ? 0.4 : style === 'hit' ? 0.34 : style === 'arm' ? 0.55 : form ? 0.4 : 0.48
+      fs = Math.max(0, Math.max(ht + 0.08 / D, tackleT - fallLen / D))
+      if (tackleT - fs < 0.2 / D) fs = Math.max(0, tackleT - 0.2 / D)
+      // Still a step short as they must go down (a late arrival): he dives at the legs.
+      const gap = (t: number) => {
+        const a = posAt(paths[tk], t)
+        const b = posAt(paths[carrierKey], t)
+        return Math.hypot(a.x - b.x, a.y - b.y)
+      }
+      if (style !== 'dive' && Math.max(gap(fs), gap(Math.max(0, tackleT - 0.25 / D))) > 1.3) style = 'dive'
       tackleStyles[tk] = style
       if (style === 'dive') {
-        diveBy[tk] = { t0: Math.max(0, tackleT - 0.25 / D), t1: tackleT }
+        diveBy[tk] = { t0: Math.max(0, tackleT - 0.4 / D), t1: tackleT }
+        for (const o of moveBy[tk] ?? []) if (o.t1 > diveBy[tk].t0) o.t1 = Math.max(o.t0, diveBy[tk].t0)
       } else {
-        const w = { t0: clamp01(Math.min(ht, tackleT - 0.2 / D)), t1: tackleT }
+        // Close and wrap: hips sink into the contact a beat before it, arms round him, legs driving.
+        const w = { t0: clamp01(Math.max(0, Math.min(ht - 0.14 / D, fs - 0.2 / D))), t1: fs }
+        // (the tackle beats any move window still open on him - a rip off his block runs into it)
+        const mv = (moveBy[tk] ??= [])
+        for (const o of mv) if (o.t1 > w.t0) o.t1 = Math.max(o.t0, w.t0)
         if (style === 'wrap') (tackleBy[tk] ??= []).push(w)
-        else (moveBy[tk] ??= []).push({ ...w, state: style === 'hit' ? 'tackleHit' : 'tackleArm' })
-        // A big hit puts him down at once (a short, hard fall); an arm tackle
-        // drags him down slowly (a longer fall as he keeps his legs going).
-        if (style === 'hit' && fallBy[carrierKey]) fallBy[carrierKey].t0 = Math.max(ht, tackleT - 0.09 / D)
-        if (style === 'arm' && fallBy[carrierKey]) fallBy[carrierKey].t0 = Math.max(0, tackleT - 0.3 / D)
+        else mv.unshift({ ...w, state: style === 'hit' ? 'tackleHit' : 'tackleArm' })
+        // ...then he takes him down and goes down with him (arms still round him).
+        mv.unshift({ t0: fs, t1: tackleT, state: 'tackleFall' })
       }
       downBy[tk] = { t0: tackleT, t1: 1 }
+      // Gang tackle: the next man in, on the pile at the end, goes down with them.
+      let gk: string | null = null
+      let gd = 1.05
+      for (const e of engagements) {
+        if (e.kind !== 'tackle' || e.b !== carrierKey || e.a === tk || !keySet[e.a] || sides[e.a] !== 'def') continue
+        const d = (() => { const a = posAt(paths[e.a], tackleT); const c = posAt(paths[carrierKey], tackleT); return Math.hypot(a.x - c.x, a.y - c.y) })()
+        if (d < gd) { gd = d; gk = e.a }
+      }
+      if (gk && !moveBy[gk]?.some((w) => w.t1 >= fs)) {
+        ;(moveBy[gk] ??= []).push({ t0: Math.max(0, tackleT - 0.32 / D), t1: tackleT, state: 'tackleFall' })
+        downBy[gk] = { t0: tackleT, t1: 1 }
+      }
     }
+    // The carrier goes down with him over the same beat (a big hit: from the hit on).
+    if (tackleT - fs > 1e-6) fallBy[carrierKey] = { t0: fs, t1: tackleT }
+    // (the tackle beats any move still open on the carrier: a juke / spin / stiff arm / truck that
+    // runs into the fall ends where the fall begins - he is never mid-move as he goes down)
+    if (moveBy[carrierKey]) {
+      for (const o of moveBy[carrierKey]) if (o.t1 > fs) o.t1 = Math.max(o.t0, fs)
+      moveBy[carrierKey] = moveBy[carrierKey].filter((o) => o.t1 - o.t0 > 0.04 / D)
+    }
+    const sp = spinBy[carrierKey]
+    if (sp && sp.t1 > fs) { if (sp.t0 + 0.04 / D < fs) sp.t1 = fs; else delete spinBy[carrierKey] }
+    downBy[carrierKey] = { t0: tackleT, t1: 1 }
+    // (a catch tackled on the spot: the catch pose gives way to the fall - never caught upright at the end)
+    const cw = catchBy[carrierKey]
+    if (cw && fallBy[carrierKey] && cw.t1 > fallBy[carrierKey].t0) cw.t1 = Math.max(cw.t0, fallBy[carrierKey].t0)
   }
 
   // animflow r6a: a recorded QB hit is a hit after the throw — the rusher
@@ -816,9 +891,11 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   // animflow r8 (J12): the fooled QB's first look (window, 0..1) and where he looks (field yd).
   const fooledWin: { t0: number; t1: number; x: number; y: number } | null = (() => {
     if (!scrimmage || type !== 'pass' || sackPlay || !play.qbFooled || !throwWin || !flight || !qbKey) return null
-    const t0 = SNAP_T + 0.35 / D
-    const t1 = Math.min(SNAP_T + 1.4 / D, throwWin.t0 - 0.5 / D)
-    if ((t1 - t0) * D < 0.3) return null
+    // (an early throw - the routes are run at speed now - still gets its first look: from the end of
+    // the snap's settle to a beat before the wind-up, which brings his eyes back to the target)
+    const t0 = SNAP_T + 0.25 / D
+    const t1 = Math.min(SNAP_T + 1.4 / D, throwWin.t0 - 0.15 / D)
+    if ((t1 - t0) * D < 0.25) return null
     const q = posAt(paths[qbKey] ?? [], t0)
     return { t0, t1, x: q.x + 14, y: ballAtCatch.y < MID_Y ? MID_Y + 11 : MID_Y - 11 }
   })()
@@ -847,7 +924,7 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     // Sitting in a zone (slow, before the throw): eyes on the quarterback.
     if (scrimmage && type === 'pass' && qbKey && keySet[qbKey] && sides[k] === 'def' && !k.startsWith('dl') && (st === 'run' || st === 'stand') &&
       t > SNAP_T && !(flight && t >= flight.t0) && Math.hypot(vx, vy) < 2.5 && !nearCar && Math.hypot(pos.x - ballAtCatch.x, pos.y - ballAtCatch.y) > 8) return { mode: 'actor', key: qbKey }
-    if (st === 'tackle' && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
+    if ((st === 'tackle' || st === 'pushOut' || st === 'tackleFall') && carrierKey && keySet[carrierKey] && carrierKey !== k) return { mode: 'actor', key: carrierKey }
     const bt = beatenBy[k]?.find((w) => t >= w.t0 && t <= w.t1)
     if (bt && keySet[bt.key]) return { mode: 'actor', key: bt.key }
     const bo = blockOther(k, t)
@@ -1036,8 +1113,19 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   const skill = moves.length || Object.keys(tackleStyles).length
     ? { moves: moves.map((m) => ({ key: m.key, move: m.move, t: m.t, missed: m.missed })), tackles: tackleStyles }
     : undefined
+  // animflow r8 (item c): the scorer runs on through the goal line after the whistle.
+  let runOn: AnimPresentation['runOn']
+  const scoreEv = events.find((e) => e.kind === 'score')
+  if (scoreEv && keySet[scoreEv.keys[0]]) {
+    const k = scoreEv.keys[0]
+    const a = posAt(paths[k], Math.max(0, 1 - 0.1 / D))
+    const b = posAt(paths[k], 1)
+    const v = Math.hypot(b.x - a.x, b.y - a.y) / 0.1
+    // (only a man who ends ON a goal line at speed: a run / catch TD already runs through and eases up)
+    if (v >= 3 && Math.min(Math.abs(b.x - 10), Math.abs(b.x - 110)) < 1.5) runOn = { key: k, v, hx: (b.x - a.x) / (v * 0.1), hy: (b.y - a.y) / (v * 0.1) }
+  }
   // Read visuals (qbReads.ts): QB head through the reads, eye jump, catch placement.
-  return applyReadPresentation({ ...anim, poses, facing, ballZ, camera, ...(skill ? { skill } : {}) }, play, ctx)
+  return applyReadPresentation({ ...anim, poses, facing, ballZ, camera, ...(skill ? { skill } : {}), ...(runOn ? { runOn } : {}) }, play, ctx)
 }
 
 /** animflow r6b: left / right for a spin, from the play number. */

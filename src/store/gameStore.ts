@@ -58,6 +58,7 @@ import {
   type StaffAward,
 } from '../game/engine/staffAwards'
 import { counterOffer } from '../game/engine/counter'
+import { accrueGameChemistry, decayChemistry } from '../game/engine/chemistry'
 import { rivalFor } from '../game/engine/rivalry'
 import { applyStakesSwing, ensureSlots, flexSlots, primetimeSwing, stakesFor, stakesNote } from '../game/engine/primetime'
 import { recordGameStats, boxScore, recordBoxLines, boxPlayerLines, boxTeamTotals } from '../game/engine/stats'
@@ -1575,6 +1576,9 @@ export const useGame = create<GameStore>((set, get) => ({
       // R4: keep a season-scoped box score for the user's game.
       userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
+      // FUTURES #37: the user's game feeds the QB–receiver and adjacent-OL pair
+      // chemistry (its real shared reps); AI games accrue a nominal game in simWeek.
+      accrueGameChemistry(world, sim)
       growPlaybookFromGame(world, sim, practiceMasteryMult(career, world) * byeMasteryMult(career, world), career.teamId)
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
@@ -2189,6 +2193,9 @@ export const useGame = create<GameStore>((set, get) => ({
     // begins (the fast path never saw the camp deadline).
     finalizeFifthYearOptions(world, career)
     world.season += 1
+    // FUTURES #37: pair chemistry decays slowly in the offseason — a pair that
+    // spent the winter apart comes back a little less in sync.
+    decayChemistry(world)
     world.week = 1
     world.phase = 'regular'
     world.offseasonStage = undefined
