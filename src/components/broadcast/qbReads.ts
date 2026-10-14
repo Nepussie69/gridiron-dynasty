@@ -302,8 +302,9 @@ export function computeReadPlan(anim: PlayAnim, play: Play, ctx: AnimContext = {
   // start is held at least this far above the recorded cone so the squeeze reads.
   const floorW = !pressured ? 0 : pType === 'sack' || pType === 'hit' ? 12 : 9
   const coneStart = Math.min(VISION.coneMax + 15, Math.max(wClean, coneEnd + floorW))
-  const pressTerm = Math.max(0, wClean - coneEnd) / VISION.conePressW
-  const rClean = Math.max(VISION.radiusMin, radEnd - pressTerm * VISION.radiusPressW)
+  // Backlog 381: pressure takes a share (`shrink`) of the clean cone and widens the circle by shrink × radiusPressW.
+  const shrink = wClean > 0 ? Math.max(0, 1 - coneEnd / wClean) : 0
+  const rClean = Math.max(VISION.radiusMin, radEnd - shrink * VISION.radiusPressW)
   const floorR = !pressured ? 0 : pType === 'sack' || pType === 'hit' ? 0.45 : 0.35
   const radStart = Math.max(0.25, Math.min(rClean, radEnd - floorR))
 
