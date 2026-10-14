@@ -406,7 +406,7 @@ import type { World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
 import { situationalPassRate, getSituational, type SituationInput } from './situational'
 import { J9, centeredSub, coachMeanRating, getCoachSubs } from './coachSubs'
-import { CHEM, getJ37, skillValue, skillRel, olHandoffChem } from './chemistry'
+import { CHEM, getJ37, skillValue, skillRel, skillCentre, olHandoffChem } from './chemistry'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -1471,6 +1471,11 @@ export const PB_CENTER = { edge: 17.25 }
 
 /** Dev accumulator (turned on by `protectionProbe`): the two league means. */
 export const PB_STAT = { on: false, n: 0, raw: 0, old: 0 }
+/** J37 debug accumulator (off by default; never read by the sim): the EXACT mean
+ *  shift each J37 term puts on the play it acts on — completion probability, pick
+ *  probability and the pass-rush edge — so the league centres can be set to zero
+ *  mean shift without the sampling noise of a full-game ON/OFF comparison. */
+export const J37_STAT = { on: false, nThrow: 0, dComp: 0, dInt: 0, nRush: 0, dEdge: 0, sumRel: 0 }
 
 /** J8b: one rusher-vs-blocker rep. An average rusher vs an average blocker is 0.
  *  J37: `handoffRel` is the blocker's relative chemistry with the man he passes a
@@ -1501,31 +1506,24 @@ function rushRepWin(r: Player, b: Player | undefined, key: string, fat: Record<s
     const bsta = clamp(rmean(b.pos, 'STA', ba.STA ?? 70) * PB.staW, -0.35, 0.35)
     block -= (fat?.[b.id] ?? 0) * PB.fatW * (1 - bsta)
     passOff = clamp(0.55 + rmean(b.pos, 'AWR', ba.AWR ?? 70) * PB.passOffW, 0.2, 0.9)
-    // J37: the ADJACENT PAIR's continuity also decides the pass-off — a settled
-    // pair makes the exchange, a reshuffled one is late. UNCLAMPED so the leg stays
-    // linear over the pair's whole rel range: the earlier widened clamp truncated the
-    // settled side (a high-AWR blocker hit 0.95) while the reshuffled side was
-    // uncapped, and that convexity alone dragged a mature league's pressure up
-    // ~2.7 pts (`logs/j37-olsweep.out` vs `logs/j37-olsweep2.out`).
-    if (handoffRel !== undefined) passOff = passOff + handoffRel * CHEM.handoffW
   }
   let win = rush - block
   if (!b) return { win: win + PB.freeWin }
-  // A twist / stunt: the two blockers must pass off, each on his OWN AWR. J37: the
-  // ADJACENT PAIR's continuity decides how often the stunt is recognised at all
-  // (a settled pair picks it up) AND how much the rep of the blocker whose handoff
-  // broke loses — the spec's "the rep of the blocker whose neighbour handoff failed
-  // loses more". All three legs are LINEAR in the pair's relative chemistry and
-  // UNCLAMPED, so a league at its typical chemistry (E[rel]=0) has E[effect]=0 and
-  // the term is league-neutral by construction; only the settled-vs-reshuffled
-  // SPREAD moves. (A clamped factor is convex — the settled side saturates while
-  // the reshuffled side does not — and measurably dragged a mature league's
-  // pressure up / completion % down; `logs/j37-olsweep.out`, `logs/j37-olsweep2.out`.)
-  const twistP = handoffRel === undefined ? PB.twistRate : PB.twistRate * (1 - handoffRel * CHEM.twistW)
-  if (h01(`${key}:tw`) < twistP && h01(`${key}:pk`) > passOff) {
-    win += PB.freeWin * PB.missPick * (handoffRel === undefined ? 1 : (1 - handoffRel * CHEM.handoffPen))
-    // J37: only the J37 layer reports the broken handoff (OFF records nothing).
-    return { win, fail: handoffRel !== undefined ? b.id : undefined }
+  // A twist / stunt: the two blockers must pass off, each on his OWN AWR. J37: when the
+  // handoff breaks, the ADJACENT PAIR's continuity decides how much the rep of the blocker
+  // whose neighbour handoff failed loses (the spec's "loses more"): a settled pair gives
+  // the rusher less of the free-rush bonus, a reshuffled pair more. ONE leg, LINEAR in the
+  // pair's relative chemistry (the multiplier is 1 at the league's typical chemistry), on
+  // the base engine's own stunt event — so a league at its typical chemistry has
+  // E[effect] = 0 whatever the spread of its lines. The earlier three-leg form (stunt rate
+  // x pass-off x penalty, each linear) multiplied out to a convex product that added
+  // +3-4 points of pass-rush edge to a mature league and had to be offset by moving the
+  // centre to a third of the league mean (`logs/salvage-verify.out`, J37_STAT sweeps).
+  if (h01(`${key}:tw`) < PB.twistRate && h01(`${key}:pk`) > passOff) {
+    win += PB.freeWin * PB.missPick * (handoffRel === undefined ? 1 : (1 - handoffRel * CHEM.handoffK))
+    // J37: only the J37 layer reports the broken handoff (OFF records nothing); a pair
+    // at or above the league's typical chemistry did not "break" it.
+    return { win, fail: handoffRel !== undefined && handoffRel < 0 ? b.id : undefined }
   }
   return { win }
 }
@@ -4042,6 +4040,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const pb: RushResult | undefined = PROT_ON
     ? rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, j13, j13Dev, olChem)
     : undefined
+  if (pb && J37_STAT.on && olChem) {
+    const pb0 = rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, j13, j13Dev, undefined)
+    J37_STAT.nRush++
+    J37_STAT.dEdge += pb.edge - pb0.edge
+  }
   if (pb && PB_STAT.on) {
     PB_STAT.n++
     PB_STAT.raw += pb.edge
@@ -4207,6 +4210,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // spread moves. Undefined when the layer is off.
   const pairChem = getJ37() && qb && target ? skillValue(world, qb.id, target.id) : undefined
   const chemRel = pairChem !== undefined ? skillRel(world, qb?.id, target?.id) : 0
+  const skillCen = pairChem !== undefined ? skillCentre(world) : 0
   // J37: what the animation needs — the throw's QB–target pair chemistry and the
   // blocker whose adjacent handoff broke (undefined when the layer is off).
   const chemFields: Pick<PlayOutcome, 'chem'> = pairChem !== undefined ? { chem: pairChem } : {}
@@ -4617,7 +4621,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   compProb = clamp(compProb - disgAdj * J12.foolComp, MU.compMin, MU.compMax)
   // J37: QB–receiver timing moves the catch window on this throw; centred, so the
   // league completion rate is held and only the pair spread widens.
-  if (pairChem !== undefined) compProb = clamp(compProb + chemRel * CHEM.compW, MU.compMin, MU.compMax)
+  if (pairChem !== undefined) {
+    const compPre = compProb
+    compProb = clamp(compProb + (chemRel - skillCen * CHEM.skillShiftFrac) * CHEM.compW, MU.compMin, MU.compMax)
+    if (J37_STAT.on) { J37_STAT.nThrow++; J37_STAT.dComp += compProb - compPre; J37_STAT.sumRel += chemRel }
+  }
   // J38: the featured throw's star — his own contested-catch ratings (the fade's
   // CIT/SPC/JMP, the seam/wheel's SPD/CTH/CIT) plus, on the fade, the QB's DAC
   // against the covering CB's own PRC. Centred on a fixed league centre.
@@ -4661,7 +4669,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const vEyeSkill = coverA && covPos ? 1 + eyeSkill(covPos, coverA.PRC, coverA.AWR) * 0.04 : 1
   const vEye = vThrow ? clamp(vThrow.offCone * VISION_CFG.eyeIntW * vEyeSkill, 0, VISION_CFG.eyeMax) : 0
   const eyeJumpId = vEye > 0 && coverPlayer ? coverPlayer.id : undefined
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1) * (1 - chemRel * CHEM.intW), 0.005, 0.06)
+  // J37: the pair's timing scales the pick probability (a pair at the league's typical
+  // chemistry changes nothing; a settled pair throws fewer picks, a fresh one more). The
+  // multiplier is correlated with the play's own pick rate (backup QBs and rookies carry
+  // BOTH the fresh pairs and the high pick rates), so the INT leg is centred on its own
+  // `CHEM.intShift` — measured with J37_STAT so the league's mean pick rate holds.
+  const intPre = R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1)
+  const intProb = clamp(pairChem !== undefined ? intPre * (1 - (chemRel - skillCen * CHEM.intShiftFrac) * CHEM.intW) : intPre, 0.005, 0.06)
+  if (J37_STAT.on && pairChem !== undefined) J37_STAT.dInt += intProb - clamp(intPre, 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the

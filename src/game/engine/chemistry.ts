@@ -51,6 +51,19 @@ export const CHEM = {
   compW: 0.14,
   /** Relative INT multiplier per unit of relative skill chemistry (higher = fewer). */
   intW: 2.0,
+  /** The INT leg's own centre offset, as a FRACTION of the league's QB–WR centre (the
+   *  `WX_CENTER` role; zero at cold start, so a fresh league stays inert). The INT
+   *  multiplier is correlated with the play's own pick rate (backup QBs and rookies carry
+   *  BOTH the fresh pairs and the high pick rates), so this leg is centred where the
+   *  league's mean pick rate holds, measured exactly with `J37_STAT.dInt` (not the mean
+   *  rel): about -0.045 at a mature centre of 0.40. */
+  intShiftFrac: -0.11,
+  /** Residual offset of the QB–WR centre for the completion leg, as a FRACTION of the
+   *  centre: the modelled centre is built from the depth charts and the measured usage
+   *  table and the outer completion clamp saturates the settled side; this takes out
+   *  what is left so the league's completion rate holds once the pass-rush side effect of
+   *  the OL leg is counted (`J37_STAT.dComp`, mature-league ON-OFF): about 0.003 at 0.40. */
+  skillShiftFrac: 0.0075,
   /** QB–WR: the share of a backup QB in the league's throw-weighted centre, set to
    *  the MEASURED share of non-QB1 attempts (5.6% / 0.0% / 10.1% across three mature
    *  2-season leagues, `logs/j37-comp.out`; league mean ≈5%). The counters are
@@ -59,43 +72,35 @@ export const CHEM = {
    *  share keeps the mature league centred. (Cutting this to 0.01 over-raised the
    *  centre: the mature completion drift went to −0.40, `logs/j37-mature8.out`.) */
   qb2Share: 0.05,
-  /** How much a pair's continuity decides the pass-off (LINEAR, unclamped): a
-   *  settled pair hands the rusher over cleanly, a reshuffled one is late. */
-  handoffW: 0.6,
-  /** How much a pair's continuity decides whether the stunt is recognised at all
-   *  (LINEAR, unclamped): a reshuffled pair is fooled by a twist more often. */
-  twistW: 1.2,
-  /** How much MORE the rep of a blocker whose adjacent handoff broke loses
-   *  (multiplier on the free-rusher bonus; 1 = the base penalty — the spec's
-   *  "the rep of the blocker whose neighbour handoff failed loses more"). All three
-   *  legs are LINEAR in the pair's relative chemistry and UNCLAMPED so that a
-   *  league at its typical chemistry (E[rel]=0) has E[effect]=0; interior clamps
-   *  make the settled side saturate while the reshuffled side does not, which
-   *  measurably dragged a mature league's pressure up (`logs/j37-olsweep*.out`). */
-  handoffPen: 2.2,
+  /** How much MORE the rep of a blocker whose adjacent handoff broke loses, per unit of
+   *  the pair's relative chemistry (multiplier on the free-rusher bonus of the base
+   *  engine's own stunt event: 1 at the league's typical chemistry, 1 + 8 x 0.4 for a
+   *  reshuffled pair, 1 - 8 x 0.4 for a settled one). A single LINEAR leg, so E[effect] = 0
+   *  for a league centred on its typical chemistry whatever the spread. */
+  handoffK: 8,
   /** Offseason decay: a pair keeps this share of its shared reps year over year. */
   offseasonDecay: 0.65,
-  /** OL centre offset as a FRACTION of the centre (the `WX_CENTER` role, not a
-   *  per-unit value; zero at cold start so the layer stays inert on a fresh
-   *  league). The linear legs are neutral when the mean blocker sits at the centre;
-   *  the men actually on the field (rotations, in-game injuries) carry slightly
-   *  LESS history than the current healthy starting five the centre is built from
-   *  (measured mean blocker handoff rel −0.007…−0.010, `logs/j37-neutral.out`), and
-   *  the J8b chain's max operator adds a little more. Scaling the centre down by
-   *  this fraction raises the league's blocker rel and holds the mature league's
-   *  pressure/completion/yards level (`logs/j37-mature*.out`). */
-  olCentreFrac: 0.15,
+  /** OL centre offset as a FRACTION of the centre (the `WX_CENTER` role, not a per-unit
+   *  value; zero at cold start so the layer stays inert on a fresh league). The handoff leg
+   *  is a single linear term, so it is neutral when the mean blocker sits at the centre; the
+   *  residual (+0.4-0.8 points of pass-rush edge on a mature league, the max-over-reps
+   *  Jensen term, measured with `J37_STAT.dEdge`) is small enough to leave at 0. */
+  olCentreFrac: 0,
   /** Nominal targets per AI game (starter shares) so league chemistry keeps pace
    *  with the user's club when the AI games are score-simulated (no play-by-play). */
   nominal: { wr1: 8, wr2: 5, wr3: 3, te: 5, rb: 4, ol: 62 },
   /** MEASURED share (%) of a club's throws each healthy depth slot gets, from a
-   *  mature 2-season league over 80 real games (`logs/j37-usage.mjs`):
+   *  mature 2-season league on the tree with the J10a/J10b read progression (3 leagues,
+   *  seeds 777 / 4242 / 9999, 120 real games each, `logs/salvage-verify.out` §J37):
    *
-   *    WR 21.6 / 19.1 / 15.8 / 1.7 / 0.1   TE 20.2 / 5.3 / 0.4   RB 15.1 / 0.8
+   *    WR 13.7 / 5.7 / 28.3 / 0.6 / 0.0   TE 29.8 / 4.4 / 0.5   RB 16.2 / 0.9
    *
-   *  (100.0% of 5365 throws; no FB targets in the sample.)  Used ONLY to weight
-   *  the league centre — the counters themselves stay the raw shared reps. */
-  usage: { WR: [21.6, 19.1, 15.8, 1.7, 0.1], TE: [20.2, 5.3, 0.4], RB: [15.1, 0.8] },
+   *  (100.0% of ~24,500 throws.)  The read progression moved a lot of the ball off
+   *  WR2 and onto the third receiver and the TE (the earlier pre-J10 table was
+   *  21.6 / 19.1 / 15.8 and TE 20.2); re-measure with `logs/j37-usage.mjs` whenever the
+   *  target model changes.  Used ONLY to weight the league centre — the counters
+   *  themselves stay the raw shared reps. */
+  usage: { WR: [13.7, 5.7, 28.3, 0.6, 0.0], TE: [29.8, 4.4, 0.5], RB: [16.2, 0.9] },
 } as const
 
 /** The skill slots `CHEM.usage` lists, in the order the centre walks them. */
@@ -241,6 +246,11 @@ function olCenter(world: World): number {
   if (!s) return 0
   if (s.olC === undefined) refreshCenters(world)
   return (s.olC ?? 0) * (1 - CHEM.olCentreFrac)
+}
+
+/** The league's QB–WR centre (0 until chemistry exists). */
+export function skillCentre(world: World): number {
+  return skillCenter(world)
 }
 
 /** Relative skill chemistry: the pair's value minus the league's typical value. */
