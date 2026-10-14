@@ -12,6 +12,7 @@ import { hash32 } from './rng'
 import { onTeamChange } from './playbook'
 import { negotiationTradeMargin } from './skills'
 import { unscaleOvr } from './ovrScale'
+import { marketAAV, remainingContractValue } from './cap'
 
 export interface TradeAsset {
   kind: 'player' | 'pick'
@@ -19,29 +20,64 @@ export interface TradeAsset {
 }
 
 /**
- * How much a position is worth on the trade market, NFL-style: quarterbacks
- * cost a fortune, edge rushers / tackles / corners / receivers carry a premium,
- * running backs, fullbacks and specialists come cheap.
+ * What a position is worth on the trade market. Derived from NFL history
+ * (backlog 399): the modern top-10 APY share of the cap at each position,
+ * convexity-adjusted, times how the trade market has actually priced the
+ * position relative to its pay rank. Anchored so a mid first-round pick ≈ 1,300
+ * and QB keeps the old 2.2 — a franchise QB is not obtainable for picks alone,
+ * an elite receiver / edge / corner costs a first and then some, and backs,
+ * off-ball 'backers, interior linemen and specialists fetch little.
+ *
+ * Source: ~/gridiron-work/logs/tradevalue-targets.{out,json} (nflverse trades +
+ * draft_picks + players, OverTheCap historical contracts).
  */
 export const POSITION_TRADE_VALUE: Record<string, number> = {
-  QB: 2.2, DE: 1.15, OT: 1.1, WR: 1.05, CB: 1.05, DT: 0.95, TE: 0.85, S: 0.85, LB: 0.85,
-  OG: 0.8, C: 0.8, RB: 0.7, FB: 0.35, K: 0.3, P: 0.3,
+  QB: 2.2, WR: 1.38, DE: 1.06, DT: 1.05, CB: 1.03, OT: 0.97, S: 0.97,
+  TE: 0.62, RB: 0.47, OG: 0.43, LB: 0.36, C: 0.3, K: 0.1, P: 0.08, FB: 0.07,
 }
-/** Age a player's decline starts, and how fast it runs per year after that. */
-const DECLINE: Record<string, { start: number; rate: number }> = {
-  QB: { start: 33, rate: 0.1 }, RB: { start: 27, rate: 0.16 }, FB: { start: 28, rate: 0.14 },
-  WR: { start: 29, rate: 0.14 }, TE: { start: 29, rate: 0.13 }, OT: { start: 30, rate: 0.12 },
-  OG: { start: 30, rate: 0.12 }, C: { start: 30, rate: 0.12 }, DE: { start: 29, rate: 0.13 },
-  DT: { start: 29, rate: 0.13 }, LB: { start: 28, rate: 0.14 }, CB: { start: 28, rate: 0.15 },
-  S: { start: 29, rate: 0.14 }, K: { start: 35, rate: 0.06 }, P: { start: 35, rate: 0.06 },
+
+/**
+ * Where each position's trade value starts to decline and how fast, from the
+ * same study: the onset is the midpoint of (a) the age at which trade returns
+ * fall off and (b) the age at which a player's own pay drops below 85% of his
+ * peak (within-player, so quality is controlled). Backs and corners fade
+ * earliest, quarterbacks and specialists hold longest.
+ */
+const POSITION_AGE: Record<string, { start: number; rate: number }> = {
+  QB: { start: 32, rate: 0.1 }, WR: { start: 29.5, rate: 0.14 }, DE: { start: 28.5, rate: 0.12 },
+  DT: { start: 30.4, rate: 0.12 }, CB: { start: 26.6, rate: 0.16 }, OT: { start: 30, rate: 0.12 },
+  S: { start: 29.4, rate: 0.12 }, TE: { start: 29, rate: 0.11 }, RB: { start: 26.1, rate: 0.16 },
+  OG: { start: 30, rate: 0.13 }, LB: { start: 30.9, rate: 0.11 }, C: { start: 29, rate: 0.12 },
+  FB: { start: 28, rate: 0.14 }, K: { start: 33, rate: 0.06 }, P: { start: 29, rate: 0.06 },
+}
+
+/** Strength of the contract-surplus term (backlog 399). */
+const SURPLUS = { k: 0.45, lo: 0.65, hi: 1.5 }
+
+/**
+ * Contract surplus: value ≈ on-field worth − remaining cap cost. A cheap rookie
+ * deal adds value (up to ×1.5), a deal above market subtracts (down to ×0.65).
+ * The ratio is symmetric so it can never swamp the rating curve. Individual
+ * only — his own rating, age and contract, never a club average.
+ */
+export function contractSurplusMultiplier(p: Player): number {
+  const c = p.contract
+  if (!c || !Number.isFinite(c.annual) || (c.years ?? 0) <= 0) return 1
+  const yearsLeft = Math.max(1, c.years)
+  const worth = marketAAV(p.ovr, p.pos, p.age) * yearsLeft
+  const cost = remainingContractValue(c)
+  if (worth <= 0 && cost <= 0) return 1
+  const ratio = Math.max(-1, Math.min(1, (worth - cost) / Math.max(worth, cost, 1)))
+  return Math.max(SURPLUS.lo, Math.min(SURPLUS.hi, 1 + SURPLUS.k * ratio))
 }
 
 /**
  * Present value of a player on the trade chart (a mid first-round pick ≈ 1,300).
  * Young players are valued at the rating they are expected to grow into; the
  * rating curve is steep at the top (a 99 is worth about twice a 90); value
- * holds through a player's prime and fades smoothly once his position's decline
- * age arrives; then it is scaled by what the position is worth.
+ * holds through a player's prime and fades smoothly once his position's
+ * data-derived decline age arrives; then it is scaled by what the position is
+ * worth and by his contract surplus.
  */
 export function playerTradeValue(p: Player): number {
   const grow = p.age <= 22 ? 0.6 : p.age === 23 ? 0.45 : p.age === 24 ? 0.3 : p.age === 25 ? 0.15 : 0
@@ -51,10 +87,10 @@ export function playerTradeValue(p: Player): number {
   const potRaw = unscaleOvr(p.pot)
   const eff = ovrRaw + Math.max(0, potRaw - ovrRaw) * grow
   const curve = Math.pow(Math.max(eff - 50, 1) / 10, 3.5)
-  const d = DECLINE[p.pos] ?? { start: 29, rate: 0.14 }
+  const d = POSITION_AGE[p.pos] ?? { start: 29, rate: 0.13 }
   const prime = p.age <= 24 ? 1.15 : Math.max(1, 1.15 - 0.05 * (p.age - 24))
   const ageMul = p.age <= d.start ? prime : Math.max(0.12, 1 - d.rate * (p.age - d.start))
-  return Math.round(curve * ageMul * (POSITION_TRADE_VALUE[p.pos] ?? 1) * 14.7)
+  return Math.round(curve * ageMul * (POSITION_TRADE_VALUE[p.pos] ?? 1) * contractSurplusMultiplier(p) * 14.7)
 }
 
 /**
@@ -187,7 +223,11 @@ function findPick(world: World, id: string): DraftPick | undefined {
   return world.draftPicks.find((p) => p.id === id)
 }
 
-/** Raw (symmetric) value of an asset. */
+/**
+ * Chart value of an asset, read the same way by both clubs: `playerTradeValue`
+ * (rating × age × position × contract surplus) or the pick chart. Symmetric —
+ * the partner's own read is applied by `partnerValue` on top.
+ */
 export function assetValue(world: World, a: TradeAsset): number {
   if (a.kind === 'player') {
     const p = findPlayer(world, a.id)
@@ -243,7 +283,11 @@ function partnerValue(world: World, partnerId: string, a: TradeAsset, rebuild: b
   const ageMul = rebuild
     ? p.age <= 25 ? 1.2 : p.age >= 30 ? 0.7 : 1
     : p.age <= 27 ? 1.05 : p.age >= 31 ? 1.05 : 1
-  const need = 1 + needFactor(world, partnerId, p.pos) * 0.18
+  // A club pays up for a position of need — and the need premium is worth more
+  // where the position itself is valuable (a QB-needy club outbids an
+  // off-ball-LB-needy club for its man).
+  const needWeight = 0.18 * Math.max(0.5, Math.min(1.6, POSITION_TRADE_VALUE[p.pos] ?? 1))
+  const need = 1 + needFactor(world, partnerId, p.pos) * needWeight
   // Stars are hard to pry away: a club's top-3 players carry a premium.
   const roster = world.roster[partnerId] ?? []
   const rank = [...roster].sort((x, y) => y.ovr - x.ovr).findIndex((x) => x.id === p.id)
@@ -255,13 +299,20 @@ function partnerValue(world: World, partnerId: string, a: TradeAsset, rebuild: b
     const qbs = roster.filter((x) => x.pos === 'QB').sort((x, y) => y.ovr - x.ovr)
     if (qbs[0]?.id === p.id) qbPremium = unscaleOvr(p.ovr) >= 85 ? 1.7 : unscaleOvr(p.ovr) >= 78 ? 1.4 : 1.15
   }
+  // Acquiring: a club with no passer of that calibre pays a starter-upgrade
+  // premium, which is how a QB-needy team ends up handing over multiple firsts.
+  const own = p.teamId === partnerId
+  let qbNeed = 1
+  if (p.pos === 'QB' && !own && unscaleOvr(p.ovr) >= 80) {
+    const best = roster.filter((x) => x.pos === 'QB').sort((x, y) => y.ovr - x.ovr)[0]
+    if (!best || unscaleOvr(best.ovr) < unscaleOvr(p.ovr)) qbNeed = 1.25
+  }
   // Elite players are rare on the trade market (user, 2026-10-09): a club's
   // 97-99 cornerstone is effectively off the table unless it is rebuilding and
   // he is 29+; 93-96 and 90-92 carry steep premiums on top of the rest.
   // Only for the club's OWN stars — what it is asked to give up, not what it receives.
-  const own = p.teamId === partnerId
   const elitePremium = !own ? 1 : p.ovr >= 97 ? (rebuild && p.age >= 29 ? 2.4 : 6) : p.ovr >= 93 ? 2.0 : p.ovr >= 90 ? 1.6 : 1
-  return base * ageMul * need * Math.max(starPremium, qbPremium, elitePremium)
+  return base * ageMul * need * Math.max(starPremium, qbPremium, qbNeed, elitePremium)
 }
 
 export interface TradeVerdict {
@@ -377,7 +428,23 @@ export function findDeals(world: World, userTeamId: string, assetId: string, use
     }
     if (!get.length) continue
 
-    const userValue = get.reduce((s, a) => s + assetValue(world, a), 0)
+    // A club overpays only so far (backlog 399, no free lunches): the package it
+    // hands over is capped at 1.35x what the shopped asset is worth, so no club
+    // gives away far more raw value than it receives. Dropping an asset can only
+    // make the deal easier for the club, so the offer stays valid.
+    const offerCap = shoppedValue * 1.35
+    let offered = get.reduce((s, a) => s + assetValue(world, a), 0)
+    if (offered > offerCap) {
+      const byValue = [...get].sort((x, y) => assetValue(world, x) - assetValue(world, y))
+      while (get.length > 1 && offered > offerCap) {
+        const drop = byValue.shift()
+        if (!drop) break
+        get.splice(get.indexOf(drop), 1)
+        offered -= assetValue(world, drop)
+      }
+    }
+
+    const userValue = offered
     if (userValue < shoppedValue * 0.5) continue
 
     const verdict = evaluateTrade(world, partner, userTeamId, give, get, userNegotiation)

@@ -6,6 +6,7 @@ import { capSummary, playerById, rosterOf } from '../game/selectors'
 import { picksOwnedBy } from '../game/engine/picks'
 import {
   assetValue,
+  contractSurplusMultiplier,
   evaluateTrade,
   findDeals,
   findPackagesFor,
@@ -716,6 +717,7 @@ function TradeBlockTab({ onLoadDeal }: { onLoadDeal: (o: DealOffer) => void }) {
                     </div>
                     <div className="text-label tnum text-muted">
                       Age {p.age} · {money(p.contract.capHit)} · value {playerTradeValue(p).toLocaleString()} pts
+                      {(() => { const s = contractSurplusMultiplier(p); return Math.abs(s - 1) >= 0.015 ? <span title="Contract surplus: cheap/rookie years add trade value, an above-market deal subtracts."> · deal ×{s.toFixed(2)}</span> : null })()}
                     </div>
                   </div>
                   <OvrBadge value={p.ovr} pot={p.pot} size={28} />
