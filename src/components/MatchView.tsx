@@ -6,7 +6,7 @@ import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
 import { originTag } from '../game/selectors'
-import { boxScore, coverageGrade, passerRating } from '../game/engine/stats'
+import { boxScore, coverageGrade, defenseImpact, defenseTableRows, passerRating } from '../game/engine/stats'
 import { useGame, useWorld, type GameDay } from '../store/gameStore'
 import { PLAN_PRESETS } from '../game/engine/gameplan'
 import { coordinatorAdvice } from '../game/engine/advice'
@@ -1986,7 +1986,13 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
   const rushing = rows.filter((r) => (r.line.rushAtt ?? 0) > 0)
   const receiving = rows.filter((r) => (r.line.rec ?? 0) > 0 || (r.line.targets ?? 0) > 0)
-  const defense = rows.filter((r) => (r.line.tackles ?? 0) > 0 || (r.line.tfl ?? 0) > 0 || (r.line.defSacks ?? 0) > 0 || (r.line.prs ?? 0) > 0 || (r.line.qbHits ?? 0) > 0 || (r.line.hurries ?? 0) > 0 || (r.line.defInts ?? 0) > 0 || (r.line.defYdsAllowed ?? 0) > 0 || (r.line.defComp ?? 0) > 0 || (r.line.defTargets ?? 0) > 0 || (r.line.missedTackles ?? 0) > 0 || (r.line.defTD ?? 0) > 0)
+  // Boxdef: the Defense table lists EVERY defender with a defensive stat (un-capped
+  // and impact-ranked), so a sack, interception, tackle-for-loss or pressure maker
+  // can never be hidden behind the tackle leaders. `defenseTableRows` is shared with
+  // the verification probe so the two can't drift.
+  const defense = defenseTableRows(rows, teamId)
+  const passRush = rows.filter((r) => (r.line.prs ?? 0) > 0)
+  const coverage = rows.filter((r) => (r.line.defTargets ?? 0) > 0)
   const returns = rows.filter((r) => (r.line.kickRet ?? 0) > 0 || (r.line.puntRet ?? 0) > 0 || (r.line.retTD ?? 0) > 0 || (r.line.defTD ?? 0) > 0)
   // Index once per render: the viewer re-renders every playback tick, so a
   // linear scan per box-score row would add up fast.
@@ -2031,14 +2037,14 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
         { k: 'rec', l: 'REC' }, { k: 'recYds', l: 'YDS' }, { k: 'recTD', l: 'TD' },
         { k: 'snapPct', l: 'SNP%', title: 'Snaps played share', fmt: (r) => (r.snapPct == null ? '—' : `${r.snapPct.toFixed(0)}%`) },
       ]} />}
-      {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cols={[
+      {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cap={99} order={(b) => defenseImpact(b.line)} cols={[
         { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' },
         { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'defInts', l: 'INT' }, { k: 'defTD', l: 'TD', title: 'Defensive touchdowns (pick-six, fumble return)' },
       ]} />}
-      {defense.some((b) => (b.line.prs ?? 0) > 0) && <BoxBlock title="Pass rush" rows={defense.filter((b) => (b.line.prs ?? 0) > 0)} fp={fp} cols={[
+      {passRush.length > 0 && <BoxBlock title="Pass rush" rows={passRush} fp={fp} cap={99} order={(b) => (b.line.prs ?? 0) * 100 + (b.line.defSacks ?? 0) * 10 + (b.line.hurries ?? 0)} cols={[
         { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'defSacks', l: 'SCK' }, { k: 'qbHits', l: 'QBH', title: 'QB hits' }, { k: 'hurries', l: 'HUR', title: 'Hurries' },
       ]} />}
-      {defense.some((b) => (b.line.defTargets ?? 0) > 0) && <BoxBlock title="Coverage" rows={defense.filter((b) => (b.line.defTargets ?? 0) > 0)} fp={fp} cols={[
+      {coverage.length > 0 && <BoxBlock title="Coverage" rows={coverage} fp={fp} cap={99} order={(b) => (b.line.defTargets ?? 0)} cols={[
         { k: 'defComp', l: 'REC', w: 'w-10', title: 'Receptions allowed / targets in coverage', fmt: (r) => `${r.defComp ?? 0}/${r.defTargets ?? 0}` },
         { k: 'defYdsAllowed', l: 'ALW', title: 'Yards allowed in coverage' },
         { k: 'coverageGrade', l: 'COV', title: 'Coverage grade', fmt: (r) => { const g = coverageGrade(r); return g == null ? '—' : String(g) } },
@@ -2074,11 +2080,13 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
 
 interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player>; jerseyNumbers: Map<string, number> }
 interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string; w?: string; title?: string }
-function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx }) {
+function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx; cap?: number; order?: (r: import('../game/engine/stats').PlayerBoxScore) => number }) {
   // Lead with the volume stat: yards for offense, tackles for defense.
-  // Lead with the block's volume stat: yards for offense, the first column otherwise.
+  // Boxdef: a block may pass its own impact `order` (the defensive tables rank by
+  // combined impact so sack/INT/TFL/pressure makers lead and can't be capped out);
+  // otherwise the block's volume stat leads.
   const sortKey = (['Defense', 'Pass rush', 'Coverage'].includes(title) ? cols[0]?.k : cols[1]?.k) as keyof GameStatLine
-  const sorted = [...rows].sort((a, b) => ((b.line[sortKey] as number) ?? 0) - ((a.line[sortKey] as number) ?? 0))
+  const sorted = [...rows].sort((a, b) => (order ? order(b) - order(a) : ((b.line[sortKey] as number) ?? 0) - ((a.line[sortKey] as number) ?? 0)))
   // The %-columns (PRS%, SNP%) are the widest headers; a 32px column left them touching their
   // right-aligned neighbour ("PRS%SNP%", "TDSNP%"), so they get the wide width too.
   const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct' || k === 'snapPct'
@@ -2097,13 +2105,13 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
           </tr>
         </thead>
         <tbody>
-          {sorted.slice(0, 8).map((b) => {
+          {sorted.slice(0, cap).map((b) => {
             const p = fp.byId.get(b.playerId)
             const jersey = fp.jerseyNumbers.get(b.playerId)
             const tag = fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null
             return (
               <tr key={b.playerId} className="text-ink-2">
-                <td className="truncate pr-1" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
+                <td className="truncate pr-1 align-top lg:overflow-visible lg:whitespace-normal" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
                   {jersey != null && <span className="mr-1 inline-block min-w-6 text-muted">#{jersey}</span>}
                   {b.name}
                   {tag && (
@@ -2113,7 +2121,7 @@ function BoxBlock({ title, rows, cols, fp }: { title: string; rows: import('../g
                   )}
                 </td>
                 {cols.map((c) => (
-                  <td key={c.k} className="whitespace-nowrap pl-1 text-right">
+                  <td key={c.k} className="whitespace-nowrap pl-1 text-right align-top">
                     {c.fmt ? c.fmt(b.line) : (b.line[c.k as keyof typeof b.line] as number ?? 0)}
                   </td>
                 ))}

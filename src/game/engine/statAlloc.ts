@@ -434,10 +434,14 @@ export function allocateTeamGame(
     defenders.forEach((p) => {
       const ri = rushers.indexOf(p)
       const tk = tSplit[defenders.indexOf(p)] ?? 0
+      const sck = ri >= 0 ? sSplit[ri] ?? 0 : 0
       addLine(p.id, {
         playerId: p.id,
-        tackles: tk,
-        defSacks: ri >= 0 ? sSplit[ri] ?? 0 : 0,
+        // Boxdef: NFL scoring counts a sack as a solo tackle and a tackle for
+        // loss, so the sack-maker lands in the tackle total and the club's TFL.
+        tackles: tk + sck,
+        defSacks: sck,
+        tfl: sck,
         missedTackles: mtSplit[defenders.indexOf(p)] ?? 0,
       })
     })
@@ -713,6 +717,9 @@ function recordAllocatedStats(world: World, sim: GameSim, season: number, level:
       entry.tackles += line.tackles ?? 0
       entry.defSacks += line.defSacks ?? 0
       entry.defInts += line.defInts ?? 0
+      // Boxdef: tackles for loss were allocated but never folded into the season
+      // line (the play-by-play path does fold them via `mergeInto`).
+      entry.tfl = (entry.tfl ?? 0) + (line.tfl ?? 0)
       // R5: fold the new defensive/offensive bookkeeping into the season line too.
       entry.missedTackles = (entry.missedTackles ?? 0) + (line.missedTackles ?? 0)
       entry.forcedMissed = (entry.forcedMissed ?? 0) + (line.forcedMissed ?? 0)

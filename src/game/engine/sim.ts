@@ -5,6 +5,7 @@ import { statGame } from './statAlloc'
 import { clamp, gauss, hash32, makeRng, type Rng } from './rng'
 import { playerAttrs } from '../data/ratings'
 import { POS_MEAN } from './ratingMeans'
+import { accrueNominalChemistry } from './chemistry'
 
 /**
  * L12 W1: the user's weekly practice plan, applied only to the user's club. AI
@@ -92,6 +93,10 @@ function allocateWeekStats(world: World, week: number, exceptGameId?: string) {
     if (game.week !== week || !game.played || game.id === exceptGameId) continue
     if (game.statsDone) continue
     statGame(world, game, world.season, 'NFL')
+    // J37: a score-simulated game has no play-by-play, so the clubs' starters get
+    // a nominal game's worth of shared reps — the league's chemistry keeps pace
+    // with the user's club (the user's own game accrues from its real plays).
+    accrueNominalChemistry(world, game.homeId, game.awayId)
     game.statsDone = true
   }
 }

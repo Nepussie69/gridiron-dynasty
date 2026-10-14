@@ -58,6 +58,7 @@ import {
   type StaffAward,
 } from '../game/engine/staffAwards'
 import { counterOffer } from '../game/engine/counter'
+import { accrueGameChemistry, decayChemistry } from '../game/engine/chemistry'
 import { rivalFor } from '../game/engine/rivalry'
 import { applyStakesSwing, ensureSlots, flexSlots, primetimeSwing, stakesFor, stakesNote } from '../game/engine/primetime'
 import { recordGameStats, boxScore, recordBoxLines, boxPlayerLines, boxTeamTotals } from '../game/engine/stats'
@@ -197,6 +198,20 @@ import {
 } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerProfile } from '../game/engine/owner'
 import { advanceCoachingTree, backfillAICoordinators, poachAssistant } from '../game/engine/coachingTree'
+// FUTURES #28 (C2): the staff-market engine hooks — market refresh, contract tick,
+// poach offers, budget gate, buyouts, interim promotion. Kept in one block so the
+// parallel gameStore edit (#15 B) merges cleanly.
+import {
+  addStaffDeadMoney,
+  applyPoachDeparture,
+  canAffordHire,
+  contractYearsForSalary,
+  promoteInterim as promoteInterimEngine,
+  refreshStaffMarket,
+  rollPoachOffers,
+  staffBuyout,
+  tickStaffContracts,
+} from '../game/engine/staffMarket'
 import {
   OWNER_STAFF_FUND_INTEREST,
   grantLabels,
@@ -814,6 +829,13 @@ interface GameStore {
   setStaffFocus: (staffId: string, focus: string) => void
   /** FUTURES 21: bring a former assistant (now a head coach or available) back onto your staff. */
   poachAssistant: (name: string, season: number) => void
+  // ── FUTURES #28 (C2): staff market actions ────────────────────────────────
+  /** Fill a vacant OC/DC chair from the best position coach, at rating −4 (his own seat opens). */
+  promoteInterim: (seat: 'off' | 'def') => void
+  /** Answer a contract-expiry offer: re-sign at the raise, or let him walk. */
+  resignStaff: (offerId: string, accept: boolean) => void
+  /** Answer a rival's poach offer: match the raise (block a lateral only), or let him go. */
+  matchStaffOffer: (offerId: string, match: boolean) => void
   restructurePlayer: (id: string) => void
   extendPlayer: (id: string) => void
   /** G2: negotiate an extension with a player's agent (negotiate rungs). */
@@ -1554,6 +1576,9 @@ export const useGame = create<GameStore>((set, get) => ({
       // R4: keep a season-scoped box score for the user's game.
       userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
+      // FUTURES #37: the user's game feeds the QB–receiver and adjacent-OL pair
+      // chemistry (its real shared reps); AI games accrue a nominal game in simWeek.
+      accrueGameChemistry(world, sim)
       growPlaybookFromGame(world, sim, practiceMasteryMult(career, world) * byeMasteryMult(career, world), career.teamId)
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
@@ -2168,6 +2193,9 @@ export const useGame = create<GameStore>((set, get) => ({
     // begins (the fast path never saw the camp deadline).
     finalizeFifthYearOptions(world, career)
     world.season += 1
+    // FUTURES #37: pair chemistry decays slowly in the offseason — a pair that
+    // spent the winter apart comes back a little less in sync.
+    decayChemistry(world)
     world.week = 1
     world.phase = 'regular'
     world.offseasonStage = undefined
@@ -2196,7 +2224,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // Backlog 193/185: a change of employer never strands a vacant coordinator.
     if (resolved.teamId !== career.teamId) backfillAICoordinators(world, resolved.teamId)
     // #11/#20: a fresh season question, clean moment log, and a new ambition slate.
-    const seasonCareer: CareerState = {
+    let seasonCareer: CareerState = {
       ...resolved,
       season: world.season,
       week: 1,
@@ -2234,6 +2262,32 @@ export const useGame = create<GameStore>((set, get) => ({
         p.holdout = { ...h, status: 'resolved', resolution: 'report' }
         p.morale = clamp(p.morale - 10, 1, 100)
       }
+    }
+    // ── FUTURES #28 (C2): staff rollover — market, contracts, poaching ────────
+    // Order per spec §6–9: refresh the market, then tick the user club's staff
+    // contracts (filing re-sign offers at expiry), then roll poach offers. All
+    // three are deterministic (hash-built) and add no rng() draw, so the play
+    // sim stays byte-identical.
+    refreshStaffMarket(world, world.season)
+    const staffTick = tickStaffContracts(world, seasonCareer)
+    seasonCareer = staffTick.career
+    const staffPoach = rollPoachOffers(world, seasonCareer)
+    seasonCareer = staffPoach.career
+    for (const off of staffTick.expired) {
+      pushCareerNews(world, seasonCareer, {
+        category: 'Career',
+        headline: `Contract expiring: ${off.name}`,
+        body: off.message,
+      })
+    }
+    if (staffPoach.offer) {
+      pushCareerNews(world, seasonCareer, {
+        category: 'League',
+        headline: staffPoach.offer.lateral
+          ? `${staffPoach.offer.name} — a lateral move you can block`
+          : `${staffPoach.offer.name} — a promotion you cannot block`,
+        body: staffPoach.offer.message,
+      })
     }
     set({
       // FUTURES #29: watched prospects whose class just turned current land on
@@ -4299,6 +4353,15 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('That candidate is no longer available.')
       return
     }
+    // FUTURES #28 (C2) §8: block an offer the staff budget cannot carry, unless the
+    // owner fund is open. The cheapest available seat is always reachable, so a
+    // vacant OC/DC can never be left unfillable.
+    if (!canAffordHire(world, career, salary)) {
+      get().showToast(
+        `Over budget — the owner must free up staff money before you can offer $${(salary / 1_000_000).toFixed(1)}M.`,
+      )
+      return
+    }
     const rng = makeRng(world.seed + world.season * 3607 + candidateId.length + Math.round(salary))
     // FUTURES 25: an owner-funded hire pulls harder, and is spent once it lands.
     const funded = ownerStaffFundOpen(career, world.season)
@@ -4312,7 +4375,7 @@ export const useGame = create<GameStore>((set, get) => ({
       funded ? OWNER_STAFF_FUND_INTEREST : 0,
     )
     if (res.signed) {
-      applyHire(world, career.teamId, candidate, salary, scheme)
+      const applied = applyHire(world, career.teamId, candidate, salary, scheme)
       if (funded) {
         const state = { ...meetingState(career) }
         state.staffFundUsed = true
@@ -4325,6 +4388,13 @@ export const useGame = create<GameStore>((set, get) => ({
       const treeNow = (career.tree ?? []).filter((e) => e.id !== candidateId)
       if (treeNow.length !== (career.tree ?? []).length) {
         set({ career: { ...career, tree: treeNow }, tick: get().tick + 1 })
+      }
+      // FUTURES #28 (C2) §7: replacing a coach mid-contract banks his buyout as dead
+      // staff money. Applied last so it rides on top of the sets above.
+      if (applied.deadMoney > 0) {
+        const cur = get().career ?? career
+        set({ career: addStaffDeadMoney(cur, world.season, applied.deadMoney), tick: get().tick + 1 })
+        get().showToast(`Buyout: $${(applied.deadMoney / 1_000_000).toFixed(1)}M in dead staff money.`)
       }
     } else {
       get().showToast(res.message)
@@ -4344,14 +4414,27 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = staff.findIndex((m) => m.id === staffId)
     if (idx < 0) return
     const m = staff[idx]
+    // FUTURES #28 (C2) §7: a mid-contract departure costs 50% of the remaining years,
+    // paid out over those seasons as dead staff money against the budget.
+    const buyout = m.contractYears > 0 ? staffBuyout(m) : 0
+    const buyoutYears = buyout > 0 ? Math.max(1, m.contractYears) : 0
     staff.splice(idx, 1)
     // Move them back to the open market. FUTURES 19: analysts return to their own
     // user-only pool so the Analytics market keeps listing them (never the AI's).
     const open = { ...m, teamId: null, status: 'Available' as const }
     if (m.role === ANALYTICS_ROLE) world.analyticsPool = [...(world.analyticsPool ?? []), open]
     else world.staffPool.push(open)
+    if (buyout > 0) {
+      const per = Math.floor(buyout / buyoutYears)
+      const rem = buyout - per * buyoutYears
+      let next = career
+      for (let k = 0; k < buyoutYears; k++) {
+        next = addStaffDeadMoney(next, world.season + k, per + (k === buyoutYears - 1 ? rem : 0))
+      }
+      set({ career: next, tick: get().tick + 1 })
+    }
     bump(set, get)
-    get().showToast(`${m.name} was let go as ${m.role}.`)
+    get().showToast(`${m.name} was let go as ${m.role}.${buyout > 0 ? ` Buyout: $${(buyout / 1_000_000).toFixed(1)}M dead money.` : ''}`)
     get().save()
   },
 
@@ -4398,6 +4481,118 @@ export const useGame = create<GameStore>((set, get) => ({
       body: res.message,
     })
     get().showToast(res.message)
+    get().save()
+  },
+
+  // ── FUTURES #28 (C2): staff market actions ─────────────────────────────────
+  // Promote interim: the best position coach fills a vacant OC/DC chair at rating
+  // −4 (his own seat opens, tenure resets). All gated at `decide`.
+  promoteInterim: (seat) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const coordRole = seat === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
+    if ((world.staff[career.teamId] ?? []).some((m) => m.role === coordRole)) {
+      get().showToast(`You already have a ${coordRole}.`)
+      return
+    }
+    const res = promoteInterimEngine(world, career.teamId, seat)
+    if (!res.member) {
+      get().showToast('No position coach is available to promote.')
+      return
+    }
+    bump(set, get)
+    pushCareerNews(world, career, {
+      category: 'Career',
+      headline: `${res.member.name} promoted interim ${coordRole}`,
+      body: `${res.member.name} takes the ${coordRole} chair at ${res.member.rating} OVR (edge ${res.edgeBefore} → ${res.edgeAfter}).${res.vacated ? ` His ${res.vacated} seat is now open.` : ''}`,
+    })
+    get().showToast(`${res.member.name} is your interim ${coordRole}.`)
+    get().save()
+  },
+
+  // Resolve a contract-expiry offer: re-sign at the asking raise, or let him walk.
+  resignStaff: (offerId, accept) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const offer = (career.staffOffers ?? []).find((o) => o.id === offerId && o.kind === 'resign')
+    if (!offer) {
+      get().showToast('That offer is no longer open.')
+      return
+    }
+    const staff = world.staff[career.teamId] ?? []
+    const m = staff.find((s) => s.id === offer.memberId)
+    const remaining = (career.staffOffers ?? []).filter((o) => o.id !== offerId)
+    if (accept && m) {
+      m.annual = offer.annual
+      m.contractYears = contractYearsForSalary(offer.annual)
+      set({ career: { ...career, staffOffers: remaining }, tick: get().tick + 1 })
+      get().showToast(`${m.name} re-signed: $${(offer.annual / 1_000_000).toFixed(1)}M × ${m.contractYears} years.`)
+    } else {
+      if (m) {
+        const i = staff.indexOf(m)
+        staff.splice(i, 1)
+        world.staffPool.push({ ...m, teamId: null, status: 'Available' as const })
+      }
+      set({ career: { ...career, staffOffers: remaining }, tick: get().tick + 1 })
+      get().showToast(`${offer.name} walks — the ${offer.role} seat is now open.`)
+    }
+    bump(set, get)
+    get().save()
+  },
+
+  // Answer a rival's poach offer. A lateral move you may block by matching the raise;
+  // a promotion you cannot block at all (NFL rule) — matching only softens the exit.
+  matchStaffOffer: (offerId, match) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const offer = (career.staffOffers ?? []).find((o) => o.id === offerId && o.kind === 'poach')
+    if (!offer) {
+      get().showToast('That offer has expired.')
+      return
+    }
+    const staff = world.staff[career.teamId] ?? []
+    const m = staff.find((s) => s.id === offer.memberId)
+    if (match && offer.lateral === true && m) {
+      // A lateral move you can block: raise ≥ 15% and he stays.
+      const raise = Math.max(offer.annual, Math.round(m.annual * 1.15))
+      m.annual = raise
+      m.contractYears = contractYearsForSalary(raise)
+      set({ career: { ...career, staffOffers: (career.staffOffers ?? []).filter((o) => o.id !== offerId) }, tick: get().tick + 1 })
+      get().showToast(`Blocked the lateral move — ${m.name} stays at $${(raise / 1_000_000).toFixed(1)}M.`)
+      bump(set, get)
+      get().save()
+      return
+    }
+    // He leaves: he joins your coaching tree as a protégé with his role.
+    const dep = applyPoachDeparture(world, career, offer)
+    set({ career: dep.career, tick: get().tick + 1 })
+    if (dep.ok) {
+      pushCareerNews(world, dep.career, {
+        category: 'League',
+        headline: `${offer.name} leaves for ${world.byId[offer.fromTeamId ?? '']?.name ?? offer.fromTeamId ?? 'another club'}`,
+        body: `${offer.name} moves on as their ${offer.toRole ?? offer.role}. He is in your coaching tree — bring him back any time.`,
+      })
+      get().showToast(
+        match && offer.lateral !== true
+          ? `You cannot block a promotion — ${offer.name} leaves.`
+          : `${offer.name} moves on.`,
+      )
+    } else {
+      get().showToast(`${offer.name} is already gone.`)
+    }
+    bump(set, get)
     get().save()
   },
 
