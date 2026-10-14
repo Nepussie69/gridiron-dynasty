@@ -12,7 +12,7 @@
 // ingests full Madden 26 / CFB 26 rosters (overall + full attribute set).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Position } from '../types'
+import type { HurtState, Position } from '../types'
 import { unscaleOvr } from '../engine/ovrScale'
 
 /**
@@ -169,6 +169,17 @@ export function attributesFor(
 }
 
 /**
+ * The physical ratings a playing-hurt player loses a slice of, and the one
+ * position-defining rating his injury also touches (FUTURES #15).
+ */
+const HURT_PHYSICAL = ['SPD', 'ACC', 'AGI', 'STR', 'JMP']
+const HURT_KEY: Partial<Record<Position, string>> = {
+  QB: 'THP', RB: 'CAR', WR: 'CTH', TE: 'CTH', FB: 'RBK',
+  OT: 'RBK', OG: 'RBK', C: 'RBK', DE: 'PMV', DT: 'PMV',
+  LB: 'TAK', CB: 'MCV', S: 'ZCV', K: 'KAC', P: 'KPW',
+}
+
+/**
  * The same merge the sim uses: generated attributes first, then any exact
  * ratings the player carries. Mirrors `mkAttrs` in `playsim.ts`/`statAlloc.ts`
  * without importing from them (which keeps the engine files untouched).
@@ -180,6 +191,8 @@ export function playerAttrs(p: {
   attrs?: Record<string, number>
   /** L15: earned development-plan rating gains (additive, clamped to 40–99). */
   devRatings?: Record<string, number>
+  /** L15 (FUTURES #15): a playing-hurt penalty, applied only while set. */
+  hurt?: HurtState
 }): Record<string, number> {
   const out = { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
   const gains = p.devRatings
@@ -188,6 +201,19 @@ export function playerAttrs(p: {
       const g = gains[k]
       if (!g) continue
       out[k] = Math.max(40, Math.min(99, (out[k] ?? 70) + g))
+    }
+  }
+  // L15 (FUTURES #15): a played-hurt player's physical ratings (and his position's
+  // key rating) drop by the injury penalty. No rng, and it disappears the moment
+  // `hurt` is cleared, so ovr, contracts and career stats never see it.
+  const hurt = p.hurt
+  if (hurt && hurt.penalty) {
+    const scale = (v: number) => Math.max(40, Math.min(99, Math.round(v * (1 - hurt.penalty))))
+    for (const k of HURT_PHYSICAL) if (out[k] != null) out[k] = scale(out[k])
+    const key = HURT_KEY[p.pos]
+    if (key && out[key] != null) {
+      const extra = hurt.keyExtra ?? 0
+      out[key] = Math.max(40, Math.min(99, Math.round(out[key] * (1 - hurt.penalty - extra))))
     }
   }
   return out

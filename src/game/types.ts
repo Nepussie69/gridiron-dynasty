@@ -219,6 +219,24 @@ export interface GameStatLine {
   snapSide?: number
 }
 
+/**
+ * L15 (FUTURES #15): the injury a player carries *into one game* when the user
+ * chooses to play him hurt. While set, `playerAttrs` scales his physical ratings
+ * down by `penalty` (plus `keyExtra` on his position's key rating). Cleared again
+ * by `restorePlayHurt` right after the game — never persisted across a week.
+ */
+export interface HurtState {
+  /** Questionable (would miss 1 game) or Doubtful (would miss 2). */
+  status: 'Q' | 'D'
+  note: string
+  /** Games the injury would have cost, captured at activation (for the log). */
+  games: number
+  /** Fraction of the physical ratings lost while hurt. */
+  penalty: number
+  /** Extra fraction on the position's key rating (QBs/RBs take −5% THP/CAR). */
+  keyExtra?: number
+}
+
 export interface Player {
   id: string
   name: string
@@ -238,6 +256,14 @@ export interface Player {
   morale: number // 1-100
   fatigue?: number
   injured?: { games: number; note: string }
+  /**
+   * L15 (FUTURES #15): set only for the duration of a game the user chose to play
+   * him hurt. Moves the injury into `hurtSaved` so the sim sees him as available.
+   * Optional — an old save never carries it, and it is cleared after the game.
+   */
+  hurt?: HurtState
+  /** L15: the injury held while `hurt` is set, restored after the game. */
+  hurtSaved?: { games: number; note: string }
   /** Hidden character. Drives development and bust risk, not current ratings. */
   character?: Character
   /** Facets of character uncovered through relationships. */
@@ -829,6 +855,12 @@ export interface CareerState {
    * stays in charge. A legacy save has none until the first stakes game.
    */
   stakes?: { season: number; profile: number; security: number }
+  /**
+   * L15 (FUTURES #15): this week's injury calls for the user's club, keyed by
+   * player id → 'play' | 'sit'. Cleared each week after the game. Optional — an
+   * old save (and a user who never opens the card) has none.
+   */
+  injuryCalls?: Record<string, 'play' | 'sit'>
   /** The boss who is shaping you (#11). */
   mentor?: { name: string; philosophy: string; teamId: string }
   /** People you developed who now run their own programs (#11, FUTURES 21). */
