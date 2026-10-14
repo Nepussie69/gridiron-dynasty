@@ -140,7 +140,7 @@ export function FreeAgency() {
       }
       if (askGm) return <GmAskButton player={p} kind="sign" label="Ask GM to sign" />
       return (
-        <Button size="sm" variant="secondary" disabled title="Roster control unlocks at Director of Player Personnel">
+        <Button size="sm" variant="secondary" disabled title="Roster control unlocks at General Manager">
           On the board
         </Button>
       )
@@ -167,7 +167,7 @@ export function FreeAgency() {
     }
     if (askGm) return <GmAskButton player={p} kind="sign" label={`Ask GM · ${money(capHit)}`} />
     return (
-      <Button size="sm" variant="secondary" disabled title="Roster control unlocks at Director of Personnel">
+      <Button size="sm" variant="secondary" disabled title="Roster control unlocks at General Manager">
         Sign · {money(capHit)}
       </Button>
     )

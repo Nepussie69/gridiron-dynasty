@@ -102,7 +102,7 @@ export function skillUsedFrom(key: SkillKey, path: 'coach' | 'personnel'): strin
     case 'scheme':
       return 'Coordinator'
     case 'negotiation':
-      return path === 'coach' ? 'Head Coach' : 'Director of Player Personnel'
+      return path === 'coach' ? 'Head Coach' : 'General Manager'
     default:
       return null
   }

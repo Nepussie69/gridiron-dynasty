@@ -12,7 +12,7 @@ import type { CareerState, Contact, NewsItem, Rival } from '../types'
 import type { World } from './generate'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { FIRST, LAST } from './names'
-import { ladderFor, overallRep } from './career'
+import { keptLevel, nextRung, overallRep, tierFor } from './career'
 import { clamp, hash32, rint, rpick, type Rng } from './rng'
 import { REGIONS } from './evaluation'
 
@@ -72,8 +72,9 @@ export function contactIntel(c: Contact): string {
 /** Each rival climbs on their own track a bit each season. */
 export function advanceRivals(world: World, rng: Rng): Rival[] {
   return world.rivals.map((r) => {
-    const ladder = ladderFor(r.path)
-    const next = ladder[r.level + 1]
+    // Backlog 415: rivals live on the same three jobs as the user — they can only
+    // ever climb into a rung that still exists.
+    const next = nextRung(r.path, r.level)
     let reputation = clamp(r.reputation + rint(rng, 2, 6), 0, 100)
     let level = r.level
     let teamId = r.teamId
@@ -81,7 +82,7 @@ export function advanceRivals(world: World, rng: Rng): Rival[] {
     if (next) {
       const gateOk = Object.entries(next.gate).every(([, v]) => reputation >= (v as number) * 0.7)
       if (gateOk && rng() < 0.45) {
-        level = r.level + 1
+        level = next.level
         tier = 'NFL'
         teamId = rpick(rng, NFL_TEAMS).id
       }
@@ -91,8 +92,9 @@ export function advanceRivals(world: World, rng: Rng): Rival[] {
 }
 
 export function rivalTitle(r: Rival): string {
-  const ladder = ladderFor(r.path)
-  return ladder[clamp(r.level, 0, ladder.length - 1)].title
+  // Backlog 415: rivals hold the same three jobs the user does, so a rival left
+  // on a removed rung by an old save still reads as one of them.
+  return tierFor(r.path, keptLevel(r.path, r.level)).title
 }
 
 // ── Media (#13) ──────────────────────────────────────────────────────────────

@@ -88,7 +88,10 @@ const COACH_ROLES: Record<number, RoleCapabilities> = {
 /** What can this career actually do right now? */
 export function capabilities(career: CareerState): RoleCapabilities {
   const table = career.path === 'coach' ? COACH_ROLES : PERSONNEL_ROLES
-  const role = table[career.level]
+  // Backlog 415: removed rungs are legacy numbers only — clamp onto the lowest
+  // rung that still exists so no code path hands out a retired job's powers.
+  const floor = career.path === 'coach' ? 6 : 8
+  const role = table[Math.max(career.level, floor)]
   if (role) return role
   // Fallback: most senior role in the track.
   const max = Math.max(...Object.keys(table).map(Number))

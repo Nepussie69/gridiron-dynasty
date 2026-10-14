@@ -511,10 +511,10 @@ export function FrenzyLotInspector({
         </div>
       ) : (
         <div className="mt-2 space-y-2">
-          <Button variant="secondary" disabled title="Roster control unlocks at Director of Player Personnel">
+          <Button variant="secondary" disabled title="Roster control unlocks at General Manager">
             Make an offer
           </Button>
-          <p className="text-label text-muted">Roster control unlocks at Director of Player Personnel.</p>
+          <p className="text-label text-muted">Roster control unlocks at General Manager.</p>
         </div>
       )}
 

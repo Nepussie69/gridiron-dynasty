@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Check, ChevronDown, Download, Pencil, Play, Plus, Save, Search, Shield, Sparkles, Trash2, TriangleAlert, TrendingUp, Upload, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { NFL_TEAMS } from '../game/data/nflTeams'
-import { minNflLevel, nflLadder, tierFor } from '../game/engine/career'
+import { coordinatorTitle, displayLadder, minNflLevel, tierFor } from '../game/engine/career'
 import { capabilities } from '../game/engine/capabilities'
 import { SCENARIOS, scenarioById } from '../game/engine/scenarios'
 import { parseSeedCode } from '../game/engine/seed'
@@ -18,9 +18,8 @@ const ARCHETYPES: Record<CareerPath, { id: string; name: string; desc: string }[
     { id: 'dealmaker', name: 'Deal Maker', desc: 'Wins trades and free agency. Aggressive roster builder.' },
   ],
   coach: [
-    { id: 'qb', name: 'QB Guru', desc: 'Develops elite passers and offensive skill talent.' },
-    { id: 'def', name: 'Defensive Mind', desc: 'Scheme-driven. Finds NFL defenders others miss.' },
-    { id: 'ceo', name: 'Program CEO', desc: 'Elite staff builder and culture setter.' },
+    { id: 'off', name: 'Offensive Mind', desc: 'Coaches the offense: develops elite passers and skill talent.' },
+    { id: 'def', name: 'Defensive Mind', desc: 'Coaches the defense: scheme-driven, finds NFL defenders others miss.' },
   ],
 }
 
@@ -154,6 +153,8 @@ export function CareerHub() {
   const [name, setName] = useState('A. Reeves')
   const [path, setPath] = useState<CareerPath>('personnel')
   const [archetype, setArchetype] = useState('scout')
+  // Backlog 415: the coach's side of the ball — offensive or defensive coordinator.
+  const [side, setSide] = useState<'off' | 'def'>('off')
   const [advanced, setAdvanced] = useState(false)
   const [level, setLevel] = useState(minNflLevel('personnel'))
   const [teamId, setTeamId] = useState(pool[0].id)
@@ -169,8 +170,11 @@ export function CareerHub() {
   const seedValue = parseSeedCode(seedText)
   const seedInvalid = seedText.trim() !== '' && seedValue === null
   const selected = pool.find((t) => t.id === teamId) ?? pool[0]
-  const ladder = nflLadder(path)
+  // What the ladder looks like: the coordinator rung is two cards, one per side.
+  const cards = displayLadder(path)
   const rung = tierFor(path, level)
+  // The coordinator rung names its side.
+  const rungTitle = path === 'coach' && level === 6 ? coordinatorTitle(side) : rung.title
   const startSalary = salaryForLevel(path, level)
   const scenario = scenarioById(scenarioId)
   const scenarioLocked = scenarioId !== 'climb'
@@ -188,6 +192,7 @@ export function CareerHub() {
   function choosePath(p: CareerPath) {
     setPath(p)
     setArchetype(ARCHETYPES[p][0].id)
+    setSide('off')
     setLevel(minNflLevel(p))
   }
 
@@ -197,6 +202,7 @@ export function CareerHub() {
     if (s.path) {
       setPath(s.path)
       setArchetype(ARCHETYPES[s.path][0].id)
+      setSide('off')
     }
     if (s.level !== null) setLevel(s.level)
     if (s.forceLowestPrestige) setTeamId(pool[0].id)
@@ -210,6 +216,7 @@ export function CareerHub() {
       name,
       path,
       archetype,
+      side,
       teamId: selected.id,
       startLevel: level,
       seed: seedValue ?? undefined,
@@ -427,22 +434,26 @@ export function CareerHub() {
               <span className="text-brand">Run an NFL franchise.</span>
             </h1>
             <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-muted">
-              Every game is an NFL game. You begin as a{' '}
-              {path === 'coach' ? 'position coach / quality-control assistant' : 'assistant director of college scouting'} making{' '}
-              {path === 'coach' ? '$700k' : '$260k'}. Four reputations and your skills decide how fast you rise:{' '}
+              Every game is an NFL game. Three jobs exist for you: an{' '}
+              <strong>Offensive or Defensive Coordinator</strong>, an <strong>NFL Head Coach</strong>, and a{' '}
+              <strong>General Manager</strong>. The coaching track starts on{' '}
+              {side === 'def' ? 'defense' : 'offense'} as a coordinator making{' '}
+              {path === 'coach' ? '$2.2M' : '$3.5M'}. Four reputations and your skills decide how fast you rise:{' '}
               <strong>Evaluation</strong>, <strong>Roster Building</strong>, <strong>Leadership</strong>,{' '}
-              <strong>Results</strong>, and <strong>Profile</strong>. Excel and you skip rungs — stumble and you can be
-              fired. The endpoint is the same: <strong>General Manager</strong>.
+              <strong>Results</strong>, and <strong>Profile</strong>. Excel and the head-coach door opens — stumble
+              and you can be fired. The endpoint is the same: <strong>General Manager</strong>.
             </p>
 
             <div className="mt-6 space-y-2">
-              {ladder.map((r, i) => {
+              {cards.map((r, i) => {
                 const open = openRung === r.level
-                const isCurrent = r.level === level
-                const d = roleDetail(path, r.level)
+                const isCurrent = r.level === level && (r.side === undefined || r.side === side)
+                const base = roleDetail(path, r.level)
+                // The coordinator card carries its own side's "What you do".
+                const d = r.does ? { ...base, does: r.does } : base
                 const unlocks = unlocksFor(path, r.level)
                 return (
-                  <div key={r.level} className={cn('overflow-hidden rounded-[var(--r-lg)] border', isCurrent ? 'border-line-strong' : 'border-line')}>
+                  <div key={`${r.level}:${r.side ?? ''}`} className={cn('overflow-hidden rounded-[var(--r-lg)] border', isCurrent ? 'border-line-strong' : 'border-line')}>
                     <button
                       type="button"
                       onClick={() => setOpenRung(open ? null : r.level)}
@@ -561,7 +572,17 @@ export function CareerHub() {
               <div className="label mb-1.5">Archetype</div>
               <OptionGroup label="Archetype" className="mb-5">
                 {ARCHETYPES[path].map((a) => (
-                  <OptionCard key={a.id} selected={archetype === a.id} title={a.name} description={a.desc} onSelect={() => setArchetype(a.id)} />
+                  <OptionCard
+                    key={a.id}
+                    selected={archetype === a.id}
+                    title={a.name}
+                    description={a.desc}
+                    onSelect={() => {
+                      setArchetype(a.id)
+                      // The off/def archetype is the coordinator's side of the ball.
+                      if (path === 'coach') setSide(a.id === 'def' ? 'def' : 'off')
+                    }}
+                  />
                 ))}
               </OptionGroup>
 
@@ -572,17 +593,20 @@ export function CareerHub() {
                     {scenarioLocked && <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-muted">Set by scenario</span>}
                   </div>
                   <div className="mb-4 flex flex-wrap gap-1.5">
-                    {ladder.map((r) => (
+                    {cards.map((r) => (
                       <button
-                        key={r.level}
+                        key={`${r.level}:${r.side ?? ''}`}
                         type="button"
-                        onClick={() => setLevel(r.level)}
+                        onClick={() => {
+                          setLevel(r.level)
+                          if (r.side) setSide(r.side)
+                        }}
                         disabled={scenarioLocked}
-                        aria-pressed={level === r.level}
+                        aria-pressed={level === r.level && (r.side === undefined || r.side === side)}
                         className={cn(
                           'motion pointer-coarse:min-h-11 rounded-[var(--r-sm)] border px-2 py-1 font-cond text-label font-700 uppercase tracking-[0.06em]',
                           scenarioLocked && 'cursor-not-allowed opacity-60',
-                          level === r.level ? 'border-line-strong bg-surface-3 text-ink' : 'border-line text-muted hover:bg-surface-2',
+                          level === r.level && (r.side === undefined || r.side === side) ? 'border-line-strong bg-surface-3 text-ink' : 'border-line text-muted hover:bg-surface-2',
                         )}
                       >
                         {r.title}
@@ -642,7 +666,7 @@ export function CareerHub() {
                 <TeamCrest team={selected} size={38} />
                 <div>
                   <div className="font-cond text-label font-600 uppercase tracking-[0.07em] opacity-80">First Job</div>
-                  <div className="font-display text-lg font-800 italic uppercase leading-none">{rung.title}</div>
+                  <div className="font-display text-lg font-800 italic uppercase leading-none">{rungTitle}</div>
                   <div className="font-cond text-small opacity-90">
                     {selected.city} {selected.name}
                   </div>

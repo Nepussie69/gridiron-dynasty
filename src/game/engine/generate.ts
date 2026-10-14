@@ -413,7 +413,7 @@ function generateRivals(rng: Rng, season: number): Rival[] {
     id: `rival_${season}_${i}`,
     name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
     path,
-    level: path === 'coach' ? 5 : 4, // first NFL rung of each ladder
+    level: path === 'coach' ? 6 : 8, // Backlog 415: the only jobs left on each track
     tier: 'NFL' as LeagueTier,
     teamId: rpick(rng, NFL_TEAMS).id,
     reputation: 30 + rint(rng, 0, 12),

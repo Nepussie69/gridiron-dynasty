@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import { num, ratingTier } from '../lib/format'
 import { teamHistory, teamSeasonStats, type CareerDatabase, type TeamSeasonRecord } from '../game/engine/statsDb'
-import { tierFor } from '../game/engine/career'
+import { roleTitle } from '../game/engine/career'
 import { STARTERS, depthAt } from '../game/engine/depth'
 import { teamAvgOvr } from '../game/selectors'
 import type { CareerState, LedgerEntry, Player, Position, SeasonStats } from '../game/types'
@@ -133,7 +133,7 @@ export function History() {
   const phone = usePhone()
   const [tab, setTab] = useState<Tab>('you')
 
-  const role = tierFor(career.path, career.level)
+  const role = { title: roleTitle(career) }
   const tabs: { id: Tab; label: string }[] = [
     { id: 'you', label: 'You' },
     { id: 'team', label: 'Team' },
@@ -177,7 +177,7 @@ function YouTab({ world, career }: { world: World; career: CareerState }) {
   const firings = history.filter((h) => /fired/i.test(h.outcome)).length
   const promotions = history.reduce((n, h, i) => (i > 0 && h.role !== history[i - 1].role && !/fired/i.test(h.outcome) ? n + 1 : n), 0)
   const clubs = new Set(history.map((h) => h.team)).size
-  const role = tierFor(career.path, career.level)
+  const role = { title: roleTitle(career) }
   const team = world.byId[career.teamId]
 
   // Y3: the résumé the calls add up to.

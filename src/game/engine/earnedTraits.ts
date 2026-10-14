@@ -8,7 +8,7 @@
 
 import type { CareerState, EarnedTrait, LedgerEntry } from '../types'
 import type { World } from './generate'
-import { tierFor } from './career'
+import { roleTitle } from './career'
 
 interface DeedDef {
   id: string
@@ -51,7 +51,7 @@ export function evaluateTraits(career: CareerState): EarnedTrait[] {
   const out = [...(career.earnedTraits ?? [])]
   for (const d of DEEDS) {
     if (!have.has(d.id) && d.test(ledger)) {
-      out.push({ id: d.id, name: d.name, desc: d.desc, season: career.season, role: tierFor(career.path, career.level).title })
+      out.push({ id: d.id, name: d.name, desc: d.desc, season: career.season, role: roleTitle(career) })
     }
   }
   return out
