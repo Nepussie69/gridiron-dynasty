@@ -21,7 +21,7 @@ NFL-realistic play where every effect comes from the individual players on the p
 
 ## Next steps
 1. Finish ladder + punts merges (above), backlog rows, status table, ask to push.
-2. Merge J52 and fapool as they land (re-run their gates on the merged tree).
+2. **fapool wrote FINAL (logs/fapool-verify.out, ~09:22) — review + merge first** (it touched generate.ts/progress.ts; re-run gates on the merged tree). Then J52 when it lands.
 3. Browser check pending for #15 C and #28 C3 at 375px + dark (spec asks orchestrator to look).
 4. Backlog: #27 DF2/DF3, J11, #7/#24/#26, #39–51; animation round for J13 audibles (hook in qbReads.ts); punter directional punting (row 376); J10b throwaway rate 2.8% vs NFL 9.1%; run ≤0 still 14.7% vs NFL 17.8% and ≥10 yd 9.4% vs 10.6% (realismloss notes).
 
