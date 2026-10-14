@@ -58,6 +58,7 @@ import {
   type StaffAward,
 } from '../game/engine/staffAwards'
 import { counterOffer } from '../game/engine/counter'
+import { accrueGameChemistry, decayChemistry } from '../game/engine/chemistry'
 import { rivalFor } from '../game/engine/rivalry'
 import { applyStakesSwing, ensureSlots, flexSlots, primetimeSwing, stakesFor, stakesNote } from '../game/engine/primetime'
 import { recordGameStats, boxScore, recordBoxLines, boxPlayerLines, boxTeamTotals } from '../game/engine/stats'
@@ -197,6 +198,20 @@ import {
 } from '../game/engine/people'
 import { ownerFiringLine, ownerName, ownerProfile } from '../game/engine/owner'
 import { advanceCoachingTree, backfillAICoordinators, poachAssistant } from '../game/engine/coachingTree'
+// FUTURES #28 (C2): the staff-market engine hooks — market refresh, contract tick,
+// poach offers, budget gate, buyouts, interim promotion. Kept in one block so the
+// parallel gameStore edit (#15 B) merges cleanly.
+import {
+  addStaffDeadMoney,
+  applyPoachDeparture,
+  canAffordHire,
+  contractYearsForSalary,
+  promoteInterim as promoteInterimEngine,
+  refreshStaffMarket,
+  rollPoachOffers,
+  staffBuyout,
+  tickStaffContracts,
+} from '../game/engine/staffMarket'
 import {
   OWNER_STAFF_FUND_INTEREST,
   grantLabels,
@@ -218,6 +233,15 @@ import { pushLedger, gradeLedger, logCoachCalls } from '../game/engine/ledger'
 import { CHARACTER_FACETS, FACET_LABEL, revealFacet } from '../game/engine/character'
 import { learnedBias, scoutReport, isEvaluator } from '../game/engine/scoutBias'
 import { currentDilemma, applyDilemma } from '../game/engine/dilemma'
+import {
+  activatePlayHurt,
+  gameStatus,
+  normalizeInjuryState,
+  restorePlayHurt,
+  type InjuryCall,
+  type InjuryRestoreResult,
+} from '../game/engine/injuryCalls'
+import { injuryProbe } from '../game/engine/injuryProbe'
 import { recordGhostSeason } from '../game/engine/ghost'
 import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
@@ -744,6 +768,12 @@ interface GameStore {
   /** Resolve this season's annual set piece (#6). */
   resolveSetPiece: (choice: string) => void
   resolveDilemma: (choice: string) => void
+  /**
+   * L15 (FUTURES #15): this week's call for one injured player — sit him (the
+   * default) or play him hurt. Only a Questionable/Doubtful player on your club
+   * can be sent out; an Out (or IR) player is never a choice.
+   */
+  setInjuryCall: (playerId: string, call: InjuryCall) => void
   pickAmbition: (id: string) => void
   dropAmbition: (id: string) => void
   /** Accept/decline a stretch assignment (#8). */
@@ -799,6 +829,13 @@ interface GameStore {
   setStaffFocus: (staffId: string, focus: string) => void
   /** FUTURES 21: bring a former assistant (now a head coach or available) back onto your staff. */
   poachAssistant: (name: string, season: number) => void
+  // ── FUTURES #28 (C2): staff market actions ────────────────────────────────
+  /** Fill a vacant OC/DC chair from the best position coach, at rating −4 (his own seat opens). */
+  promoteInterim: (seat: 'off' | 'def') => void
+  /** Answer a contract-expiry offer: re-sign at the raise, or let him walk. */
+  resignStaff: (offerId: string, accept: boolean) => void
+  /** Answer a rival's poach offer: match the raise (block a lateral only), or let him go. */
+  matchStaffOffer: (offerId: string, match: boolean) => void
   restructurePlayer: (id: string) => void
   extendPlayer: (id: string) => void
   /** G2: negotiate an extension with a player's agent (negotiate rungs). */
@@ -1460,6 +1497,20 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const week = world.week
+    // L15 (FUTURES #15): a coached game was already played, so its injury calls
+    // are settled HERE — before the week's heal — so `healPlayers` sees the same
+    // `injured` set (and the same rng draw count) a Sit week would. The effect on
+    // the career (owner security, morale, the story) is applied with the rest of
+    // the week below.
+    let injuryRestore: InjuryRestoreResult | null = null
+    if (opts?.userSim) {
+      const g = world.schedule.find(
+        (x) => x.week === week && (x.homeId === career.teamId || x.awayId === career.teamId),
+      )
+      const isHome = !g || g.homeId === career.teamId
+      const won = isHome ? opts.userSim.homeScore > opts.userSim.awayScore : opts.userSim.awayScore > opts.userSim.homeScore
+      injuryRestore = restorePlayHurt(world, career, won)
+    }
     // L11 W2/W4: Waiver Tuesday — AI clubs add claims to entries from an earlier
     // week, then those entries resolve before any game is simulated. Snapshot the
     // open entries first so the result can be reported back to the user's inbox.
@@ -1510,6 +1561,11 @@ export const useGame = create<GameStore>((set, get) => ({
     let rbInjuryLine: string | null = null
     let keysRepDelta = 0
     if (userGame) {
+      // L15 (FUTURES #15): the fast path heals the club above (in `simWeek`), so a
+      // chosen "play" call goes out now — the injury moves to `hurtSaved` and the
+      // player carries reduced ratings for this game only. (A coached game already
+      // activated at kickoff and was settled at the top of this function.)
+      if (!opts?.userSim) activatePlayHurt(world, career)
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
       sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101, userCtx(career), weatherForGame(userGame))
@@ -1520,6 +1576,9 @@ export const useGame = create<GameStore>((set, get) => ({
       // R4: keep a season-scoped box score for the user's game.
       userGame.box = { players: boxPlayerLines(sim.box), team: boxTeamTotals(sim.box) }
       recordGameStats(world, sim, world.season, level)
+      // FUTURES #37: the user's game feeds the QB–receiver and adjacent-OL pair
+      // chemistry (its real shared reps); AI games accrue a nominal game in simWeek.
+      accrueGameChemistry(world, sim)
       growPlaybookFromGame(world, sim, practiceMasteryMult(career, world) * byeMasteryMult(career, world), career.teamId)
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
@@ -1577,6 +1636,16 @@ export const useGame = create<GameStore>((set, get) => ({
           }
         }
       }
+      // L15 (FUTURES #15): the played-hurt state lasts exactly one game. Put the
+      // injuries back (rolling the aggravation) once the game is recorded — after
+      // the user-game post-processing above, with the rest of the week's effects
+      // applied below. No-op when nothing was played hurt, so a normal week is
+      // byte-identical.
+      if (!opts?.userSim) {
+        const isHome = userGame.homeId === career.teamId
+        const won = isHome ? sim.homeScore > sim.awayScore : sim.awayScore > sim.homeScore
+        injuryRestore = restorePlayHurt(world, career, won)
+      }
     }
     // K1: fold this week's wrinkles into the film history, then clear the pick.
     if (career.wrinkles?.pick && career.wrinkles.pick.week === week) {
@@ -1600,7 +1669,7 @@ export const useGame = create<GameStore>((set, get) => ({
       set({ scoutingPoints: MAX_SCOUT_POINTS })
     }
     const c = get().career!
-    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, weekFlags: {} }
+    let nextCareer: CareerState = { ...c, week: world.week, season: world.season, weekFlags: {}, injuryCalls: undefined }
     // L12.9 H1: the weekly hours card is gone; its effects arrive passively.
     nextCareer = applyPassiveGains(nextCareer, world)
     // FUTURES 17: a Self-scout bye sets up a sharp read on next week's opponent.
@@ -1686,6 +1755,46 @@ export const useGame = create<GameStore>((set, get) => ({
         }
       }
     }
+    // L15 (FUTURES #15): this week's injury calls — the aggravation or "played
+    // through it" story, the owner's read in a push, the room's morale and the
+    // club's culture. Every effect was computed from that player's own injury,
+    // ratings and the club's medical staff (engine side); here they land on the
+    // existing security / reputation / morale / culture paths.
+    if (injuryRestore) {
+      const r = injuryRestore
+      for (const m of r.moments) nextCareer = logMoment(nextCareer, { week, text: m.text, tone: m.tone })
+      if (r.security) {
+        nextCareer = { ...nextCareer, jobSecurity: clamp(nextCareer.jobSecurity + r.security, 0, 100) }
+      }
+      if (r.leadership) {
+        nextCareer = {
+          ...nextCareer,
+          reputation: { ...nextCareer.reputation, leadership: clamp(nextCareer.reputation.leadership + r.leadership, 0, 100) },
+        }
+      }
+      if (r.morale.length) {
+        // Mutate in place: roster entries must stay the canonical world.players objects.
+        for (const m of r.morale) {
+          const p = world.players.find((x) => x.id === m.playerId)
+          if (p) p.morale = clamp(p.morale + m.delta, 1, 100)
+        }
+      }
+      if (r.culture !== 0) {
+        // Culture is character-derived, so it lands on the people it affects — the
+        // club's leaders (the same shape as a resolved dilemma card).
+        const leaders = [...(world.roster[career.teamId] ?? [])].sort((a, b) => b.ovr - a.ovr).slice(0, 8)
+        const step = r.culture * 0.6
+        for (const p of leaders) {
+          if (!p.character) continue
+          p.character = {
+            ...p.character,
+            maturity: clamp(p.character.maturity + step, 0, 100),
+            workEthic: clamp(p.character.workEthic + step, 0, 100),
+          }
+        }
+      }
+      for (const n of r.news) pushCareerNews(world, nextCareer, { category: 'Injury', headline: n.headline, body: n.body })
+    }
     // The week's ONE big decision (#2). Generated from the new week's state.
     nextCareer = { ...nextCareer, dilemma: currentDilemma(world, nextCareer) ?? undefined }
     // Offer a stretch assignment from the rung above (once a season).
@@ -1765,6 +1874,9 @@ export const useGame = create<GameStore>((set, get) => ({
       const game = world.schedule.find((g) => g.id === gd.gameId)
       if (keepPlays !== undefined && game && keepPlays < old.plays.length && !old.done) {
         const switches = (gd.callSwitches ?? []).filter((w) => w.at <= keepPlays)
+        // L15: keep the injured-availability state live across the rebuild (a
+        // no-op for a player whose injury was already moved to `hurtSaved`).
+        activatePlayHurt(world, career)
         const rebuilt = createGame(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, { ...oldCtx, callAll: gd.callStart }, old.weather)
         let ok = true
         let guard = 4000
@@ -1815,6 +1927,10 @@ export const useGame = create<GameStore>((set, get) => ({
     const plan = { off: { ...off }, def: { ...def } }
     setLivePlan({ teamId: career.teamId, off: plan.off, def: plan.def })
     applyUserCoaching(career)
+    // L15 (FUTURES #15): a chosen "play" call puts the player on the field for
+    // this game with reduced ratings (the game day is where the coached path
+    // activates; the fast path does it in `advanceWeek`).
+    activatePlayHurt(world, career)
     // L12.6: "call every play" only applies to a coached game, never to fast sim.
     const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, { ...ctx, callAll: career.callMode }, weatherForGame(game))
     // L11.5 Q2: run out the first drive so the user sees the game start.
@@ -1896,6 +2012,9 @@ export const useGame = create<GameStore>((set, get) => ({
 
   abandonGameDay: () => {
     // Nothing is recorded — the week is exactly as it was before kickoff.
+    // L15: an abandoned game never happened, so any playing-hurt state simply
+    // reverts (the injury comes back untouched — no aggravation).
+    normalizeInjuryState(world)
     setLivePlan(null)
     set({ gameDay: null, match: null, tick: get().tick + 1 })
   },
@@ -2074,6 +2193,9 @@ export const useGame = create<GameStore>((set, get) => ({
     // begins (the fast path never saw the camp deadline).
     finalizeFifthYearOptions(world, career)
     world.season += 1
+    // FUTURES #37: pair chemistry decays slowly in the offseason — a pair that
+    // spent the winter apart comes back a little less in sync.
+    decayChemistry(world)
     world.week = 1
     world.phase = 'regular'
     world.offseasonStage = undefined
@@ -2102,7 +2224,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // Backlog 193/185: a change of employer never strands a vacant coordinator.
     if (resolved.teamId !== career.teamId) backfillAICoordinators(world, resolved.teamId)
     // #11/#20: a fresh season question, clean moment log, and a new ambition slate.
-    const seasonCareer: CareerState = {
+    let seasonCareer: CareerState = {
       ...resolved,
       season: world.season,
       week: 1,
@@ -2140,6 +2262,32 @@ export const useGame = create<GameStore>((set, get) => ({
         p.holdout = { ...h, status: 'resolved', resolution: 'report' }
         p.morale = clamp(p.morale - 10, 1, 100)
       }
+    }
+    // ── FUTURES #28 (C2): staff rollover — market, contracts, poaching ────────
+    // Order per spec §6–9: refresh the market, then tick the user club's staff
+    // contracts (filing re-sign offers at expiry), then roll poach offers. All
+    // three are deterministic (hash-built) and add no rng() draw, so the play
+    // sim stays byte-identical.
+    refreshStaffMarket(world, world.season)
+    const staffTick = tickStaffContracts(world, seasonCareer)
+    seasonCareer = staffTick.career
+    const staffPoach = rollPoachOffers(world, seasonCareer)
+    seasonCareer = staffPoach.career
+    for (const off of staffTick.expired) {
+      pushCareerNews(world, seasonCareer, {
+        category: 'Career',
+        headline: `Contract expiring: ${off.name}`,
+        body: off.message,
+      })
+    }
+    if (staffPoach.offer) {
+      pushCareerNews(world, seasonCareer, {
+        category: 'League',
+        headline: staffPoach.offer.lateral
+          ? `${staffPoach.offer.name} — a lateral move you can block`
+          : `${staffPoach.offer.name} — a promotion you cannot block`,
+        body: staffPoach.offer.message,
+      })
     }
     set({
       // FUTURES #29: watched prospects whose class just turned current land on
@@ -2877,6 +3025,25 @@ export const useGame = create<GameStore>((set, get) => ({
     pushLedger(nextCareer, { kind: 'advice', name: card.title, pos: '—', college: '—', note: chosen.outcome })
     set({ career: withFlag(nextCareer, 'dilemma'), tick: get().tick + 1 })
     get().showToast(chosen.outcome)
+    get().save()
+  },
+
+  setInjuryCall: (playerId, call) => {
+    const career = get().career
+    if (!career) return
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+    if (!p) return
+    // Only a Questionable/Doubtful player is ever a choice: an Out (or IR) player
+    // cannot be sent out, and a healthy one has no call to make.
+    if (call === 'play') {
+      const status = gameStatus(p, world, career)
+      if (status !== 'Q' && status !== 'D') return
+    }
+    const calls: Record<string, InjuryCall> = { ...(career.injuryCalls ?? {}) }
+    // Sit is the default, so it clears the entry rather than storing a 'sit'.
+    if (call === 'play') calls[playerId] = 'play'
+    else delete calls[playerId]
+    set({ career: { ...career, injuryCalls: calls }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -4186,6 +4353,15 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('That candidate is no longer available.')
       return
     }
+    // FUTURES #28 (C2) §8: block an offer the staff budget cannot carry, unless the
+    // owner fund is open. The cheapest available seat is always reachable, so a
+    // vacant OC/DC can never be left unfillable.
+    if (!canAffordHire(world, career, salary)) {
+      get().showToast(
+        `Over budget — the owner must free up staff money before you can offer $${(salary / 1_000_000).toFixed(1)}M.`,
+      )
+      return
+    }
     const rng = makeRng(world.seed + world.season * 3607 + candidateId.length + Math.round(salary))
     // FUTURES 25: an owner-funded hire pulls harder, and is spent once it lands.
     const funded = ownerStaffFundOpen(career, world.season)
@@ -4199,7 +4375,7 @@ export const useGame = create<GameStore>((set, get) => ({
       funded ? OWNER_STAFF_FUND_INTEREST : 0,
     )
     if (res.signed) {
-      applyHire(world, career.teamId, candidate, salary, scheme)
+      const applied = applyHire(world, career.teamId, candidate, salary, scheme)
       if (funded) {
         const state = { ...meetingState(career) }
         state.staffFundUsed = true
@@ -4212,6 +4388,13 @@ export const useGame = create<GameStore>((set, get) => ({
       const treeNow = (career.tree ?? []).filter((e) => e.id !== candidateId)
       if (treeNow.length !== (career.tree ?? []).length) {
         set({ career: { ...career, tree: treeNow }, tick: get().tick + 1 })
+      }
+      // FUTURES #28 (C2) §7: replacing a coach mid-contract banks his buyout as dead
+      // staff money. Applied last so it rides on top of the sets above.
+      if (applied.deadMoney > 0) {
+        const cur = get().career ?? career
+        set({ career: addStaffDeadMoney(cur, world.season, applied.deadMoney), tick: get().tick + 1 })
+        get().showToast(`Buyout: $${(applied.deadMoney / 1_000_000).toFixed(1)}M in dead staff money.`)
       }
     } else {
       get().showToast(res.message)
@@ -4231,14 +4414,27 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = staff.findIndex((m) => m.id === staffId)
     if (idx < 0) return
     const m = staff[idx]
+    // FUTURES #28 (C2) §7: a mid-contract departure costs 50% of the remaining years,
+    // paid out over those seasons as dead staff money against the budget.
+    const buyout = m.contractYears > 0 ? staffBuyout(m) : 0
+    const buyoutYears = buyout > 0 ? Math.max(1, m.contractYears) : 0
     staff.splice(idx, 1)
     // Move them back to the open market. FUTURES 19: analysts return to their own
     // user-only pool so the Analytics market keeps listing them (never the AI's).
     const open = { ...m, teamId: null, status: 'Available' as const }
     if (m.role === ANALYTICS_ROLE) world.analyticsPool = [...(world.analyticsPool ?? []), open]
     else world.staffPool.push(open)
+    if (buyout > 0) {
+      const per = Math.floor(buyout / buyoutYears)
+      const rem = buyout - per * buyoutYears
+      let next = career
+      for (let k = 0; k < buyoutYears; k++) {
+        next = addStaffDeadMoney(next, world.season + k, per + (k === buyoutYears - 1 ? rem : 0))
+      }
+      set({ career: next, tick: get().tick + 1 })
+    }
     bump(set, get)
-    get().showToast(`${m.name} was let go as ${m.role}.`)
+    get().showToast(`${m.name} was let go as ${m.role}.${buyout > 0 ? ` Buyout: $${(buyout / 1_000_000).toFixed(1)}M dead money.` : ''}`)
     get().save()
   },
 
@@ -4285,6 +4481,118 @@ export const useGame = create<GameStore>((set, get) => ({
       body: res.message,
     })
     get().showToast(res.message)
+    get().save()
+  },
+
+  // ── FUTURES #28 (C2): staff market actions ─────────────────────────────────
+  // Promote interim: the best position coach fills a vacant OC/DC chair at rating
+  // −4 (his own seat opens, tenure resets). All gated at `decide`.
+  promoteInterim: (seat) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const coordRole = seat === 'off' ? 'Offensive Coordinator' : 'Defensive Coordinator'
+    if ((world.staff[career.teamId] ?? []).some((m) => m.role === coordRole)) {
+      get().showToast(`You already have a ${coordRole}.`)
+      return
+    }
+    const res = promoteInterimEngine(world, career.teamId, seat)
+    if (!res.member) {
+      get().showToast('No position coach is available to promote.')
+      return
+    }
+    bump(set, get)
+    pushCareerNews(world, career, {
+      category: 'Career',
+      headline: `${res.member.name} promoted interim ${coordRole}`,
+      body: `${res.member.name} takes the ${coordRole} chair at ${res.member.rating} OVR (edge ${res.edgeBefore} → ${res.edgeAfter}).${res.vacated ? ` His ${res.vacated} seat is now open.` : ''}`,
+    })
+    get().showToast(`${res.member.name} is your interim ${coordRole}.`)
+    get().save()
+  },
+
+  // Resolve a contract-expiry offer: re-sign at the asking raise, or let him walk.
+  resignStaff: (offerId, accept) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const offer = (career.staffOffers ?? []).find((o) => o.id === offerId && o.kind === 'resign')
+    if (!offer) {
+      get().showToast('That offer is no longer open.')
+      return
+    }
+    const staff = world.staff[career.teamId] ?? []
+    const m = staff.find((s) => s.id === offer.memberId)
+    const remaining = (career.staffOffers ?? []).filter((o) => o.id !== offerId)
+    if (accept && m) {
+      m.annual = offer.annual
+      m.contractYears = contractYearsForSalary(offer.annual)
+      set({ career: { ...career, staffOffers: remaining }, tick: get().tick + 1 })
+      get().showToast(`${m.name} re-signed: $${(offer.annual / 1_000_000).toFixed(1)}M × ${m.contractYears} years.`)
+    } else {
+      if (m) {
+        const i = staff.indexOf(m)
+        staff.splice(i, 1)
+        world.staffPool.push({ ...m, teamId: null, status: 'Available' as const })
+      }
+      set({ career: { ...career, staffOffers: remaining }, tick: get().tick + 1 })
+      get().showToast(`${offer.name} walks — the ${offer.role} seat is now open.`)
+    }
+    bump(set, get)
+    get().save()
+  },
+
+  // Answer a rival's poach offer. A lateral move you may block by matching the raise;
+  // a promotion you cannot block at all (NFL rule) — matching only softens the exit.
+  matchStaffOffer: (offerId, match) => {
+    const career = get().career
+    if (!career) return
+    if (accessFor(career, 'staff') !== 'decide') {
+      get().showToast('You do not make staff decisions at this rung.')
+      return
+    }
+    const offer = (career.staffOffers ?? []).find((o) => o.id === offerId && o.kind === 'poach')
+    if (!offer) {
+      get().showToast('That offer has expired.')
+      return
+    }
+    const staff = world.staff[career.teamId] ?? []
+    const m = staff.find((s) => s.id === offer.memberId)
+    if (match && offer.lateral === true && m) {
+      // A lateral move you can block: raise ≥ 15% and he stays.
+      const raise = Math.max(offer.annual, Math.round(m.annual * 1.15))
+      m.annual = raise
+      m.contractYears = contractYearsForSalary(raise)
+      set({ career: { ...career, staffOffers: (career.staffOffers ?? []).filter((o) => o.id !== offerId) }, tick: get().tick + 1 })
+      get().showToast(`Blocked the lateral move — ${m.name} stays at $${(raise / 1_000_000).toFixed(1)}M.`)
+      bump(set, get)
+      get().save()
+      return
+    }
+    // He leaves: he joins your coaching tree as a protégé with his role.
+    const dep = applyPoachDeparture(world, career, offer)
+    set({ career: dep.career, tick: get().tick + 1 })
+    if (dep.ok) {
+      pushCareerNews(world, dep.career, {
+        category: 'League',
+        headline: `${offer.name} leaves for ${world.byId[offer.fromTeamId ?? '']?.name ?? offer.fromTeamId ?? 'another club'}`,
+        body: `${offer.name} moves on as their ${offer.toRole ?? offer.role}. He is in your coaching tree — bring him back any time.`,
+      })
+      get().showToast(
+        match && offer.lateral !== true
+          ? `You cannot block a promotion — ${offer.name} leaves.`
+          : `${offer.name} moves on.`,
+      )
+    } else {
+      get().showToast(`${offer.name} is already gone.`)
+    }
+    bump(set, get)
     get().save()
   },
 
@@ -5107,10 +5415,16 @@ function applyRuntime(set: (partial: Partial<GameStore>) => void, snap: RuntimeS
 function restoreSaveData(p: SaveData): Partial<GameStore> {
   const careerWasScaled = p.world.ovrScaleV2 === true
   world = migrateWorld(p.world)
+  // L15 (FUTURES #15): a save written mid-game can carry a leaked playing-hurt
+  // state. The game day never survives a load, so the state reverts with the
+  // injury untouched — activation is not an outcome, and nothing was recorded.
+  normalizeInjuryState(world)
   // L12.16 H0: the league database and award history travel with the save.
   statDb = restoreStatsDb(p.statDb, world, !careerWasScaled)
   awards = restoreAwards(p.awards)
-  const career = reconcileCareerTeam(world, migrateCareer(p.career!, !careerWasScaled))
+  // L15: this week's injury calls belonged to the dropped game day, so they go
+  // with it; the report is rebuilt from the (restored) injuries on the new week.
+  const career = { ...reconcileCareerTeam(world, migrateCareer(p.career!, !careerWasScaled)), injuryCalls: undefined }
   return {
     career,
     activeTeamId: p.activeTeamId && world.byId[p.activeTeamId] ? p.activeTeamId : career.teamId,
@@ -9253,6 +9567,19 @@ export function penaltyProbe(games = 300) {
     falseStartAwayPerGame: per(fsAway),
     homeWinPct: +((homeWins / games) * 100).toFixed(1),
   }
+}
+
+/**
+ * Dev-only probe (L15 / FUTURES #15): the phase-A injury-decision report for the
+ * LIVE career, exposed to the browser as `__injuryCallProbe(n)` and to the node
+ * acceptance probe as `store.injuryCallProbe(n)`. The engine probe clones the
+ * world for every mutation, so this never perturbs the live career. `n` is the
+ * number of forced aggravation trials (default grade C).
+ */
+export function injuryCallProbe(n = 1200) {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  return injuryProbe(world, career, n)
 }
 
 /**

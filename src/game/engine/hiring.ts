@@ -110,6 +110,44 @@ function repAppeal(rep: Reputation): number {
 }
 
 /**
+ * Backlog 398: what a coach asks for from *your* club — his market annual scaled
+ * by how much he wants the destination (a weak program has to overpay).
+ * `salaryOffer / askingFor(...)` is the ratio the money curve is anchored to.
+ */
+function askingFor(dest: number, annual: number): number {
+  return Math.max(1, Math.round(annual * (1 + (100 - dest) / 200)))
+}
+
+/**
+ * Backlog 398: how much a dollar actually moves THIS coach (never a team average).
+ *
+ * - a stable per-person "money/ambition" trait from his id (0.88–1.12);
+ * - age: veterans take the last big deal, rookies are building (0.86–1.14);
+ * - rating: elite coaches are not bought — money moves them less than the
+ *   destination and your reputation, so cash alone can't land an 88+ name.
+ */
+export function moneyAppetite(member: StaffMember): number {
+  const trait = 0.88 + ((hash32(`cash|${member.id}`, 79) % 101) / 100) * 0.24
+  const age = clamp(1 + (member.age - 39) * 0.011, 0.86, 1.14)
+  const elite = member.rating >= 88 ? 0.74 : member.rating >= 82 ? 0.84 : member.rating >= 74 ? 0.94 : 1.04
+  return trait * age * elite
+}
+
+/**
+ * Backlog 398: the money curve. Continuous and monotonic in the offer, anchored
+ * to the asking price `r = offer / ask`:
+ *   r 0.70 → ≈ −12   (a real lowball still stings)
+ *   r 0.85 → ≈  −1   (just under what he wants)
+ *   r 1.00 → ≈  +9   (he gets his number)
+ *   r 1.30 → ≈ +24   (a clearly better deal)
+ *   r 1.50 → ≈ +31   (top of the slider — diminishing returns, never infinite)
+ * `66 − 156·e^{−r}` is concave, so each extra dollar past the ask buys less.
+ */
+function moneyCurve(r: number): number {
+  return 66 - 156 * Math.exp(-r)
+}
+
+/**
  * Compute a candidate's interest in joining your staff.
  * High-rated coaches are pickier; a strong destination and your reputation help.
  */
@@ -122,13 +160,20 @@ export function computeInterest(
 ): number {
   const dest = destinationAppeal(world, teamId)
   const you = repAppeal(rep)
-  // A coach wants: a good destination, a respected boss, and fair money.
-  const moneyPull = salaryOffer >= member.annual ? 12 : salaryOffer >= member.annual * 0.85 ? 4 : -12
+  // A coach wants: a good destination, a respected boss, and fair money. Money
+  // rises smoothly with the offer and keeps paying past the ask — scaled to him.
+  const ask = askingFor(dest, member.annual)
+  const moneyPull = clamp(moneyCurve(salaryOffer / ask) * moneyAppetite(member), -24, 34)
   // Elite coaches (85+) are hard to land without a strong profile.
   const elitism = member.rating >= 88 ? -18 : member.rating >= 80 ? -8 : member.rating >= 70 ? 0 : 8
   const interest =
     dest * 0.3 + you * 0.35 + moneyPull + elitism + (member.rating >= 85 && you < 55 ? -14 : 0) + 16
   return clamp(Math.round(interest), 2, 99)
+}
+
+/** Backlog 398: interest → the odds he signs (one definition, UI and engine). */
+export function hireProbability(interest: number, rating: number): number {
+  return clamp(interest / 100 - (rating - 75) * 0.004, 0.05, 0.95)
 }
 
 /** Candidates currently interested in your open role. */
@@ -146,7 +191,7 @@ export function openCandidates(
   ]
   const out: HireCandidate[] = []
   for (const m of pool.slice(0, 24)) {
-    const asking = Math.round(m.annual * (1 + (100 - destinationAppeal(world, teamId)) / 200))
+    const asking = askingFor(destinationAppeal(world, teamId), m.annual)
     const interest = computeInterest(world, teamId, rep, m, asking)
     out.push({ ...m, askingSalary: asking, interest, negotiationRound: 0 })
   }
@@ -175,7 +220,7 @@ export function attemptHire(
 ): HireResult {
   const interest = clamp(computeInterest(world, teamId, rep, candidate, salaryOffer) + interestBonus, 0, 99)
   // Convert interest to a hire probability.
-  const prob = clamp(interest / 100 - (candidate.rating - 75) * 0.004, 0.05, 0.95)
+  const prob = hireProbability(interest, candidate.rating)
   const roll = rng()
   if (roll < prob) {
     return { signed: true, candidate: { ...candidate, interest }, message: `${candidate.name} signed as ${candidate.role}.` }

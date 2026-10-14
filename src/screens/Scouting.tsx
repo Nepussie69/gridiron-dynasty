@@ -16,6 +16,7 @@ import { overallRep } from '../game/engine/career'
 import { CombineCard } from '../components/CombineCard'
 import { ScoutTravelCard } from '../components/ScoutTravelCard'
 import { DataTable, type Column } from '../components/DataTable'
+import { RowQuickActions, type QuickAction } from '../components/RowQuickActions'
 import {
   AccessBanner,
   Badge,
@@ -38,6 +39,8 @@ import {
 import { usePhone, useMediaQuery, WIDE_QUERY } from '../ui/hooks'
 
 const POS_FILTERS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
+/** Free character reads a week — the cap the store's `investigateCharacter` enforces. */
+const MAX_CHARACTER_READS = 2
 /** The four calls. Every chip is neutral; Pass is muted, never red. */
 const RECS: { id: Recommendation; label: string }[] = [
   { id: 'Blue Chip', label: 'Blue Chip' },
@@ -96,15 +99,23 @@ export function Scouting() {
 
   const locked = scoutLevel === 'locked'
   const charDoneOf = (p: DraftProspect) => !p.character || (p.characterReads ?? []).length >= CHARACTER_FACETS.length
+  // The two free reads the store hands out each week (gameStore.investigateCharacter).
+  const charsUsed = (career.weekFlags?.character ? 1 : 0) + (career.weekFlags?.character2 ? 1 : 0)
 
-  const quickMenu = (p: DraftProspect): MenuItem[] => {
+  /**
+   * The quick actions for one prospect — ONE source for both the row icon
+   * buttons (RowQuickActions) and the ⋯ menu, so the rules and the wording can
+   * never drift. Every handler is the store action the board already used.
+   */
+  const quickActions = (p: DraftProspect): QuickAction[] => {
     const noPts = points <= 0
     const charDone = charDoneOf(p)
-    const items: MenuItem[] = [
+    const charSpent = !charDone && charsUsed >= MAX_CHARACTER_READS
+    const actions: QuickAction[] = [
       {
         id: 'scout',
         label: 'Scout prospect',
-        description: locked ? 'Scouting is locked at this rung' : noPts ? 'No scouting points left this week' : 'Spends 1 scouting point · sharpens his range',
+        hint: locked ? 'Scouting is locked at this rung' : noPts ? 'No scouting points left this week' : 'Spends 1 scouting point · sharpens his range',
         icon: <Search size={16} />,
         disabled: locked || noPts,
         onSelect: () => scoutProspect(p.id),
@@ -112,9 +123,15 @@ export function Scouting() {
       {
         id: 'char',
         label: 'Character read',
-        description: locked ? 'Scouting is locked at this rung' : charDone ? 'Character fully uncovered' : 'Free · twice a week',
+        hint: locked
+          ? 'Scouting is locked at this rung'
+          : charDone
+            ? 'Character fully uncovered'
+            : charSpent
+              ? `Two character reads used this week (${MAX_CHARACTER_READS})`
+              : 'Free · twice a week',
         icon: <Phone size={16} />,
-        disabled: locked || charDone,
+        disabled: locked || charDone || charSpent,
         onSelect: () => investigateCharacter(p.id),
       },
     ]
@@ -122,10 +139,10 @@ export function Scouting() {
       const on = convicted.includes(p.id)
       const flagged = redFlagged.includes(p.id)
       const full = !on && convicted.length >= MAX_CONVICTION
-      items.push({
+      actions.push({
         id: 'conviction',
         label: on ? 'Remove conviction call' : 'Pound the table',
-        description: on
+        hint: on
           ? 'Take your conviction call back'
           : full
             ? `Conviction calls are full (${MAX_CONVICTION})`
@@ -134,6 +151,8 @@ export function Scouting() {
               : 'Your read the club must not ignore',
         icon: <Flame size={16} />,
         disabled: full || flagged,
+        pressed: on,
+        pressedInk: 'win',
         onSelect: () => toggleConviction(p.id),
       })
     }
@@ -142,10 +161,10 @@ export function Scouting() {
       const convict = convicted.includes(p.id)
       const full = !on && redFlagged.length >= MAX_RED_FLAGS
       const flaggable = isRedFlaggable(league, p.id)
-      items.push({
+      actions.push({
         id: 'redflag',
         label: on ? 'Clear the red flag' : 'Red flag him',
-        description: on
+        hint: on
           ? 'Put him back on the board'
           : full
             ? `Red flags are full (${MAX_RED_FLAGS})`
@@ -156,10 +175,33 @@ export function Scouting() {
                 : 'Take him off your club’s board',
         icon: <Flag size={16} />,
         disabled: full || convict || (!on && !flaggable),
+        pressed: on,
+        pressedInk: 'warn',
         onSelect: () => toggleRedFlag(p.id),
       })
     }
-    return items
+    return actions
+  }
+
+  /** The ⋯ menu keeps the full list; it is projected straight off quickActions(). */
+  const quickMenu = (p: DraftProspect): MenuItem[] =>
+    quickActions(p).map((a) => ({
+      id: a.id,
+      label: a.label,
+      description: a.hint,
+      icon: a.icon,
+      disabled: a.disabled,
+      onSelect: a.onSelect,
+    }))
+
+  /** Optional bulk action: spend this week's points on the least-known prospects. */
+  const bulkScoutCount = Math.min(5, Math.max(0, points))
+  const bulkScout = () => {
+    const picks = [...scoped]
+      .filter((p) => inProspectScope(career, p))
+      .sort((a, b) => (reads.get(a.id)?.confidence ?? 0) - (reads.get(b.id)?.confidence ?? 0))
+      .slice(0, bulkScoutCount)
+    for (const p of picks) scoutProspect(p.id)
   }
 
   const columns: Column<DraftProspect>[] = [
@@ -262,7 +304,12 @@ export function Scouting() {
       label: 'Actions',
       align: 'right',
       card: 'aside',
-      render: (p) => <OverflowMenu items={quickMenu(p)} label={`Quick actions for ${p.name}`} size="sm" />,
+      render: (p) => (
+        <span className="inline-flex items-center gap-1">
+          <RowQuickActions actions={quickActions(p)} subject={p.name} />
+          <OverflowMenu items={quickMenu(p)} label={`Quick actions for ${p.name}`} size="sm" />
+        </span>
+      ),
     },
   ]
 
@@ -419,6 +466,22 @@ export function Scouting() {
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
               <SectionTitle spacing="none">Class Board</SectionTitle>
               <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<Search size={14} aria-hidden />}
+                  disabled={locked || points <= 0}
+                  title={
+                    locked
+                      ? 'Scouting is locked at this rung'
+                      : points <= 0
+                        ? 'No scouting points left this week'
+                        : `Spends 1 point on each of the ${bulkScoutCount} least-known prospects on the board`
+                  }
+                  onClick={bulkScout}
+                >
+                  Scout top {bulkScoutCount} unknown
+                </Button>
                 {canConvictHere && (
                   <Badge tone="win"><Flame size={11} /> Conviction {convicted.length}/{MAX_CONVICTION}</Badge>
                 )}

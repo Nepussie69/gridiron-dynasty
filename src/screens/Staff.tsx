@@ -58,7 +58,9 @@ import {
   ANALYTICS_ROLE,
   DEF_SCHEMES,
   OFF_SCHEMES,
+  computeInterest,
   focusOptions,
+  hireProbability,
   isFrontOfficeRole,
   openCandidates,
   schemesForRole,
@@ -66,6 +68,7 @@ import {
 } from '../game/engine/hiring'
 import { ownerStaffBudgetBonus, ownerStaffFundOpen } from '../game/engine/ownerMeeting'
 import { ACCESS_META, type AccessLevel } from '../game/engine/access'
+import type { Reputation } from '../game/engine/career'
 import type { World } from '../game/engine/generate'
 import {
   COACH_UNIT,
@@ -241,6 +244,8 @@ function gateReason(level: AccessLevel): string {
 interface Ctx {
   world: World
   teamId: string
+  /** Your reputation, so the market can show live interest as the offer moves. */
+  rep: Reputation
   staff: StaffMember[]
   eff: CoachEffect
   /** The coordinator chair the user holds on this club (never vacant; backlog 193). */
@@ -451,6 +456,7 @@ export function Staff() {
   const ctx: Ctx = {
     world: league,
     teamId: activeTeamId,
+    rep: career.reputation,
     staff,
     eff,
     seat,
@@ -1753,14 +1759,17 @@ function MarketCard({
   const [scheme, setScheme] = useState(candidate.scheme)
   const [open, setOpen] = useState(false)
 
+  const salary = open ? offer : candidate.askingSalary
+  // Backlog 398: interest — and the odds he signs — move live with the offer.
+  const liveInterest = computeInterest(ctx.world, ctx.teamId, ctx.rep, candidate, salary)
+  const liveChance = hireProbability(liveInterest, candidate.rating)
   const interest =
-    candidate.interest >= 65
+    liveInterest >= 65
       ? { label: 'Keen', tone: 'win' as const }
-      : candidate.interest >= 40
+      : liveInterest >= 40
         ? { label: 'Warm', tone: 'neutral' as const }
         : { label: 'Cold', tone: 'warn' as const }
 
-  const salary = open ? offer : candidate.askingSalary
   const payrollAfter = ctx.payroll - (current?.annual ?? 0) + salary
   const headroom = staffBudget - payrollAfter
   const impact = staffChangeImpact(
@@ -1797,7 +1806,7 @@ function MarketCard({
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         <VerdictChip tone={interest.tone}>
-          {interest.label} {candidate.interest}%
+          {interest.label} {liveInterest}%
         </VerdictChip>
         {front ? (
           <span className="text-small text-muted">Focus: {candidate.focus ?? 'none'}</span>
@@ -1849,7 +1858,7 @@ function MarketCard({
         <Button variant="secondary" size="sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
           {open ? 'Hide offer' : 'Adjust offer'}
         </Button>
-        {candidate.interest < 15 ? (
+        {liveInterest < 15 ? (
           <Button variant="secondary" size="sm" disabled className="flex-1">
             Not interested
           </Button>
@@ -1900,6 +1909,13 @@ function MarketCard({
               <span>Above ask</span>
             </span>
           </label>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[var(--r-md)] bg-surface-2 px-3 py-2 text-small">
+            <span className="text-muted">With this offer</span>
+            <span className="flex items-center gap-2">
+              <VerdictChip tone={interest.tone}>Interest {liveInterest}%</VerdictChip>
+              <span className="font-600 text-ink tnum">{Math.round(liveChance * 100)}% to sign</span>
+            </span>
+          </div>
         </div>
       )}
     </Card>

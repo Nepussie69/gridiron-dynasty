@@ -21,6 +21,54 @@ export interface PlayerBoxScore {
 }
 
 /**
+ * Boxdef: combined defensive impact, used to rank the box-score Defense table so
+ * a sack / interception / tackle-for-loss / pressure maker can never be pushed
+ * out by a pure tackle compiler. Sacks and takeaways weigh most, then TFL, then
+ * pressures, then plain stops.
+ */
+export function defenseImpact(l: GameStatLine): number {
+  return (l.tackles ?? 0)
+    + (l.defSacks ?? 0) * 4
+    + (l.defInts ?? 0) * 4
+    + (l.tfl ?? 0) * 1.5
+    + (l.prs ?? 0) * 0.75
+    + (l.qbHits ?? 0)
+    + (l.hurries ?? 0) * 0.75
+    + (l.defTD ?? 0) * 6
+    + (l.missedTackles ?? 0) * 0.5
+}
+
+/**
+ * Boxdef: true when a defender recorded any front-seven / impact stat, so the
+ * Defense table lists every sack, TFL, INT, pressure and tackling defender —
+ * not just the tackle leaders. Coverage-only (targets, no stop) lines stay in
+ * the Coverage table.
+ */
+export function hasDefenseStat(l: GameStatLine): boolean {
+  return (l.tackles ?? 0) > 0
+    || (l.tfl ?? 0) > 0
+    || (l.defSacks ?? 0) > 0
+    || (l.defInts ?? 0) > 0
+    || (l.defTD ?? 0) > 0
+    || (l.prs ?? 0) > 0
+    || (l.qbHits ?? 0) > 0
+    || (l.hurries ?? 0) > 0
+    || (l.missedTackles ?? 0) > 0
+}
+
+/**
+ * Boxdef: the rows the box-score Defense table shows for one club — every
+ * defender with any defensive stat, ranked by combined impact. Never capped, so
+ * no sack / INT / TFL / pressure maker is ever hidden. Shared by MatchView and
+ * the verification probe so the two can never drift.
+ */
+export function defenseTableRows(box: PlayerBoxScore[], teamId: string): PlayerBoxScore[] {
+  return box
+    .filter((b) => b.teamId === teamId && hasDefenseStat(b.line))
+    .sort((a, b) => defenseImpact(b.line) - defenseImpact(a.line) || (b.line.tackles ?? 0) - (a.line.tackles ?? 0))
+}
+
+/**
  * L11.5 Q7: standard NFL passer rating from any passing line (game or season).
  * Returns 0 when the player has no attempts.
  */
@@ -154,8 +202,11 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       }
       if (play.sackId) {
         add(play.sackId, def, 'defSacks', 1)
-        // Q7: a sack is a tackle for loss.
+        // Q7: a sack is a tackle for loss. Boxdef: NFL scoring also counts the
+        // sack as a solo tackle, so the sack-maker appears in the tackle total
+        // (this is why pressure makers were showing SCK but TCK 0 before).
         add(play.sackId, def, 'tfl', 1)
+        add(play.sackId, def, 'tackles', 1)
       }
       if (play.intId) {
         add(play.intId, def, 'defInts', 1)
@@ -170,8 +221,14 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'recTD', 1)
       }
       // L12 S3: a completion is stopped by one defender (no credit on a score —
-      // the resolver already withholds tackleIds there).
-      if (isComp && play.tackleIds?.length) add(play.tackleIds[0], def, 'tackles', 1)
+      // the resolver already withholds tackleIds there). Boxdef: a catch stopped
+      // behind the line of scrimmage (a screen / bubble that loses ground) is a
+      // tackle for loss, derived from the play's negative gain, exactly like a
+      // stuffed run — the engine does not stamp TFL itself.
+      if (isComp && play.tackleIds?.length) {
+        add(play.tackleIds[0], def, 'tackles', 1)
+        if ((play.yards ?? 0) < 0) add(play.tackleIds[0], def, 'tfl', 1)
+      }
       // R5: the defender who whiffed is charged a missed tackle; the carrier
       // who broke it is credited with a forced miss.
       if (play.missedTackleIds?.length) for (const id of play.missedTackleIds) add(id, def, 'missedTackles', 1)
