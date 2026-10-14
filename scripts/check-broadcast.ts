@@ -2637,8 +2637,11 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         const sp = (s: number) => { const p0 = posAt(a.path, Math.max(0, s - 0.05) / D); const p1 = posAt(a.path, Math.min(D, s + 0.05) / D); return { v: Math.hypot(p1.x - p0.x, p1.y - p0.y) / 0.1, vx: (p1.x - p0.x) / 0.1 } }
         if (posAt(a.path, th.t).x - posAt(a.path, 0).x < 4) continue
         // smoothness: no stop-and-go between snap + 0.3 s and the throw (+0.4 s for a non-target)
-        routes++
         const tEnd = Math.min(D - 0.1, th.t * D + (k === tgt ? 0 : 0.4))
+        // (a back who chips a rusher, a screen's stalk blocker: he stops because he is blocking - that is an
+        // engagement, not a route with a stop in it)
+        if ((anim.engagements ?? []).some((e) => (e.kind === 'block' || e.kind === 'chip' || e.kind === 'double') && (e.a === k || e.b === k) && e.t1 * D > 0.44 && e.t0 * D < tEnd)) continue
+        routes++
         let low = false
         let sg = false
         for (let s = 0.44; s <= tEnd; s += 0.05) { const v = sp(s).v; if (v < 1.5) low = true; else if (low && v > 3) sg = true }
@@ -2819,7 +2822,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const bad: string[] = []
     const fooled = { y: 0, n: 0, honest: 0, honestN: 0 }
     const steer = { y: 0, n: 0 }
-    games6d(10, 101, (play, anim, actors) => {
+    games6d(16, 101, (play, anim, actors) => {
       const los = 10 + play.startYard
       const ev = anim.events ?? []
       const feat = play.featured
