@@ -45,6 +45,7 @@ import {
   COL_TGT,
   type StatCol,
 } from '../components/statsColumns'
+import { PlayerHoverCard } from '../components/PlayerHoverCard'
 import type { CareerDatabase } from '../game/engine/statsDb'
 import type { World } from '../game/engine/generate'
 import { emptySeason, type Player, type Position, type SeasonStats, type StatLevel } from '../game/types'
@@ -578,7 +579,13 @@ export function StatsHub() {
                       >
                         <td className={cn('px-2 font-cond text-label tnum text-muted', rowPad)}>{idx + 1}</td>
                         <td className={cn('sticky left-0 z-10 whitespace-nowrap px-2', rowPad, cellBg)}>
-                          <span className={cn('text-ink', sortKey === 'name' ? 'font-700' : 'font-600')}>{r.name}</span>
+                          {r.player ? (
+                            <PlayerHoverCard player={r.player} info={false}>
+                              <span className={cn('text-ink', sortKey === 'name' ? 'font-700' : 'font-600')}>{r.name}</span>
+                            </PlayerHoverCard>
+                          ) : (
+                            <span className={cn('text-ink', sortKey === 'name' ? 'font-700' : 'font-600')}>{r.name}</span>
+                          )}
                         </td>
                         <td className={cn('whitespace-nowrap px-2', rowPad, sortKey === 'team' && 'font-600 text-ink')}>
                           <span className="inline-flex items-center gap-1.5 text-ink-2">

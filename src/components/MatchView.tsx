@@ -24,6 +24,7 @@ import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { effRating } from './animRatings'
 import { TeamHoverCard } from './TeamHoverCard'
+import { PlayerHoverCard } from './PlayerHoverCard'
 import { Badge, BroadcastScope, Button, ConfirmSheet, DivergingMeter, IconButton, OptionCard, OptionGroup, OverflowMenu, ScoreBlock, TeamCrest, VerdictChip, type MenuItem } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
 import { challengeThreshold, type ChallengeState, type PlayReview } from '../game/engine/review'
@@ -2113,7 +2114,13 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
               <tr key={b.playerId} className="text-ink-2">
                 <td className="truncate pr-1 align-top lg:overflow-visible lg:whitespace-normal" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
                   {jersey != null && <span className="mr-1 inline-block min-w-6 text-muted">#{jersey}</span>}
-                  {b.name}
+                  {p ? (
+                    <PlayerHoverCard player={p} info={false}>
+                      <span>{b.name}</span>
+                    </PlayerHoverCard>
+                  ) : (
+                    b.name
+                  )}
                   {tag && (
                     <span className="ml-1 rounded bg-[var(--team-soft)] px-1 py-px font-cond text-label font-700 uppercase tracking-wide text-[var(--team)]">
                       {tag}
