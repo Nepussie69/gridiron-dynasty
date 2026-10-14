@@ -625,10 +625,13 @@ function backCheckPath(path: WP[], plan: ReadPlan): WP[] | null {
 
 /** A completion placed past his reach: his line bends toward the ball over the last 0.45 s
  *  and back onto it over the next 0.45 s (the catch time, the run after it and the end spot unchanged). */
+/** Seconds each way of the line adjust: 0.45 s, longer for a big shift so the lateral speed it adds stays <= ~4.3 yd/s (a 2.6 yd shift in 0.45 s added 8+ yd/s: a 13 yd/s spike at the catch). */
+const adjustSec = (pl: { sx: number; sy: number }): number => clampN((1.5 * Math.hypot(pl.sx, pl.sy)) / 4.3, 0.45, 0.9)
+
 function adjustPath(path: WP[], plan: ReadPlan): WP[] {
   const pl = plan.place!
   const C = plan.catchT!
-  const W = 0.45 / plan.D
+  const W = adjustSec(pl) / plan.D
   const a = Math.max(0, C - W)
   const b = Math.min(1, C + W)
   const out: WP[] = path.filter((w) => w.t < a - 1e-9).map((w) => ({ ...w }))
@@ -675,7 +678,7 @@ function placeBall(anim: PlayAnim, play: Play, plan: ReadPlan): WP[] {
     // Pulled into his hands over 0.1 s, then carried (the shadow of his path).
     const tp = pathOf(anim, pl.key)!
     const t2 = Math.min(1, C + 0.1 / D)
-    const tEnd = pl.sx || pl.sy ? Math.min(1, C + 0.46 / D) : t2
+    const tEnd = pl.sx || pl.sy ? Math.min(1, C + (adjustSec(pl) + 0.01) / D) : t2
     const mid: WP[] = []
     for (let t = t2; t <= tEnd + 1e-9; t += 0.04 / D) { const p = posAt(tp, t); mid.push({ t, x: p.x, y: p.y }) }
     const after = ball.slice(iC + 1).filter((w) => w.t > (mid[mid.length - 1]?.t ?? t2) + 1e-9)

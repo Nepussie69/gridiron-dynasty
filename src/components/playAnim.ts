@@ -877,6 +877,16 @@ class Mover {
           this.t += k[k.length - 1].t
           this.x = k[k.length - 1].x
           this.y = k[k.length - 1].y
+          // (the braking carried him past the first knots of the line: he drives out to the first knot AHEAD
+          // of him along the line's overall direction - never back to one he has overrun, that was a weave)
+          const ox = pts[pts.length - 1].x - pts[0].x
+          const oy = pts[pts.length - 1].y - pts[0].y
+          const ol = Math.hypot(ox, oy)
+          if (ol > 1e-6) {
+            let sk = 0
+            while (sk < pts.length - 1 && ((pts[sk].x - this.x) * ox + (pts[sk].y - this.y) * oy) / ol < 0.3) sk++
+            if (sk) pts = pts.slice(sk)
+          }
         }
         v0 = vc
       } else if (hl > 1e-6 && nl > 1e-6 && cosT < TURN_COS) {
@@ -2838,7 +2848,8 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   const cPt = posAt(m[carrier].path, contactT)
   // animflow r5: with real acceleration caps the credited man is often a beat
   // late; on a run he still makes it (hitAndRide meets the pile where it is).
-  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2)
+  // (a forced out-of-bounds end needs a man who can really get there: the credited one gets no extra slack)
+  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2, oobRun ? TACKLE_SLACK_PASS : TACKLE_SLACK)
   // A touchdown is chased, never forced: the closest man just runs with him.
   // animflow r6c: a credited man who shed inside the tackle phase closes from his rip.
   let hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
@@ -3778,11 +3789,13 @@ function natTo(mv: Mover, pt: Pt, fromSec: number): number {
 /** The tackler who can make the contact in time: the credited man when he can, else the quickest. */
 /** How late (s) the sim's credited tackler may be and still be drawn making the tackle. */
 const TACKLE_SLACK = 1.0
-function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number): string {
+/** A catch-and-run gives the credited man less slack: every beat he is late the carrier is slowed or bowed wide to wait for him, and that reads as sideways running / a crawl. */
+const TACKLE_SLACK_PASS = 0.6
+function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number, slack = TACKLE_SLACK): string {
   const cand = keys.filter((k) => m[k]).map((k) => ({ k, nat: natTo(m[k], c, fromSec) })).sort((a, b) => a.nat - b.nat)
   if (!cand.length) return keys[0]
   const pk = prefer ? cand.find((x) => x.k === prefer) : undefined
-  if (pk && pk.nat <= window + TACKLE_SLACK) return pk.k
+  if (pk && pk.nat <= window + slack) return pk.k
   return cand[0].k
 }
 
@@ -4200,11 +4213,13 @@ function resolveCarry(opts: {
   // 5-15 yd off a catch tackled at once is not drawn diving at nobody; the man who arrives first is.
   // (a catch tackled within a couple of yards of where he took it: he picks his way at a crawl, down to
   // 0.12 x his top, so the nearest man can arrive; a longer run slows to 0.32 x at most)
-  const kMin = total < 3 ? 0.12 : 0.32
+  // (a man catching on the run is never slowed to a crawl from 9 yd/s in one stride: a long run keeps >= 0.6 x his top,
+  // and the credited tackler is judged on that, so the pace he is drawn at is the pace the window assumed)
+  const kMin = total < 3 ? 0.12 : cV0 > 6 ? 0.6 : 0.32
   const slowNat = opts.northSouth && pre.length
     ? timedLine([cPos, ...pre], { top: carrier.pace.top * kMin, acc: carrier.pace.acc }, { v0: Math.min(cV0, carrier.pace.top * kMin), stop: false }).slice(-1)[0]?.t ?? 0
     : Infinity
-  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, Math.min(preNat + (opts.northSouth ? 2.0 : 1.4), slowNat + 0.3))
+  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, Math.min(preNat + (opts.northSouth ? 2.0 : 1.4), slowNat + 0.3), opts.northSouth ? TACKLE_SLACK_PASS : TACKLE_SLACK)
   const need = natTo(m[tk], c, fromSec)
   if (need > preNat + 0.05 && pre.length && opts.northSouth) {
     // A catch-and-run stays north-south: he runs it slower (picking his way,
@@ -5426,7 +5441,11 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       catchV0 = carrySpeed(m[tgt])
     }
     if (isTD) {
-      m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: false, pivot: true })
+      // (a score caught at the goal line turns into the end zone: the first leg runs a couple of yards in with a
+      // lateral drift of at most half its length - not 7 yd sideways for 4 downfield)
+      const tdX = clampX(Math.max(endX, catchPt.x + 3))
+      const tdLat = 0.5 * (tdX - catchPt.x)
+      m[tgt].run([{ x: tdX, y: clampY(catchPt.y + clampN(endY - catchPt.y, -tdLat, tdLat)) }], { v0: catchV0, stop: false, pivot: true })
       // animflow r6c2 (297): through the goal line at speed; the coverage takes
       // real pursuit angles (the fast men close, the rest angle at the pylon).
       runThroughGoal(m[tgt], 110, 1)
