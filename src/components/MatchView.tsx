@@ -30,6 +30,7 @@ import { challengeThreshold, type ChallengeState, type PlayReview } from '../gam
 import { ReviewCard } from './ReviewCard'
 import BroadcastBoundary from './broadcast/BroadcastBoundary'
 import { QbConeSvg } from './broadcast/visionConeSvg'
+import { QbReadsSvg } from './broadcast/qbReadsSvg'
 import { buildLivePlay, createLiveBroadcast, latchLiveView, reportFallback, useLiveView, type LiveBroadcast } from './broadcast/liveView'
 import { autoStartLevel } from './broadcast/quality'
 import { deviceKey, qbConeOn, setAutoQState, useViewSettings } from './broadcast/viewSettings'
@@ -1003,6 +1004,9 @@ export function MatchView() {
                   </g>
                 )
               })}
+
+              {/* the QB's reads: shoulders through the progression; the eye-jumper's eyes (qbReads.ts) */}
+              {anim && <QbReadsSvg play={play} anim={anim} t={t} mx={mx} qb={actorMap?.get('qb')} />}
 
               {/* the QB's throwing motion: wind-up, over the top, follow-through (animflow r3) */}
               {anim && (() => {
