@@ -749,7 +749,7 @@ function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; vE
 /** cos of the turn angle that counts as a plant (≈ 40°). */
 const TURN_COS = Math.cos(0.7)
 /** animflow r8: braking rate (yd/s^2) of a planted turn out of a catch (an NFL plant-and-cut decelerates harder than it accelerates). */
-const PIVOT_DECEL = 8
+const PIVOT_DECEL = 10.5
 /** animflow r5: share of the cornering speed kept through a cut (0 = the old stop at every corner). */
 const CORNER_KEEP = 1
 
@@ -2362,12 +2362,17 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   if (jet) f.rb = { x: jetMeshX, y: clampY(MID_Y - side0 * 6.5), side: 'off', role: carRole }
   const m = startMovers(f, ctx)
   recSnap(los)
-  const wide = /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
+  // animflow r8 ("still runs sideways"): a run the sim ends out of bounds is bounced to the edge BEHIND the
+  // line (the lateral travel is spent there, like a stretch / toss) and goes up the sideline past it - it
+  // used to cross the line at the middle and run 20+ yd sideways across the field to the touchline.
+  const oobEarly = !!play.outOfBounds && !play.turnover && 10 + play.endYard < 110
+  const wide = oobEarly || /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
   const power = /Power|Counter|Trap|Iso|Dive/.test(play.concept)
   const side = hash(seed) < 0.5 ? -1 : 1
   // Inside holes sit between the guards and tackles (NFL R4: inside runs cross
   // the line ~1.5 yd from the ball); designed outside runs bend to the edge.
-  const holeY = MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
+  const edgeIn = 2.5 + hash(seed + 1) * 0.8
+  const holeY = oobEarly ? (side < 0 ? edgeIn : FIELD_H - edgeIn) : MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
   const endX = clampX(10 + play.endYard)
   const fumble = !!play.turnover
   // ── the carrier's line (animflow r4: NFL tracking targets, logs/nfl-motion-reference.out) ──
@@ -3772,7 +3777,7 @@ function natTo(mv: Mover, pt: Pt, fromSec: number): number {
 
 /** The tackler who can make the contact in time: the credited man when he can, else the quickest. */
 /** How late (s) the sim's credited tackler may be and still be drawn making the tackle. */
-const TACKLE_SLACK = 0.6
+const TACKLE_SLACK = 1.0
 function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number): string {
   const cand = keys.filter((k) => m[k]).map((k) => ({ k, nat: natTo(m[k], c, fromSec) })).sort((a, b) => a.nat - b.nat)
   if (!cand.length) return keys[0]
@@ -5496,7 +5501,10 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   // A sack takes 2.5-3.5 s of real time: give the pocket a realistic duration so
   // the recorded rusher can actually get home (a 1.7 s drop would make any rush
   // arrive "late"). The drop shape and the final spot are unchanged.
-  const pocketT = clampN(2.3 + (los - endX) * 0.09, 2.3, 3.5)
+  // animflow r8: ...and long enough for the recorded sacker to be there even when he is a man the
+  // blitz package never sent (a corner credited with the sack starts 20 yd wide: his run takes what it takes).
+  const rushNeed = rusherKey && m[rusherKey] ? natTo(m[rusherKey], { x: endX, y: MID_Y }, 0) * 1.3 + 0.4 : 0
+  const pocketT = clampN(Math.max(2.3 + (los - endX) * 0.09, rushNeed), 2.3, 5.2)
   // animflow round 2: a real drop first (done ~1.2 s), a set with his feet
   // alive while he looks downfield, then the escape attempt into the sack spot.
   const dropPt: Pt = { x: f.qb.x - (snapK === 'under' ? 6 : snapK === 'pistol' ? 3.2 : 2.6), y: MID_Y }
