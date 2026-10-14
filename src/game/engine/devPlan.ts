@@ -199,13 +199,18 @@ export function autoFocusFor(p: Player): DevFocusId {
  * Focused rating points earned this season. Tied directly to the playing-time
  * experience score (a bench player earns nothing) and boosted by a strong
  * development program — i.e. the position-coach specialties. Deterministic.
+ *
+ * FUTURES #28: `boost` is the extra focus points from the specific position
+ * coach in that player's seat (staffMarket.boostPointsFor). It rides the same
+ * path, is capped at `MAX_FOCUS_BONUS`, and adds no new coverage — a player with
+ * no playing time still earns nothing.
  */
-export function focusPointsFor(experience: number, program: number): number {
+export function focusPointsFor(experience: number, program: number, boost = 0): number {
   if (experience < 0.3) return 0
   let pts = 1
   if (experience >= 0.55) pts += 1
   if (program >= 1.06) pts += 1
-  return pts
+  return Math.min(MAX_FOCUS_BONUS, pts + Math.max(0, Math.round(boost)))
 }
 
 /**

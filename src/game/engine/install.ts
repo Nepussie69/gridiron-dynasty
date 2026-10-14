@@ -11,6 +11,7 @@
 import type { CareerState } from '../types'
 import type { World } from './generate'
 import { capabilities, isHeadCoach } from './capabilities'
+import { coordinatorTeachingScale } from './staffMarket'
 
 export type InstallPlan = 'lean' | 'full'
 
@@ -66,8 +67,10 @@ export function installBonus(career: CareerState, world: World): { off: number; 
   if (!install || install.season !== world.season) return { off: 0, def: 0 }
   const edge = installEdge(install.plan, world.week)
   const sides = installSides(career)
+  // FUTURES #28 §4: when the user has an install plan for a side, the coordinator's
+  // teaching scales that side's edge (×0.8–1.2). No coordinator → ×1 (unchanged).
   return {
-    off: sides.includes('off') ? edge : 0,
-    def: sides.includes('def') ? edge : 0,
+    off: sides.includes('off') ? edge * coordinatorTeachingScale(world, career.teamId, 'off') : 0,
+    def: sides.includes('def') ? edge * coordinatorTeachingScale(world, career.teamId, 'def') : 0,
   }
 }

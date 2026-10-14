@@ -10,7 +10,8 @@ import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
 import { nextClassCount, nextClassSeed, promoteNextClass } from './futureClasses'
-import { applyDevFocus, focusPointsFor } from './devPlan'
+import { applyDevFocus, focusPointsFor, devGroupFor } from './devPlan'
+import { boostPointsFor, groupDevMultiplier } from './staffMarket'
 import { mentorGrowthBonus } from './lockerRoom'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
 import type { CareerDatabase } from './statsDb'
@@ -95,7 +96,12 @@ export function developPlayers(
     // Staff quality changes how fast young players grow and how slowly vets decline.
     // Character (hidden) is the second lever: motor and maturity decide whether
     // the talent actually arrives. It never touches current ratings directly.
-    const dev = (p.teamId ? coachEffect(world, p.teamId).development : 1) * (p.character ? devModifier(p.character) : 1)
+    // FUTURES #28: the club's own position coaches redistribute development between
+    // groups (`groupDevMultiplier` deviates each group around the club's mean).
+    const dev =
+      (p.teamId
+        ? coachEffect(world, p.teamId).development * groupDevMultiplier(world, p.teamId, devGroupFor(p.pos))
+        : 1) * (p.character ? devModifier(p.character) : 1)
     const growth = Math.max(0, p.pot - p.ovr)
     // D2: growth for young players is earned on the field, not handed out by age.
     const experience = p.age <= 26 ? experienceScore(world, p, psIds) : 0
@@ -141,7 +147,9 @@ export function developPlayers(
     // only to the user's club and only when a focus is set, so AI development and
     // calibration are untouched. Deterministic: no `rng()` draw is added here.
     if (user && p.teamId === user.teamId && p.age <= 26 && p.devFocus) {
-      applyDevFocus(p, focusPointsFor(experience, dev))
+      // FUTURES #28: the specific position coach in the player's seat adds focus
+      // points (0–2), capped by MAX_FOCUS_BONUS inside focusPointsFor.
+      applyDevFocus(p, focusPointsFor(experience, dev, boostPointsFor(world, p.teamId, p.pos)))
     }
 
     // Bust risk: a player who never got the motor can stall out. Generated
