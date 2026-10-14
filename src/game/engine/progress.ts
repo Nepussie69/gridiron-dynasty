@@ -1,14 +1,14 @@
 import type { CareerState, Contract, Player, Position, Recommendation, SeasonStats } from '../types'
-import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT } from './cap'
+import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT, minSalary, deadMoney } from './cap'
 import { coachEffect } from './coaching'
-import { generateProspectClass, indexPlayers, type World } from './generate'
+import { generateProspectClass, generateStreetPool, indexPlayers, type World } from './generate'
 import { depthAt, STARTERS } from './depth'
 import { coverageGrade, passerRating } from './stats'
 import { ledgerFreeAgent } from './picks'
 import { unscaleOvr } from './ovrScale'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
-import { clamp, makeRng, rpick } from './rng'
+import { clamp, hash32, makeRng, rpick } from './rng'
 import { nextClassCount, nextClassSeed, promoteNextClass } from './futureClasses'
 import { applyDevFocus, focusPointsFor, devGroupFor } from './devPlan'
 import { boostPointsFor, groupDevMultiplier } from './staffMarket'
@@ -505,15 +505,38 @@ export function trimNflRosters(world: World) {
       roster.splice(idx, 1)
       counts[p.pos] -= 1
       p.teamId = null
-      p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+      p.faWeeks = 0
+      p.contract = voidContract(p.contract)
       world.freeAgents.push(p)
     }
   }
+  balanceStreetPool(world)
 }
 
 /** Market price for a free agent in a given season (tracks cap growth + era drift). */
 export function marketPrice(p: Player, season: number, posBias = 1): number {
   return Math.round((marketAAV(p.ovr, p.pos, p.age) * capScale(season) * posBias) / 100_000) * 100_000
+}
+
+/**
+ * Backlog 408 (2c): a free agent's asking price falls the longer he sits
+ * unsigned. Fringe bodies reach the veteran minimum within a few weeks; elite
+ * vets hold out (they never drop below a majority of market) while a starter's
+ * ask erodes gradually. Per player — age and rating set both the horizon and
+ * the floor, so there is no league-wide average.
+ */
+export function freeAgentAsk(p: Player, season: number, faWeeks = 0, posBias = 1): number {
+  const base = marketPrice(p, season, posBias)
+  const min = minSalary(Math.max(p.age - 22, 0))
+  const elite = p.ovr >= 85
+  const starter = p.ovr >= 75
+  // Weeks to fall most of the way to the floor; elite vets hold out longest.
+  const horizon = elite ? 15 : starter ? 8 : 4
+  const holdFrac = elite ? 0.55 : starter ? 0.4 : 0.05
+  const t = clamp(faWeeks / horizon, 0, 1)
+  const ease = t * t * (3 - 2 * t) // smoothstep
+  const frac = 1 - (1 - holdFrac) * ease
+  return Math.max(min, Math.round((base * frac) / 1e5) * 1e5)
 }
 
 /**
@@ -531,7 +554,8 @@ export function freeAgentContract(
   askMult = 1,
   discountPct = 0,
 ): Contract {
-  const market = annualOverride ?? marketPrice(p, season)
+  // Backlog 408 (2c): the ask falls week by week while he is unsigned.
+  const market = annualOverride ?? freeAgentAsk(p, season, p.faWeeks ?? 0)
   // L12.11: the user's Negotiation skill shaves the ask (AI callers use 1).
   // L12.9 K2: a winning-culture discount also comes off the asking price.
   const annual = annualOverride != null ? market : Math.round((market * askMult * (1 - discountPct / 100)) / 1e5) * 1e5
@@ -642,7 +666,8 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
           roster.splice(idx, 1)
           counts[release.pos] -= 1
           release.teamId = null
-          release.contract = { ...release.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+          release.faWeeks = 0
+          release.contract = voidContract(release.contract)
           world.freeAgents.push(release)
         }
         const bias = world.era?.positionBias?.[cand.pos] ?? 1
@@ -662,6 +687,139 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
   // Z1c: the X1 top-up can push a roster past 53; trim again at the very end.
   trimNflRosters(world)
   // Z1b: adopt any newly signed players into `world.players`.
+  indexPlayers(world)
+}
+
+/** Backlog 408 (2d): a released player keeps no contract; his dead money stays
+ *  with the old club. */
+function voidContract(c: Contract): Contract {
+  return { ...c, years: 0, length: 0, base: [0], signingBonus: 0, proration: 0, guaranteed: 0, capHit: 0, annual: 0 }
+}
+
+/** The street pool's realistic in-season band (2a). */
+const STREET_MIN = 280
+const STREET_MAX = 420
+
+/**
+ * Backlog 408 (2c): advance the unsigned clock. Every free agent gains a week;
+ * a 34+ vet unsigned by midseason may retire (hash-based, per player's age and
+ * rating, so a 36-year-old backup hangs it up far more often than a 34-year-old
+ * starter).
+ */
+function tickUnsignedMarket(world: World) {
+  const keep: Player[] = []
+  for (const p of world.freeAgents) {
+    p.faWeeks = (p.faWeeks ?? 0) + 1
+    if (p.age >= 34 && world.week >= 9) {
+      const base = p.ovr >= 85 ? 6 : p.ovr >= 75 ? 11 : p.ovr >= 65 ? 16 : 22
+      const risk = Math.min(65, base + (p.age - 34) * 7)
+      if (hash32(`${p.id}|retire|${world.season}`, p.age) % 100 < risk) continue
+    }
+    keep.push(p)
+  }
+  world.freeAgents = keep
+}
+
+/**
+ * Backlog 408 (2b): sign the free agent who most improves a club's depth chart
+ * at a need or injured slot, if his own ask fits the club's cap. One signing per
+ * club per week; a full roster releases its weakest surplus body at the position
+ * to stay at 53. Deterministic — no rng draw, so the play sim is untouched.
+ */
+function signBestFit(world: World, teamId: string, capLimit: number) {
+  const roster = world.roster[teamId] ?? []
+  const usedCap = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + (world.deadMoney[teamId] ?? 0)
+  let best: Player | null = null
+  let bestScore = 0
+  for (const p of world.freeAgents) {
+    const depth = depthAt(world, teamId, p.pos)
+    const startersN = STARTERS[p.pos] ?? 1
+    const starters = depth.slice(0, startersN)
+    const injuredStarter = starters.some((x) => x.injured && x.injured.games >= 2)
+    const count = roster.reduce((s, x) => s + (x.pos === p.pos ? 1 : 0), 0)
+    const deficit = (FA_NEEDS[p.pos] ?? 0) - count
+    const bestAtPos = depth.length ? Math.max(...depth.map((x) => x.ovr)) : 0
+    let score = 0
+    if (deficit > 0) score = 30 + (p.ovr - 55) // fill a thin slot
+    else if (injuredStarter) score = 20 + (p.ovr - 55) // cover an injury
+    // A genuine depth-chart upgrade: elite vets upgrade anyone, mid vets only a
+    // thin room (and never a fringe body).
+    else if (
+      (p.ovr >= 85 && p.ovr >= bestAtPos) ||
+      (p.ovr >= 78 && p.ovr >= bestAtPos + 3 && depth.length <= startersN + 1)
+    ) {
+      score = p.ovr - bestAtPos + 1
+    }
+    if (score <= 0) continue
+    if (score > bestScore || (score === bestScore && best && p.ovr > best.ovr)) {
+      best = p
+      bestScore = score
+    }
+  }
+  if (!best) return
+  const contract = freeAgentContract(best, world.season, world.week, 'regular')
+  if (usedCap() + contract.capHit > capLimit) return
+  if (roster.length >= 53) {
+    const floor = ROSTER_FLOOR[best.pos] ?? 2
+    const atPos = roster.filter((x) => x.pos === best.pos)
+    if (atPos.length <= floor) return
+    const weakest = atPos.sort((a, b) => a.ovr - b.ovr || (a.id < b.id ? -1 : 1))[0]
+    const idx = roster.indexOf(weakest)
+    if (idx < 0) return
+    roster.splice(idx, 1)
+    world.deadMoney[teamId] = (world.deadMoney[teamId] ?? 0) + deadMoney(weakest.contract)
+    weakest.teamId = null
+    weakest.faWeeks = 0
+    weakest.contract = voidContract(weakest.contract)
+    world.freeAgents.push(weakest)
+  }
+  const signed = best
+  world.freeAgents = world.freeAgents.filter((x) => x.id !== signed.id)
+  signed.teamId = teamId
+  signed.faWeeks = 0
+  signed.contract = contract
+  roster.push(signed)
+  ledgerFreeAgent(world, teamId, 'gained', signed.ovr)
+}
+
+/**
+ * Backlog 408 (2a): keep the street pool in its realistic in-season band. Above
+ * the cap the oldest fringe bodies leave the league; below the floor fresh
+ * street bodies are drawn from a separate hash stream (never the sim rng).
+ */
+function balanceStreetPool(world: World) {
+  const fas = world.freeAgents
+  if (fas.length > STREET_MAX) {
+    const excess = fas.length - STREET_MAX
+    const drop = new Set(
+      [...fas]
+        .filter((p) => p.ovr <= 68)
+        .sort((a, b) => a.ovr - b.ovr || b.age - a.age || (a.id < b.id ? -1 : 1))
+        .slice(0, excess)
+        .map((p) => p.id),
+    )
+    world.freeAgents = fas.filter((p) => !drop.has(p.id))
+  } else if (fas.length < STREET_MIN) {
+    const rng = makeRng(hash32(`streetfill|${world.seed}|${world.season}|${world.week}`))
+    const need = Math.min(60, STREET_MIN - fas.length)
+    for (const p of generateStreetPool(rng, world.season, need)) world.freeAgents.push(p)
+  }
+}
+
+/**
+ * Backlog 408: the in-season free-agent market. Runs weekly after the injury
+ * moves: the unsigned clock ticks (asks fall, vets retire), then every club
+ * signs the free agent who most improves its depth chart if he fits its cap.
+ */
+export function runInSeasonFreeAgency(world: World, skipTeamId?: string): void {
+  if (world.phase !== 'regular') return
+  const capLimit = capForSeason(world.season)
+  tickUnsignedMarket(world)
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL' || t.id === skipTeamId) continue
+    signBestFit(world, t.id, capLimit)
+  }
+  balanceStreetPool(world)
   indexPlayers(world)
 }
 
