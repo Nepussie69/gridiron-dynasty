@@ -79,15 +79,103 @@ export function futurePickFactor(yearsAway: number): number {
 }
 
 /**
- * Trade-chart value of a pick, estimated at the middle of its round. Future
- * picks are discounted by distance: next draft ×1.0, two drafts ×0.8, three
- * drafts ×0.65. Pass the upcoming draft's season (`world.season + 1`) to apply
- * that discount; callers that omit it get the undiscounted chart value.
+ * The draft-pick value chart, in points, keyed by overall draft slot: the classic
+ * Jimmy Johnson / Dallas chart. It is the reference the nflverse draft-trade
+ * study (backlog 399) reconciles its pick packages against — see
+ * ~/gridiron-work/logs/tradevalue-targets.out ("PICK CHART REFERENCE"). A real
+ * chart is steep: #1 is 3,000 points and #32 is 590, so a first overall is worth
+ * about five late firsts. Sparse entries are linearly interpolated, so any slot
+ * 1–256 lands on the curve.
  */
-export function pickTradeValue(pick: DraftPick, upcomingDraftSeason?: number): number {
-  const overall = (pick.round - 1) * 32 + 16
-  const base = Math.max(1, Math.round(3000 * Math.pow(0.945, overall - 1)))
-  const factor = upcomingDraftSeason ? futurePickFactor(pick.season - upcomingDraftSeason) : 1
+export const PICK_VALUE_CHART: Record<number, number> = {
+  1: 3000, 2: 2600, 3: 2200, 4: 1800, 5: 1700, 6: 1600, 7: 1500, 8: 1400, 9: 1350, 10: 1300,
+  11: 1250, 12: 1200, 13: 1150, 14: 1100, 15: 1050, 16: 1000, 17: 950, 18: 900, 19: 875, 20: 850,
+  21: 800, 22: 780, 23: 760, 24: 740, 25: 720, 26: 700, 27: 680, 28: 660, 29: 640, 30: 620, 31: 600, 32: 590,
+  33: 580, 34: 560, 40: 500, 48: 420, 56: 340, 64: 270,
+  65: 265, 72: 230, 80: 190, 88: 150, 96: 116,
+  102: 92, 110: 74, 120: 54, 130: 42, 137: 37.5,
+  140: 37, 150: 31.4, 160: 27.4, 170: 23.4, 180: 19,
+  181: 18.6, 190: 15, 200: 11, 210: 7, 218: 3.8,
+  219: 3, 230: 1, 240: 1, 256: 1,
+}
+
+const CHART_SLOTS = Object.keys(PICK_VALUE_CHART).map(Number).sort((a, b) => a - b)
+const CHART_MAX = CHART_SLOTS[CHART_SLOTS.length - 1]
+
+/** Chart points for one overall draft slot (interpolated between published points). */
+export function chartPickValue(overall: number): number {
+  const n = Math.max(1, Math.min(CHART_MAX, overall))
+  let i = 0
+  while (i < CHART_SLOTS.length - 2 && CHART_SLOTS[i + 1] < n) i++
+  const lo = CHART_SLOTS[i]
+  const hi = CHART_SLOTS[i + 1]
+  if (n <= lo) return PICK_VALUE_CHART[lo]
+  const pts = PICK_VALUE_CHART[lo] + ((n - lo) / (hi - lo)) * (PICK_VALUE_CHART[hi] - PICK_VALUE_CHART[lo])
+  return Math.max(1, Math.round(pts))
+}
+
+export interface PickSlot {
+  /** Overall draft slot, 1-based (fractional when projected). */
+  overall: number
+  /** True when the order is built (`world.draftPickIds`), false when projected. */
+  known: boolean
+}
+
+/** Rank of every NFL club by projected draft position (worst first), cached per week. */
+const slotCache = new WeakMap<World, { stamp: string; rank: Map<string, number> }>()
+function projectedRanks(world: World): Map<string, number> {
+  const stamp = `${world.season}:${world.week}:${world.phase}`
+  let c = slotCache.get(world)
+  if (!c || c.stamp !== stamp) {
+    // Mirrors `computeDraftOrder` (fewest wins first, then most points allowed).
+    const order = world.teams
+      .filter((t) => t.tier === 'NFL')
+      .map((t) => ({ id: t.id, rec: world.standings[t.id] }))
+      .sort((a, b) => a.rec.wins - b.rec.wins || b.rec.pointsAgainst - a.rec.pointsAgainst)
+    c = { stamp, rank: new Map(order.map((t, i) => [t.id, i + 1])) }
+    slotCache.set(world, c)
+  }
+  return c.rank
+}
+
+/**
+ * Which slot a pick occupies: its real overall number when the draft order is
+ * already built (`world.draftPickIds` — set once the regular season is over and
+ * read right through the draft), otherwise a projection from the original
+ * club's current standing, regressed toward the middle of the round the further
+ * out the pick is. A comp pick always sits at the end of its round.
+ */
+export function pickSlot(world: World, pick: DraftPick): PickSlot {
+  const ids = world.draftPickIds
+  if (ids?.length) {
+    const i = ids.indexOf(pick.id)
+    if (i >= 0) return { overall: i + 1, known: true }
+  }
+  if (pick.comp) return { overall: (pick.round - 1) * 32 + 32.5, known: false }
+  const rank = projectedRanks(world).get(pick.originalTeam) ?? 16.5
+  const yearsAway = Math.max(1, pick.season - upcomingDraftSeason(world))
+  // Regress toward the middle of the round: a club's record two or three drafts
+  // out says far less about the slot than its record one draft out does.
+  const w = 1 / (1 + 0.7 * (yearsAway - 1))
+  return { overall: (pick.round - 1) * 32 + 16.5 + (rank - 16.5) * w, known: false }
+}
+
+/** Human label for a pick asset with its slot, e.g. "2027 Rd 1 #1 (NYJ)". */
+export function pickAssetLabel(world: World, pick: DraftPick): string {
+  const abbr = world.byId[pick.originalTeam]?.abbr ?? pick.originalTeam
+  const slot = pickSlot(world, pick)
+  const num = Math.min(CHART_MAX, Math.max(1, Math.round(slot.overall)))
+  return `${pick.season} Rd ${pick.round} ${slot.known ? '#' : '~#'}${num}${pick.comp ? ' comp' : ''} (${abbr})`
+}
+
+/**
+ * Trade-chart value of a pick at its actual (or projected) slot, then discounted
+ * by how many drafts away it is: this draft ×1.0, next ×0.8, the one after ×0.65
+ * (L11.5 Q11). Comp picks carry a small further haircut.
+ */
+export function pickTradeValue(world: World, pick: DraftPick): number {
+  const base = chartPickValue(pickSlot(world, pick).overall)
+  const factor = futurePickFactor(pick.season - upcomingDraftSeason(world))
   const value = base * factor
   return pick.comp ? Math.round(value * 0.7) : Math.round(value)
 }
@@ -106,7 +194,7 @@ export function assetValue(world: World, a: TradeAsset): number {
     return p ? playerTradeValue(p) : 0
   }
   const pk = findPick(world, a.id)
-  return pk ? pickTradeValue(pk, upcomingDraftSeason(world)) : 0
+  return pk ? pickTradeValue(world, pk) : 0
 }
 
 const NEED_TARGET: Record<string, number> = {
@@ -247,7 +335,7 @@ function dealSummary(world: World, partnerId: string, get: TradeAsset[]): string
       return p ? `${p.name} (${p.pos}, ${p.ovr})` : 'Player'
     }
     const pk = findPick(world, a.id)
-    return pk ? `${pk.season} Rd ${pk.round}` : 'Pick'
+    return pk ? pickAssetLabel(world, pk) : 'Pick'
   })
   return `${abbr}: ${parts.join(' + ')}`
 }
@@ -335,7 +423,6 @@ export function findPackagesFor(world: World, userTeamId: string, assetId: strin
   if (!partnerId || partnerId === userTeamId) return []
   if (targetPick && !isTradeablePick(world, targetPick)) return []
   const target: TradeAsset = { kind: targetPick ? 'pick' : 'player', id: assetId }
-  const up = upcomingDraftSeason(world)
 
   const roster = world.roster[userTeamId] ?? []
   // Never strip the user of his last body at a position (same rule as findDeals).
@@ -349,7 +436,7 @@ export function findPackagesFor(world: World, userTeamId: string, assetId: strin
     .sort((a, b) => playerTradeValue(a) - playerTradeValue(b) || a.id.localeCompare(b.id))
   const picks = world.draftPicks
     .filter((pk) => pk.ownerTeam === userTeamId && isTradeablePick(world, pk))
-    .sort((a, b) => pickTradeValue(a, up) - pickTradeValue(b, up) || a.id.localeCompare(b.id))
+    .sort((a, b) => pickTradeValue(world, a) - pickTradeValue(world, b) || a.id.localeCompare(b.id))
 
   const accepted = (give: TradeAsset[]) => evaluateTrade(world, partnerId, userTeamId, give, [target]).accepted
   const candidates: TradeAsset[][] = []
