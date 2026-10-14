@@ -31,6 +31,13 @@ interface DilemmaTemplate {
   id: string
   /** Which verbs this card is appropriate for. */
   verbs: string[]
+  /**
+   * L15 (FUTURES #15): a retired card keeps its slot in the pool — and therefore
+   * the pool's length and order — so the week's pick (a hash over that length)
+   * still lands on the same index. When the pick lands here the search moves to
+   * the next live card, so every OTHER card keeps the week it always had.
+   */
+  retired?: boolean
   build: (world: World, career: CareerState, rng: Rng) => Omit<WeeklyDilemma, 'id' | 'season' | 'week' | 'resolved'>
 }
 
@@ -81,9 +88,15 @@ const TEMPLATES: DilemmaTemplate[] = [
     },
   },
 
-  // ── Injury gamble: play the banged-up star (lead/adapt) ─────────────────────
+  // ── Injury gamble: retired by L15 (FUTURES #15) ─────────────────────────────
+  // Real injury calls replaced this card: the user now has a per-player Injury
+  // report (Questionable / Doubtful), the medical staff's read and the true
+  // aggravation risk from the engine (`injuryCalls.ts`), all off that player's
+  // own injury and ratings. The template stays in the array as a RETIRED slot so
+  // the pool's length and order never change — every other card keeps its week.
   {
     id: 'injuryGamble',
+    retired: true,
     verbs: verbSet('lead', 'adapt'),
     build: (_world, _career, rng) => {
       const who = aPlayer(rng)
@@ -250,7 +263,21 @@ export function currentDilemma(world: World, career: CareerState): WeeklyDilemma
   const verb = verbFor(career.path, career.level) as string
   const eligible = TEMPLATES.filter((t) => t.verbs.includes(verb))
   const pool = eligible.length ? eligible : TEMPLATES
-  const pick = rpick(rng, pool)
+  // L15: draw the same slot the hash always produced (the pool keeps every
+  // retired card's slot, so the index mapping is unchanged), then walk forward to
+  // the next live card if that slot is retired. A week that would have shown a
+  // retired card now shows the next live one; every other week is untouched.
+  let pick = rpick(rng, pool)
+  if (pick.retired) {
+    const at = pool.indexOf(pick)
+    for (let i = 1; i <= pool.length; i++) {
+      const cand = pool[(at + i) % pool.length]
+      if (!cand.retired) {
+        pick = cand
+        break
+      }
+    }
+  }
   const built = pick.build(world, career, rng)
   return {
     id: `dl_${world.season}_${world.week}_${pick.id}`,
