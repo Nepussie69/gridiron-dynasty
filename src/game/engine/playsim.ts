@@ -195,6 +195,12 @@ export function setJ12(on: boolean) {
 export function getJ12(): boolean {
   return J12_ON
 }
+// J37 (FUTURES #37): QB–receiver timing & OL continuity. The flag and every
+// constant live in chemistry.ts (the J8d pattern) so the season/week accrual hook
+// and the resolvers share one switch; re-exported here so the probe and the OFF
+// calibration copy call `setJ37(false)` on this module. Default ON; OFF restores
+// the exact pre-J37 engine (no read, no write, no rng draw).
+export { setJ37, getJ37 } from './chemistry'
 function ocEffect(world: World, teamId: string) {
   if (USER_COACH && USER_COACH.teamId === teamId) {
     // Backlog 193: pass only the user's SEAT so a coordinator seat they hold is
@@ -232,6 +238,7 @@ import type { World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
 import { situationalPassRate, getSituational, type SituationInput } from './situational'
 import { J9, centeredSub, coachMeanRating, getCoachSubs } from './coachSubs'
+import { CHEM, getJ37, skillValue, skillRel, olHandoffChem } from './chemistry'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -840,6 +847,11 @@ export interface Play {
   beatenBlockerId?: string
   /** J8b: modelled time from the snap until the pressure arrives (animation). */
   timeToPressureS?: number
+  // ── J37: QB–receiver timing & OL continuity ────────────────────────────────
+  /** J37: the throw's QB–target pair chemistry (0..1) on a pass (animation). */
+  chem?: number
+  /** J37: the blocker whose adjacent handoff (twist/stunt pass-off) broke. */
+  olHandoffFail?: string
   // ── R14: typed penalties ───────────────────────────────────────────────────
   /** R14: the specific foul (holding, false start, DPI, …). */
   penaltyKind?: PenaltyKind
@@ -1237,8 +1249,11 @@ export const PB_CENTER = { edge: 17.25 }
 /** Dev accumulator (turned on by `protectionProbe`): the two league means. */
 export const PB_STAT = { on: false, n: 0, raw: 0, old: 0 }
 
-/** J8b: one rusher-vs-blocker rep. An average rusher vs an average blocker is 0. */
-function rushRepWin(r: Player, b: Player | undefined, key: string, fat: Record<string, number> | undefined): number {
+/** J8b: one rusher-vs-blocker rep. An average rusher vs an average blocker is 0.
+ *  J37: `handoffRel` is the blocker's relative chemistry with the man he passes a
+ *  twist off to (undefined when the layer is off or the blocker has no adjacent
+ *  pair): a settled pair recovers the exchange, a reshuffled one loses the rep. */
+function rushRepWin(r: Player, b: Player | undefined, key: string, fat: Record<string, number> | undefined, handoffRel?: number): { win: number; fail?: string } {
   const ra = mkAttrs(r)
   const pmv = rmean(r.pos, 'PMV', ra.PMV ?? 70)
   const fmv = rmean(r.pos, 'FMV', ra.FMV ?? 70)
@@ -1263,12 +1278,33 @@ function rushRepWin(r: Player, b: Player | undefined, key: string, fat: Record<s
     const bsta = clamp(rmean(b.pos, 'STA', ba.STA ?? 70) * PB.staW, -0.35, 0.35)
     block -= (fat?.[b.id] ?? 0) * PB.fatW * (1 - bsta)
     passOff = clamp(0.55 + rmean(b.pos, 'AWR', ba.AWR ?? 70) * PB.passOffW, 0.2, 0.9)
+    // J37: the ADJACENT PAIR's continuity also decides the pass-off — a settled
+    // pair makes the exchange, a reshuffled one is late. UNCLAMPED so the leg stays
+    // linear over the pair's whole rel range: the earlier widened clamp truncated the
+    // settled side (a high-AWR blocker hit 0.95) while the reshuffled side was
+    // uncapped, and that convexity alone dragged a mature league's pressure up
+    // ~2.7 pts (`logs/j37-olsweep.out` vs `logs/j37-olsweep2.out`).
+    if (handoffRel !== undefined) passOff = passOff + handoffRel * CHEM.handoffW
   }
   let win = rush - block
-  if (!b) return win + PB.freeWin
-  // A twist / stunt: the two blockers must pass off, each on his OWN AWR.
-  if (h01(`${key}:tw`) < PB.twistRate && h01(`${key}:pk`) > passOff) win += PB.freeWin * PB.missPick
-  return win
+  if (!b) return { win: win + PB.freeWin }
+  // A twist / stunt: the two blockers must pass off, each on his OWN AWR. J37: the
+  // ADJACENT PAIR's continuity decides how often the stunt is recognised at all
+  // (a settled pair picks it up) AND how much the rep of the blocker whose handoff
+  // broke loses — the spec's "the rep of the blocker whose neighbour handoff failed
+  // loses more". All three legs are LINEAR in the pair's relative chemistry and
+  // UNCLAMPED, so a league at its typical chemistry (E[rel]=0) has E[effect]=0 and
+  // the term is league-neutral by construction; only the settled-vs-reshuffled
+  // SPREAD moves. (A clamped factor is convex — the settled side saturates while
+  // the reshuffled side does not — and measurably dragged a mature league's
+  // pressure up / completion % down; `logs/j37-olsweep.out`, `logs/j37-olsweep2.out`.)
+  const twistP = handoffRel === undefined ? PB.twistRate : PB.twistRate * (1 - handoffRel * CHEM.twistW)
+  if (h01(`${key}:tw`) < twistP && h01(`${key}:pk`) > passOff) {
+    win += PB.freeWin * PB.missPick * (handoffRel === undefined ? 1 : (1 - handoffRel * CHEM.handoffPen))
+    // J37: only the J37 layer reports the broken handoff (OFF records nothing).
+    return { win, fail: handoffRel !== undefined ? b.id : undefined }
+  }
+  return { win }
 }
 
 interface RushRep { id: string; pos: string; blockerId?: string; win: number; blitz: boolean; free: boolean }
@@ -1280,6 +1316,8 @@ export interface RushResult {
   freeRusher: boolean
   lost: number
   time: number
+  /** J37: the blocker whose adjacent handoff (twist/stunt pass-off) broke. */
+  handoffFail?: string
 }
 
 /** J8b: assign every rusher a blocker and score the reps (deterministic only). */
@@ -1290,6 +1328,7 @@ function rushMatchups(
   blitz: boolean, fat: Record<string, number> | undefined,
   offMove: string | undefined, defMove: string | undefined,
   dlUsage: 'starters' | 'rotate' | undefined, q4: boolean,
+  handoffChem?: Map<string, number>,
 ): RushResult {
   const rushers: { p: Player; blitz: boolean }[] = dl.map((p) => ({ p, blitz: false }))
   // Only the linebackers / defensive backs who actually blitz rush — never the
@@ -1319,11 +1358,14 @@ function rushMatchups(
   const inside = ol.filter((p) => p.pos === 'OG' || p.pos === 'C')
   const helpers = [rb, te, fb].filter((p): p is Player => !!p)
   const reps: RushRep[] = []
+  let handoffFail: string | undefined
   const addReps = (group: { p: Player; blitz: boolean }[], blockers: Player[], tag: string) => {
     const order = group.map((_, i) => i).sort((a, b) => (hash32(`${n}:${defId}:${tag}o${a}`) % 100000) - (hash32(`${n}:${defId}:${tag}o${b}`) % 100000))
     group.forEach((r, i) => {
       const b = i < blockers.length ? blockers[order[i]] : undefined
-      reps.push({ id: r.p.id, pos: r.p.pos, blockerId: b?.id, win: rushRepWin(r.p, b, `${n}:${defId}:${tag}${i}`, fat), blitz: r.blitz, free: !b })
+      const res = rushRepWin(r.p, b, `${n}:${defId}:${tag}${i}`, fat, b ? handoffChem?.get(b.id) : undefined)
+      reps.push({ id: r.p.id, pos: r.p.pos, blockerId: b?.id, win: res.win, blitz: r.blitz, free: !b })
+      if (res.fail && handoffFail === undefined) handoffFail = res.fail
     })
   }
   addReps(edges, tackles, 'edge')
@@ -1377,7 +1419,9 @@ function rushMatchups(
   const credit = reps[wins.indexOf(maxWin)]
   const lost = wins.filter((w) => w > PB.lossLine).length
   const time = clamp(PB.baseTime - maxWin * PB.secPerUnit, PB.minTime, PB.maxTime)
-  return { edge, reps, credit, maxWin, freeRusher: !!credit?.free, lost, time }
+  // J37: a rep dropped by the spy call takes its handoff record with it.
+  const fail = handoffFail && reps.some((r) => r.blockerId === handoffFail) ? handoffFail : undefined
+  return { edge, reps, credit, maxWin, freeRusher: !!credit?.free, lost, time, handoffFail: fail }
 }
 /** E2: pursuit (DL/LB PUR + SPD) shrinks the run's big-play tail. */
 function runPursuit(dl: Player[], lbs: Player[]): number {
@@ -2189,6 +2233,11 @@ export interface PlayOutcome {
   beatenBlockerId?: string
   /** J8b: modelled time from the snap until the pressure arrives (animation). */
   timeToPressureS?: number
+  // ── J37: QB–receiver timing & OL continuity ────────────────────────────────
+  /** J37: the throw's QB–target pair chemistry (0..1) on a pass (animation). */
+  chem?: number
+  /** J37: the blocker whose adjacent handoff (twist/stunt pass-off) broke. */
+  olHandoffFail?: string
   /** T2M: a sideline carry/reception went out of bounds (stops the clock). */
   outOfBounds?: boolean
   /** J6: a victory-formation kneeldown (a rush attempt for negative yards). */
@@ -3263,8 +3312,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Every rusher faces the blocker assigned to him; the weakest rep leads. Only
   // when the layer is on (the OFF branch below is the untouched base it replaces).
   const teOff = offEleven.find((p) => p.pos === 'TE')
+  // J37: each lineman's adjacent-pair chemistry — the pass-off on a twist/stunt
+  // is decided by the specific pair (never a line average). Undefined when OFF.
+  const olChem = getJ37() && ol.length >= 2 ? olHandoffChem(world, offId, ol) : undefined
   const pb: RushResult | undefined = PROT_ON
-    ? rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4)
+    ? rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, olChem)
     : undefined
   if (pb && PB_STAT.on) {
     PB_STAT.n++
@@ -3360,6 +3412,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   if (fb && concept.depth <= 4 && hash32(`${n}:${offId}:fbflat`) % 100 < 4) { target = fb; readRank = scored.length }
   const tA = target ? mkAttrs(target) : {}
   const tStyle = target ? styleProfile(target) : styleProfile({ traits: [''] } as Player)
+  // J37: QB x receiver timing. The pair's shared targets decide the placement of
+  // THIS throw to THIS receiver — a settled pair has a better catch window and
+  // fewer timing picks, a brand-new pairing is late. Centred on the league's
+  // typical chemistry (shared-weighted), so the league levels hold and only the
+  // spread moves. Undefined when the layer is off.
+  const pairChem = getJ37() && qb && target ? skillValue(world, qb.id, target.id) : undefined
+  const chemRel = pairChem !== undefined ? skillRel(world, qb?.id, target?.id) : 0
+  // J37: what the animation needs — the throw's QB–target pair chemistry and the
+  // blocker whose adjacent handoff broke (undefined when the layer is off).
+  const chemFields: Pick<PlayOutcome, 'chem'> = pairChem !== undefined ? { chem: pairChem } : {}
+  const olFailFields: Pick<PlayOutcome, 'olHandoffFail'> = pb?.handoffFail ? { olHandoffFail: pb.handoffFail } : {}
   // Q7: pick the coverage defender now, from the same groups, with no rng draw.
   // J8c: `let` because the plan-driven coverage (`targetWeakCB` / `shadowWR1`) may
   // reassign the actual defender below.
@@ -3388,7 +3451,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
-      qbId: qb?.id, sackId, coverId, ...j12Fields,
+      qbId: qb?.id, sackId, coverId, ...j12Fields, ...olFailFields,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
@@ -3686,6 +3749,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // reads the disguise through throws with a small, matched edge. Zero-mean (the
   // per-snap read noise is symmetric), so the league completion rate holds.
   compProb = clamp(compProb - disgAdj * J12.foolComp, MU.compMin, MU.compMax)
+  // J37: QB–receiver timing moves the catch window on this throw; centred, so the
+  // league completion rate is held and only the pair spread widens.
+  if (pairChem !== undefined) compProb = clamp(compProb + chemRel * CHEM.compW, MU.compMin, MU.compMax)
   if (J8C_STAT.on) { J8C_STAT.cov2 += coverage * coverage; J8C_STAT.compProb += compProb }
   // G7 hurry: a faster offense forces riskier throws.
   // L12 E2: JMP+PRC replace part of the trait-only ball-hawk in the pick rate.
@@ -3707,7 +3773,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         const a = mkAttrs(p)
         return (rmean(p.pos, 'JMP', a.JMP ?? 70) * 0.5 + rmean(p.pos, 'PRC', a.PRC ?? 70) * 0.5) * 0.01
       })) * E2_W)
-  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt), 0.005, 0.06)
+  const intProb = clamp(R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * (1 - chemRel * CHEM.intW), 0.005, 0.06)
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -3739,7 +3805,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...chemFields, ...olFailFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -3845,13 +3911,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...chemFields, ...olFailFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: concept.depth, ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...chemFields, ...olFailFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
