@@ -20,6 +20,7 @@ import {
 import { tradeBlock, type TradeBlockEntry } from '../game/engine/tradeBlock'
 import { clearTradeRequest, peekTradeRequest } from '../game/tradeRequest'
 import { canShadow } from '../game/engine/shadow'
+import { isHeadCoachCareer } from '../game/engine/access'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import type { Player, Position } from '../game/types'
 import type { World } from '../game/engine/generate'
@@ -27,6 +28,7 @@ import { useGame, useWorld } from '../store/gameStore'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
 import { DeadlinePanel } from '../components/DeadlinePanel'
 import { GmAskButton } from '../components/GmAskButton'
+import { TradeControlToggle } from '../components/TradeControlToggle'
 import { HoverCard } from '../components/HoverCard'
 import { PlayerHoverCard } from '../components/PlayerHoverCard'
 import { Badge, Button, Card, ConfirmSheet, FilterChip, IconButton, OvrBadge, PageHeader, SectionTitle, Tabs, TeamCrest } from '../ui/kit'
@@ -184,20 +186,28 @@ export function Trades() {
         title="Trade Center"
         subtitle="Draft capital is currency. Find a partner, balance the value chart, and pull the trigger — the other club has to want the deal."
         right={
-          <select
-            value={partnerId}
-            onChange={(e) => {
-              setPartnerId(e.target.value)
-              setGet([])
-            }}
-            className="rounded-lg border border-line bg-surface min-h-11 px-3 py-2 font-cond text-base font-600 outline-none lg:min-h-0 lg:text-sm"
-          >
-            {NFL_TEAMS.filter((t) => t.id !== activeTeamId).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.city} {t.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {career && isHeadCoachCareer(career) && (
+              <div className="flex items-center gap-2">
+                <span className="label">Trades</span>
+                <TradeControlToggle />
+              </div>
+            )}
+            <select
+              value={partnerId}
+              onChange={(e) => {
+                setPartnerId(e.target.value)
+                setGet([])
+              }}
+              className="rounded-lg border border-line bg-surface min-h-11 px-3 py-2 font-cond text-base font-600 outline-none lg:min-h-0 lg:text-sm"
+            >
+              {NFL_TEAMS.filter((t) => t.id !== activeTeamId).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.city} {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
         }
       />
 

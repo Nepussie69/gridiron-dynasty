@@ -412,8 +412,12 @@ export function enforceCapCompliance(world: World) {
  * A few AI-to-AI trades each offseason, so the league moves on its own: teams
  * swap similar-value players where each has a surplus. Cheap, but it makes the
  * world feel alive and gives the media something to report.
+ *
+ * `skipTeamId`: a head coach who holds the trade pen (CareerState.tradeControl
+ * 'coach') — the AI GM makes no deal involving that club on its own. The
+ * draws are still made first, so the rng stream is unchanged.
  */
-export function runAITrades(world: World) {
+export function runAITrades(world: World, skipTeamId?: string | null) {
   const rng = makeRng(world.seed + world.season * 7079)
   const nfl = world.teams.filter((t) => t.tier === 'NFL')
   let made = 0
@@ -426,6 +430,8 @@ export function runAITrades(world: World) {
     const pa = [...ra].filter((p) => unscaleOvr(p.ovr) >= 70 && unscaleOvr(p.ovr) <= 84).sort(() => rng() - 0.5)[0]
     const pb = [...rb].filter((p) => unscaleOvr(p.ovr) >= 70 && unscaleOvr(p.ovr) <= 84).sort(() => rng() - 0.5)[0]
     if (!pa || !pb) continue
+    // Both players are drawn above, so skipping a deal never shifts the rng stream.
+    if (skipTeamId && (a.id === skipTeamId || b.id === skipTeamId)) continue
     if (Math.abs(unscaleOvr(pa.ovr) - unscaleOvr(pb.ovr)) > 7 || pa.pos === pb.pos) continue
     world.roster[a.id] = ra.filter((x) => x.id !== pa.id)
     pa.teamId = b.id

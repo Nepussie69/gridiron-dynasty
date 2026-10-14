@@ -85,6 +85,11 @@ export interface ProfileCtx {
    * second): pulled back and a little wider so the formation has room round it.
    */
   wide?: number
+  /**
+   * Backlog 357: CSS px the playback controls cover at the bottom; the safe
+   * area then ends above them (+14 px). Unset = the symmetric 88% rect.
+   */
+  bottomClear?: number
 }
 
 export const PROFILE_FOV_MAX = 56
@@ -123,6 +128,10 @@ function overshoot(r: Rig, ctx: ProfileCtx, vp: { w: number; h: number }): numbe
     const nx = Math.abs(s.x - vp.w / 2) / (vp.w / 2)
     const ny = Math.abs(s.y - vp.h / 2) / (vp.h / 2)
     worst = Math.max(worst, Math.max(nx, ny) - PROFILE_SAFE)
+    if (ctx.bottomClear != null) {
+      const bot = vp.h - Math.max(vp.h * (1 - PROFILE_SAFE) * 0.5, ctx.bottomClear + 14)
+      if (s.y > bot) worst = Math.max(worst, (s.y - bot) / (vp.h / 2))
+    }
   }
   return worst
 }
@@ -181,17 +190,74 @@ export function applyCameraProfile(pose: CameraPose, prof: CameraProfile, ctx: P
   return poseOf(rig)
 }
 
+/** Backlog 357: the widest vertical FOV the fixed-angle phone lens may open to (degrees). */
+export const PROFILE_FIXED_FOV_MAX = 64
+
+/**
+ * Backlog 357 ("keep camera angle still"): the phone lens with ONE camera angle.
+ * Same re-aim (pan toward the strong side) as applyCameraProfile, but the
+ * camera keeps the director's (fixed-angle) phone rig and zoom — it never moves
+ * closer / higher; the safe-area pass gives back lean (pan) first, then opens
+ * the FOV (zoom). Always uses the live variant (a replay keeps the live angle).
+ */
+export function applyFixedCameraProfile(pose: CameraPose, prof: CameraProfile, ctx: ProfileCtx): CameraPose {
+  const v = prof.live
+  const vp = ctx.viewport ?? { w: 1280, h: 720 }
+  const [px, py, pz] = pose.pos
+  const [tx, ty, tz] = pose.target
+  const wide = clamp(ctx.wide ?? 0, 0, 1)
+  const leanMax = Math.abs(v.by - MID_WIDTH) * (1 - 0.7 * wide)
+  const shift = clamp(ctx.strongSideY - ty, -leanMax, leanMax)
+  const target: Vec3 = [tx + (v.dx ?? 0), clamp(ty + shift, 2, FIELD_WIDTH - 2), tz]
+  // The director's own phone rig and zoom (it already frames the portrait
+  // viewport above the controls); only the lean is added here.
+  const rig: Rig = {
+    target,
+    back: Math.hypot(px - tx, py - ty),
+    height: pz,
+    yaw: Math.atan2(py - ty, px - tx),
+    fov: pose.fovDeg,
+  }
+  // Safe area: pan first (give back as little of the strong-side lean as keeps
+  // the carrier / ball inside — continuous in the input), then zoom out.
+  if (overshoot(rig, ctx, vp) > 0 && shift !== 0) {
+    const at = (k: number): Rig => ({ ...rig, target: [target[0], clamp(ty + shift * k, 2, FIELD_WIDTH - 2), tz] })
+    let lo = 0
+    let hi = 1
+    if (overshoot(at(0), ctx, vp) > 0) hi = 0
+    else {
+      for (let i = 0; i < 12; i++) {
+        const mid = (lo + hi) / 2
+        if (overshoot(at(mid), ctx, vp) > 0) hi = mid
+        else lo = mid
+      }
+      hi = lo
+    }
+    rig.target = at(hi).target
+  }
+  for (let i = 0; i < 12; i++) {
+    const o = overshoot(rig, ctx, vp)
+    if (o <= 0 || rig.fov >= PROFILE_FIXED_FOV_MAX) break
+    rig.fov = Math.min(PROFILE_FIXED_FOV_MAX, rig.fov + Math.max(0.25, o * 40))
+  }
+  return poseOf(rig)
+}
+
 /**
  * A stateful wrapper for the live view: keeps the previous output and eases
  * toward the raw profile result, hard-limiting aim movement (1.5 yd) and FOV
  * change (2°) per 60 Hz frame. `key` identifies the play; changing it resets.
  */
-export function createProfileApplier(prof: CameraProfile): {
+export function createProfileApplier(
+  prof: CameraProfile,
+  opts: { fixed?: boolean } = {},
+): {
   apply(pose: CameraPose, ctx: ProfileCtx, key?: string): CameraPose
   reset(): void
 } {
   let last: CameraPose | null = null
   let lastKey = ''
+  let lean: [number, number] = [0, 0]
   const maxAim = 1.5
   const maxFov = 2
   return {
@@ -200,6 +266,38 @@ export function createProfileApplier(prof: CameraProfile): {
       lastKey = ''
     },
     apply(pose: CameraPose, ctx: ProfileCtx, key = ''): CameraPose {
+      if (opts.fixed) {
+        // Backlog 357: the angle is fixed — the camera moves rigidly with its aim
+        // point. The director's track is already eased, so only the phone lean
+        // (aim offset from the director's focus) and the zoom are eased here.
+        const raw = applyFixedCameraProfile(pose, prof, ctx)
+        const offX = raw.target[0] - pose.target[0]
+        const offY = raw.target[1] - pose.target[1]
+        if (!last || key !== lastKey) {
+          lean = [offX, offY]
+          lastKey = key
+          last = raw
+          return raw
+        }
+        // A lean that grows eases in; one the safe-area pass takes back (the
+        // carrier nearing the frame edge) follows at once, within the aim limit.
+        const back = Math.hypot(offX, offY) < Math.hypot(lean[0], lean[1]) - 1e-9
+        const k = back ? 1 : 0.18
+        let lx = lean[0] + (offX - lean[0]) * k
+        let ly = lean[1] + (offY - lean[1]) * k
+        const d = Math.hypot(lx - lean[0], ly - lean[1])
+        if (d > maxAim) {
+          lx = lean[0] + ((lx - lean[0]) / d) * maxAim
+          ly = lean[1] + ((ly - lean[1]) / d) * maxAim
+        }
+        lean = [lx, ly]
+        const fov = last.fovDeg + clamp(raw.fovDeg - last.fovDeg, -maxFov, maxFov)
+        const tx = pose.target[0] + lx
+        const ty = pose.target[1] + ly
+        const tz = raw.target[2]
+        last = { pos: [tx + raw.pos[0] - raw.target[0], ty + raw.pos[1] - raw.target[1], raw.pos[2]], target: [tx, ty, tz], fovDeg: fov }
+        return last
+      }
       const raw = applyCameraProfile(pose, prof, ctx)
       if (!last || key !== lastKey) {
         last = raw

@@ -1,7 +1,7 @@
 import { Clock, Handshake, Lock, TrendingDown, TrendingUp } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { cn } from '../lib/cn'
-import { accessFor } from '../game/engine/access'
+import { accessFor, coachHoldsTradePen, isHeadCoachCareer } from '../game/engine/access'
 import { currentRound, draftOpen, overallPick } from '../game/engine/draft'
 import {
   buildDraftTradeDownOffers,
@@ -41,13 +41,16 @@ export function DraftTradePanel({ className }: { className?: string }) {
   const open = draftOpen(world) && !world.draftState.complete
   const canTrade = !!career && accessFor(career, 'trades') === 'decide'
   const deciding = !!career && accessFor(career, 'draft') === 'decide'
+  // A head coach holding the trade pen (Trade Center toggle) does not make the pick —
+  // the GM does — but the draft pauses on his slot so he can trade it.
+  const pen = !!career && coachHoldsTradePen(career)
   const pickIndex = world.draftState.pickIndex
-  const mine = open && deciding && !!career && world.draftOrder[pickIndex] === career.teamId
+  const mine = open && (deciding || pen) && !!career && world.draftOrder[pickIndex] === career.teamId
 
   // The engine memoises both searches per world/stamp, so calling them every
   // render is cheap and always reflects the current slot.
   const down = open && mine && canTrade && career ? buildDraftTradeDownOffers(world, career.teamId) : []
-  const up = open && !mine && canTrade && deciding && career ? buildDraftTradeUpTargets(world, career.teamId, 5) : []
+  const up = open && !mine && canTrade && (deciding || pen) && career ? buildDraftTradeUpTargets(world, career.teamId, 5) : []
 
   const clockOn = career?.draftClock === true
 
@@ -102,6 +105,7 @@ export function DraftTradePanel({ className }: { className?: string }) {
       {!canTrade && (
         <div className="mb-3 flex items-center gap-2 rounded-[var(--r-md)] bg-warn-soft px-3 py-2 text-small font-600 text-warn">
           <Lock size={14} aria-hidden /> You do not have trade authority at this rung — the club&rsquo;s GM handles the calls.
+          {career && isHeadCoachCareer(career) && ' Take the pen with the Trades switch in the Trade Center header.'}
         </div>
       )}
 
@@ -116,7 +120,7 @@ export function DraftTradePanel({ className }: { className?: string }) {
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5 font-cond text-small font-700 uppercase tracking-wide text-ink">
               <Clock size={13} aria-hidden /> Pick clock
-              {clockOn && mine && <PickClock key={pickIndex} on onExpire={expire} />}
+              {clockOn && mine && deciding && <PickClock key={pickIndex} on onExpire={expire} />}
             </span>
             <span className="mt-0.5 block text-micro leading-snug text-muted">
               Off by default. When on, a 90-second clock runs while you are on the clock; if it runs out your club takes
@@ -130,7 +134,8 @@ export function DraftTradePanel({ className }: { className?: string }) {
         down.length ? (
           <div className="space-y-3">
             <p className="text-small text-muted">
-              Calls are coming in for the pick on the clock. Accept one to move back and stockpile assets.
+              Calls are coming in for the pick on the clock. Accept one to move back and stockpile assets
+              {pen && ' — or press Sim to my next pick and your GM makes the selection'}.
             </p>
             {down.map((o) => (
               <OfferRow key={o.id} world={world} offer={o} canAct={canTrade} onAsk={() => setPending({ offer: o, up: false })} />
@@ -138,7 +143,9 @@ export function DraftTradePanel({ className }: { className?: string }) {
           </div>
         ) : (
           <p className="rounded-[var(--r-md)] bg-surface-2 px-3 py-4 text-small text-muted">
-            No club has made a serious offer for this pick. Make your selection.
+            {pen
+              ? 'No club has made a serious offer for this pick. Press Sim to my next pick and your GM makes the selection.'
+              : 'No club has made a serious offer for this pick. Make your selection.'}
           </p>
         )
       ) : up.length ? (

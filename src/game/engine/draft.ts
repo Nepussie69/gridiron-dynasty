@@ -1,12 +1,14 @@
 import type { CareerState, DraftProspect, Player, PlayerOrigin, Position } from '../types'
 import { makeRookieContract } from './cap'
 import { canDraft } from './career'
+import { coachHoldsTradePen } from './access'
 import { computeDraftOrder } from './sim'
 import { ensureDraftPicks } from './picks'
 import { pushLedger } from './ledger'
 import { departmentGrade } from './department'
 import { convictionPick } from './conviction'
 import { redFlagIds } from './redflag'
+import { roomNote, roomTilt, roomWinner } from './draftRoom'
 import { makeCharacter } from './character'
 import { type World, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
@@ -115,6 +117,17 @@ export function userOnClock(world: World, career: CareerState | null) {
   return currentTeamId(world) === career.teamId
 }
 
+/**
+ * On the clock for trade purposes. A head coach who holds the trade pen
+ * (CareerState.tradeControl 'coach') does not make the pick — his GM does —
+ * but the draft pauses on his slot so he can still take a trade-back offer.
+ * For every other career this is exactly `userOnClock`.
+ */
+export function userOnTradeClock(world: World, career: CareerState | null) {
+  if (userOnClock(world, career)) return true
+  return !!career && coachHoldsTradePen(career) && currentTeamId(world) === career.teamId
+}
+
 function teamNeeds(roster: Player[]): Record<string, number> {
   const counts: Record<string, number> = {}
   for (const p of roster) counts[p.pos] = (counts[p.pos] ?? 0) + 1
@@ -142,6 +155,7 @@ export function bestAvailableFor(
   teamId: string,
   advice?: BoardAdvice,
   gradeOf?: (p: DraftProspect) => number,
+  tilt?: (p: DraftProspect) => number,
 ): DraftProspect | null {
   const available = world.draft.filter((p) => !p.draftedBy)
   if (!available.length) return null
@@ -154,7 +168,10 @@ export function bestAvailableFor(
       const idx = advice.board.indexOf(p.id)
       if (idx >= 0) adviceBonus = advice.weight * Math.max(4, 30 - idx * 4)
     }
-    return { p, score: (gradeOf ? gradeOf(p) : p.grade) + needBonus + posPremium + adviceBonus }
+    // FUTURES #27 DF1: the draft room's blended tilt. Absent (the default) the
+    // score is byte-identical to before.
+    const roomBonus = tilt ? tilt(p) : 0
+    return { p, score: (gradeOf ? gradeOf(p) : p.grade) + needBonus + posPremium + adviceBonus + roomBonus }
   })
   scored.sort((a, b) => b.score - a.score)
   return scored[0].p
@@ -385,12 +402,24 @@ function advancePick(world: World) {
   if (world.draftState.pickIndex >= totalPicks(world)) world.draftState.complete = true
 }
 
-/** Run AI picks until the user is on the clock or the draft ends. */
-export function simUntilUser(world: World, career: CareerState | null, max = 0) {
+/**
+ * Run AI picks until the user is on the clock or the draft ends. A head coach
+ * holding the trade pen also pauses on his slot (so he can trade it); `gmGo`
+ * lets the GM make that one pick and carry on.
+ */
+export function simUntilUser(world: World, career: CareerState | null, max = 0, gmGo = false) {
   const cap = max || totalPicks(world)
+  const startIndex = world.draftState.pickIndex
   let steps = 0
   while (!world.draftState.complete && steps < cap) {
     if (career && canDraft(career) && currentTeamId(world) === career.teamId) break
+    if (
+      career &&
+      coachHoldsTradePen(career) &&
+      currentTeamId(world) === career.teamId &&
+      !(gmGo && world.draftState.pickIndex === startIndex)
+    )
+      break
     const teamId = currentTeamId(world)
     if (!teamId) break
     // If the user lacks draft authority but has filed a board, the NPC weighs it.
@@ -406,7 +435,10 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
         gradeOf = (p: DraftProspect) => (flagged.includes(p.id) ? -999 : base(p))
       }
     }
-    let prospect = bestAvailableFor(world, teamId, advice, gradeOf)
+    // FUTURES #27 DF1: on your club's picks the room's blended stance tilts the
+    // board (red flag first, then the tilt, then a conviction call can still win).
+    const tilt = career && teamId === career.teamId ? roomTilt(world, career) : undefined
+    let prospect = bestAvailableFor(world, teamId, advice, gradeOf, tilt)
     // G2: in advise mode the Director may pound the table for a conviction call.
     if (prospect && career && teamId === career.teamId && !canDraft(career)) {
       const roll = makeRng(world.seed + world.season * 97 + world.draftState.pickIndex)()
@@ -417,7 +449,25 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0) 
       break
     }
     const round = currentRound(world)
+    // The room note is read off the board the pick was made from.
+    const winner = tilt && career ? roomWinner(world, career, prospect.id) : null
     const player = makePick(world, prospect, teamId)
+    if (tilt && career && teamId === career.teamId) {
+      pushLedger(career, {
+        kind: 'advice',
+        prospectId: prospect.id,
+        playerId: player.id,
+        name: prospect.name,
+        pos: prospect.pos,
+        college: prospect.college,
+        myGrade: prospect.myGrade ?? prospect.grade,
+        round,
+        pick: prospect.draftPick ?? undefined,
+        truth: prospect.trueGrade,
+        accepted: true,
+        note: roomNote(winner),
+      })
+    }
     if (advising && advice && career) {
       const onBoard = advice.board.includes(prospect.id)
       pushLedger(career, {
@@ -449,14 +499,41 @@ export function simulateRestOfDraft(world: World, career: CareerState | null) {
     if (world.draftState.complete) break
     const teamId = currentTeamId(world)
     if (!teamId) break
+    // A head coach holding the trade pen: the draft paused on his slot, so the GM makes the pick as usual.
+    if (career && teamId === career.teamId && coachHoldsTradePen(career)) {
+      simUntilUser(world, career, totalPicks(world), true)
+      continue
+    }
     // The user's club is on the clock but the user chose to auto-finish: take best available for them.
-    const gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
-    const prospect = bestAvailableFor(world, teamId, undefined, gradeOf)
+    const mine = !!career && teamId === career.teamId
+    const gradeOf = mine ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    // FUTURES #27 DF1: an auto/clock pick uses your own vector at 0.7 plus the
+    // room's at 0.3 — you still hear the building before the card goes in.
+    const tilt = mine ? roomTilt(world, career, { auto: true }) : undefined
+    const prospect = bestAvailableFor(world, teamId, undefined, gradeOf, tilt)
     if (!prospect) {
       world.draftState.complete = true
       break
     }
-    makePick(world, prospect, teamId, career && teamId === career.teamId ? career.gmName : null)
+    const winner = tilt && career ? roomWinner(world, career, prospect.id) : null
+    const round = currentRound(world)
+    const player = makePick(world, prospect, teamId, mine ? career!.gmName : null)
+    if (tilt && career) {
+      pushLedger(career, {
+        kind: 'advice',
+        prospectId: prospect.id,
+        playerId: player.id,
+        name: prospect.name,
+        pos: prospect.pos,
+        college: prospect.college,
+        myGrade: prospect.myGrade ?? prospect.grade,
+        round,
+        pick: prospect.draftPick ?? undefined,
+        truth: prospect.trueGrade,
+        accepted: true,
+        note: roomNote(winner),
+      })
+    }
   }
   return world.draftState.complete
 }
