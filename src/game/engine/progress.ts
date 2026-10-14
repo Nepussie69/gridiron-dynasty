@@ -10,9 +10,11 @@ import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
 import { clamp, makeRng, rpick } from './rng'
 import { nextClassCount, nextClassSeed, promoteNextClass } from './futureClasses'
-import { applyDevFocus, focusPointsFor } from './devPlan'
+import { applyDevFocus, focusPointsFor, devGroupFor } from './devPlan'
+import { boostPointsFor, groupDevMultiplier } from './staffMarket'
 import { mentorGrowthBonus } from './lockerRoom'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
+import { playerTradeValue } from './trade'
 import type { CareerDatabase } from './statsDb'
 
 // ── Player development ───────────────────────────────────────────────────────
@@ -95,7 +97,12 @@ export function developPlayers(
     // Staff quality changes how fast young players grow and how slowly vets decline.
     // Character (hidden) is the second lever: motor and maturity decide whether
     // the talent actually arrives. It never touches current ratings directly.
-    const dev = (p.teamId ? coachEffect(world, p.teamId).development : 1) * (p.character ? devModifier(p.character) : 1)
+    // FUTURES #28: the club's own position coaches redistribute development between
+    // groups (`groupDevMultiplier` deviates each group around the club's mean).
+    const dev =
+      (p.teamId
+        ? coachEffect(world, p.teamId).development * groupDevMultiplier(world, p.teamId, devGroupFor(p.pos))
+        : 1) * (p.character ? devModifier(p.character) : 1)
     const growth = Math.max(0, p.pot - p.ovr)
     // D2: growth for young players is earned on the field, not handed out by age.
     const experience = p.age <= 26 ? experienceScore(world, p, psIds) : 0
@@ -141,7 +148,9 @@ export function developPlayers(
     // only to the user's club and only when a focus is set, so AI development and
     // calibration are untouched. Deterministic: no `rng()` draw is added here.
     if (user && p.teamId === user.teamId && p.age <= 26 && p.devFocus) {
-      applyDevFocus(p, focusPointsFor(experience, dev))
+      // FUTURES #28: the specific position coach in the player's seat adds focus
+      // points (0–2), capped by MAX_FOCUS_BONUS inside focusPointsFor.
+      applyDevFocus(p, focusPointsFor(experience, dev, boostPointsFor(world, p.teamId, p.pos)))
     }
 
     // Bust risk: a player who never got the motor can stall out. Generated
@@ -412,8 +421,12 @@ export function enforceCapCompliance(world: World) {
 export function runAITrades(world: World, skipTeamId?: string | null) {
   const rng = makeRng(world.seed + world.season * 7079)
   const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  // League-average bodies per position, the yardstick for "surplus" and "need".
+  const avgBody: Record<string, number> = {}
+  for (const t of nfl) for (const p of world.roster[t.id] ?? []) avgBody[p.pos] = (avgBody[p.pos] ?? 0) + 1
+  for (const k of Object.keys(avgBody)) avgBody[k] /= nfl.length || 1
   let made = 0
-  for (let i = 0; i < 10 && made < 4; i++) {
+  for (let i = 0; i < 20 && made < 4; i++) {
     const a = rpick(rng, nfl)
     const b = rpick(rng, nfl)
     if (a.id === b.id) continue
@@ -425,6 +438,29 @@ export function runAITrades(world: World, skipTeamId?: string | null) {
     // Both players are drawn above, so skipping a deal never shifts the rng stream.
     if (skipTeamId && (a.id === skipTeamId || b.id === skipTeamId)) continue
     if (Math.abs(unscaleOvr(pa.ovr) - unscaleOvr(pb.ovr)) > 7 || pa.pos === pb.pos) continue
+    // Backlog 399: the swap has to be a real trade by the market's own values.
+    // Clubs never move their passer like this, the two assets have to be close
+    // in trade value (position and contract included), and each side has to be
+    // filling a position it is thinner at.
+    if (pa.pos === 'QB' || pb.pos === 'QB') continue
+    const va = playerTradeValue(pa)
+    const vb = playerTradeValue(pb)
+    if (va <= 0 || vb <= 0) continue
+    // Value parity (backlog 399): across-position swaps legitimately differ by
+    // their position multipliers, so a tight cap starved the market. 3.0x is
+    // still far from a free lunch — a lopsided offer is declined elsewhere.
+    if (Math.max(va, vb) / Math.min(va, vb) > 3.0) continue
+    // Clubs trade from a surplus to fill a need. Numbers first — deeper than the
+    // league average at the position they give up, thinner at the one they take
+    // — with a talent fallback for the common case where trimming has levelled
+    // the counts: the man given up is only a spare (two better bodies sit ahead
+    // of him) and he would be a top-two player at the partner's.
+    const cnt = (id: string, pos: Position) => (world.roster[id] ?? []).filter((x) => x.pos === pos).length
+    const better = (id: string, p: Player) => (world.roster[id] ?? []).filter((x) => x.pos === p.pos && unscaleOvr(x.ovr) > unscaleOvr(p.ovr)).length
+    const fillNeed = (id: string, give: Player, take: Player) =>
+      (cnt(id, give.pos) > (avgBody[give.pos] ?? 3) && cnt(id, take.pos) < (avgBody[take.pos] ?? 3)) ||
+      (better(id, give) >= 2 && better(id, take) <= 1)
+    if (!fillNeed(a.id, pa, pb) || !fillNeed(b.id, pb, pa)) continue
     world.roster[a.id] = ra.filter((x) => x.id !== pa.id)
     pa.teamId = b.id
     world.roster[b.id].push(pa)
@@ -442,6 +478,7 @@ export function runAITrades(world: World, skipTeamId?: string | null) {
     })
     made++
   }
+  return made
 }
 
 // ── Free agency AI: teams re-sign or sign to fill needs ───────────────────────/** Minimum bodies per position when trimming a roster to 53. */

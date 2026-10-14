@@ -8,6 +8,7 @@
 
 import type { StaffMember } from '../types'
 import { coachEffect } from './coaching'
+import { contractYearsForSalary, staffBuyout } from './staffMarket'
 import type { World } from './generate'
 import { FIRST, LAST } from './names'
 import { noteCoordinatorChange } from './playbook'
@@ -109,6 +110,44 @@ function repAppeal(rep: Reputation): number {
 }
 
 /**
+ * Backlog 398: what a coach asks for from *your* club — his market annual scaled
+ * by how much he wants the destination (a weak program has to overpay).
+ * `salaryOffer / askingFor(...)` is the ratio the money curve is anchored to.
+ */
+function askingFor(dest: number, annual: number): number {
+  return Math.max(1, Math.round(annual * (1 + (100 - dest) / 200)))
+}
+
+/**
+ * Backlog 398: how much a dollar actually moves THIS coach (never a team average).
+ *
+ * - a stable per-person "money/ambition" trait from his id (0.88–1.12);
+ * - age: veterans take the last big deal, rookies are building (0.86–1.14);
+ * - rating: elite coaches are not bought — money moves them less than the
+ *   destination and your reputation, so cash alone can't land an 88+ name.
+ */
+export function moneyAppetite(member: StaffMember): number {
+  const trait = 0.88 + ((hash32(`cash|${member.id}`, 79) % 101) / 100) * 0.24
+  const age = clamp(1 + (member.age - 39) * 0.011, 0.86, 1.14)
+  const elite = member.rating >= 88 ? 0.74 : member.rating >= 82 ? 0.84 : member.rating >= 74 ? 0.94 : 1.04
+  return trait * age * elite
+}
+
+/**
+ * Backlog 398: the money curve. Continuous and monotonic in the offer, anchored
+ * to the asking price `r = offer / ask`:
+ *   r 0.70 → ≈ −12   (a real lowball still stings)
+ *   r 0.85 → ≈  −1   (just under what he wants)
+ *   r 1.00 → ≈  +9   (he gets his number)
+ *   r 1.30 → ≈ +24   (a clearly better deal)
+ *   r 1.50 → ≈ +31   (top of the slider — diminishing returns, never infinite)
+ * `66 − 156·e^{−r}` is concave, so each extra dollar past the ask buys less.
+ */
+function moneyCurve(r: number): number {
+  return 66 - 156 * Math.exp(-r)
+}
+
+/**
  * Compute a candidate's interest in joining your staff.
  * High-rated coaches are pickier; a strong destination and your reputation help.
  */
@@ -121,13 +160,20 @@ export function computeInterest(
 ): number {
   const dest = destinationAppeal(world, teamId)
   const you = repAppeal(rep)
-  // A coach wants: a good destination, a respected boss, and fair money.
-  const moneyPull = salaryOffer >= member.annual ? 12 : salaryOffer >= member.annual * 0.85 ? 4 : -12
+  // A coach wants: a good destination, a respected boss, and fair money. Money
+  // rises smoothly with the offer and keeps paying past the ask — scaled to him.
+  const ask = askingFor(dest, member.annual)
+  const moneyPull = clamp(moneyCurve(salaryOffer / ask) * moneyAppetite(member), -24, 34)
   // Elite coaches (85+) are hard to land without a strong profile.
   const elitism = member.rating >= 88 ? -18 : member.rating >= 80 ? -8 : member.rating >= 70 ? 0 : 8
   const interest =
     dest * 0.3 + you * 0.35 + moneyPull + elitism + (member.rating >= 85 && you < 55 ? -14 : 0) + 16
   return clamp(Math.round(interest), 2, 99)
+}
+
+/** Backlog 398: interest → the odds he signs (one definition, UI and engine). */
+export function hireProbability(interest: number, rating: number): number {
+  return clamp(interest / 100 - (rating - 75) * 0.004, 0.05, 0.95)
 }
 
 /** Candidates currently interested in your open role. */
@@ -145,7 +191,7 @@ export function openCandidates(
   ]
   const out: HireCandidate[] = []
   for (const m of pool.slice(0, 24)) {
-    const asking = Math.round(m.annual * (1 + (100 - destinationAppeal(world, teamId)) / 200))
+    const asking = askingFor(destinationAppeal(world, teamId), m.annual)
     const interest = computeInterest(world, teamId, rep, m, asking)
     out.push({ ...m, askingSalary: asking, interest, negotiationRound: 0 })
   }
@@ -174,7 +220,7 @@ export function attemptHire(
 ): HireResult {
   const interest = clamp(computeInterest(world, teamId, rep, candidate, salaryOffer) + interestBonus, 0, 99)
   // Convert interest to a hire probability.
-  const prob = clamp(interest / 100 - (candidate.rating - 75) * 0.004, 0.05, 0.95)
+  const prob = hireProbability(interest, candidate.rating)
   const roll = rng()
   if (roll < prob) {
     return { signed: true, candidate: { ...candidate, interest }, message: `${candidate.name} signed as ${candidate.role}.` }
@@ -188,14 +234,34 @@ export function attemptHire(
   return { signed: false, candidate: { ...candidate, interest }, message: reason }
 }
 
-/** Apply a successful hire: add to staff, remove from pool. Optionally set the scheme. */
-export function applyHire(world: World, teamId: string, candidate: HireCandidate, salary: number, scheme?: string) {
+/** The result of a completed hire — the new seat holder, who lost it, and the dead money owed. */
+export interface HireApplied {
+  member: StaffMember
+  /** The coach who lost the seat, if the hire replaced someone mid-contract. */
+  replaced?: StaffMember
+  /** §7: 50% of the replaced coach's remaining years × annual, as dead staff money. */
+  deadMoney: number
+}
+
+/**
+ * Apply a successful hire: add to staff, remove from pool. Optionally set the
+ * scheme. FUTURES #28: contract length now comes from the salary tier (2–4 years)
+ * and replacing a coach mid-contract reports a buyout to be banked as dead money
+ * (the store records it via `addStaffDeadMoney`).
+ */
+export function applyHire(
+  world: World,
+  teamId: string,
+  candidate: HireCandidate,
+  salary: number,
+  scheme?: string,
+): HireApplied {
   const member: StaffMember = {
     ...candidate,
     teamId,
     status: 'Hired',
     annual: salary,
-    contractYears: 3,
+    contractYears: contractYearsForSalary(salary),
     scheme: scheme ?? candidate.scheme,
   }
   delete (member as unknown as Record<string, unknown>).interest
@@ -204,8 +270,15 @@ export function applyHire(world: World, teamId: string, candidate: HireCandidate
   // Replace an existing coach in the same role, if any.
   const staff = world.staff[teamId] ?? (world.staff[teamId] = [])
   const idx = staff.findIndex((m) => m.role === member.role)
-  if (idx >= 0) staff[idx] = member
-  else staff.push(member)
+  let replaced: StaffMember | undefined
+  let deadMoney = 0
+  if (idx >= 0) {
+    replaced = staff[idx]
+    deadMoney = replaced.contractYears > 0 ? staffBuyout(replaced) : 0
+    staff[idx] = member
+  } else {
+    staff.push(member)
+  }
   world.staffPool = world.staffPool.filter((m) => m.id !== candidate.id)
   if (candidate.role === ANALYTICS_ROLE) {
     world.analyticsPool = (world.analyticsPool ?? []).filter((m) => m.id !== candidate.id)
@@ -214,5 +287,5 @@ export function applyHire(world: World, teamId: string, candidate: HireCandidate
   // the moment of the hire — not a season later at the regular-season tick.
   const side = member.role === 'Offensive Coordinator' ? 'off' : member.role === 'Defensive Coordinator' ? 'def' : null
   if (side) noteCoordinatorChange(world, teamId, side)
-  return member
+  return { member, replaced, deadMoney }
 }

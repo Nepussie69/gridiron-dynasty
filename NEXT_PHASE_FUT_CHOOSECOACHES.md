@@ -114,6 +114,6 @@ C1 and C3 can run in parallel worktrees if C1's signatures are frozen in the C3 
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| C1 engine | ⏳ |
-| C2 store | ⏳ |
+| C1 engine | ✅ 2026-10-14 (salvage merge, row 391) |
+| C2 store | ✅ 2026-10-14 (DeepSeek fut28c2, row 407: probe 94/0, calib identical, eq 20/20) |
 | C3 UI | ⏳ (after V1) |
