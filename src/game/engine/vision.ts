@@ -23,7 +23,10 @@
 //      ball in. That is the big individual spread at the site.
 //   3. vision cone — `visionThrow()` measures `coneDeg` from the QB's own
 //      depth-specific accuracy + AWR, narrowed by his fatigue (STA-scaled) and by
-//      pressure. A read beyond the cone (`offCone`) loses accuracy steeply.
+//      pressure. Pressure is a BIG, poise-scaled effect (backlog 381): the cone
+//      shrinks by a share set by how hard the throw is pressed, and a QB with
+//      elite pocket poise (his own TUP/TOR/AWR) keeps most of it while a poor one
+//      collapses. A read beyond the cone (`offCone`) loses accuracy steeply.
 //   4. placement circle — the same call returns `placeRadiusYd` (the throw's error
 //      radius: wider under pressure, fatigue, off-platform and off-cone) and the
 //      deterministic `ballOffsetYd` spot the ball lands on inside it. The circle
@@ -115,16 +118,36 @@ export const VISION = {
   coneBase: 33,
   coneAccW: 0.8, // depth-specific accuracy widens the cone
   coneAwrW: 0.6, // awareness widens the cone
-  conePressW: 5.0, // pressure narrows it
   coneFatW: 6.0, // his own fatigue narrows it
   coneMin: 12,
   coneMax: 55,
+  /** Floor for a pressured cone (a collapsed cone may go below the clean-pocket `coneMin`). */
+  conePressMin: 4,
+  /** Pressure (pressureEdge / pressScale) at which the pressure shrink is full. */
+  conePressFull: 0.45,
+  /** Shape of the shrink from clean (0) to full (1): < 1 makes light pressure
+   *  already clearly narrower. A clean pocket (pressure <= 0) is never touched. */
+  conePressCurve: 0.75,
+  /** Share of the cone lost at full pressure by a QB of league-average poise. */
+  coneShrinkMid: 0.5,
+  /** Per rating point of the QB's own poise, taken off that share (an elite-poise
+   *  QB keeps most of his cone, a poor one collapses). */
+  coneShrinkPoiseW: 0.025,
+  coneShrinkMin: 0.15,
+  coneShrinkMax: 0.78,
+  /** Poise = his own TUP / TOR (the qbPressureRelief inputs) + AWR, as rating
+   *  points off the QB position mean. Weights sum to 1. */
+  poiseTup: 0.4,
+  poiseTor: 0.3,
+  poiseAwr: 0.3,
   // ── 4. placement circle ────────────────────────────────────────────────────
   /** Error radius (yd) for a league-average QB, clean pocket. */
   radiusBase: 1.45,
   radiusAccW: 0.05, // a more accurate depth rating tightens it
   radiusAwrW: 0.018,
-  radiusPressW: 0.18, // pressure widens it
+  /** Yards of circle widening per unit of cone shrink: the circle opens as the
+   *  cone closes, so a poor-poise QB's circle widens more than an elite one's. */
+  radiusPressW: 1.8,
   radiusFatW: 0.25, // fatigue widens it (STA-scaled)
   radiusOffPlatW: 0.30, // off-platform (scrambling style) widens it
   radiusConeW: 0.80, // a throw outside the cone widens it (stared down / late)
@@ -339,25 +362,38 @@ export function visionThrow(
   qb: Player, depth: number, readNo: number, reach: number | null,
   pressureEdge: number, fat: number, offPlatform: number,
   spotU: number, _spotA: number,
+  extraCone = 0, extraRadius = 0, extraAcc = 0,
 ): VisionThrow {
   const a = attrs(qb)
   const key = depthAccKey(depth)
   const accDev = dev('QB', key, a[key] ?? POS_MEAN.QB[key])
   const awrDev = dev('QB', 'AWR', a.AWR ?? POS_MEAN.QB.AWR)
   const staDev = dev('QB', 'STA', a.STA ?? POS_MEAN.QB.STA)
-  const press = pressureEdge / VISION.pressScale - VISION.pressCenter
+  const press = Math.max(0, pressureEdge / VISION.pressScale - VISION.pressCenter)
+  // Pressure shrink (backlog 381): how hard he is pressed (0 clean .. 1 full) times
+  // the share of the cone his OWN poise lets pressure take. No unit mean is read.
+  const poise = dev('QB', 'TUP', a.TUP ?? POS_MEAN.QB.TUP) * VISION.poiseTup
+    + dev('QB', 'TOR', a.TOR ?? POS_MEAN.QB.TOR) * VISION.poiseTor
+    + awrDev * VISION.poiseAwr
+  const pressLevel = Math.pow(Math.min(1, press / VISION.conePressFull), VISION.conePressCurve)
+  const shrink = pressLevel * clampV(VISION.coneShrinkMid - poise * VISION.coneShrinkPoiseW, VISION.coneShrinkMin, VISION.coneShrinkMax)
   // A high-STA QB carries his fatigue better (his own stamina rating scales the cost).
   const fatW = fat * (1 - clampV(staDev, -0.3, 0.3))
   const offCone = reach == null ? 0 : Math.max(0, readNo - reach)
-  const coneDeg = clampV(
-    VISION.coneBase + accDev * VISION.coneAccW + awrDev * VISION.coneAwrW
-      - Math.max(0, press) * VISION.conePressW - fatW * VISION.coneFatW,
+  // The clean-pocket cone is exactly the pre-381 value (same clamp); pressure then takes `shrink` of it.
+  // J10b: `extraCone` / `extraRadius` carry the throw-power / throw-type / pocket-
+  // presence move computed by `throw.ts` — folded INTO the circle so there is one
+  // accuracy scalar and one placement radius, never a second accuracy term. They
+  // are 0 on the OFF path, so the J10a cone/circle is then bit-exact.
+  const cleanCone = clampV(
+    VISION.coneBase + accDev * VISION.coneAccW + awrDev * VISION.coneAwrW - fatW * VISION.coneFatW - extraCone,
     VISION.coneMin, VISION.coneMax,
   )
+  const coneDeg = shrink > 0 ? clampV(cleanCone * (1 - shrink), VISION.conePressMin, VISION.coneMax) : cleanCone
   const radius = clampV(
     VISION.radiusBase - accDev * VISION.radiusAccW - awrDev * VISION.radiusAwrW
-      + Math.max(0, press) * VISION.radiusPressW + fatW * VISION.radiusFatW
-      + offPlatform * VISION.radiusOffPlatW + offCone * VISION.radiusConeW,
+      + shrink * VISION.radiusPressW + fatW * VISION.radiusFatW
+      + offPlatform * VISION.radiusOffPlatW + offCone * VISION.radiusConeW + extraRadius,
     VISION.radiusMin, VISION.radiusMax,
   )
   // The ball spot inside the circle (uniform over the disc; deterministic). The
@@ -371,7 +407,7 @@ export function visionThrow(
   // mean so the league completion level does not move.)
   const qAcc = clampV(
     VISION.accCenter + accDev * VISION.accW
-      - (radius - VISION.radiusBase) * VISION.accRadiusW,
+      - (radius - VISION.radiusBase) * VISION.accRadiusW - extraAcc,
     VISION.accMin, VISION.accMax,
   )
   return { readNo, coneDeg, placeRadiusYd: radius, ballOffsetYd, offSpotYd, offCone, qAcc }

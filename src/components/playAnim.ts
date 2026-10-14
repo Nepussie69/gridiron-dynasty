@@ -31,6 +31,7 @@ import { LiveField, pursue, phases, holdSpot, livePos, type Brain, type PairPlan
 import { runReturnField, returnLine, returnScheme } from './playReturn.ts'
 import { carrierMove, effAttrs, effRating, fatigueMap, fatiguePace } from './animRatings'
 import { planOf } from './jersey'
+import { applyReadPaths, eyeJumpPicker } from './broadcast/qbReads'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
@@ -1601,7 +1602,8 @@ export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim
         return buildStatic(play, ctx)
     }
   }
-  return presentAnim(buildRaw(), play, ctx)
+  // Read visuals (qbReads.ts): the eye jump's break and the ball placement, plan attached.
+  return presentAnim(applyReadPaths(buildRaw(), play, ctx), play, ctx)
 }
 
 /** A numeric attribute, or `fallback` when the player does not carry it (never
@@ -5039,7 +5041,8 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
 
   if (int) {
     const spotX = changeSpot(play, ctx.next) ?? catchPt.x - 8
-    const near = nearestKey(m, DEF_KEYS, catchPt, catchSec)
+    // Read visuals: the credited defender who read the QB's eyes jumps the route and makes the pick.
+    const near = eyeJumpPicker(play, ctx, (k) => (m[k] ? posAt(m[k].path, catchSec - 1.0) : null), catchPt) ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)
     recEv(catchSec, 'interception', [near, tgt], catchPt)
     recEv(catchSec, 'turnover', [near], catchPt)
     const v0 = seek(m[near], Math.max(0.12, catchSec - 0.06))

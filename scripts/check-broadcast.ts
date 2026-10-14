@@ -3028,4 +3028,195 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
   })
 }
 
+// Read visuals (backlog 303-309; J10a fields; qbReads.ts): (1) the QB's head / shoulders and the
+// cone go through his designed reads in order and land on the engine's target (readNo); (2) a
+// checkdown works the downfield reads first, then the eyes come off to the back / TE underneath;
+// (3) an eye-jump defender faces the QB, breaks before the throw and is at the ball for the pick /
+// break-up; (4) the ball arrives ballOffsetYd (3-D) from the receiver's ideal spot with the matching
+// catch pose; (5) the drawn cone narrows from the clean pocket to exactly coneDeg at the release —
+// obviously on pressured snaps — and the circle grows to exactly placeRadiusYd.
+{
+  const QR = await import('../src/components/broadcast/qbReads.ts')
+  const { qbConeAt } = await import('../src/components/broadcast/visionCone.ts')
+  const AD = await import('../src/components/broadcast/animData.ts')
+  const store = await import('../src/store/gameStore.ts')
+  const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
+  const { buildPlayAnim, posAt, targetKey } = await import('../src/components/playAnim.ts')
+  const { actorPlayers } = await import('../src/components/jersey.ts')
+  ok('read visuals: progression in read order to the engine target, checkdown eyes off the downfield reads, eye-jump break before the throw, ball placed ballOffsetYd with the matching catch, cone narrows to coneDeg under pressure', () => {
+    store.useGame.getState().startCareer({ name: 'Q', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const byId = new Map(world.players.map((p) => [p.id, p]))
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const deg = (a: number) => (Math.abs(((a + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * 180) / Math.PI
+    const c = { plans: 0, tgtOk: 0, seqOk: 0, seqN: 0, faceOk: 0, faceN: 0, coneOk: 0, coneN: 0, dwellShort: 0, dwells: 0,
+      chk: 0, chkDown: 0, chkBack: 0, swings: [] as number[], backSet: 0, backN: 0,
+      eye: 0, eyePlanned: 0, eyeEarly: 0, eyeReads: 0, eyeInc: 0, eyeIncNear: 0, eyeIncSwat: 0, eyeInt: 0, eyeIntDrawn: 0, eyeVmax: 0,
+      place: 0, placeExact: 0, placePose: 0, placeCls: {} as Record<string, number>, holdMoved: 0,
+      cone: 0, coneEnd: 0, press: 0, pressNarrow: 0, mono: 0, radEnd: 0, pressGrow: 0, sackCone: 0, sacks: 0 }
+    const dwellBy: Record<string, number[]> = { lo: [], hi: [] }
+    const bad: string[] = []
+    for (let g = 0; g < 40 && (g < 8 || c.eye < 6 || c.chk < 12); g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 3) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 3301 + g * 7919)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' || play.spike) continue
+        const other = play.offId === home ? away : home
+        const tPos = play.targetId ? byId.get(play.targetId)?.pos : undefined
+        const tKey = play.targetId ? targetKey(play, { targetPos: tPos }) : null
+        const actors = actorPlayers(world, play, other, tKey)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], targetPos: tPos, actors })
+        const plan = (anim as BroadcastAnim & { reads?: import('../src/components/broadcast/qbReads.ts').ReadPlan | null }).reads
+        if (!plan) continue
+        const D = plan.D
+        const sack = plan.kind === 'sack'
+        const at = (k: string, t: number) => posAt(anim.actors.find((a) => a.key === k)!.path, t)
+        const qbSpd = (t: number) => { const a = at('qb', t - 0.05 / D); const b = at('qb', t + 0.05 / D); return Math.hypot(b.x - a.x, b.y - a.y) / 0.1 }
+        const f = anim.flights[0]
+        c.plans++
+        // 1. progression
+        if (!sack) {
+          if (actors.get(plan.target!)?.id === play.targetId && plan.seq[plan.seq.length - 1] === plan.target) c.tgtOk++
+          else bad.push(`${play.n}: target ${plan.target} is not the engine's`)
+          if (plan.looks.map((l) => l.key).join() !== plan.seq.join()) bad.push(`${play.n}: looks out of read order`)
+          if (!play.checkdown) {
+            // readNo - 1 designed reads before the target (fewer only when fewer men run routes).
+            const runners = ['wr0', 'wr1', 'wr2', 'te', 'rb', 'fb'].filter((k) => k !== plan.target && anim.actors.some((a) => a.key === k) && Math.hypot(at(k, plan.endT).x - at(k, plan.snapT).x, at(k, plan.endT).y - at(k, plan.snapT).y) >= 3.5).length
+            c.seqN++
+            if (plan.seq.length === Math.min(plan.readNo, runners + 1)) c.seqOk++
+          }
+        }
+        const lockT = f ? f.t0 - (THROW_TIMING[anim.throwStyle ?? 'normal'].wind + 0.45) / D : plan.endT - 0.25 / D
+        for (const l of plan.looks) {
+          const dw = (l.t1 - l.t0) * D
+          c.dwells++
+          if (dw < 0.15) c.dwellShort++
+          if (l.role === 'read') dwellBy[plan.reach < 1.3 ? 'lo' : plan.reach >= 2 ? 'hi' : 'mid']?.push(plan.dwell)
+          const m = (l.t0 + l.t1) / 2
+          const look = (t: number) => (l.role === 'read' ? at(l.key, t) : { x: plan.aimX, y: plan.aimY })
+          if (m < lockT && qbSpd(m) <= 2.6 && dw >= 0.2) {
+            // Head + shoulders on the man he is reading (the cone looks ahead to the ball's spot).
+            const q = at('qb', m)
+            const r = at(l.key, m)
+            c.faceN++
+            if (deg(AD.facingAt(anim, 'qb', m) - Math.atan2(r.y - q.y, r.x - q.x)) <= 20) c.faceOk++
+          }
+          if (dw >= 2 * QR.TURN_SEC + 0.05) {
+            const t = l.t0 + (QR.TURN_SEC + 0.03) / D
+            const cone = qbConeAt(play, anim, t).cone
+            const q = at('qb', t)
+            const r = look(t)
+            if (cone) { c.coneN++; if (deg(cone.yaw - Math.atan2(r.y - q.y, r.x - q.x)) <= 3) c.coneOk++ }
+          }
+        }
+        // 2. checkdown
+        if (play.checkdown && !sack) {
+          c.chk++
+          const los = 10 + play.startYard
+          const pre = plan.looks.filter((l) => l.role === 'read')
+          // (when nobody is 5+ yd downfield at the release he works the first designed reads, then dumps it)
+          const deepMen = ['wr0', 'wr1', 'wr2', 'te', 'rb', 'fb'].filter((k) => k !== plan.target && anim.actors.some((a) => a.key === k) && at(k, plan.endT).x - los >= 5)
+          if (pre.length && (!deepMen.length || pre.every((l) => at(l.key, plan.endT).x - los >= 5))) c.chkDown++
+          if (/^(rb|te|fb)$/.test(plan.target ?? '')) c.chkBack++
+          const last = pre[pre.length - 1]
+          if (last) {
+            const q = at('qb', plan.endT)
+            const a = at(last.key, last.t1)
+            c.swings.push(deg(Math.atan2(plan.aimY - q.y, plan.aimX - q.x) - Math.atan2(a.y - q.y, a.x - q.x)))
+          }
+          if (/^(rb|fb)$/.test(plan.target ?? '')) {
+            c.backN++
+            if ((anim.poses[plan.target!] ?? []).some((w) => w.state === 'set' && w.t1 <= plan.endT + 1e-9)) c.backSet++
+          }
+        }
+        // 3. eye jump
+        if (play.eyeJumpId && !sack && f) {
+          c.eye++
+          const j = plan.jump
+          if (j) {
+            c.eyePlanned++
+            if (j.breakT < f.t0) c.eyeEarly++
+            if ((anim.facing[j.key] ?? []).some((w) => w.mode === 'actor' && w.key === 'qb' && w.t1 > j.lookT && w.t0 < j.breakT)) c.eyeReads++
+            const b = posAt(anim.ball, f.t1)
+            const p = at(j.key, f.t1)
+            if (play.result.startsWith('Interception')) {
+              if (play.intId === play.eyeJumpId) { c.eyeInt++; if ((anim.events ?? []).find((e) => e.kind === 'interception')?.keys[0] === j.key) c.eyeIntDrawn++ }
+            } else {
+              c.eyeInc++
+              if (Math.hypot(b.x - p.x, b.y - p.y) <= 1.2) c.eyeIncNear++
+              if (AD.poseAt(anim, j.key, f.t1) === 'swat') c.eyeIncSwat++
+            }
+            for (let t = j.breakT; t < f.t1; t += 0.04 / D) { const a = at(j.key, t); const e = at(j.key, t + 0.04 / D); c.eyeVmax = Math.max(c.eyeVmax, Math.hypot(e.x - a.x, e.y - a.y) / 0.04) }
+          }
+        }
+        // 4. placement
+        const pl = plan.place
+        if (pl && f) {
+          c.place++
+          const b = posAt(anim.ball, f.t1)
+          const z = AD.ballZAt(anim, f.t1)
+          if (Math.abs(Math.hypot(b.x - pl.ix, b.y - pl.iy, z - 1.4) - (play.ballOffsetYd ?? 0)) <= 0.03) c.placeExact++
+          if (AD.poseAt(anim, pl.key, f.t1) === pl.pose) c.placePose++
+          c.placeCls[pl.cls] = (c.placeCls[pl.cls] ?? 0) + 1
+          if (play.result !== 'Incomplete' && !anim.holders.some((h) => h.key === pl.key && Math.abs(h.t - f.t1) < 1e-9)) c.holdMoved++
+        }
+        // 5. pressure cone
+        c.cone++
+        const t0 = plan.snapT + 0.02 / D
+        const wS = QR.coneWidthAt(plan, t0)
+        const wR = QR.coneWidthAt(plan, plan.endT)
+        if (play.coneDeg == null || wR === play.coneDeg) c.coneEnd++
+        const pr = sack || !!play.pressure || !!play.pressureType
+        if (pr) { c.press++; if (wS - wR >= 6) c.pressNarrow++ }
+        let prev = Infinity
+        let mono = true
+        for (let t = plan.snapT; t <= plan.endT; t += 0.04 / D) { const w = QR.coneWidthAt(plan, t); if (w > prev + 1e-9) mono = false; prev = w }
+        if (mono) c.mono++
+        if (!sack) {
+          if (play.placeRadiusYd == null || QR.radiusAt(plan, plan.endT) === play.placeRadiusYd) c.radEnd++
+          if (pr && QR.radiusAt(plan, plan.endT) - QR.radiusAt(plan, t0) >= 0.3) c.pressGrow++
+          if (f && play.coneDeg != null) {
+            const cone = qbConeAt(play, anim, f.t0).cone
+            if (!cone || Math.abs((cone.half * 360) / Math.PI - play.coneDeg) > 1e-6) bad.push(`${play.n}: drawn cone at release ${cone ? ((cone.half * 360) / Math.PI).toFixed(2) : 'none'} vs coneDeg ${play.coneDeg}`)
+          }
+        } else {
+          c.sacks++
+          if (qbConeAt(play, anim, (plan.snapT + plan.endT) / 2).cone) c.sackCone++
+        }
+      }
+    }
+    const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : NaN }
+    const pct = (a: number, b: number) => (b ? a / b : 1)
+    assert.ok(c.plans >= 300 && c.chk >= 12 && c.eye >= 6 && c.place >= 200 && c.press >= 40 && c.sacks >= 10, `coverage ${JSON.stringify({ plans: c.plans, chk: c.chk, eye: c.eye, place: c.place, press: c.press, sacks: c.sacks })}`)
+    assert.ok(bad.length === 0, `${bad.length} bad: ${bad.slice(0, 5).join('; ')}`)
+    // 1
+    assert.ok(pct(c.seqOk, c.seqN) >= 0.98, `reads shown before the target = readNo - 1 on ${c.seqOk}/${c.seqN}`)
+    assert.ok(pct(c.faceOk, c.faceN) >= 0.97, `QB head/shoulders on the read ${c.faceOk}/${c.faceN}`)
+    assert.ok(pct(c.coneOk, c.coneN) >= 0.98, `cone on the read after the turn ${c.coneOk}/${c.coneN}`)
+    assert.ok(pct(c.dwellShort, c.dwells) <= 0.05, `reads shorter than 0.15 s: ${c.dwellShort}/${c.dwells}`)
+    assert.ok(!dwellBy.hi.length || !dwellBy.lo.length || med(dwellBy.hi) < med(dwellBy.lo), `a quick reader moves faster: dwell hi ${med(dwellBy.hi)} vs lo ${med(dwellBy.lo)}`)
+    // 2
+    assert.ok(pct(c.chkDown, c.chk) >= 0.95 && c.chkBack === c.chk, `checkdown: downfield reads first ${c.chkDown}/${c.chk}, ends on the back / TE ${c.chkBack}/${c.chk}`)
+    assert.ok(med(c.swings) >= 25, `checkdown eye swing median ${med(c.swings).toFixed(1)} deg`)
+    assert.ok(pct(c.backSet, c.backN) >= 0.8, `checkdown back in protection before his release ${c.backSet}/${c.backN}`)
+    // 3
+    assert.ok(c.eyePlanned === c.eye && c.eyeEarly === c.eyePlanned && c.eyeReads === c.eyePlanned, `eye jump: planned ${c.eyePlanned}/${c.eye}, breaks before the throw ${c.eyeEarly}, reads the QB ${c.eyeReads}`)
+    assert.ok(pct(c.eyeIncNear, c.eyeInc) >= 0.8 && pct(c.eyeIncSwat, c.eyeInc) >= 0.8, `eye-jump break-up at the ball ${c.eyeIncNear}/${c.eyeInc}, swat ${c.eyeIncSwat}`)
+    assert.ok(pct(c.eyeIntDrawn, c.eyeInt) >= 0.8, `credited eye-jumper makes the drawn pick ${c.eyeIntDrawn}/${c.eyeInt}`)
+    assert.ok(c.eyeVmax <= 11, `eye-jump break speed ${c.eyeVmax.toFixed(1)} yd/s`)
+    // 4
+    assert.ok(pct(c.placeExact, c.place) >= 0.96, `ball placed ballOffsetYd off the ideal spot ${c.placeExact}/${c.place}`)
+    assert.ok(pct(c.placePose, c.place) >= 0.95, `catch pose matches the placement ${c.placePose}/${c.place}`)
+    assert.ok(Object.keys(c.placeCls).length === 4, `placement classes ${JSON.stringify(c.placeCls)}`)
+    assert.ok(c.holdMoved === 0, `catch time moved on ${c.holdMoved}`)
+    // 5
+    assert.ok(c.coneEnd === c.cone && c.radEnd === c.cone - c.sacks, `cone at release == coneDeg ${c.coneEnd}/${c.cone}, circle == placeRadiusYd ${c.radEnd}`)
+    assert.ok(c.pressNarrow === c.press && c.mono === c.cone, `pressured snaps narrow >= 6 deg ${c.pressNarrow}/${c.press}; never widens ${c.mono}/${c.cone}`)
+    assert.ok(pct(c.pressGrow, c.press - c.sacks) >= 0.9 && c.sackCone === c.sacks, `circle grows under pressure ${c.pressGrow}/${c.press - c.sacks}; sack cone ${c.sackCone}/${c.sacks}`)
+    console.log(`      reads: ${c.plans} plans, face ${c.faceOk}/${c.faceN}, cone ${c.coneOk}/${c.coneN}; checkdown ${c.chk} swing med ${med(c.swings).toFixed(0)} deg; eye jump ${c.eye} (inc ${c.eyeIncNear}/${c.eyeInc}, int ${c.eyeIntDrawn}/${c.eyeInt}); placement ${c.placeExact}/${c.place} ${JSON.stringify(c.placeCls)}; pressured ${c.pressNarrow}/${c.press}`)
+  })
+}
+
 console.log(`check-broadcast: PASS (${n} checks)`)

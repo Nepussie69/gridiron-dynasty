@@ -30,6 +30,7 @@ import { bestInk, contrast, INK_DARK, INK_LIGHT, luminance, mixHex, parseHex, to
 import { project, type Camera } from './camera.ts'
 import { ART, type ClubLike } from './palette.ts'
 import type { PoseState } from './animData.ts'
+import { READ_POSES } from './readPoses.ts'
 
 // ── kits ─────────────────────────────────────────────────────────────────────
 
@@ -293,6 +294,7 @@ function throwDyn(wind: number, follow: number, o: { qtr: number; hi: number; pl
 
 /** Every pose state animData emits (keep in sync with animData PoseState; check-broadcast asserts it). */
 export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
+  ...READ_POSES, // read visuals: catch placement + break-up poses (readPoses.ts)
   stance3: { base: { cr: 1, ln: 0.75, hd: 1, run: 0 } },
   stance2: { base: { cr: 0.42, ln: 0.35, af: 0.12, run: 0.3 } },
   stand: { base: { cr: 0.08, af: 0.18 } },

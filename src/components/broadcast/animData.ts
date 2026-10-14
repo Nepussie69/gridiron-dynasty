@@ -15,6 +15,7 @@
 import type { PlayAnim, AnimContext, Actor } from '../playAnim'
 import type { Play } from '../../game/engine/playsim'
 import { carrierMove, effRating, tackleStyle, tiredness, type CarrierMove } from '../animRatings'
+import { applyReadPresentation } from './qbReads'
 
 // Geometry constant (copied: no value import from playAnim.ts).
 const MID_Y = 26.65
@@ -36,6 +37,7 @@ interface InB1aInput { engagements?: InEngagement[]; events?: InEvent[]; sheds?:
 
 // ── public shapes (the renderer, B3/B4/B5, consumes these) ───────────────────
 export type PoseState =
+  | 'catchHigh' | 'catchLow' | 'catchReach' | 'catchBack' | 'swat' // read visuals (readPoses.ts)
   | 'stance3' | 'stance2' | 'stand' | 'run' | 'pedal' | 'block' | 'fake' | 'throw'
   | 'catch' | 'carry' | 'stumble' | 'dive' | 'fall' | 'down' | 'kick' | 'hold' | 'tackle'
   | 'set' | 'throwQuick' | 'throwDeep' | 'throwRun' | 'throwHurry'
@@ -1101,7 +1103,8 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     // (only a man who ends ON a goal line at speed: a run / catch TD already runs through and eases up)
     if (v >= 3 && Math.min(Math.abs(b.x - 10), Math.abs(b.x - 110)) < 1.5) runOn = { key: k, v, hx: (b.x - a.x) / (v * 0.1), hy: (b.y - a.y) / (v * 0.1) }
   }
-  return { ...anim, poses, facing, ballZ, camera, ...(skill ? { skill } : {}), ...(runOn ? { runOn } : {}) }
+  // Read visuals (qbReads.ts): QB head through the reads, eye jump, catch placement.
+  return applyReadPresentation({ ...anim, poses, facing, ballZ, camera, ...(skill ? { skill } : {}), ...(runOn ? { runOn } : {}) }, play, ctx)
 }
 
 /** animflow r6b: left / right for a spin, from the play number. */
