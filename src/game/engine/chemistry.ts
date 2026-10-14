@@ -59,11 +59,16 @@ export const CHEM = {
    *  rel): about -0.045 at a mature centre of 0.40. */
   intShiftFrac: -0.11,
   /** Residual offset of the QB–WR centre for the completion leg, as a FRACTION of the
-   *  centre: the modelled centre is built from the depth charts and the measured usage
-   *  table and the outer completion clamp saturates the settled side; this takes out
-   *  what is left so the league's completion rate holds once the pass-rush side effect of
-   *  the OL leg is counted (`J37_STAT.dComp`, mature-league ON-OFF): about 0.003 at 0.40. */
-  skillShiftFrac: 0.0075,
+   *  centre: the modelled `leagueSkillCenter` is built from the depth charts and the
+   *  measured usage table and sits a little BELOW the true throw-weighted pair value on a
+   *  mature league (pooled meanΔcomp +0.00122 over 6 mature leagues, J37_STAT), which made
+   *  the ON league complete ~0.3 points more and pass ~+4 yards. This takes out what is
+   *  left so the league's completion / passing means hold. Re-centred 2026-10-14 with the
+   *  J37_STAT sweep + the 6-seed mature band sweep (salvage stat10/ms4) and the 500-game
+   *  mature gate (logs/j37-m-a2/b2): with 0.045 the A set was −0.17 but the B set +0.27;
+   *  0.055 centres BOTH (the shift is uniform ~−0.05 points per +0.01, and note the
+   *  constant also feeds the user's own season games, so it changes the mature build). */
+  skillShiftFrac: 0.055,
   /** QB–WR: the share of a backup QB in the league's throw-weighted centre, set to
    *  the MEASURED share of non-QB1 attempts (5.6% / 0.0% / 10.1% across three mature
    *  2-season leagues, `logs/j37-comp.out`; league mean ≈5%). The counters are
@@ -83,9 +88,13 @@ export const CHEM = {
   /** OL centre offset as a FRACTION of the centre (the `WX_CENTER` role, not a per-unit
    *  value; zero at cold start so the layer stays inert on a fresh league). The handoff leg
    *  is a single linear term, so it is neutral when the mean blocker sits at the centre; the
-   *  residual (+0.4-0.8 points of pass-rush edge on a mature league, the max-over-reps
-   *  Jensen term, measured with `J37_STAT.dEdge`) is small enough to leave at 0. */
-  olCentreFrac: 0,
+   *  mature league's men on the field carry slightly LESS history than the healthy five the
+   *  centre is built from, and the max-over-reps Jensen term adds a little more, so the raw
+   *  leg ran +1.2 points of pass-rush edge (J37_STAT.dEdge, 6 leagues) and cost the ON league
+   *  ~0.3 points of completion / ~1.6 passing yards. Scaling the centre down by 0.2 raises
+   *  the blockers' rel, holds the mature band means (ms4 sweep) and only widens the settled
+   *  side — the per-pair SPREAD is untouched by a uniform centre shift. */
+  olCentreFrac: 0.2,
   /** Nominal targets per AI game (starter shares) so league chemistry keeps pace
    *  with the user's club when the AI games are score-simulated (no play-by-play). */
   nominal: { wr1: 8, wr2: 5, wr3: 3, te: 5, rb: 4, ol: 62 },
