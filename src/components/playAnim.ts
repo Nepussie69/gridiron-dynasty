@@ -2362,12 +2362,17 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   if (jet) f.rb = { x: jetMeshX, y: clampY(MID_Y - side0 * 6.5), side: 'off', role: carRole }
   const m = startMovers(f, ctx)
   recSnap(los)
-  const wide = /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
+  // animflow r8 ("still runs sideways"): a run the sim ends out of bounds is bounced to the edge BEHIND the
+  // line (the lateral travel is spent there, like a stretch / toss) and goes up the sideline past it - it
+  // used to cross the line at the middle and run 20+ yd sideways across the field to the touchline.
+  const oobEarly = !!play.outOfBounds && !play.turnover && 10 + play.endYard < 110
+  const wide = oobEarly || /Outside|Toss|Sweep|Stretch|Pitch|Bubble/.test(play.concept)
   const power = /Power|Counter|Trap|Iso|Dive/.test(play.concept)
   const side = hash(seed) < 0.5 ? -1 : 1
   // Inside holes sit between the guards and tackles (NFL R4: inside runs cross
   // the line ~1.5 yd from the ball); designed outside runs bend to the edge.
-  const holeY = MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
+  const edgeIn = 2.5 + hash(seed + 1) * 0.8
+  const holeY = oobEarly ? (side < 0 ? edgeIn : FIELD_H - edgeIn) : MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
   const endX = clampX(10 + play.endYard)
   const fumble = !!play.turnover
   // ── the carrier's line (animflow r4: NFL tracking targets, logs/nfl-motion-reference.out) ──

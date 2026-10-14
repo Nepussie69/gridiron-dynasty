@@ -2817,6 +2817,81 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(!bad.length, bad.join('; '))
   })
 
+  ok('animflow r8 (sideways): a carrier runs upfield - after the line (runs), the catch (catch-and-runs) or the return\'s first 5 yd, little of his time is spent heading > 60 deg off downfield (runs <= 20%, runs that stay in bounds <= 6%, in-bounds catch-and-runs <= 12%, returns <= 5%), his lateral travel per downfield yard is short (runs <= 0.6, out-of-bounds runs <= 2.0), and the whole carry (handoff to whistle, behind the line included) travels <= 4.0 yd per yard gained (NGS rushing efficiency, NFL average ~4.0)', () => {
+    type Acc = { n: number; tSide: number; tAll: number; lat: number; down: number; dist: number; yds: number }
+    const mk = (): Acc => ({ n: 0, tSide: 0, tAll: 0, lat: 0, down: 0, dist: 0, yds: 0 })
+    const A = { run: mk(), runIn: mk(), runOob: mk(), cr: mk(), crIn: mk(), ret: mk() }
+    const worst: string[] = []
+    const take = (anim: BroadcastAnim, play: Play, kind: 'run' | 'cr' | 'ret') => {
+      const D = anim.duration / 1000
+      const holder = anim.holders.filter((h) => h.key).at(-1)
+      const a = holder ? anim.actors.find((x) => x.key === holder.key) : undefined
+      if (!holder || !a) return
+      const dir = play.type === 'punt' ? -1 : 1
+      const los = 10 + play.startYard
+      const tEnd = (anim.events ?? []).find((e) => ['tackle', 'outOfBounds', 'score', 'down', 'fumble'].includes(e.kind) && e.t >= holder.t)?.t ?? 1
+      const p = (s: number) => posAt(a.path, s / D)
+      let s0 = holder.t * D
+      if (kind === 'run') { while (s0 < tEnd * D && dir * (p(s0).x - los) < 0.3) s0 += 0.04 }
+      if (kind === 'ret') { const x0 = p(s0).x; while (s0 < tEnd * D && Math.abs(p(s0).x - x0) < 5) s0 += 0.04 }
+      const s1 = tEnd * D
+      if (s1 - s0 < 0.4) return
+      let tSide = 0
+      let tAll = 0
+      let lat = 0
+      let down = 0
+      for (let s = s0; s < s1; s += 0.05) {
+        const q0 = p(s)
+        const q1 = p(Math.min(s1, s + 0.1))
+        const dx = dir * (q1.x - q0.x)
+        const dy = q1.y - q0.y
+        if (Math.hypot(dx, dy) / 0.1 < 1.5) continue
+        tAll += 0.05
+        if ((Math.atan2(Math.abs(dy), dx) * 180) / Math.PI > 60) tSide += 0.05
+      }
+      let prev = p(s0)
+      for (let s = s0 + 0.05; s <= s1 + 1e-9; s += 0.05) { const q = p(Math.min(s, s1)); lat += Math.abs(q.y - prev.y); down += Math.max(0, dir * (q.x - prev.x)); prev = q }
+      let dist = 0
+      prev = p(holder.t * D)
+      for (let s = holder.t * D + 0.05; s <= s1 + 1e-9; s += 0.05) { const q = p(Math.min(s, s1)); dist += Math.hypot(q.x - prev.x, q.y - prev.y); prev = q }
+      const yds = Math.max(0, kind === 'run' ? play.yards : Math.abs(p(s1).x - p(holder.t * D).x))
+      const v = { n: 1, tSide, tAll, lat, down, dist, yds }
+      const into = (acc: Acc) => { for (const k of Object.keys(v) as (keyof Acc)[]) acc[k] += v[k] }
+      if (kind === 'run') { into(A.run); into(play.outOfBounds ? A.runOob : A.runIn) }
+      else if (kind === 'cr') { into(A.cr); if (!play.outOfBounds) into(A.crIn) }
+      else into(A.ret)
+      if (tAll > 0.5 && tSide / tAll > 0.7 && !play.outOfBounds && worst.length < 4) worst.push(`${kind} ${play.n} ${play.concept}`)
+    }
+    games6d(8, 17, (play, anim) => {
+      if (play.turnover || play.kneel || play.spike) return
+      if (play.type === 'run') take(anim, play, 'run')
+      else if (play.type === 'pass' && !/^(Sack|Incomplete|Interception)/.test(play.result)) take(anim, play, 'cr')
+    })
+    store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    for (let g = 0; g < 10; g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 5) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 17 + g * 389)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if ((play.type !== 'kickoff' && play.type !== 'punt') || play.returnKind !== 'return' || !play.returnerId || play.turnover) continue
+        take(buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, play.offId === home ? away : home, null) }), play, 'ret')
+      }
+    }
+    const pctOf = (a: Acc) => (a.tAll ? (100 * a.tSide) / a.tAll : 0)
+    const lpd = (a: Acc) => a.lat / Math.max(1, a.down)
+    console.log(`      sideways (heading > 60 deg off downfield): runs ${pctOf(A.run).toFixed(1)}% of ${A.run.n} (in bounds ${pctOf(A.runIn).toFixed(1)}%, out of bounds ${pctOf(A.runOob).toFixed(1)}%), lateral/downfield ${lpd(A.run).toFixed(2)} (oob ${lpd(A.runOob).toFixed(2)}), efficiency ${(A.run.dist / Math.max(1, A.run.yds)).toFixed(2)} yd/yd; catch-and-runs in bounds ${pctOf(A.crIn).toFixed(1)}% of ${A.crIn.n} (all ${pctOf(A.cr).toFixed(1)}%); returns ${pctOf(A.ret).toFixed(1)}% of ${A.ret.n}`)
+    assert.ok(A.run.n >= 100 && A.crIn.n >= 100 && A.ret.n >= 20, `coverage ${A.run.n} / ${A.crIn.n} / ${A.ret.n}`)
+    assert.ok(pctOf(A.run) <= 20, `runs head sideways ${pctOf(A.run).toFixed(1)}% of their time after the line`)
+    assert.ok(pctOf(A.runIn) <= 6, `in-bounds runs head sideways ${pctOf(A.runIn).toFixed(1)}%: ${worst.join('; ')}`)
+    assert.ok(pctOf(A.crIn) <= 12, `in-bounds catch-and-runs head sideways ${pctOf(A.crIn).toFixed(1)}%`)
+    assert.ok(pctOf(A.ret) <= 5, `returns head sideways ${pctOf(A.ret).toFixed(1)}%`)
+    assert.ok(lpd(A.run) <= 0.6 && lpd(A.runOob) <= 2.0, `lateral travel per downfield yard: runs ${lpd(A.run).toFixed(2)}, out of bounds ${lpd(A.runOob).toFixed(2)}`)
+    assert.ok(A.run.dist / Math.max(1, A.run.yds) <= 4.0, `rushing efficiency ${(A.run.dist / Math.max(1, A.run.yds)).toFixed(2)} yd travelled per yard gained`)
+  })
+
   ok('animflow r8 (J38 / J12 / J36): featured plays are drawn as themselves (wildcat direct snap, jet motion, back-shoulder turn, TE seam, RB wheel); a fooled QB looks off first; a steered throw goes at the scouted corner', () => {
     const seen: Record<string, number> = {}
     const bad: string[] = []
