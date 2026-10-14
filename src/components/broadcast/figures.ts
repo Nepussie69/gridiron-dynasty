@@ -333,7 +333,37 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
     fallDir: 'live',
   },
   down: { base: { af: 0.2, fall: 1, run: 0 }, fallDir: 'start' },
-  tackle: { base: { af: 1, ln: 0.62, cr: 0.3, jos: 0.5, run: 0.6 } },
+  // animflow r8 (item b): the wrap - hips sink into the contact (crouch, arms cocked), then the arms
+  // close round him and he leans in with the legs still driving.
+  tackle: {
+    base: { af: 1, ln: 0.62, cr: 0.3, jos: 0.5, run: 0.6 },
+    dyn: (age, _len, p) => {
+      const u = ease(clamp01(age / 0.18))
+      p.cr = 0.48 - 0.18 * u
+      p.af = 0.6 + 0.4 * u
+      p.ln = 0.45 + 0.2 * u
+    },
+  },
+  // animflow r8 (item b): he takes the carrier down and goes down with him, arms still round him.
+  tackleFall: {
+    base: { af: 1, ln: 0.6, cr: 0.25, jos: 0.3, run: 0 },
+    dyn: (age, len, p) => {
+      p.fall = ease(clamp01(age / Math.max(0.15, len)))
+    },
+    fallDir: 'live',
+  },
+  // animflow r8 (item b): a missed tackle - a lunge at the carrier, the arms closing on air, half a
+  // fall forward and back up.
+  lunge: {
+    base: { af: 1, ln: 0.85, cr: 0.35, run: 0.4 },
+    dyn: (age, len, p) => {
+      const u = clamp01(age / Math.max(0.15, len))
+      p.af = 1 - 0.55 * ease(clamp01((u - 0.35) / 0.3))
+      p.sp = 0.35 * ease(clamp01((u - 0.35) / 0.3))
+      p.fall = 0.32 * Math.sin(Math.PI * u)
+    },
+    fallDir: 'live',
+  },
   kick: {
     base: { ln: 0.12, sp: 0.8, run: 0.3 },
     dyn: (age, _len, p) => {
@@ -401,6 +431,15 @@ export const POSE_LIBRARY: Record<PoseState, PoseDef> = {
   bull: { base: { cr: 0.5, ln: 0.68, af: 1, jos: 0.9, run: 0.75 } },
   // Spin off the blocker's hip (facing 'spin'): compact, arms in, low.
   spinRush: { base: { cr: 0.35, ln: 0.18, af: 0.3, sp: 0.2, run: 0.45 } },
+  // animflow r8 (backlog 354): a push-out - hips sunk, both arms punched out into the carrier's near
+  // shoulder and locked, leaning into him with the legs still driving.
+  pushOut: {
+    base: { cr: 0.34, af: 1, ln: 0.5, jos: 0.7, run: 0.8 },
+    dyn: (age, _len, p) => {
+      p.ln = 0.42 + 0.22 * easeOut(clamp01(age / 0.2))
+      p.cr = 0.4 - 0.1 * clamp01(age / 0.4)
+    },
+  },
   // animflow r6b (item 4): hands on the hips, slightly bent over (a tired man).
   hips: {
     base: { hp: 1, ln: 0.1, cr: 0.05, run: 0.3 },
@@ -449,6 +488,8 @@ export interface Figure {
   heading: number
   /** Ground speed (yd/s). */
   speed: number
+  /** animflow r8: change of ground speed (yd/s²): the drive phase leans further forward. */
+  accel?: number
   /** Run-cycle phase (radians), advanced by distance travelled. */
   phase: number
   pose: PoseParams
@@ -687,7 +728,18 @@ export interface DrawOpts {
  * that read as running in place in the 2.5D view).
  */
 export function cycleLength(v: number): number {
-  return 1.4 + 0.3 * Math.min(10.5, Math.max(0, v))
+  const u = Math.min(10.5, Math.max(0, v))
+  // animflow r8: above a jog the cadence keeps climbing (~4.0 steps/s at 6.5 yd/s, ~4.4 at 8,
+  // ~4.6-4.8 at 9-10: NFL sprint cadence) instead of the stride only lengthening.
+  return u <= 4 ? 1.4 + 0.3 * u : 2.6 + 0.26 * (u - 4)
+}
+
+/**
+ * animflow r8: how much of a sprint the gait is (0 = jog / walk, 1 = full sprint form: flight
+ * phase, high knee drive, heel recovery, a hard arm pump from cheek to hip, forward lean).
+ */
+export function sprintOf(v: number): number {
+  return clamp01((v - 5.2) / 1.6)
 }
 
 /** The widest leg swing (a sprint stride reaches past the walk geometry). */
@@ -711,8 +763,10 @@ export function hipYOf(P: PoseParams): number {
 }
 
 /** Forward lean (torso tilt factor) for a pose at speed v. */
-function leanOf(P: PoseParams, v: number): number {
-  return P.ln + clamp01(v / 9) * 0.22 * P.run
+function leanOf(P: PoseParams, v: number, accel = 0): number {
+  // animflow r8: a sprinter leans from the ankles, more while he is still accelerating (the first
+  // steps off the line, out of a break).
+  return P.ln + (clamp01(v / 9) * 0.22 + sprintOf(v) * 0.08 + clamp01(accel / 5) * 0.16 * clamp01(v / 2)) * P.run
 }
 
 /**
@@ -740,6 +794,9 @@ export function figureFrame(c: Camera, f: Figure, s: FigureScreen, time: number,
     o.x += Math.sin(time * 23 + f.order * 1.7) * 0.022 * P.jos * h
     o.y += Math.cos(time * 19 + f.order * 2.3) * 0.01 * P.jos * h
   }
+  // animflow r8: a sprint has a flight phase - both feet off the turf between strides.
+  const spr = sprintOf(f.speed) * P.run * (1 - P.fall)
+  if (spr > 0.01) o.y -= spr * 0.03 * h * Math.abs(Math.cos(f.phase))
   if (P.fall > 0.001 && f.fallDir != null) {
     const side = clamp((Math.cos(f.fallDir) * c.rhx + Math.sin(f.fallDir) * c.rhy) * 1.5, -1, 1)
     o.rot = P.fall * 1.42 * side
@@ -760,7 +817,7 @@ export function figureHead(c: Camera, f: Figure, s: FigureScreen, time: number):
   const h = s.h
   const { sdx } = facingVsCamera(c, f.heading)
   const ad = Math.abs(sdx)
-  const lean = leanOf(P, f.speed)
+  const lean = leanOf(P, f.speed, f.accel ?? 0)
   // Torso frame: scale y, rotate, then offset by the hips.
   const tr = sdx * lean * 0.5
   const lx0 = sdx * 0.015
@@ -798,8 +855,9 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
   const bw = 1 - 0.3 * ad
   const kit = f.kit
   const amp = strideAmp(f.speed) * (1 - P.fall) * P.run
+  const spr = sprintOf(f.speed) * P.run * (1 - P.fall)
   const ph = f.phase
-  const lean = leanOf(P, f.speed)
+  const lean = leanOf(P, f.speed, f.accel ?? 0)
   const detail = h >= DETAIL_MIN_CSS * o.dpr
   const outline = h >= 9 * o.dpr
 
@@ -827,6 +885,17 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
     let fyp = -Math.max(0, Math.cos(pp)) * amp * 0.09 * (1 + (1 - ad) * 0.5)
     let kx = (hx + fxp) / 2 + sdx * (0.045 * amp + 0.08 * P.cr) + L * 0.025 * P.cr * (1 - ad)
     let ky = (hy + fyp) / 2 + 0.01 * P.cr
+    if (spr > 0) {
+      // animflow r8: sprint mechanics - the swing leg drives the knee high and forward, the
+      // recovering foot kicks up behind toward the seat (heel recovery).
+      const fwd = Math.max(0, Math.cos(pp))
+      const drive = fwd * Math.max(0, Math.sin(pp) + 0.35)
+      kx += sdx * 0.07 * spr * drive
+      ky -= 0.09 * spr * drive
+      const heel = fwd * Math.max(0, 0.6 - Math.sin(pp))
+      fyp -= 0.11 * spr * heel * (1 + (1 - ad) * 0.4)
+      fxp -= sdx * 0.06 * spr * heel
+    }
     if (P.stp > 0) {
       // The throwing stride: the front foot (opposite the arm) steps toward the
       // target (into the screen when he faces away), the back foot pushes off.
@@ -879,6 +948,13 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
     const sw = -Math.sin(ph + (L > 0 ? 0 : Math.PI)) * amp
     let hx = L * 0.2 * bw + sdx * sw * 0.15
     let hy = -0.02 - Math.abs(sw) * 0.03
+    if (spr > 0) {
+      // animflow r8: the sprint arm pump - elbows bent ~90 deg, hands driving from cheek (front)
+      // to hip pocket (back), kept close to the body.
+      const u = amp > 1e-6 ? clamp(sw / amp, -1, 1) : 0
+      hx = lerp(hx, L * 0.13 * bw + sdx * u * 0.2, spr)
+      hy = lerp(hy, -0.16 - u * 0.15, spr)
+    }
     hx = lerp(hx, L * 0.07 * bw + sdx * 0.25, P.af)
     hy = lerp(hy, -0.19, P.af)
     hx = lerp(hx, L * 0.1, P.au)
@@ -935,8 +1011,10 @@ export function drawFigure(g: Ctx2D, c: Camera, f: Figure, s: FigureScreen, o: D
     for (const [L, hx, hy] of HANDS) {
       const sx = L * 0.175 * bw
       const sy = -0.27
-      const ex = (sx + hx) / 2 + L * (0.035 + 0.09 * P.hp) * (1 - 0.5 * ad)
-      const ey = (sy + hy) / 2 + 0.02 - 0.03 * P.hp
+      // animflow r8: in a sprint the elbow stays bent near 90 deg (out behind the hand on the
+      // back swing, under it on the front swing).
+      const ex = (sx + hx) / 2 + L * (0.035 + 0.09 * P.hp) * (1 - 0.5 * ad) - sdx * 0.05 * spr
+      const ey = (sy + hy) / 2 + 0.02 - 0.03 * P.hp + 0.05 * spr
       limb(g, sx, sy, ex, ey, 0.088, kit.jersey, outline)
       if (detail) {
         g.strokeStyle = kit.trim

@@ -11,6 +11,11 @@ import type { GameSim } from './playsim'
 import type { Play } from './playsim'
 import type { World } from './generate'
 import { depthGroup } from './depth'
+import { playerAttrs } from '../data/ratings'
+import { clamp, hash32 } from './rng'
+
+/** 405: a deterministic uniform in [0,1) — bookkeeping only, no rng() draw. */
+const hashUnit = (key: string) => (hash32(key) >>> 0) / 4294967296
 
 export interface PlayerBoxScore {
   playerId: string
@@ -127,6 +132,10 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     }
     return byId[id]
   }
+  // 405: one lookup + one ball-skills cache for the passes-defensed credit below,
+  // so the per-play path never re-scans the league or re-derives attributes.
+  const pmap = new Map(world.players.map((p) => [p.id, p]))
+  const ballSkillsCache = new Map<string, number>()
   const add = (id: string | undefined, teamId: string, key: keyof GameStatLine, n: number) => {
     const line = ensure(id, teamId)
     if (!line) return
@@ -245,6 +254,25 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         // R4b: INTs credited to the coverage defender (distinct from the ball hawk).
         if (play.intId || play.result.startsWith('Interception')) add(play.coverId, def, 'defIntsCov', 1)
       }
+      // 405: passes defensed. NFL scoring counts an interception and a break-up;
+      // the engine already stamps the break-up (`pbuId`), and an incompletion with
+      // no stamp is credited to the cover man on a deterministic share of his own
+      // ball skills (JMP/PRC). Bookkeeping only — no rng() draw, no counter moves.
+      if (!isSackPlay) {
+        if (play.intId) add(play.intId, def, 'passDef', 1)
+        else if (play.pbuId) add(play.pbuId, def, 'passDef', 1)
+        else if (play.coverId && play.targetId && !isComp && !play.dropId) {
+          let ball = ballSkillsCache.get(play.coverId)
+          if (ball == null) {
+            const d = pmap.get(play.coverId)
+            const a = d ? playerAttrs(d) : undefined
+            ball = ((a?.JMP ?? 70) + (a?.PRC ?? 70)) / 2
+            ballSkillsCache.set(play.coverId, ball)
+          }
+          const p = clamp(0.28 + (ball - 72) * 0.004, 0.12, 0.5)
+          if (hashUnit(`${play.n}:${play.offId}:pd`) < p) add(play.coverId, def, 'passDef', 1)
+        }
+      }
     } else if (play.type === 'run') {
       if (play.carrierId) {
         add(play.carrierId, off, 'rushAtt', 1)
@@ -346,6 +374,9 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.tackles += line.tackles ?? 0
   season.defSacks += line.defSacks ?? 0
   season.defInts += line.defInts ?? 0
+  // 405: passes defensed (break-ups + interceptions) were credited per game but
+  // never rolled into the season line.
+  season.passDef += line.passDef ?? 0
   season.tfl = (season.tfl ?? 0) + (line.tfl ?? 0)
   // R4b: coverage fields, so the season coverage grade matches the game detail.
   season.defTargets = (season.defTargets ?? 0) + (line.defTargets ?? 0)
@@ -454,6 +485,7 @@ export function careerTotals(p: Player) {
     t.rushAtt += s.rushAtt; t.rushYds += s.rushYds; t.rushTD += s.rushTD
     t.targets += s.targets; t.rec += s.rec; t.recYds += s.recYds; t.recTD += s.recTD
     t.tackles += s.tackles; t.defSacks += s.defSacks; t.defInts += s.defInts
+    t.passDef += s.passDef ?? 0
     t.tfl = (t.tfl ?? 0) + (s.tfl ?? 0)
     t.defTargets = (t.defTargets ?? 0) + (s.defTargets ?? 0)
     t.defComp = (t.defComp ?? 0) + (s.defComp ?? 0)
