@@ -891,9 +891,11 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
   // animflow r8 (J12): the fooled QB's first look (window, 0..1) and where he looks (field yd).
   const fooledWin: { t0: number; t1: number; x: number; y: number } | null = (() => {
     if (!scrimmage || type !== 'pass' || sackPlay || !play.qbFooled || !throwWin || !flight || !qbKey) return null
-    const t0 = SNAP_T + 0.35 / D
-    const t1 = Math.min(SNAP_T + 1.4 / D, throwWin.t0 - 0.5 / D)
-    if ((t1 - t0) * D < 0.3) return null
+    // (an early throw - the routes are run at speed now - still gets its first look: from the end of
+    // the snap's settle to a beat before the wind-up, which brings his eyes back to the target)
+    const t0 = SNAP_T + 0.25 / D
+    const t1 = Math.min(SNAP_T + 1.4 / D, throwWin.t0 - 0.15 / D)
+    if ((t1 - t0) * D < 0.25) return null
     const q = posAt(paths[qbKey] ?? [], t0)
     return { t0, t1, x: q.x + 14, y: ballAtCatch.y < MID_Y ? MID_Y + 11 : MID_Y - 11 }
   })()

@@ -368,7 +368,9 @@ function placement(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan)
   const zHi = inc ? 2.4 : 1.3
   // Arms reach 1.6 yd; a dive (nothing after it) 2.8; otherwise he adjusts his line up to
   // SHIFT_MAX toward the ball over the last beat and reaches the rest.
-  const SHIFT_MAX = 1.4
+  // (animflow r8: 2.6 yd - the engine's misses run past 3.3 yd on ~7% of completions; a receiver chasing a
+  // ball that far off adjusts his line by two or three yards, not one)
+  const SHIFT_MAX = 2.6
   const reachH = inc ? Infinity : ends ? 2.8 : 1.6 + SHIFT_MAX
   let dz = clampN(cls === 'high' ? 0.85 * o : cls === 'low' ? -0.8 * o : cls === 'behind' ? 0.25 * o : 0.1 * o, zLo, zHi)
   let hz = Math.sqrt(Math.max(0, o * o - dz * dz))
@@ -590,7 +592,12 @@ function backCheckPath(path: WP[], plan: ReadPlan): WP[] | null {
   let relS = Math.max(snapS + 0.55, Cs - T)
   // Already slow to leave on his own (a chip / a late release): leave it.
   const own = (() => { for (let s = snapS + 0.1; s < Cs; s += 0.04) if (Math.hypot(posAt(path, s / D).x - s0.x, posAt(path, s / D).y - s0.y) > 1.6) return s; return Cs })()
-  if (relS - snapS < 0.5 || own >= relS - 0.1) return null
+  if (relS - snapS < 0.5 || own >= relS - 0.1) {
+    // (he leaves late on his own path - the routes are run at speed now, so this is the usual case:
+    // the path stays, and he is in protection, set and square to the rush, until he leaves it)
+    if (relS - snapS >= 0.5 && own - snapS >= 0.3 && own < Cs - 0.4) plan.backRelT = own / D
+    return null
+  }
   T = Cs - relS
   const herm = (s: number): Pt => {
     const s2 = s * s
