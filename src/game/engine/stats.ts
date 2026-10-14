@@ -248,7 +248,12 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     } else if (play.type === 'run') {
       if (play.carrierId) {
         add(play.carrierId, off, 'rushAtt', 1)
-        add(play.carrierId, off, 'rushYds', play.kneel ? play.yards : Math.max(0, play.yards))
+        // realismloss: rushing yards include losses, as in the real NFL stat book.
+        // This used to floor every non-kneel run at 0, so the restored run losses
+        // (calibration.ts CDF walk fix) were invisible in the box score and the
+        // YPC band was detached from the on-field run mean. Kneels already kept
+        // their negative yards; now every carry does.
+        add(play.carrierId, off, 'rushYds', play.yards)
         if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'rushTD', 1)
       }
       // One tackler per run — the defense shares stops across the front seven.

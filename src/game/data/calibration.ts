@@ -83,10 +83,57 @@ export async function loadCalibration(): Promise<Calibration | null> {
   }
 }
 
+/**
+ * The bucket labels are NOT safe to walk with Object.entries: JS enumerates
+ * integer-like keys first, so a runCdf of {'-6-':0.0037,'0':0.1693,…} is walked
+ * as '0', '-6-', '-1to-5', … and every r <= 0.1693 returns '0', making the loss
+ * buckets unreachable. Order the CDF once, by the bucket's own lower bound, and
+ * never touch Object.entries again.
+ */
+const CDF_ORDER = new WeakMap<Record<string, number>, Array<[string, number]>>()
+
+/** Lower bound implied by a bucket label ('-6-' = −∞, '-1to-5' = −1, '0' = 0, '1-4' = 1, …). */
+function bucketLower(label: string): number {
+  if (label === '-6-') return -Infinity
+  const m = /^(-?\d+)/.exec(label)
+  return m ? Number(m[1]) : 0
+}
+
+/** The [bucket, cumulative] pairs of a CDF in ascending bucket order (memoised per object). */
+function orderedCdf(cdf: Record<string, number>): Array<[string, number]> {
+  let ordered = CDF_ORDER.get(cdf)
+  if (!ordered) {
+    ordered = Object.entries(cdf).sort((a, b) => bucketLower(a[0]) - bucketLower(b[0]) || a[1] - b[1])
+    CDF_ORDER.set(cdf, ordered)
+  }
+  return ordered
+}
+
+/**
+ * The pass CDF is mined from DROPBACKS: scripts/mine_gamelogs.py counts a sack
+ * into pass_dist (`if row.get('sack') == '1': pass_dist[bucket_pass(y)] += 1`),
+ * so its negative buckets ('-6-', '-1to-5') are sacks — not completions. Sacks
+ * are modelled on their own (the pressure path) and behind-the-line completions
+ * come from the air-depth/YAC layer, so the completion draw must NOT sample the
+ * loss buckets again (that would double-count). Drop them and let the lowest
+ * completing bucket ('0') absorb the sack mass: with the cums untouched this is
+ * exactly the pre-fix de-facto completion distribution.
+ */
+const COMPLETION_CDF = new WeakMap<Record<string, number>, Record<string, number>>()
+export function completionCdf(cdf: Record<string, number>): Record<string, number> {
+  let out = COMPLETION_CDF.get(cdf)
+  if (!out) {
+    out = {}
+    for (const k of Object.keys(cdf)) if (bucketLower(k) >= 0) out[k] = cdf[k]
+    COMPLETION_CDF.set(cdf, out)
+  }
+  return out
+}
+
 /** Sample a yardage bucket for a play type (0..1 random → bucket label). */
 export function sampleBucket(cdf: Record<string, number>, r: number): string {
   let last = ''
-  for (const [bucket, cum] of Object.entries(cdf)) {
+  for (const [bucket, cum] of orderedCdf(cdf)) {
     last = bucket
     if (r <= cum) return bucket
   }
