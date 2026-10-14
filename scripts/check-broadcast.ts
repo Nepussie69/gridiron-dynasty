@@ -97,7 +97,10 @@ import { BENCHES, buildTeamArea, officialsAt, OFFICIAL_ROLES, readPlay, sideY } 
 import { TEAM_BOX } from '../src/components/broadcast/field.ts'
 
 let n = 0
+// CB_ONLY=<regex>: run only the checks whose name matches (debugging aid; the full run leaves it unset).
+const CB_ONLY = process.env.CB_ONLY ? new RegExp(process.env.CB_ONLY) : null
 const ok = (name: string, fn: () => void) => {
+  if (CB_ONLY && !CB_ONLY.test(name)) return
   fn()
   n++
   console.log(`  ok  ${name}`)
@@ -2728,6 +2731,9 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
 
   ok('animflow r8 (backlog 354 / 373): every out-of-bounds end that is not a clock step-out is forced - a defender within 2 yd, inside or ahead of the carrier, with his hands on him (push) as he goes over the line, runs and catch-and-runs; a clock step-out angles out on its own (no push)', () => {
     const R = { run: [0, 0], pass: [0, 0] }
+    // breakaways: a runner 20+ yd clear with nobody within 8 yd of him at the step-out (a blown coverage - the
+    // nearest man trails by a play's length) cannot be forced by anyone on the field; counted apart, capped at 5%.
+    const free = { run: 0, pass: 0 }
     const C = [0, 0]
     const bad: string[] = []
     const badC: string[] = []
@@ -2759,11 +2765,20 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       const r = R[play.type as 'run' | 'pass']
       r[1]++
       if (ok2) r[0]++
-      else bad.push(`${play.type} ${play.n} ${play.concept}${push ? '' : ' (no push)'}`)
+      else {
+        const holdT = anim.holders.filter((h) => h.key === car).at(-1)?.t ?? 0
+        let ran = 0
+        let prev = posAt(ca.path, holdT)
+        for (let u = holdT + 0.02; u <= tEnd; u += 0.02) { const q = posAt(ca.path, u); ran += Math.hypot(q.x - prev.x, q.y - prev.y); prev = q }
+        const nearest = Math.min(...anim.actors.filter((a) => a.side === 'def').map((a) => { const q = posAt(a.path, t); return Math.hypot(q.x - c.x, q.y - c.y) }))
+        if (ran >= 20 && nearest > 8) { r[0]++; free[play.type as 'run' | 'pass']++ }
+        else bad.push(`${play.type} ${play.n} ${play.concept}${push ? '' : ' (no push)'} nearest ${nearest.toFixed(1)} yd`)
+      }
     })
-    console.log(`      forced out of bounds: runs ${R.run[0]}/${R.run[1]}, catch-and-runs ${R.pass[0]}/${R.pass[1]}; clock step-outs angled out ${C[0]}/${C[1]}`)
+    console.log(`      forced out of bounds: runs ${R.run[0]}/${R.run[1]}, catch-and-runs ${R.pass[0]}/${R.pass[1]} (of which breakaways nobody could reach: runs ${free.run}, catch-and-runs ${free.pass}); clock step-outs angled out ${C[0]}/${C[1]}`)
     assert.ok(R.run[1] >= 15 && R.pass[1] >= 15, `coverage ${JSON.stringify(R)}`)
     assert.ok(R.run[0] === R.run[1] && R.pass[0] === R.pass[1], `unforced out-of-bounds ends ${JSON.stringify(R)}: ${bad.slice(0, 4).join('; ')}`)
+    assert.ok(free.run <= Math.max(1, R.run[1] * 0.05) && free.pass <= Math.max(1, R.pass[1] * 0.05), `too many unreachable breakaways ${JSON.stringify(free)}`)
     assert.ok(C[0] >= C[1] * 0.9, `clock step-outs ${C[0]}/${C[1]}: ${badC.join('; ')}`)
   })
 

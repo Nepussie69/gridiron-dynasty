@@ -800,6 +800,9 @@ function spliceWindows<W extends { t0: number; t1: number }>(ws: W[], a: number,
 const sameFacing = (x: FacingWindow, y: FacingWindow) =>
   x.mode === y.mode && (x.mode !== 'actor' || (y.mode === 'actor' && x.key === y.key)) && (x.mode !== 'angle' || (y.mode === 'angle' && Math.abs(x.angle - y.angle) < 1e-6)) && x.mode !== 'spin'
 const samePose = (x: PoseWindow, y: PoseWindow) => x.state === y.state
+/** animflow r8: a man already in a tackle / fall / pile at `m` keeps it - a catch, lay-out or swat pose never overrides the tackle that ends the play. */
+const TACKLING = new Set<PoseState>(['fall', 'down', 'tackleFall', 'tackleHit', 'tackleArm', 'tackle', 'dive', 'pushOut'])
+const tackling = (base: PoseWindow[], m: number): boolean => TACKLING.has((base.find((w) => m <= w.t1 + 1e-9) ?? base[base.length - 1]).state)
 
 /** presentAnim hook: the QB's head/shoulders through the reads, the eye-jumper's
  *  read of the QB, the catch / break-up poses, the placed ball's height. */
@@ -838,7 +841,8 @@ export function applyReadPresentation(banim: BroadcastAnim, play: Play, ctx: Ani
     facing[j.key] = spliceWindows(facing[j.key], a, j.breakT, [], () => ({ t0: 0, t1: 0, mode: 'actor', key: 'qb' }) as FacingWindow, sameFacing)
     if (!j.pick && poses[j.key]) {
       const c = j.arriveT
-      poses[j.key] = spliceWindows(poses[j.key], Math.max(0, c - 0.16 / D), Math.min(1, c + 0.14 / D), [], () => ({ t0: 0, t1: 0, state: 'swat' }) as PoseWindow, samePose)
+      const jb = poses[j.key]
+      poses[j.key] = spliceWindows(jb, Math.max(0, c - 0.16 / D), Math.min(1, c + 0.14 / D), [], (m) => (tackling(jb, m) ? null : ({ t0: 0, t1: 0, state: 'swat' }) as PoseWindow), samePose)
     }
   }
   // 4. the catch the placement asks for, and the defender contesting it.
@@ -847,14 +851,18 @@ export function applyReadPresentation(banim: BroadcastAnim, play: Play, ctx: Ani
   if (pl && C != null && poses[pl.key]) {
     const t0 = Math.max(0, C - (pl.dive ? 0.2 : 0.14) / D)
     const t1 = pl.dive ? 1 : Math.min(1, C + 0.12 / D)
-    poses[pl.key] = spliceWindows(poses[pl.key], t0, t1, [], () => ({ t0: 0, t1: 0, state: pl.pose }) as PoseWindow, samePose)
+    // (a catch tackled on the spot: the catch / lay-out pose gives way to the fall - the receiver is
+    // never still reaching or laid out as the tackle takes him down, nor at the end of the play)
+    const base = poses[pl.key]
+    poses[pl.key] = spliceWindows(base, t0, t1, [], (m) => (tackling(base, m) ? null : ({ t0: 0, t1: 0, state: pl.pose }) as PoseWindow), samePose)
     if (pl.cls === 'behind' && facing[pl.key]) {
       // The back-shoulder turn: he twists back to the ball as it comes in behind him.
       const ang = Math.atan2(posAt(banim.ball, plan.endT).y - pl.iy, posAt(banim.ball, plan.endT).x - pl.ix)
       facing[pl.key] = spliceWindows(facing[pl.key], Math.max(0, C - 0.4 / D), Math.min(1, C + 0.08 / D), [], () => ({ t0: 0, t1: 0, mode: 'angle', angle: ang }) as FacingWindow, sameFacing)
     }
     if (pl.contestKey && poses[pl.contestKey]) {
-      poses[pl.contestKey] = spliceWindows(poses[pl.contestKey], Math.max(0, C - 0.14 / D), Math.min(1, C + 0.12 / D), [], () => ({ t0: 0, t1: 0, state: 'swat' }) as PoseWindow, samePose)
+      const cb = poses[pl.contestKey]
+      poses[pl.contestKey] = spliceWindows(cb, Math.max(0, C - 0.14 / D), Math.min(1, C + 0.12 / D), [], (m) => (tackling(cb, m) ? null : ({ t0: 0, t1: 0, state: 'swat' }) as PoseWindow), samePose)
     }
     // Ball height at the catch: chest (1.4) + the placement's vertical part.
     const f = banim.flights[0]

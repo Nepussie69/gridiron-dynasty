@@ -589,7 +589,15 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     // step short) is a dive at the legs; a second man on the pile goes down with them (gang).
     let fallLen = 0.42
     let fs = Math.max(0, tackleT - fallLen / D)
-    const tk = keyForId(play.tackleIds?.[0]) ?? keyForId(play.sackId) ??
+    // (the man the animation actually sends to make the tackle - the credited one only when he is
+    // the one who arrives: the chase picks the credited man only if he can get there, else the
+    // fastest, and the pose / dive / fall belongs to the man on the carrier)
+    const evTk = (() => {
+      const e = events.find((x) => x.kind === 'tackle' || x.kind === 'sack')
+      const k = e?.keys[0]
+      return k && k !== carrierKey && keySet[k] && sides[k] === 'def' ? k : null
+    })()
+    const tk = evTk ?? keyForId(play.tackleIds?.[0]) ?? keyForId(play.sackId) ??
       nearestOf(keys.filter((k) => sides[k] === 'def'), posAt(paths[carrierKey], tackleT), tackleT)
     if (tk && tk !== carrierKey) {
       // animflow r6a: how he brings him down follows the angle and speed of the
@@ -655,6 +663,14 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     }
     // The carrier goes down with him over the same beat (a big hit: from the hit on).
     if (tackleT - fs > 1e-6) fallBy[carrierKey] = { t0: fs, t1: tackleT }
+    // (the tackle beats any move still open on the carrier: a juke / spin / stiff arm / truck that
+    // runs into the fall ends where the fall begins - he is never mid-move as he goes down)
+    if (moveBy[carrierKey]) {
+      for (const o of moveBy[carrierKey]) if (o.t1 > fs) o.t1 = Math.max(o.t0, fs)
+      moveBy[carrierKey] = moveBy[carrierKey].filter((o) => o.t1 - o.t0 > 0.04 / D)
+    }
+    const sp = spinBy[carrierKey]
+    if (sp && sp.t1 > fs) { if (sp.t0 + 0.04 / D < fs) sp.t1 = fs; else delete spinBy[carrierKey] }
     downBy[carrierKey] = { t0: tackleT, t1: 1 }
     // (a catch tackled on the spot: the catch pose gives way to the fall - never caught upright at the end)
     const cw = catchBy[carrierKey]

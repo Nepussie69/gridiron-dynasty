@@ -273,7 +273,8 @@ function recMissedTackles(
   ids.forEach((id, i) => {
     const dk = keyOf(ctx, id, pool)
     if (!dk || dk === carrierKey) return
-    const t = clampN(from + (to - from) * (0.62 + i * 0.08), from, to)
+    // (early enough that the move is done before the carrier goes down: the last ~0.75 s are the tackle)
+    const t = clampN(from + (to - from) * (0.62 + i * 0.08), from, Math.max(from, to - 0.75))
     recEv(t, 'brokenTackle', [carrierKey, dk], posAt(m[carrierKey].path, t))
     recEng(dk, carrierKey, Math.max(0, t - 0.18), t + 0.06, 'missedTackle')
   })
@@ -319,6 +320,31 @@ function closeOnCarrier(tk: Mover, carrier: Mover, endSec: number, notBefore = 0
   rideOn(tk, carrier, tk.t, endSec, u)
 }
 
+/**
+ * animflow r8: the tackler is on the carrier when it ends, on any sim stream. When even his last strides
+ * (closeOnCarrier) leave him short - a safety 20 yd off a run that gained 12, an open man tackled where he
+ * took the ball - the whistle waits for him: the carrier holds the spot (the end spot is untouched) while
+ * the tackler's run is carried on into a ride, at the closing speed of a lunge on top of his run. Capped
+ * (what is left after that he covers with a dive). Returns the new whistle time.
+ */
+function arriveByWhistle(tk: Mover, carrier: Mover, endSec: number): number {
+  const gapAt = (t: number) => {
+    const a = posAt(tk.path, Math.min(t, tk.t))
+    const b = posAt(carrier.path, Math.min(t, carrier.t))
+    return Math.hypot(a.x - b.x, a.y - b.y)
+  }
+  const g = gapAt(endSec)
+  if (g <= 1.2) return endSec
+  const extra = clampN((g - 0.9) / 7, 0.1, 1.2)
+  const a = posAt(tk.path, Math.min(endSec, tk.t))
+  const b = posAt(carrier.path, Math.min(endSec, carrier.t))
+  const l = Math.hypot(a.x - b.x, a.y - b.y) || 1
+  const u = { x: (a.x - b.x) / l, y: (a.y - b.y) / l }
+  carrier.hold(Math.max(0, endSec + extra - carrier.t))
+  rideOn(tk, carrier, Math.min(endSec, tk.t), endSec + extra, u)
+  return endSec + extra
+}
+
 function recClose(
   m: Record<string, Mover>,
   carrierKey: string,
@@ -352,6 +378,7 @@ function recClose(
     // (a man just off his block takes his first strides free - his rip / shed is seen - before the chase)
     // (and never before the carrier has the ball - the cover man stands the recorded separation at the catch)
     closeOnCarrier(m[tackler], carrier, endSec, Math.max(from, offBlock > 0 ? offBlock + 0.4 : 0))
+    endSec = arriveByWhistle(m[tackler], carrier, endSec)
   }
   // A man still locked up on a block who brushes the carrier as he goes by is
   // not the first contact (animflow): only free defenders count.
@@ -721,6 +748,8 @@ function baseLine(pts: Pt[], pace: Pace, opts: { v0?: number; stop?: boolean; vE
 
 /** cos of the turn angle that counts as a plant (≈ 40°). */
 const TURN_COS = Math.cos(0.7)
+/** animflow r8: braking rate (yd/s^2) of a planted turn out of a catch (an NFL plant-and-cut decelerates harder than it accelerates). */
+const PIVOT_DECEL = 8
 /** animflow r5: share of the cornering speed kept through a cut (0 = the old stop at every corner). */
 const CORNER_KEEP = 1
 
@@ -797,7 +826,7 @@ class Mover {
     }
   }
   /** Move along a polyline (the first point is the *next* waypoint). */
-  run(pts: Pt[], opts: { v0?: number; stop?: boolean; vEnd?: number; cut?: boolean } = {}): number {
+  run(pts: Pt[], opts: { v0?: number; stop?: boolean; vEnd?: number; cut?: boolean; pivot?: boolean } = {}): number {
     this.lastStop = !!opts.stop
     if (!pts.length) return this.t
     let v0 = Math.max(0, opts.v0 ?? 0)
@@ -833,7 +862,24 @@ class Mover {
       const nx = pts[0].x - this.x
       const ny = pts[0].y - this.y
       const nl = Math.hypot(nx, ny)
-      if (hl > 1e-6 && nl > 1e-6 && (hx * nx + hy * ny) / (hl * nl) < TURN_COS) {
+      const cosT = hl > 1e-6 && nl > 1e-6 ? (hx * nx + hy * ny) / (hl * nl) : 1
+      if (opts.pivot && cosT < TURN_COS) {
+        // animflow r8: a planted turn out of a catch (a hard cut back upfield): he brakes hard along his
+        // heading to a cornering speed set by the turn (the same law as timedLine's corners), pivots
+        // and drives out - it used to brake to a dead stop and re-launch, a 0.6 s stand-still.
+        const vc = Math.min(v0, Math.max(1.8, this.pace.top * clampN(0.2 + 0.25 * (1 + cosT), 0, 0.7)))
+        const dec = PIVOT_DECEL
+        const dist = (v0 * v0 - vc * vc) / (2 * dec)
+        if (dist > 0.05) {
+          const tmp: Pace = { top: v0, acc: dec }
+          const k = baseLine([{ x: this.x, y: this.y }, { x: clampX(this.x + (hx / hl) * dist), y: clampY(this.y + (hy / hl) * dist) }], tmp, { v0, vEnd: vc })
+          for (let i = 1; i < k.length; i++) this.path.push({ t: this.t + k[i].t, x: k[i].x, y: k[i].y })
+          this.t += k[k.length - 1].t
+          this.x = k[k.length - 1].x
+          this.y = k[k.length - 1].y
+        }
+        v0 = vc
+      } else if (hl > 1e-6 && nl > 1e-6 && cosT < TURN_COS) {
         const brake = Math.min(1.5, (v0 * v0) / (2 * this.pace.acc))
         const tmp: Pace = { top: v0, acc: (v0 * v0) / (2 * Math.max(0.05, brake)) }
         const k = baseLine([{ x: this.x, y: this.y }, { x: clampX(this.x + (hx / hl) * brake), y: clampY(this.y + (hy / hl) * brake) }], tmp, { v0, stop: true })
@@ -4132,7 +4178,16 @@ function resolveCarry(opts: {
   } else line = Math.abs(bend) > 0.2 ? bowPts(cPos, spot, bend) : [spot]
   const { pre, post, c } = splitPolyline(cPos, line, Math.max(0, polyLen(cPos, line) - ac))
   const preNat = pre.length ? timedLine([cPos, ...pre], carrier.pace, { v0: cV0, stop: false }).slice(-1)[0]?.t ?? 0 : 0
-  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, preNat + (opts.northSouth ? 2.0 : 1.4))
+  // animflow r8: the credited man is the tackler only when he can get there in the time the carrier
+  // can give him (his slowest picking-his-way pace over the run to the contact + a beat) - a man
+  // 5-15 yd off a catch tackled at once is not drawn diving at nobody; the man who arrives first is.
+  // (a catch tackled within a couple of yards of where he took it: he picks his way at a crawl, down to
+  // 0.12 x his top, so the nearest man can arrive; a longer run slows to 0.32 x at most)
+  const kMin = total < 3 ? 0.12 : 0.32
+  const slowNat = opts.northSouth && pre.length
+    ? timedLine([cPos, ...pre], { top: carrier.pace.top * kMin, acc: carrier.pace.acc }, { v0: Math.min(cV0, carrier.pace.top * kMin), stop: false }).slice(-1)[0]?.t ?? 0
+    : Infinity
+  const tk = chooseTackler(m, tacklerKeys, prefer, c, fromSec, Math.min(preNat + (opts.northSouth ? 2.0 : 1.4), slowNat + 0.3))
   const need = natTo(m[tk], c, fromSec)
   if (need > preNat + 0.05 && pre.length && opts.northSouth) {
     // A catch-and-run stays north-south: he runs it slower (picking his way,
@@ -4140,19 +4195,26 @@ function resolveCarry(opts: {
     const saved = carrier.pace
     let k = 1
     const natK = (kk: number) => timedLine([cPos, ...pre], { top: saved.top * kk, acc: saved.acc }, { v0: Math.min(cV0, saved.top * kk), stop: false }).slice(-1)[0]?.t ?? 0
-    while (k > 0.32 && natK(k) < need) k -= 0.03
+    while (k > kMin && natK(k) < need) k -= 0.03
     carrier.pace = { top: saved.top * k, acc: saved.acc }
     const v0k = Math.min(cV0, carrier.pace.top)
     // animflow r7a: still early at a cautious pace -> the same line widened to one
     // side (bounded; never a loop back or a second bow that S-bends).
-    carrier.run(natK(k) >= need - 0.05 ? pre : widenByTime(cPos, pre, carrier.pace, v0k, need, hv), { v0: v0k, stop: false })
+    carrier.run(natK(k) >= need - 0.05 ? pre : widenByTime(cPos, pre, carrier.pace, v0k, need, hv), { v0: v0k, stop: false, pivot: true })
     carrier.pace = saved
   } else if (need > preNat + 0.05 && pre.length) {
     // Nobody could get there yet: he runs a wider line (never a loop) to give
     // the tackler time to arrive.
     carrier.run(routeByTime(cPos, c, carrier.pace, cV0, need, 0), { v0: cV0, stop: false })
   } else if (pre.length) {
-    carrier.run(pre, { v0: cV0, stop: false })
+    carrier.run(pre, { v0: cV0, stop: false, pivot: !!opts.northSouth })
+  }
+  // animflow r8: nobody could be there yet even so (an open man tackled where he took the ball): he
+  // holds the ball at the contact until the man arrives - the last strides (a lunge, a dive) cover
+  // the rest - so a tackle is never the tackler diving at nobody. Capped; the spot is untouched.
+  if (opts.northSouth && carrier.t > fromSec) {
+    const short = fromSec + need - 0.7 - carrier.t
+    if (short > 0.05) carrier.hold(Math.min(short, 1.0))
   }
   const contactT = carrier.t
   pileDrive(carrier, post, carrySpeed(carrier))
@@ -5327,7 +5389,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       catchV0 = carrySpeed(m[tgt])
     }
     if (isTD) {
-      m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: false })
+      m[tgt].run([{ x: endX, y: endY }], { v0: catchV0, stop: false, pivot: true })
       // animflow r6c2 (297): through the goal line at speed; the coverage takes
       // real pursuit angles (the fast men close, the rest angle at the pylon).
       runThroughGoal(m[tgt], 110, 1)
