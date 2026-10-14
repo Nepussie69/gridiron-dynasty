@@ -3755,7 +3755,19 @@ function pileDrive(mv: Mover, pts: Pt[], v0: number) {
 /** Can-he-get-there time (s) from `fromSec` to `pt`, carrying his speed. */
 function natTo(mv: Mover, pt: Pt, fromSec: number): number {
   const p = posAt(mv.path, fromSec)
-  return straightTime(mv.pace, Math.hypot(pt.x - p.x, pt.y - p.y), Math.min(mv.pace.top, speedAtTime(mv.path, fromSec)))
+  const dx = pt.x - p.x
+  const dy = pt.y - p.y
+  const d = Math.hypot(dx, dy)
+  const sp = Math.min(mv.pace.top, speedAtTime(mv.path, fromSec))
+  if (d < 1e-6 || sp < 0.3) return straightTime(mv.pace, d, sp)
+  // animflow r8: only the speed he carries TOWARD the point counts - a man running the other way (a
+  // cover man peeling off a beaten route, a pursuer overrun) first kills that speed (and a man
+  // running across it starts with none of it).
+  const v = speedVec(mv.path, fromSec)
+  const along = (v.x * dx + v.y * dy) / d
+  const vf = clampN(along, 0, sp)
+  const lost = along < 0 ? -along / Math.max(4, mv.pace.acc) : 0
+  return lost + straightTime(mv.pace, d, vf)
 }
 
 /** The tackler who can make the contact in time: the credited man when he can, else the quickest. */
@@ -4675,7 +4687,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   let bestErr = Infinity
   // animflow r8 (user: "route running looks slow"): routes are run at NFL route speed (>= 85% of
   // top on the stem); a man open early settles in the window / the ball comes out as he is open.
-  for (let pace = 1; pace >= ROUTE_PACE_MIN - 1e-9; pace -= 0.03) {
+  // (a back-shoulder fade is the exception: he sells the vertical, then sinks and plants to look back for the
+  // ball - that is the throw's timing, so it may be a slower stem; the plant and turn land on the catch)
+  for (let pace = 1; pace >= (backShoulder ? 0.5 : ROUTE_PACE_MIN) - 1e-9; pace -= 0.03) {
     const r = planTarget(pace).rel
     const err = Math.abs(r - Math.max(wantRel, minRel)) + (r < minRel ? 5 + (minRel - r) : 0)
     if (err < bestErr) {
@@ -4751,7 +4765,25 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
         catchV0 = 0
       }
     } else {
-      pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
+      // animflow r8 (J38): a back-shoulder fade that planted early waits at the plant (feet alive) and
+      // turns back WITH the ball - the look back is the last beat before the catch, not a pose held for a
+      // second. The back-step is shifted later on the clock; the plant itself is untouched.
+      const P = m[tgt].path
+      let ip = 0
+      for (let i = 1; i < P.length; i++) if (P[i].x > P[ip].x + 1e-9) ip = i
+      const dtShift = late - m[tgt].t
+      if (backShoulder && dtShift > 0.05 && ip < P.length - 1 && speedAtTime(P, P[ip].t) < 4) {
+        const t0 = P[ip].t
+        const hov: WP[] = []
+        for (let t = t0 + 0.05; t < t0 + dtShift - 1e-6; t += 0.05) hov.push({ t, x: P[ip].x, y: P[ip].y + Math.sin((t - t0) * 6.1) * 0.08 })
+        const tail = P.slice(ip + 1).map((w) => ({ t: w.t + dtShift, x: w.x, y: w.y }))
+        m[tgt].path = [...P.slice(0, ip + 1), ...hov, ...tail]
+        const last = m[tgt].path[m[tgt].path.length - 1]
+        m[tgt].t = last.t
+        m[tgt].x = last.x
+        m[tgt].y = last.y
+        m[tgt].lastStop = true
+      } else pocketPair(m, null, [tgt], catchSec, late, 0, seed + 91)
       catchSec = m[tgt].t
       catchPt = { x: m[tgt].x, y: m[tgt].y }
       catchV0 = 0
@@ -5906,7 +5938,10 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   const landX = isReturnOrMuff ? clampX(finalX + retYds) : finalX
   const side = hash(seed + 2) < 0.5 ? -1 : 1
   const landY = clampY(MID_Y + (hash(seed + 1) - 0.5) * 12)
-  const endY = isReturn ? clampY(landY + side * (3 + hash(seed + 3) * 7)) : landY
+  // (a return score from a catch close to the goal line runs straight in: the lateral drift is at most
+  // a third of the way he has to go, so he ends the play heading into the end zone at his pace)
+  const endLat = 3 + hash(seed + 3) * 7
+  const endY = isReturn ? clampY(landY + side * (td ? Math.min(endLat, 0.3 * retYds) : endLat)) : landY
   const landPt: Pt = { x: landX, y: landY }
   const spot: Pt = { x: finalX, y: endY }
   const kickDist = Math.max(10, Math.abs(landX - los))
@@ -6069,7 +6104,8 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
   const side = hash(seed) < 0.5 ? -1 : 1
   const catchX = clampX(endX - retYds)
   const catchY = clampY(MID_Y + (hash(seed + 4) - 0.5) * 8)
-  const seamY = clampY(catchY + side * (4 + hash(seed + 1) * 9))
+  const seamLat = 4 + hash(seed + 1) * 9
+  const seamY = clampY(catchY + side * (td ? Math.min(seamLat, 0.3 * retYds) : seamLat))
   const catchPt: Pt = { x: catchX, y: catchY }
   const spot: Pt = { x: endX, y: seamY }
   const { scheme } = returnScheme(catchPt, spot)
