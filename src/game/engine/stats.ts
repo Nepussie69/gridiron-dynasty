@@ -11,6 +11,11 @@ import type { GameSim } from './playsim'
 import type { Play } from './playsim'
 import type { World } from './generate'
 import { depthGroup } from './depth'
+import { playerAttrs } from '../data/ratings'
+import { clamp, hash32 } from './rng'
+
+/** 405: a deterministic uniform in [0,1) — bookkeeping only, no rng() draw. */
+const hashUnit = (key: string) => (hash32(key) >>> 0) / 4294967296
 
 export interface PlayerBoxScore {
   playerId: string
@@ -18,6 +23,54 @@ export interface PlayerBoxScore {
   pos: string
   teamId: string
   line: GameStatLine
+}
+
+/**
+ * Boxdef: combined defensive impact, used to rank the box-score Defense table so
+ * a sack / interception / tackle-for-loss / pressure maker can never be pushed
+ * out by a pure tackle compiler. Sacks and takeaways weigh most, then TFL, then
+ * pressures, then plain stops.
+ */
+export function defenseImpact(l: GameStatLine): number {
+  return (l.tackles ?? 0)
+    + (l.defSacks ?? 0) * 4
+    + (l.defInts ?? 0) * 4
+    + (l.tfl ?? 0) * 1.5
+    + (l.prs ?? 0) * 0.75
+    + (l.qbHits ?? 0)
+    + (l.hurries ?? 0) * 0.75
+    + (l.defTD ?? 0) * 6
+    + (l.missedTackles ?? 0) * 0.5
+}
+
+/**
+ * Boxdef: true when a defender recorded any front-seven / impact stat, so the
+ * Defense table lists every sack, TFL, INT, pressure and tackling defender —
+ * not just the tackle leaders. Coverage-only (targets, no stop) lines stay in
+ * the Coverage table.
+ */
+export function hasDefenseStat(l: GameStatLine): boolean {
+  return (l.tackles ?? 0) > 0
+    || (l.tfl ?? 0) > 0
+    || (l.defSacks ?? 0) > 0
+    || (l.defInts ?? 0) > 0
+    || (l.defTD ?? 0) > 0
+    || (l.prs ?? 0) > 0
+    || (l.qbHits ?? 0) > 0
+    || (l.hurries ?? 0) > 0
+    || (l.missedTackles ?? 0) > 0
+}
+
+/**
+ * Boxdef: the rows the box-score Defense table shows for one club — every
+ * defender with any defensive stat, ranked by combined impact. Never capped, so
+ * no sack / INT / TFL / pressure maker is ever hidden. Shared by MatchView and
+ * the verification probe so the two can never drift.
+ */
+export function defenseTableRows(box: PlayerBoxScore[], teamId: string): PlayerBoxScore[] {
+  return box
+    .filter((b) => b.teamId === teamId && hasDefenseStat(b.line))
+    .sort((a, b) => defenseImpact(b.line) - defenseImpact(a.line) || (b.line.tackles ?? 0) - (a.line.tackles ?? 0))
 }
 
 /**
@@ -79,6 +132,10 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
     }
     return byId[id]
   }
+  // 405: one lookup + one ball-skills cache for the passes-defensed credit below,
+  // so the per-play path never re-scans the league or re-derives attributes.
+  const pmap = new Map(world.players.map((p) => [p.id, p]))
+  const ballSkillsCache = new Map<string, number>()
   const add = (id: string | undefined, teamId: string, key: keyof GameStatLine, n: number) => {
     const line = ensure(id, teamId)
     if (!line) return
@@ -154,8 +211,11 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       }
       if (play.sackId) {
         add(play.sackId, def, 'defSacks', 1)
-        // Q7: a sack is a tackle for loss.
+        // Q7: a sack is a tackle for loss. Boxdef: NFL scoring also counts the
+        // sack as a solo tackle, so the sack-maker appears in the tackle total
+        // (this is why pressure makers were showing SCK but TCK 0 before).
         add(play.sackId, def, 'tfl', 1)
+        add(play.sackId, def, 'tackles', 1)
       }
       if (play.intId) {
         add(play.intId, def, 'defInts', 1)
@@ -170,8 +230,14 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'recTD', 1)
       }
       // L12 S3: a completion is stopped by one defender (no credit on a score —
-      // the resolver already withholds tackleIds there).
-      if (isComp && play.tackleIds?.length) add(play.tackleIds[0], def, 'tackles', 1)
+      // the resolver already withholds tackleIds there). Boxdef: a catch stopped
+      // behind the line of scrimmage (a screen / bubble that loses ground) is a
+      // tackle for loss, derived from the play's negative gain, exactly like a
+      // stuffed run — the engine does not stamp TFL itself.
+      if (isComp && play.tackleIds?.length) {
+        add(play.tackleIds[0], def, 'tackles', 1)
+        if ((play.yards ?? 0) < 0) add(play.tackleIds[0], def, 'tfl', 1)
+      }
       // R5: the defender who whiffed is charged a missed tackle; the carrier
       // who broke it is credited with a forced miss.
       if (play.missedTackleIds?.length) for (const id of play.missedTackleIds) add(id, def, 'missedTackles', 1)
@@ -188,10 +254,34 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
         // R4b: INTs credited to the coverage defender (distinct from the ball hawk).
         if (play.intId || play.result.startsWith('Interception')) add(play.coverId, def, 'defIntsCov', 1)
       }
+      // 405: passes defensed. NFL scoring counts an interception and a break-up;
+      // the engine already stamps the break-up (`pbuId`), and an incompletion with
+      // no stamp is credited to the cover man on a deterministic share of his own
+      // ball skills (JMP/PRC). Bookkeeping only — no rng() draw, no counter moves.
+      if (!isSackPlay) {
+        if (play.intId) add(play.intId, def, 'passDef', 1)
+        else if (play.pbuId) add(play.pbuId, def, 'passDef', 1)
+        else if (play.coverId && play.targetId && !isComp && !play.dropId) {
+          let ball = ballSkillsCache.get(play.coverId)
+          if (ball == null) {
+            const d = pmap.get(play.coverId)
+            const a = d ? playerAttrs(d) : undefined
+            ball = ((a?.JMP ?? 70) + (a?.PRC ?? 70)) / 2
+            ballSkillsCache.set(play.coverId, ball)
+          }
+          const p = clamp(0.28 + (ball - 72) * 0.004, 0.12, 0.5)
+          if (hashUnit(`${play.n}:${play.offId}:pd`) < p) add(play.coverId, def, 'passDef', 1)
+        }
+      }
     } else if (play.type === 'run') {
       if (play.carrierId) {
         add(play.carrierId, off, 'rushAtt', 1)
-        add(play.carrierId, off, 'rushYds', play.kneel ? play.yards : Math.max(0, play.yards))
+        // realismloss: rushing yards include losses, as in the real NFL stat book.
+        // This used to floor every non-kneel run at 0, so the restored run losses
+        // (calibration.ts CDF walk fix) were invisible in the box score and the
+        // YPC band was detached from the on-field run mean. Kneels already kept
+        // their negative yards; now every carry does.
+        add(play.carrierId, off, 'rushYds', play.yards)
         if (play.result === 'TOUCHDOWN!' && !play.defTD) add(play.carrierId, off, 'rushTD', 1)
       }
       // One tackler per run — the defense shares stops across the front seven.
@@ -284,6 +374,9 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.tackles += line.tackles ?? 0
   season.defSacks += line.defSacks ?? 0
   season.defInts += line.defInts ?? 0
+  // 405: passes defensed (break-ups + interceptions) were credited per game but
+  // never rolled into the season line.
+  season.passDef += line.passDef ?? 0
   season.tfl = (season.tfl ?? 0) + (line.tfl ?? 0)
   // R4b: coverage fields, so the season coverage grade matches the game detail.
   season.defTargets = (season.defTargets ?? 0) + (line.defTargets ?? 0)
@@ -392,6 +485,7 @@ export function careerTotals(p: Player) {
     t.rushAtt += s.rushAtt; t.rushYds += s.rushYds; t.rushTD += s.rushTD
     t.targets += s.targets; t.rec += s.rec; t.recYds += s.recYds; t.recTD += s.recTD
     t.tackles += s.tackles; t.defSacks += s.defSacks; t.defInts += s.defInts
+    t.passDef += s.passDef ?? 0
     t.tfl = (t.tfl ?? 0) + (s.tfl ?? 0)
     t.defTargets = (t.defTargets ?? 0) + (s.defTargets ?? 0)
     t.defComp = (t.defComp ?? 0) + (s.defComp ?? 0)

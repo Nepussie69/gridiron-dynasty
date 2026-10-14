@@ -151,6 +151,7 @@ export function IconButton({
   disabled,
   rowSafe = false,
   className,
+  title,
   ref,
   'aria-haspopup': ariaHaspopup,
   'aria-expanded': ariaExpanded,
@@ -167,6 +168,8 @@ export function IconButton({
   disabled?: boolean
   rowSafe?: boolean
   className?: string
+  /** Tooltip when it should say more than `label` (defaults to `label`). */
+  title?: string
   ref?: Ref<HTMLButtonElement>
   'aria-haspopup'?: 'menu' | 'dialog' | boolean
   'aria-expanded'?: boolean
@@ -178,7 +181,7 @@ export function IconButton({
       ref={ref}
       type="button"
       aria-label={label}
-      title={label}
+      title={title ?? label}
       aria-pressed={pressed}
       aria-haspopup={ariaHaspopup}
       aria-expanded={ariaExpanded}

@@ -139,6 +139,10 @@ export interface World {
    *  at the next rollover. Optional — a legacy save has none. The shape lives in
    *  types.ts (FutureClassesState); see engine/futureClasses.ts. */
   futureClasses?: import('../types').FutureClassesState
+  /** FUTURES #37: per-pair chemistry (QB–receiver shared targets, adjacent-OL
+   *  shared snaps). Optional — a legacy save has none and builds it as it plays;
+   *  see engine/chemistry.ts. */
+  chem?: import('./chemistry').ChemState
 }
 
 // Backwards-compatible alias used by screen/selector imports.

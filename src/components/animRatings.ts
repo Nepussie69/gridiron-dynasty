@@ -104,7 +104,7 @@ export function carrierMove(p: Player | undefined, seed: number): CarrierMove {
  * hit; everyone else wraps up and drives.
  */
 export function tackleStyle(p: Player | undefined, o: { fromBehind: boolean; carrierSpeed: number; tacklerSpeed: number; seed: number }): TackleStyle {
-  if (o.fromBehind && o.carrierSpeed > 3) return 'dive'
+  if (o.fromBehind && o.carrierSpeed > 4.5) return 'dive'
   if (!p) return 'wrap'
   const tak = effRating(p, 'TAK', 70)
   const hpw = effRating(p, 'HPW', 70)

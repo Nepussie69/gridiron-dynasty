@@ -87,6 +87,58 @@ function split(_rng: Rng, total: number, weights: number[]): number[] {
 }
 
 /**
+ * Backlog 405: deterministic *systematic* sampling into integers summing to
+ * `total`. Every draw takes one unit from a cumulative weight line at a hashed
+ * offset, so each item's expected share is exactly its weight share and a rare
+ * event (a game's 1–3 TDs or INTs) is not always handed to the largest weight —
+ * the failure mode of largest-remainder splitting on small totals. Draws no
+ * rng(), so the seed stream is untouched.
+ */
+function detLotto(total: number, weights: number[], key: string): number[] {
+  const n = weights.length
+  const out = weights.map(() => 0)
+  if (n === 0 || total <= 0) return out
+  const sum = weights.reduce((a, b) => a + b, 0)
+  // No usable weights (e.g. nobody was targeted): fall back to a uniform field.
+  const w = sum > 0 ? weights : weights.map(() => 1)
+  const s = sum > 0 ? sum : n
+  const cum: number[] = []
+  let acc = 0
+  for (const x of w) { acc += x / s; cum.push(acc) }
+  for (let k = 0; k < total; k++) {
+    const u = (k + hashUnit(`${key}:l:${k}`)) / total
+    let i = 0
+    while (i < n - 1 && cum[i] <= u) i++
+    out[i] += 1
+  }
+  return out
+}
+
+/**
+ * Backlog 405: keep every allocation inside its own hard cap (a man cannot allow
+ * more completions than he was targeted, nor more TDs than completions). The
+ * overflow is moved one unit at a time to the man with the most headroom, so the
+ * totals stay reconciled. Deterministic — the smallest cap-safe fix.
+ */
+function capAlloc(out: number[], cap: number[]): number[] {
+  for (let guard = 0; guard < 256; guard++) {
+    let over = -1
+    for (let i = 0; i < out.length; i++) if (out[i] > cap[i]) { over = i; break }
+    if (over < 0) return out
+    out[over] -= 1
+    let best = -1
+    let slack = 0
+    for (let j = 0; j < out.length; j++) {
+      const room = cap[j] - out[j]
+      if (room > slack) { slack = room; best = j }
+    }
+    if (best < 0) return out
+    out[best] += 1
+  }
+  return out
+}
+
+/**
  * R7/R9: a deterministic weighted split into integers summing to `total`. Used by
  * the fast-sim coverage and pressure allocation, which must not consume rng() so
  * the seed stream (and every other allocated stat) is unchanged. Largest-fraction
@@ -168,7 +220,9 @@ function snapShare(world: World, teamId: string, p: Player): number {
     // a side's snap shares sum to ~11 rather than every backup drawing a share.
     case 'DE': case 'DT': return r < 2 ? 0.82 : r === 2 ? 0.35 : 0.1
     case 'LB': return r < 2 ? 0.85 : r === 2 ? 0.5 : 0.12
-    case 'CB': return r < 2 ? 0.85 : r === 2 ? 0.45 : 0.1
+    // 405: the slot corner is a real coverage role (NFL ≈ 60–70% of snaps and one
+    // of the most-targeted men on the field), not a 45% rotational body.
+    case 'CB': return r < 2 ? 0.85 : r === 2 ? 0.62 : 0.1
     case 'S': return r < 2 ? 0.9 : r === 2 ? 0.2 : 0.08
     default: return 0
   }
@@ -428,16 +482,25 @@ export function allocateTeamGame(
     // league-average defender rate, so an average defence lands at the base 8.
     const avgMtRate = defenders.reduce((s, p) => s + defenderMissRate(p), 0) / defenders.length
     const mtTotal = clamp(Math.round(MT_ALLOC_BASE * (avgMtRate / MT_ALLOC_REF)), 5, 11)
-    const mtWeight = defenders.map((p, i) => (tSplit[i] ?? 0) * defenderMissRate(p))
+    const mtWeight = defenders.map((p, i) => (tSplit[i] ?? 0) * clamp(defenderMissRate(p) / MT_ALLOC_REF, 0.45, 1.6))
+    // Backlog 405(e): the man's own tackling rating still tilts his share, but the
+    // tilt is measured against the model's league-average rate and clamped, so a
+    // club's whole missed-tackle total no longer lands on the corners (the raw
+    // rate ratio put ≈ 64% of it on CBs — NFL is ≈ 20–25%). The team total is
+    // unchanged, only its split; still no rng() draw added or removed.
     const mtSplit = split(rng, mtTotal, mtWeight)
     defMissed = mtTotal
     defenders.forEach((p) => {
       const ri = rushers.indexOf(p)
       const tk = tSplit[defenders.indexOf(p)] ?? 0
+      const sck = ri >= 0 ? sSplit[ri] ?? 0 : 0
       addLine(p.id, {
         playerId: p.id,
-        tackles: tk,
-        defSacks: ri >= 0 ? sSplit[ri] ?? 0 : 0,
+        // Boxdef: NFL scoring counts a sack as a solo tackle and a tackle for
+        // loss, so the sack-maker lands in the tackle total and the club's TFL.
+        tackles: tk + sck,
+        defSacks: sck,
+        tfl: sck,
         missedTackles: mtSplit[defenders.indexOf(p)] ?? 0,
       })
     })
@@ -502,12 +565,70 @@ export function allocateTeamGame(
 }
 
 /**
+ * Backlog 405: the league-level reference the coverage model is centred on. The
+ * play-by-play cover level sits at ≈ 77 (J8C.coverBase 76.5), so the fast path
+ * uses the same centre and a poor/elite club reads as a genuine difference.
+ */
+const COV_SKILL_REF = 76
+/** 405: share of pass attempts with no defender (throwaway, spike, batted at the
+ *  line). These are not credited to any cover man, so credited targets are the
+ *  documented residue below the opponent's attempt total. */
+const COV_NO_DEF = 0.08
+/** 405: NFL target share by coverage position (of credited targets). */
+const COV_POS_SHARE: Record<string, number> = { CB: 0.52, S: 0.23, LB: 0.25 }
+/** 405: a cover man only joins the coverage pool if he plays a real share of the
+ *  side's snaps (matches the snap-share floor that earns a game played). */
+const COV_POOL_MIN = 0.2
+/** 405: how fast the target weight falls as a man's own coverage rises — an
+ *  elite CB (≈ +15 skill) is targeted ≈ 40% less than a poor one (≈ −15). */
+const COV_AVOID_SLOPE = 0.035
+
+/** 405: one defender's cover skill — his own MCV/ZCV blended by role. */
+function coverSkill(p: Player): number {
+  const a = mkAttrs(p)
+  const mcv = a.MCV ?? 70
+  const zcv = a.ZCV ?? 70
+  if (p.pos === 'CB') return mcv * 0.65 + zcv * 0.35
+  if (p.pos === 'S') return mcv * 0.4 + zcv * 0.6
+  if (p.pos === 'LB') return mcv * 0.3 + zcv * 0.7
+  return mcv * 0.5 + zcv * 0.5
+}
+
+/** 405: completion % allowed per target (before reconciliation). Elite ≈ 44%,
+ *  average ≈ 56%, poor ≈ 68% on the model scale. The club total is fixed to the
+ *  opponent's completions, which renormalizes the whole share upward by the
+ *  uncredited-attempt residue, so the realised rate sits a few points higher. */
+function compAllowedRate(skill: number): number {
+  return clamp(0.56 - (skill - COV_SKILL_REF) * 0.008, 0.35, 0.8)
+}
+/** 405: TD allowed per target — elite ≈ 2%, average ≈ 4.2%, poor ≈ 6.5%. */
+function tdAllowedRate(skill: number): number {
+  return clamp(0.042 - (skill - COV_SKILL_REF) * 0.0013, 0.012, 0.09)
+}
+/** 405: interception per target — a ball hawk's man is picked ≈ 3× as often. */
+function covIntRate(skill: number): number {
+  return clamp(0.026 + (skill - COV_SKILL_REF) * 0.0008, 0.008, 0.045)
+}
+/** 405: break-up share of the incompletions (and INTs) a man is on the hook for
+ *  — NFL ≈ 4–5 passes defensed a team-game, leaders ≈ 15–20 a season. */
+function pdShare(skill: number): number {
+  return clamp(0.38 + (skill - COV_SKILL_REF) * 0.004, 0.15, 0.6)
+}
+
+/**
  * R7/R9: allocate the fast-sim coverage and pressure stats that the play-by-play
  * credits via `coverId` / pressure credit. Deterministic (hashes only, no rng()),
  * so the seed stream for every other allocated stat is untouched. Coverage allowed
  * by a defence equals the opponent offence's passing production, so simmed seasons
  * have consistent REC allowed / YDS ALW / COV; pressures come from the same
  * pressureEdge-style rate and are split among the rushers by max(PMV, FMV).
+ *
+ * Backlog 405: targets no longer follow coverage skill directly (which gave the
+ * best cover man the most targets and TDs). The club's credited targets are split
+ * by NFL position share and, inside a position, the weight FALLS as the man's own
+ * coverage rises — a quarterback avoids an elite corner. Each man's comp / TD /
+ * INT / PD then follow from HIS OWN ratings at his own target volume, with the
+ * club totals reconciled to the opponent's passing line.
  */
 function allocateCoverageAndPressure(
   world: World,
@@ -532,7 +653,7 @@ function allocateCoverageAndPressure(
   const oppQb = opp.offense.find((o) => playerById.get(o.playerId)?.pos === 'QB')
   const dropbacks = tgt + (oppQb?.line.sk ?? 0)
 
-  const covRows = alloc.lines.filter((l) => {
+  const covRows: { playerId: string; line: GameStatLine }[] = alloc.lines.filter((l) => {
     const p = playerById.get(l.playerId)
     return !!p && (p.pos === 'CB' || p.pos === 'S' || p.pos === 'LB')
   })
@@ -541,28 +662,63 @@ function allocateCoverageAndPressure(
     return !!p && (p.pos === 'DE' || p.pos === 'DT' || p.pos === 'LB')
   })
 
-  // ── R9: coverage ──
+  // ── R9 / Backlog 405: coverage ──
   if (covRows.length) {
-    const covW = covRows.map(({ playerId }) => {
+    const covered = Math.max(0, Math.round(tgt * (1 - COV_NO_DEF)))
+    const teamId = playerById.get(covRows[0].playerId)?.teamId ?? ''
+    // 405: the coverage pool is the club's REAL cover men — the corners, safeties
+    // and linebackers who play a meaningful share — not just whoever already had a
+    // line in the 12-man defender slice. When the slice held a single corner he
+    // ate the whole positional target share (a 188-target season); a man without a
+    // line yet simply gets one here. No rng() draw is involved.
+    const known = new Set(covRows.map((r) => r.playerId))
+    for (const p of world.roster[teamId] ?? []) {
+      if (p.injured || known.has(p.id)) continue
+      if (p.pos !== 'CB' && p.pos !== 'S' && p.pos !== 'LB') continue
+      if (snapShare(world, teamId, p) < COV_POOL_MIN) continue
+      const row = { playerId: p.id, line: { playerId: p.id } }
+      alloc.lines.push(row)
+      covRows.push(row)
+      known.add(p.id)
+    }
+    const pInfo = covRows.map(({ playerId }) => {
       const p = playerById.get(playerId)!
-      const a = mkAttrs(p)
-      const mcv = a.MCV ?? 70
-      const zcv = a.ZCV ?? 70
-      if (p.pos === 'CB') return Math.max(1, (mcv * 0.6 + zcv * 0.4) * 2.4)
-      if (p.pos === 'S') return Math.max(1, (mcv * 0.4 + zcv * 0.6) * 1.3)
-      return Math.max(1, (mcv * 0.3 + zcv * 0.7) * 0.9)
+      const skill = coverSkill(p)
+      // Usage (snaps) and the man's own cover skill: a better cover man is used
+      // more but avoided more.
+      const use = clamp(snapShare(world, teamId, p), 0.15, 1)
+      const avoid = clamp(1 - COV_AVOID_SLOPE * (skill - COV_SKILL_REF), 0.4, 1.6)
+      return { p, skill, raw: Math.max(0.01, use * avoid) }
     })
-    const tgts = detSplit(tgt, covW, `${key}:ctgt`)
-    const comps = detSplit(comp, covW, `${key}:ccmp`)
-    const ydsA = detSplit(yds, covW, `${key}:cyds`)
-    const tds = detSplit(td, covW, `${key}:ctd`)
-    const intsCov = detSplit(ints, covW, `${key}:cint`)
+    // Within-position normalization × the NFL position shares (renormalized over
+    // the positions actually present), so CB ≈ 52% / S ≈ 23% / LB ≈ 25% of the
+    // credited targets.
+    const present = new Set(pInfo.map((x) => x.p.pos))
+    const posNorm = [...present].reduce((s, pos) => s + (COV_POS_SHARE[pos] ?? 0.15), 0) || 1
+    const posSub = new Map<string, number>()
+    for (const x of pInfo) posSub.set(x.p.pos, (posSub.get(x.p.pos) ?? 0) + x.raw)
+    const tgW = pInfo.map((x) => ((COV_POS_SHARE[x.p.pos] ?? 0.15) / posNorm) * (x.raw / (posSub.get(x.p.pos) || 1)))
+    const tgts = detLotto(covered, tgW, `${key}:ctgt`)
+    // Every outcome follows the man's own ratings at his own target volume; the
+    // club totals still reconcile to the opponent's passing line (the shares are
+    // scaled by the game's own numbers when the integer split lands).
+    const comps = capAlloc(detLotto(comp, pInfo.map((x, i) => tgts[i] * compAllowedRate(x.skill)), `${key}:ccmp`), tgts)
+    const tds = capAlloc(detLotto(td, pInfo.map((x, i) => comps[i] * tdAllowedRate(x.skill)), `${key}:ctd`), comps)
+    const intsCov = capAlloc(detLotto(ints, pInfo.map((x, i) => tgts[i] * covIntRate(x.skill)), `${key}:cint`), tgts)
+    // Yards allowed: the man's own completions × a yards-per-catch he gives up
+    // (an elite corner tackles sooner), reconciled to the opponent's pass yards.
+    const ydsW = pInfo.map((x, i) => comps[i] * clamp(11.5 * (1 - 0.004 * (x.skill - COV_SKILL_REF)), 7, 15))
+    const ydsA = detSplit(yds, ydsW, `${key}:cyds`)
     covRows.forEach((row, i) => {
       row.line.defTargets = (row.line.defTargets ?? 0) + tgts[i]
-      row.line.defComp = (row.line.defComp ?? 0) + Math.min(tgts[i], comps[i])
+      row.line.defComp = (row.line.defComp ?? 0) + comps[i]
       row.line.defYdsAllowed = (row.line.defYdsAllowed ?? 0) + ydsA[i]
       row.line.defTDAllowed = (row.line.defTDAllowed ?? 0) + tds[i]
       row.line.defIntsCov = (row.line.defIntsCov ?? 0) + intsCov[i]
+      // 405: passes defensed — a break-up of one of his incompletions, and NFL
+      // scoring counts an interception as a pass defensed too.
+      const inc = Math.max(0, tgts[i] - comps[i])
+      row.line.passDef = (row.line.passDef ?? 0) + detCount(inc + intsCov[i], pdShare(pInfo[i].skill), `${key}:${row.playerId}:pd`)
     })
   }
 
@@ -713,6 +869,9 @@ function recordAllocatedStats(world: World, sim: GameSim, season: number, level:
       entry.tackles += line.tackles ?? 0
       entry.defSacks += line.defSacks ?? 0
       entry.defInts += line.defInts ?? 0
+      // Boxdef: tackles for loss were allocated but never folded into the season
+      // line (the play-by-play path does fold them via `mergeInto`).
+      entry.tfl = (entry.tfl ?? 0) + (line.tfl ?? 0)
       // R5: fold the new defensive/offensive bookkeeping into the season line too.
       entry.missedTackles = (entry.missedTackles ?? 0) + (line.missedTackles ?? 0)
       entry.forcedMissed = (entry.forcedMissed ?? 0) + (line.forcedMissed ?? 0)
@@ -737,6 +896,8 @@ function recordAllocatedStats(world: World, sim: GameSim, season: number, level:
       entry.defYdsAllowed = (entry.defYdsAllowed ?? 0) + (line.defYdsAllowed ?? 0)
       entry.defTDAllowed = (entry.defTDAllowed ?? 0) + (line.defTDAllowed ?? 0)
       entry.defIntsCov = (entry.defIntsCov ?? 0) + (line.defIntsCov ?? 0)
+      // 405: passes defensed were allocated but never folded into the season line.
+      entry.passDef = (entry.passDef ?? 0) + (line.passDef ?? 0)
       // R15: snap totals kept as numerator/denominator (never a biased average;
       // an unmeasured game contributes nothing rather than a 0%).
       entry.snaps = (entry.snaps ?? 0) + (line.snaps ?? 0)
@@ -761,6 +922,7 @@ export function allocProbe(world: World, games = 200) {
   let covYds = 0
   let covTD = 0
   let covInt = 0
+  let passDef = 0
   let prs = 0
   let qbh = 0
   let hur = 0
@@ -796,6 +958,7 @@ export function allocProbe(world: World, games = 200) {
       covYds += line.defYdsAllowed ?? 0
       covTD += line.defTDAllowed ?? 0
       covInt += line.defIntsCov ?? 0
+      passDef += line.passDef ?? 0
       prs += line.prs ?? 0
       qbh += line.qbHits ?? 0
       hur += line.hurries ?? 0
@@ -809,7 +972,7 @@ export function allocProbe(world: World, games = 200) {
   const per = (x: number) => +(x / (gamesRun || 1)).toFixed(2)
   return {
     games: gamesRun,
-    coverage: { targets: per(covTgt), comp: per(covComp), yds: per(covYds), td: per(covTD), ints: per(covInt) },
+    coverage: { targets: per(covTgt), comp: per(covComp), yds: per(covYds), td: per(covTD), ints: per(covInt), pd: per(passDef) },
     pressures: per(prs),
     qbHits: per(qbh),
     hurries: per(hur),

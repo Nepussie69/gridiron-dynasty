@@ -8,6 +8,7 @@ import { teamAvgOvr } from '../game/selectors'
 import type { CareerState, LedgerEntry, Player, Position, SeasonStats } from '../game/types'
 import type { World } from '../game/engine/generate'
 import { useGame, useWorld } from '../store/gameStore'
+import { PlayerHoverCard } from '../components/PlayerHoverCard'
 import { Badge, Card, KpiTile, PageHeader, Sparkline, Tabs, TeamCrest, TierScale } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
 
@@ -731,6 +732,8 @@ function YearTab({ world, db, career }: { world: World; db: CareerDatabase; care
 }
 
 function TopPlayers({ title, players }: { title: string; players: PlayerLine[] }) {
+  const world = useWorld()
+  const byId = new Map(world.players.map((p) => [p.id, p]))
   return (
     <Card pad={false}>
       <div className="border-b border-line px-4 py-2">
@@ -738,15 +741,24 @@ function TopPlayers({ title, players }: { title: string; players: PlayerLine[] }
       </div>
       {players.length === 0 && <div className="px-4 py-6 text-center text-xs text-muted">No lines recorded.</div>}
       <div className="divide-y divide-line/60">
-        {players.map((p) => (
-          <div key={p.id} className="flex items-center gap-3 px-4 py-2">
-            <span className="grid h-7 w-9 shrink-0 place-items-center rounded-[var(--r-sm)] bg-surface-3 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-body font-600 text-ink">{p.name}</div>
-              <div className="text-label text-muted">{lineSummary(p.pos, p.line)}</div>
+        {players.map((p) => {
+          const player = byId.get(p.id)
+          return (
+            <div key={p.id} className="flex items-center gap-3 px-4 py-2">
+              <span className="grid h-7 w-9 shrink-0 place-items-center rounded-[var(--r-sm)] bg-surface-3 font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-body font-600 text-ink">
+                  {player ? (
+                    <PlayerHoverCard player={player} info={false}>{p.name}</PlayerHoverCard>
+                  ) : (
+                    p.name
+                  )}
+                </div>
+                <div className="text-label text-muted">{lineSummary(p.pos, p.line)}</div>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </Card>
   )

@@ -45,6 +45,7 @@ import {
 } from './statsColumns'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, DensityToggle, OvrBadge, TeamCrest, useDensity } from '../ui/kit'
+import { PlayerHoverCard } from './PlayerHoverCard'
 
 type Dir = 'asc' | 'desc'
 type SortKey = 'name' | 'pos' | 'age' | 'ovr' | 'pot' | `col:${string}`
@@ -297,7 +298,9 @@ export function StatsTable({
                       )}
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        <span className={cn('text-ink', sortKey === 'name' ? 'font-700' : 'font-600')}>{p.name}</span>
+                        <PlayerHoverCard player={p} info={false}>
+                          <span className={cn('text-ink', sortKey === 'name' ? 'font-700' : 'font-600')}>{p.name}</span>
+                        </PlayerHoverCard>
                         {tag && <Badge tone="info">{tag}</Badge>}
                       </span>
                     </td>
