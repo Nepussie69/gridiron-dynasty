@@ -124,7 +124,7 @@ export const VISION = {
   /** Floor for a pressured cone (a collapsed cone may go below the clean-pocket `coneMin`). */
   conePressMin: 4,
   /** Pressure (pressureEdge / pressScale) at which the pressure shrink is full. */
-  conePressFull: 0.6,
+  conePressFull: 0.45,
   /** Shape of the shrink from clean (0) to full (1): < 1 makes light pressure
    *  already clearly narrower. A clean pocket (pressure <= 0) is never touched. */
   conePressCurve: 0.75,
@@ -362,6 +362,7 @@ export function visionThrow(
   qb: Player, depth: number, readNo: number, reach: number | null,
   pressureEdge: number, fat: number, offPlatform: number,
   spotU: number, _spotA: number,
+  extraCone = 0, extraRadius = 0, extraAcc = 0,
 ): VisionThrow {
   const a = attrs(qb)
   const key = depthAccKey(depth)
@@ -380,15 +381,19 @@ export function visionThrow(
   const fatW = fat * (1 - clampV(staDev, -0.3, 0.3))
   const offCone = reach == null ? 0 : Math.max(0, readNo - reach)
   // The clean-pocket cone is exactly the pre-381 value (same clamp); pressure then takes `shrink` of it.
+  // J10b: `extraCone` / `extraRadius` carry the throw-power / throw-type / pocket-
+  // presence move computed by `throw.ts` — folded INTO the circle so there is one
+  // accuracy scalar and one placement radius, never a second accuracy term. They
+  // are 0 on the OFF path, so the J10a cone/circle is then bit-exact.
   const cleanCone = clampV(
-    VISION.coneBase + accDev * VISION.coneAccW + awrDev * VISION.coneAwrW - fatW * VISION.coneFatW,
+    VISION.coneBase + accDev * VISION.coneAccW + awrDev * VISION.coneAwrW - fatW * VISION.coneFatW - extraCone,
     VISION.coneMin, VISION.coneMax,
   )
   const coneDeg = shrink > 0 ? clampV(cleanCone * (1 - shrink), VISION.conePressMin, VISION.coneMax) : cleanCone
   const radius = clampV(
     VISION.radiusBase - accDev * VISION.radiusAccW - awrDev * VISION.radiusAwrW
       + shrink * VISION.radiusPressW + fatW * VISION.radiusFatW
-      + offPlatform * VISION.radiusOffPlatW + offCone * VISION.radiusConeW,
+      + offPlatform * VISION.radiusOffPlatW + offCone * VISION.radiusConeW + extraRadius,
     VISION.radiusMin, VISION.radiusMax,
   )
   // The ball spot inside the circle (uniform over the disc; deterministic). The
@@ -402,7 +407,7 @@ export function visionThrow(
   // mean so the league completion level does not move.)
   const qAcc = clampV(
     VISION.accCenter + accDev * VISION.accW
-      - (radius - VISION.radiusBase) * VISION.accRadiusW,
+      - (radius - VISION.radiusBase) * VISION.accRadiusW - extraAcc,
     VISION.accMin, VISION.accMax,
   )
   return { readNo, coneDeg, placeRadiusYd: radius, ballOffsetYd, offSpotYd, offCone, qAcc }

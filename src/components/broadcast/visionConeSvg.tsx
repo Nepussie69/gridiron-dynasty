@@ -16,7 +16,7 @@ export function QbConeSvg({ play, anim, t, mx, qb }: { play: Play; anim: PlayAni
         <g opacity={ring.alpha}>
           <polygon points={pts(ringPoints(ring))} fill="var(--color-gold)" fillOpacity={0.14} stroke="var(--color-canvas)" strokeOpacity={0.6} strokeWidth={0.5} />
           <polygon points={pts(ringPoints(ring))} fill="none" stroke="var(--color-gold)" strokeWidth={0.26} />
-          <circle cx={mx(ring.bx)} cy={ring.by} r={0.5} fill={ring.outside ? 'var(--color-warn)' : 'var(--color-ink)'} stroke="var(--color-canvas)" strokeWidth={0.12} />
+          {!ring.noBall && <circle cx={mx(ring.bx)} cy={ring.by} r={0.5} fill={ring.outside ? 'var(--color-warn)' : 'var(--color-ink)'} stroke="var(--color-canvas)" strokeWidth={0.12} />}
         </g>
       )}
     </g>
