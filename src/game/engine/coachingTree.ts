@@ -36,6 +36,30 @@ export interface TreeAdvance {
 
 const COORD_ROLES: StaffRole[] = ['Offensive Coordinator', 'Defensive Coordinator', 'Special Teams Coordinator']
 
+/**
+ * FUTURES #28 §9: the seats a departed protégé can return to. A coach who was
+ * poached away keeps his own role in the tree, so bringing him back puts him in
+ * that seat — never a head job (a head-job entry returns to his `fromRole`).
+ */
+const TREE_RETURN_ROLES = new Set<StaffRole>([
+  'Offensive Coordinator',
+  'Defensive Coordinator',
+  'Special Teams Coordinator',
+  'QB Coach',
+  'OL Coach',
+  'DL Coach',
+  'Secondary Coach',
+  'WR Coach',
+  'LB Coach',
+])
+
+/** The role a tree entry returns to on `poachAssistant` (legacy entries fall back). */
+function treeRoleFor(entry: { fromRole?: string; role?: string }): StaffRole {
+  const candidate = (entry.fromRole ?? entry.role) as StaffRole | undefined
+  if (candidate && candidate !== 'Head Coach' && TREE_RETURN_ROLES.has(candidate)) return candidate
+  return 'Offensive Coordinator'
+}
+
 const SPECIALTIES = [
   'Offense architect',
   'Defense architect',
@@ -275,7 +299,9 @@ export function poachAssistant(world: World, career: CareerState, name: string, 
   const entry = tree.find((e) => e.name === name && e.season === season)
   if (!entry) return { career, ok: false, message: `${name} is no longer available.` }
 
-  const role = (entry.fromRole ?? 'Offensive Coordinator') as StaffRole
+  // FUTURES #28 §9: a departed position coach returns to his own seat; a head-job
+  // protégé returns to the role he held for you (`fromRole`).
+  const role = treeRoleFor(entry)
 
   // He leaves his current club; if he was the head coach, that club promotes.
   if (entry.id) {
