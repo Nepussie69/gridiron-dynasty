@@ -90,4 +90,4 @@ B and C run in parallel worktrees (`ds-wt`) after A. They merge B then C, and th
 | Spec | ✅ 2026-10-11 |
 | A engine | ✅ 2026-10-14 (salvage merge, row 391) |
 | B wiring | ✅ 2026-10-14 (DeepSeek fut15b, row 406: calib byte-identical, eq 20/20, probe 0 FAIL) |
-| C UI | ⏳ |
+| C UI | ✅ 2026-10-14 (DeepSeek fut15c, row 427: probe 117/0 incl. SSR render, eq 20/20; browser check at 375px/dark pending) |

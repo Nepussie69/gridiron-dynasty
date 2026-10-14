@@ -5,6 +5,20 @@ import { coachEffect, coordinatorEdge, NO_USER_BONUS, type CoachEffect, type Use
 import { isFrontOfficeRole, ANALYTICS_ROLE } from '../game/engine/hiring'
 import { ANALYTICS_LEVEL_LABEL, analyticsLevel } from '../game/engine/analytics'
 import { AXIS_LABEL, isEvaluator, learnedBias } from '../game/engine/scoutBias'
+// FUTURES #28 (C3): the C1 coach-profile engine and the live sim reads the UI
+// previews come from. Read-only: nothing here writes to the world.
+import { coachTendency, type CoachTendency } from '../game/engine/decisions'
+import {
+  coachProfile,
+  groupDevMultiplier,
+  promoteInterim,
+  ROLE_DEV_GROUPS,
+  teachFactor,
+  type CoachProfile,
+  type InterimResult,
+} from '../game/engine/staffMarket'
+import { masteryCeiling, staffContinuity } from '../game/engine/playbook'
+import { hash32 } from '../game/engine/rng'
 
 /**
  * Backlog #41: read the real staff code and say what each member actually does.
@@ -110,6 +124,9 @@ export const COACH_UNIT: Partial<Record<string, string>> = {
   'OL Coach': 'the O-Line',
   'DL Coach': 'the D-Line',
   'Secondary Coach': 'the Secondary',
+  // FUTURES #28: market-only seats a user club can add.
+  'WR Coach': 'the Receivers',
+  'LB Coach': 'the Linebackers',
 }
 
 /** Flavor descriptions for the generated specialty tag (display only — no sim hook). */
@@ -174,6 +191,7 @@ export function staffEffectLines(
       tone: toneFor(e),
       hint: 'coaching.ts offEdge = clamp((OC OVR − 74) × 0.2, ±4.5); statAlloc.ts: pass yards ×(1 + edge/50), completion +edge×0.004',
     })
+    pushCoordinatorReadout(out, m)
   }
 
   if (m.role === 'Defensive Coordinator') {
@@ -184,6 +202,7 @@ export function staffEffectLines(
       tone: toneFor(e),
       hint: 'coaching.ts defEdge = clamp((DC OVR − 74) × 0.2, ±4.5); read by playsim.ts for the defense',
     })
+    pushCoordinatorReadout(out, m)
   }
 
   if (m.role === 'Special Teams Coordinator') {
@@ -197,6 +216,29 @@ export function staffEffectLines(
   }
 
   if (COACH_UNIT[m.role]) {
+    // FUTURES #28 §2: the seat's REAL effect is C1's per-group multiplier for the
+    // players he coaches (g in [0.95, 1.05]), plus his focus boost.
+    const ge = groupEffectFor(world, teamId, m)
+    if (ge) {
+      out.push({
+        label: 'Position-group development',
+        value: `×${ge.g.toFixed(3)} for ${COACH_UNIT[m.role]}`,
+        tone: toneFor(ge.g - 1),
+        hint: 'staffMarket.ts groupDevMultiplier() — this coach against the club’s own position-coach mean × teachFactor; progress.ts multiplies it in for his group only',
+      })
+      out.push({
+        label: 'Focus boost',
+        value: ge.boost > 0 ? `+${ge.boost} pts/yr to ${ge.group} players` : 'none from this seat',
+        tone: ge.boost > 0 ? 'win' : 'neutral',
+        hint: 'staffMarket.ts coachProfile().boost — extra focus points for his group (capped by MAX_FOCUS_BONUS)',
+      })
+      out.push({
+        label: 'Teaching',
+        value: `${ge.teaching} / 100`,
+        tone: ge.teaching >= 70 ? 'win' : ge.teaching < 50 ? 'warn' : 'neutral',
+        hint: `staffMarket.ts coachProfile().teaching — teachFactor ×${ge.teach.toFixed(2)} scales his group’s boost and the install speed`,
+      })
+    }
     const dev = unitDevMultiplier(m.rating)
     out.push({
       label: 'Player development',
@@ -285,6 +327,8 @@ export function effectSummary(m: StaffMember, eff?: CoachEffect): string {
     case 'OL Coach':
     case 'DL Coach':
     case 'Secondary Coach':
+    case 'WR Coach':
+    case 'LB Coach':
       return `Dev ×${unitDevMultiplier(m.rating).toFixed(2)} (${COACH_UNIT[m.role]})`
     default: {
       const mag = m.bias?.magnitude ?? 0
@@ -346,7 +390,7 @@ export function groupOf(role: string): Exclude<RoleGroup, 'all'> {
     role === 'Special Teams Coordinator'
   )
     return 'coord'
-  if (role === 'QB Coach' || role === 'OL Coach' || role === 'DL Coach' || role === 'Secondary Coach')
+  if (role === 'QB Coach' || role === 'OL Coach' || role === 'DL Coach' || role === 'Secondary Coach' || role === 'WR Coach' || role === 'LB Coach')
     return 'pos'
   return 'front'
 }
@@ -485,7 +529,9 @@ export function memberEffect(m: StaffMember, eff: CoachEffect, lim: EngineLimits
     case 'QB Coach':
     case 'OL Coach':
     case 'DL Coach':
-    case 'Secondary Coach': {
+    case 'Secondary Coach':
+    case 'WR Coach':
+    case 'LB Coach': {
       const v = unitDevMultiplier(m.rating)
       return { kind: 'mult', value: v, label: 'dev alone', clamp: null, sort: (v - 1) * 10 }
     }
@@ -589,6 +635,8 @@ export function vacancyCost(role: string, heldByUser = false): string {
     case 'OL Coach':
     case 'DL Coach':
     case 'Secondary Coach':
+    case 'WR Coach':
+    case 'LB Coach':
       return 'program development averages the remaining position coaches'
     case ANALYTICS_ROLE:
       return 'no analytics read on 4th-down calls, win probability or tendencies'
@@ -629,8 +677,8 @@ export function liveSchemes(staff: StaffMember[]): LiveSchemes {
   }
 }
 
-const OFF_SIDE = new Set(['QB Coach', 'OL Coach'])
-const DEF_SIDE = new Set(['DL Coach', 'Secondary Coach'])
+const OFF_SIDE = new Set(['QB Coach', 'OL Coach', 'WR Coach'])
+const DEF_SIDE = new Set(['DL Coach', 'Secondary Coach', 'LB Coach'])
 
 /**
  * Where a staffer's scheme stands against the live coordinator scheme.
@@ -658,3 +706,219 @@ export function schemeStateOf(
     ? { state: 'match', against, liveScheme: holder.scheme }
     : { state: 'off', against, liveScheme: holder.scheme }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUTURES #28 C3: the coaching-market readouts the redesigned Staff screen shows.
+//
+// Everything is DERIVED from the C1 engine (staffMarket.ts) and the live sim
+// reads (decisions.coachTendency, playbook cohesion, coaching.coordinatorEdge) on
+// read-only hypothetical worlds. Nothing here writes, hires, fires or simulates.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** C1 profile value for one seat, straight from staffMarket.coachProfile(). */
+export function profileOf(m: StaffMember): CoachProfile {
+  return coachProfile(m)
+}
+
+/** The C1 per-position-group readout for a coach seat ("QB dev +2/yr", g ×1.03). */
+export interface GroupEffect {
+  /** The dev group he sharpens (QB/OL/DL/CB/S/WR/LB). */
+  group: string
+  /** staffMarket.groupDevMultiplier() for his group at this club. */
+  g: number
+  /** Extra focus points his seat adds for that group (0–2). */
+  boost: number
+  teaching: number
+  /** teachFactor(teaching) — 0.6–1.4. */
+  teach: number
+  /** Weeks to full mastery of an install (2–6). */
+  install: number
+}
+
+/** The C1 group effect for a coach seat, or null when the seat has no group. */
+export function groupEffectFor(world: World, teamId: string, m: StaffMember): GroupEffect | null {
+  const groups = ROLE_DEV_GROUPS[m.role]
+  if (!groups?.length) return null
+  const p = coachProfile(m)
+  return {
+    group: p.boost.group || groups[0],
+    g: groupDevMultiplier(world, teamId, groups[0]),
+    boost: p.boost.points,
+    teaching: p.teaching,
+    teach: teachFactor(p.teaching),
+    install: p.install,
+  }
+}
+
+/** "QB dev +2/yr" — the boost chip text; null when the seat adds no focus points. */
+export function boostText(m: StaffMember): string | null {
+  const p = coachProfile(m)
+  return p.boost.group && p.boost.points > 0 ? `${p.boost.group} dev +${p.boost.points}/yr` : null
+}
+
+/** Appends a coordinator's C1 profile (teaching, install window) to a readout. */
+function pushCoordinatorReadout(out: EffectLine[], m: StaffMember): void {
+  const p = coachProfile(m)
+  out.push({
+    label: 'Teaching',
+    value: `${p.teaching} / 100`,
+    tone: p.teaching >= 70 ? 'win' : p.teaching < 50 ? 'warn' : 'neutral',
+    hint: 'staffMarket.ts coachProfile().teaching — scales this side’s install edge ×0.8–1.2 (install.ts)',
+  })
+  out.push({
+    label: 'Install window',
+    value: `${p.install} weeks to full mastery`,
+    tone: 'neutral',
+    hint: 'staffMarket.ts coachProfile().install — how long the system takes to bed in after a change',
+  })
+}
+
+// ── §5: game-day call preview (display only; no new sim effect) ──────────────
+
+/** Display-only bucketing of playsim.ts's DC tendency-exploit weight (0.10–0.35). */
+export type ExploitTier = 'light' | 'steady' | 'heavy'
+export const EXPLOIT_LABEL: Record<ExploitTier, string> = {
+  light: 'rarely attacks your book',
+  steady: 'reads your book',
+  heavy: 'hunts your tendencies',
+}
+export function exploitTier(rating: number): ExploitTier {
+  return rating >= 82 ? 'heavy' : rating >= 68 ? 'steady' : 'light'
+}
+
+export interface CallPreview {
+  /** decisions.coachTendency() with the candidate slotted into his own chair. */
+  tendency: CoachTendency
+  passPct: number
+  tempo: 'up-tempo' | 'balanced' | 'deliberate'
+  fourth: 'aggressive on 4th' | 'standard on 4th' | 'conservative on 4th'
+  /** Defensive-coordinator candidates only (playsim's tendency-exploit tier). */
+  exploit?: ExploitTier
+}
+
+/** The world with `candidate` in his role (shallow, read-only). */
+function withCandidate(world: World, teamId: string, candidate: StaffMember): World {
+  const staff = (world.staff[teamId] ?? []).filter((m) => m.role !== candidate.role)
+  return withStaff(world, teamId, [...staff, candidate])
+}
+
+/** §5: how a candidate would call games if he took his seat. Thin wrapper on coachTendency(). */
+export function callPreview(world: World, teamId: string, candidate: StaffMember): CallPreview {
+  const tendency = coachTendency(withCandidate(world, teamId, candidate), teamId)
+  return {
+    tendency,
+    passPct: Math.round(tendency.passRate * 100),
+    tempo: tendency.tempo >= 0.15 ? 'up-tempo' : tendency.tempo <= -0.15 ? 'deliberate' : 'balanced',
+    fourth:
+      tendency.fourth === 'aggressive'
+        ? 'aggressive on 4th'
+        : tendency.fourth === 'conservative'
+          ? 'conservative on 4th'
+          : 'standard on 4th',
+    exploit: candidate.role === 'Defensive Coordinator' ? exploitTier(candidate.rating) : undefined,
+  }
+}
+
+/** "Pass 61% · up-tempo · aggressive on 4th" — the MarketCard calls readout. */
+export function callsText(p: CallPreview): string {
+  return `${p.passPct}% pass · ${p.tempo} · ${p.fourth}`
+}
+
+// ── §4: install cost preview ─────────────────────────────────────────────────
+
+/** A representative position fit for the mastery-ceiling projection (display only). */
+const FIT_REF = 0.75
+
+export interface InstallCost {
+  side: 'off' | 'def'
+  /** Seasons the current coordinator has held the side (playbook tenure). */
+  tenureBefore: number
+  /** 1 when the hire (or scheme change) resets tenure. */
+  tenureAfter: number
+  /** Projected mastery ceiling before/after (playbook.masteryCeiling at a reference fit). */
+  masteryBefore: number
+  masteryAfter: number
+  /** coaching: weeks to full mastery of the new system. */
+  weeks: number
+  teaching: number
+  resets: boolean
+}
+
+/**
+ * §4: what installing this coordinator's system costs. The hire resets the side's
+ * tenure to year 1 (playbook.ts staffContinuity), and the new system takes
+ * `install` weeks to bed in. Null for non-coordinator seats (no install).
+ */
+export function installCost(world: World, teamId: string, candidate: StaffMember): InstallCost | null {
+  const side = candidate.role === 'Offensive Coordinator' ? 'off' : candidate.role === 'Defensive Coordinator' ? 'def' : null
+  if (!side) return null
+  const holder = (world.staff[teamId] ?? []).find((m) => m.role === candidate.role)
+  const tenureBefore = world.staffTenure?.[`${teamId}:${side}`] ?? 1
+  const resets = !holder || holder.id !== candidate.id || holder.scheme !== candidate.scheme
+  const tenureAfter = resets ? 1 : tenureBefore
+  const p = coachProfile(candidate)
+  return {
+    side,
+    tenureBefore,
+    tenureAfter,
+    masteryBefore: masteryCeiling(FIT_REF, staffContinuity(tenureBefore)),
+    masteryAfter: masteryCeiling(FIT_REF, staffContinuity(tenureAfter)),
+    weeks: p.install,
+    teaching: p.teaching,
+    resets,
+  }
+}
+
+// ── §9: poach risk + §7: contract/buyout readouts ────────────────────────────
+
+export interface PoachRisk {
+  /** The engine's eligibility rule: a position coach, rating ≥ 78, ≤ 1 year left. */
+  eligible: boolean
+  /** Display-only interest gauge — clubs that would ask (1–3). */
+  clubs: number
+  /** "Hot name" at 2+ clubs asking. */
+  hot: boolean
+}
+
+/** §9: how exposed a position coach is to a rival's promotion offer this offseason. */
+export function poachRisk(teamId: string, m: StaffMember): PoachRisk {
+  const eligible = !!ROLE_DEV_GROUPS[m.role] && m.rating >= 78 && m.contractYears <= 1
+  const clubs = eligible ? 1 + (hash32(`ask|${teamId}|${m.id}`, 71) % 3) : 0
+  return { eligible, clubs, hot: clubs >= 2 }
+}
+
+/** §7: the buyout a mid-contract firing costs, and how it lands across seasons. */
+export interface BuyoutPlan {
+  /** Total dead money = 50% × remaining years × annual. */
+  total: number
+  /** Seasons the club carries it. */
+  years: number
+  /** Dead money charged in each of the next `years` seasons. */
+  perSeason: { season: number; amount: number }[]
+}
+
+export function buyoutPlan(m: StaffMember, season: number): BuyoutPlan {
+  const total = 0.5 * Math.max(0, m.contractYears) * m.annual
+  const years = total > 0 ? Math.max(1, m.contractYears) : 0
+  const perSeason: { season: number; amount: number }[] = []
+  if (years > 0) {
+    const rounded = Math.round(total)
+    const per = Math.floor(rounded / years)
+    for (let k = 0; k < years; k++) {
+      perSeason.push({ season: season + k, amount: k === years - 1 ? rounded - per * (years - 1) : per })
+    }
+  }
+  return { total: Math.round(total), years, perSeason }
+}
+
+// ── §7: interim promotion projection (before → after) ────────────────────────
+
+/**
+ * §7: what "Promote interim" would do, computed with the SAME engine function the
+ * store calls — on a throwaway copy of the staff, so the live world is untouched.
+ */
+export function interimProjection(world: World, teamId: string, seat: 'off' | 'def'): InterimResult {
+  const copy = (world.staff[teamId] ?? []).map((m) => ({ ...m }))
+  return promoteInterim(withStaff(world, teamId, copy), teamId, seat)
+}
+
