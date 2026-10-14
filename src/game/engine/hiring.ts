@@ -8,6 +8,7 @@
 
 import type { StaffMember } from '../types'
 import { coachEffect } from './coaching'
+import { contractYearsForSalary, staffBuyout } from './staffMarket'
 import type { World } from './generate'
 import { FIRST, LAST } from './names'
 import { noteCoordinatorChange } from './playbook'
@@ -188,14 +189,34 @@ export function attemptHire(
   return { signed: false, candidate: { ...candidate, interest }, message: reason }
 }
 
-/** Apply a successful hire: add to staff, remove from pool. Optionally set the scheme. */
-export function applyHire(world: World, teamId: string, candidate: HireCandidate, salary: number, scheme?: string) {
+/** The result of a completed hire — the new seat holder, who lost it, and the dead money owed. */
+export interface HireApplied {
+  member: StaffMember
+  /** The coach who lost the seat, if the hire replaced someone mid-contract. */
+  replaced?: StaffMember
+  /** §7: 50% of the replaced coach's remaining years × annual, as dead staff money. */
+  deadMoney: number
+}
+
+/**
+ * Apply a successful hire: add to staff, remove from pool. Optionally set the
+ * scheme. FUTURES #28: contract length now comes from the salary tier (2–4 years)
+ * and replacing a coach mid-contract reports a buyout to be banked as dead money
+ * (the store records it via `addStaffDeadMoney`).
+ */
+export function applyHire(
+  world: World,
+  teamId: string,
+  candidate: HireCandidate,
+  salary: number,
+  scheme?: string,
+): HireApplied {
   const member: StaffMember = {
     ...candidate,
     teamId,
     status: 'Hired',
     annual: salary,
-    contractYears: 3,
+    contractYears: contractYearsForSalary(salary),
     scheme: scheme ?? candidate.scheme,
   }
   delete (member as unknown as Record<string, unknown>).interest
@@ -204,8 +225,15 @@ export function applyHire(world: World, teamId: string, candidate: HireCandidate
   // Replace an existing coach in the same role, if any.
   const staff = world.staff[teamId] ?? (world.staff[teamId] = [])
   const idx = staff.findIndex((m) => m.role === member.role)
-  if (idx >= 0) staff[idx] = member
-  else staff.push(member)
+  let replaced: StaffMember | undefined
+  let deadMoney = 0
+  if (idx >= 0) {
+    replaced = staff[idx]
+    deadMoney = replaced.contractYears > 0 ? staffBuyout(replaced) : 0
+    staff[idx] = member
+  } else {
+    staff.push(member)
+  }
   world.staffPool = world.staffPool.filter((m) => m.id !== candidate.id)
   if (candidate.role === ANALYTICS_ROLE) {
     world.analyticsPool = (world.analyticsPool ?? []).filter((m) => m.id !== candidate.id)
@@ -214,5 +242,5 @@ export function applyHire(world: World, teamId: string, candidate: HireCandidate
   // the moment of the hire — not a season later at the regular-season tick.
   const side = member.role === 'Offensive Coordinator' ? 'off' : member.role === 'Defensive Coordinator' ? 'def' : null
   if (side) noteCoordinatorChange(world, teamId, side)
-  return member
+  return { member, replaced, deadMoney }
 }

@@ -212,6 +212,20 @@ export function getJ12(): boolean {
 // calibration copy call `setJ37(false)` on this module. Default ON; OFF restores
 // the exact pre-J37 engine (no read, no write, no rng draw).
 export { setJ37, getJ37 } from './chemistry'
+// J13 (FUTURES #33): pre-snap reads & audibles (the setStamina pattern). Default
+// ON; the shipped sim always leaves it on. With it off the QB never checks the
+// call against the defensive look and no audible/hot-route/slide term is applied,
+// so its rng() stream and every resolved play are byte-identical to the pre-J13
+// engine. The specific QB (his own AWR and experience) and the OC's `reads` sub
+// decide every check — never a team or roster mean.
+let J13_ON = true
+export function setJ13(on: boolean) {
+  J13_ON = on
+}
+/** J13: read the current pre-snap-read toggle so a probe can restore it. */
+export function getJ13(): boolean {
+  return J13_ON
+}
 // J36 (FUTURES #36): individual scouting reports — the game plan targets a player
 // the staff flagged. Dev-only toggle in the setStamina pattern. Default ON; with
 // it OFF no target list is read and no scout edge is applied, so the rng() stream
@@ -951,6 +965,12 @@ export interface Play {
   disguised?: boolean
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
   qbFooled?: boolean
+  /** J13: the QB checked the called play to a new one pre-snap (animation). */
+  audible?: { from: string; to: string }
+  /** J13: the receiver sent on the hot route vs the blitz look (animation). */
+  hotRoute?: string
+  /** J13: the protection slid to this side, toward the extra rusher (animation). */
+  slide?: 'L' | 'R'
   bigPlay?: boolean
   /** J36: the opponent player the play was steered at (a targeted report finding). */
   scoutTarget?: string
@@ -1531,6 +1551,7 @@ function rushMatchups(
   blitz: boolean, fat: Record<string, number> | undefined,
   offMove: string | undefined, defMove: string | undefined,
   dlUsage: 'starters' | 'rotate' | undefined, q4: boolean,
+  j13?: J13Effect, j13Dev = 0,
   handoffChem?: Map<string, number>,
 ): RushResult {
   const rushers: { p: Player; blitz: boolean }[] = dl.map((p) => ({ p, blitz: false }))
@@ -1607,6 +1628,30 @@ function rushMatchups(
         let worst = 0
         for (let i = 1; i < reps.length; i++) if (reps[i].win < reps[worst].win) worst = i
         reps.splice(worst, 1)
+      }
+    }
+  }
+  // J13: a pre-snap protection slide picks up the extra rusher instead of leaving
+  // him free. The specific tackle on the slid side takes the blitzer on; a QB who
+  // read the look executes it, a poor-read slide whiffs and the rusher comes even
+  // cleaner. Deterministic hash, no rng, and centred on the QB's read deviation —
+  // the league mean pressure does not move. OFF (no slide) is unchanged.
+  if (j13?.slide && blitz && reps.length) {
+    let idx = -1
+    let worst = -Infinity
+    for (let i = 0; i < reps.length; i++) if (reps[i].free && reps[i].blitz && reps[i].win > worst) { worst = reps[i].win; idx = i }
+    if (idx < 0) for (let i = 0; i < reps.length; i++) if (reps[i].blitz && reps[i].win > worst) { worst = reps[i].win; idx = i }
+    if (idx >= 0) {
+      const rusher = rushers.find((r) => r.p.id === reps[idx].id)?.p
+      const ots = ol.filter((p) => p.pos === 'OT')
+      const blocker = ots.length ? ots[j13.slide === 'L' ? 0 : ots.length - 1] : ol[0]
+      const success = h01(`${n}:${defId}:j13slide`) < clamp(J13.slideBase + j13Dev * J13.slideW, J13.slideLo, J13.slideHi)
+      if (rusher && blocker && success) {
+        reps[idx].win = rushRepWin(rusher, blocker, `${n}:${defId}:slid`, fat).win * J13.slideWin
+        reps[idx].blockerId = blocker.id
+        reps[idx].free = false
+      } else if (h01(`${n}:${defId}:j13whiff`) < clamp(J13.whiffBase - j13Dev * J13.slideW, 0, 0.5)) {
+        reps[idx].win += J13.whiffWin
       }
     }
   }
@@ -2433,6 +2478,12 @@ export interface PlayOutcome {
   disguised?: boolean
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
   qbFooled?: boolean
+  /** J13: the QB checked the called play to a new one pre-snap (animation). */
+  audible?: { from: string; to: string }
+  /** J13: the receiver sent on the hot route vs the blitz look (animation). */
+  hotRoute?: string
+  /** J13: the protection slid to this side, toward the extra rusher (animation). */
+  slide?: 'L' | 'R'
   bigPlay?: boolean
   /** J36: the opponent player the play was steered at (a targeted report finding). */
   scoutTarget?: string
@@ -3351,6 +3402,235 @@ export const J12 = {
   spyRun: 7, // QB run-gain cut when spied
 } as const
 
+// ── J13 (FUTURES #33): pre-snap reads & audibles ─────────────────────────────
+// Before the snap the quarterback checks the called play against the look the
+// defence shows: how many defenders are in the box and whether they are crowding
+// the line (a blitz look). What he SEES is the J12 disguise — a disguised shell
+// can fool him into a wrong read. A QB with AWR + experience (and an OC with a
+// `reads` sub) fixes a bad call: a run into a loaded box becomes a quick pass /
+// RPO, a throw into a light box becomes a run, and a blitz look gets a hot route
+// and a protection slide toward the extra rusher (the slid blocker picks the
+// blitzer up — see `rushMatchups`). Rookies and low-AWR QBs often miss it, and a
+// fooled QB sometimes checks INTO a worse play. Every pick is a deterministic
+// hash — no rng() draw — and every term is centred (the read deviation is
+// measured against the league's own starting QBs), so the league means hold and
+// `setJ13(false)` is byte-identical to the base. The individual QB decides.
+export const J13 = {
+  // ── the look the defence shows ────────────────────────────────────────────
+  // Centring: the run→pass checks (a run into a loaded box) and the pass→run
+  // checks (a throw into a light box) must cancel, or the layer's net pass share
+  // drifts (try-3's +4.4 pooled gross pass yards). Two sources: the box rotation
+  // below (∝ these two shares) and the fixed J12-disguise ±2 box flips, which are
+  // box-independent. Symmetric check rates (the two shares equal) leave the pair
+  // neutral: the paired OFF/ON 6-seed drift then sits at the disguise flip's own
+  // small net rather than adding a rotation term on top (see the verify file).
+  // A small up-bias (+0.004) is left in, so the run→pass checks slightly outnumber
+  // the pass→run ones: that cancels the disguise flip's own small negative net and
+  // centres the paired OFF/ON 6-seed drift (a fully symmetric pair drifted −1.88
+  // gross pass yards; boxDown 0.201 lands −1.35, inside ±1.5, without pushing any
+  // seed's gross pass yards over the band). The bias is taken out of boxDown rather
+  // than boxUp, keeping the loaded-look frequency — the load-bearing term for the
+  // rendered animation — at the broadcast-safe 0.205 (0.211 tipped the check-
+  // broadcast long-play fixture over). See the verify file.
+  boxUp: 0.205, // share of snaps the safety rotates into the box (a loaded look)
+  boxDown: 0.201, // share the defence walks a man out (a light look)
+  blitzBase: 0.05, // base share of snaps a league-average front flashes a blitz look
+  // ── the QB's check ────────────────────────────────────────────────────────
+  // League-mean share of a mismatched look the QB checks out of. Centred so the
+  // league audible rate lands at ~11% of snaps (NFL 10–15%) AND so the checks stay
+  // rare enough that the rendered long plays keep a defender on the carrier — the
+  // check-broadcast 6c long-play fixture fails above ~0.32 (a checked run into a
+  // loaded box becomes a quick pass the defence, in run fits, cannot chase down).
+  audBase: 0.31,
+  audLo: 0.02,
+  audHi: 0.82,
+  awrEq: 1.0, // the QB's AWR (league-relative) → his pre-snap read
+  expAge: 22, // seasons of experience are counted above this age
+  expEq: 1.35, // per season over 22 → his read (a vet fixes far more bad calls)
+  audW: 0.014, // read deviation (rating points) → the check probability
+  readsW: 0.003, // the OC's centred `reads` sub → the check probability
+  // On 3rd/4th the situational guards below already keep the check honest, so the
+  // remaining checks are scaled back: the layer's 3rd-down deviation from the base
+  // play-caller shrinks toward zero, while 1st/2nd (where most of the individual
+  // spread lives) is untouched. Centring constant, tuned with the box shares above
+  // against the paired OFF/ON 6-seed drift (verify file has the numbers).
+  audThirdW: 0.7, // 3rd/4th-down multiplier on the check probability
+  misread: 2, // box-count error (defenders) a fooled QB sees through the disguise
+  misreadBlitz: 0.5, // chance a fooled QB sees a blitz look that is not there
+  pickFrom: 3, // audibles come from the quickest N concepts of the target type
+  checkRunMax: 5, // on 3rd/4th a pass is only checked down to a run inside this distance
+  checkPassMin: 3, // on 3rd/4th a run is only checked up to a pass at or beyond this distance
+  // ── protection slide (feeds J8b) ──────────────────────────────────────────
+  slideBase: 0.5, // base chance the slide finds the extra rusher
+  slideW: 0.02, // read deviation → the slide's chance
+  slideLo: 0.05,
+  slideHi: 0.95,
+  slideWin: 0.85, // a slid blocker leaves the blitzer this share of a free rep
+  whiffWin: 8, // a busted slide leaves the rusher cleaner than free
+  whiffBase: 0.18, // base chance a poor-read slide whiffs entirely
+  // ── hot route / blitz recognition ─────────────────────────────────────────
+  hotW: 0.12, // the hot route's quick throw trims the sack term (× read deviation)
+  // A QB who DIAGNOSES a blitz look gets the protection set and the ball out; a
+  // poor-read QB does not and the free rusher arrives. Scaled by his own read
+  // deviation, so the league sack rate (blitz-look and actual-blitz) is unchanged
+  // while the elite-vs-poor spread on blitz-look sacks opens up.
+  blitzSackW: 0.5, // recognizing the blitz look → the sack term (× read deviation)
+} as const
+
+/** J13: the QB's read (rating points) — his own AWR plus his experience. */
+function j13ReadRel(qb: Player | undefined): number {
+  if (!qb) return 0
+  const a = mkAttrs(qb)
+  return rmean('QB', 'AWR', a.AWR ?? 70) * J13.awrEq + Math.max(0, (qb.age ?? 22) - J13.expAge) * J13.expEq
+}
+// J13: the league mean of the QB read across the NFL's starters (the WX_CENTER
+// pattern, cached per world). Subtracting it makes the check probability and the
+// slide/hot-route effect zero-mean, so the league audible rate and every band are
+// held while the individual QB still decides.
+const j13ReadCenterCache = new WeakMap<World, number>()
+function j13ReadCenter(world: World): number {
+  const hit = j13ReadCenterCache.get(world)
+  if (hit !== undefined) return hit
+  let sum = 0
+  let cnt = 0
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL') continue
+    const qb = topGroup(world, t.id, ['QB'], 1)[0]
+    sum += j13ReadRel(qb)
+    cnt++
+  }
+  const center = cnt ? sum / cnt : 0
+  j13ReadCenterCache.set(world, center)
+  return center
+}
+/** J13: the QB's read as a deviation from the league's starting QBs (0 = average). */
+function j13ReadDev(world: World, qb: Player | undefined): number {
+  return j13ReadRel(qb) - j13ReadCenter(world)
+}
+/** J13: a QB's pre-snap read rating (his AWR + experience) — probe/report helper. */
+export function j13QbRead(p: Player | undefined): number {
+  return j13ReadRel(p)
+}
+/** J13: the QB and OC for one snap (the QB override and injuries respected). */
+function j13Qb(world: World, offId: string, env?: SimEnv): Player | undefined {
+  return topGroup(world, offId, ['QB'], 1, env?.qbOverride)[0]
+}
+/** J13: what the animation needs — the check and its protection call. */
+export interface J13Effect {
+  audible?: { from: string; to: string }
+  hotRoute?: string
+  slide?: 'L' | 'R'
+  /** J13: the QB saw a blitz look on this snap (the protection/recognition term). */
+  sawBlitz?: boolean
+}
+/**
+ * J13: one pre-snap check. Returns the (possibly changed) concept and the record
+ * the animation needs. Pure and deterministic (hashes only, no rng): it reads the
+ * look the defence shows (box count + a blitz look), applies the J12 disguise a
+ * fooled QB cannot see through, and — if the call and the look disagree — lets
+ * the specific QB audible out of it. The target concept is one of the club's own
+ * menu (same personnel grouping), the quickest of the type for a check-down.
+ */
+/**
+ * J13: the look the defence shows on a snap — how many defenders are in the box
+ * and whether it flashes a blitz look, as the J12 disguise lets the QB SEE them
+ * (a fooled QB misreads the box and can be sold a blitz that is not coming).
+ * Deterministic hash only, no rng. Probe/report helper too.
+ */
+export function j13Look(world: World, n: number, offId: string, defId: string, concept: Concept, qb: Player | undefined): { box: number; neutral: number; blitzLook: boolean; disguised: boolean } {
+  const dStyle = defStyle(world, defId)
+  // The box: the defensive package's front seven the offence's own personnel
+  // draws, plus a per-snap rotation (the safety down / a man walked out).
+  const pkg = defensePackage(concept.personnel)
+  const neutral = pkg.dl + pkg.lb + (dStyle.manCoverage >= 0.5 ? 1 : 0)
+  const rot = h01(`${n}:${defId}:j13box`)
+  let box = neutral + (rot < J13.boxUp ? 1 : rot > 1 - J13.boxDown ? -1 : 0)
+  const defPlan = planFor(defId, 'def')
+  let blitzLook = h01(`${n}:${defId}:j13bl`) < clamp(dStyle.blitz + (defPlan ? planEffects(defPlan, true).blitz : 0) + J13.blitzBase, 0, 0.85)
+  let disguised = false
+  if (J12_ON && qb) {
+    const dcM = j12Coord(world, defId, 'Defensive Coordinator')
+    const dcDisg = j12Sub(world, 'Defensive Coordinator', 'disguise', dcM)
+    const disgP = clamp(J12.disgBase + dcDisg * J12.disgW, J12.disgLo, J12.disgHi)
+    disguised = h01(`${n}:${defId}:j12disg`) < disgP
+    if (disguised) {
+      const safTop = topGroup(world, defId, ['S'], 1)[0]
+      const safDisg = safTop
+        ? (rmean(safTop.pos, 'AWR', mkAttrs(safTop).AWR ?? 70) + rmean(safTop.pos, 'PRC', mkAttrs(safTop).PRC ?? 70)) * 0.5
+        : 0
+      const disgQ = dcDisg * J12.dcDisgW + safDisg * J12.safDisgW
+      const a = mkAttrs(qb)
+      const qbRead = rmean('QB', 'AWR', a.AWR ?? 70) * J12.qbReadW + Math.max(0, (qb.age ?? 22) - 22) * J12.qbExpW
+      const noise = (h01(`j12n1:${n}:${offId}`) + h01(`j12n2:${n}:${offId}`) + h01(`j12n3:${n}:${offId}`) + h01(`j12n4:${n}:${offId}`) - 2) / 0.5774
+      if (disgQ - qbRead - j12ReadCenter(world) + J12.foolBias + noise * J12.readNoise > 0) {
+        box = clamp(box + (h01(`${n}:${defId}:j13mis`) < 0.5 ? -J13.misread : J13.misread), 4, 11)
+        blitzLook = h01(`${n}:${defId}:j13bb`) < J13.misreadBlitz
+      }
+    }
+  }
+  return { box, neutral, blitzLook, disguised }
+}
+
+/** J13: is this a snap the QB could check out of? The called play disagrees with
+ *  the look he sees (run vs a loaded box, pass vs a light box, pass vs a blitz
+ *  look) — the probe's "audible-eligible" set. */
+export function j13Eligible(world: World, n: number, offId: string, defId: string, concept: Concept, qb: Player | undefined): boolean {
+  const { box, neutral, blitzLook } = j13Look(world, n, offId, defId, concept, qb)
+  return (concept.type === 'run' && box > neutral) || (concept.type === 'pass' && box < neutral) || (concept.type === 'pass' && blitzLook)
+}
+
+function j13PreSnap(world: World, s: GameState, offId: string, defId: string, concept: Concept, env?: SimEnv): { concept: Concept; effect?: J13Effect } {
+  const qb = j13Qb(world, offId, env)
+  if (!qb) return { concept }
+  const n = s.n
+  const { box, neutral, blitzLook } = j13Look(world, n, offId, defId, concept, qb)
+  // The specific QB decides: his own read deviation, plus the OC's `reads` sub.
+  const reads = j12Sub(world, 'Offensive Coordinator', 'reads', j12Coord(world, offId, 'Offensive Coordinator'))
+  const pAudBase = clamp(J13.audBase + j13ReadDev(world, qb) * J13.audW + reads * J13.readsW, J13.audLo, J13.audHi)
+  // The blitz look is itself a J13 outcome term: a QB who SEES it sets the
+  // protection and gets the ball out (scaled by his own read in resolvePass), so
+  // record it even when he leaves the called play alone. OFF adds nothing.
+  const pAud = s.down >= 3 ? pAudBase * J13.audThirdW : pAudBase
+  if (h01(`${n}:${offId}:j13aud`) >= pAud) return { concept, effect: blitzLook ? { sawBlitz: true } : undefined }
+  // A check needs a disagreement between the called play and the look it sees. On
+  // 3rd/4th down the check keeps the run when it is short enough to convert and
+  // keeps the pass when the run would strand the drive (so a check never works
+  // against the situation). 1st/2nd keep the base behaviour.
+  const wantPass = concept.type === 'run' && box > neutral && !(s.down >= 3 && s.distance < J13.checkPassMin)
+  // A pass is checked DOWN to a run only when the run can actually convert. On
+  // 1st/2nd the check-down is fine; on 3rd/4th a long-yardage run would strand the
+  // drive, so the situational pass stands (the league-neutrality fix for the
+  // 3rd-down drift). 1st/2nd keep the base behaviour.
+  const wantRun = concept.type === 'pass' && box < neutral && !(s.down >= 3 && s.distance > J13.checkRunMax)
+  const blitzCheck = concept.type === 'pass' && blitzLook
+  const slide: 'L' | 'R' = h01(`${n}:${offId}:j13side`) < 0.5 ? 'L' : 'R'
+  if (!wantPass && !wantRun && !blitzCheck) {
+    // No audible, but a QB who sees pressure still slides the protection to it.
+    return blitzLook ? { concept, effect: { sawBlitz: true, slide } } : { concept }
+  }
+  const style = offStyle(world, offId)
+  const type: 'run' | 'pass' = wantRun ? 'run' : 'pass'
+  const pool = style.concepts.filter((c) => c.type === type && (c.personnel === concept.personnel || c.personnel === undefined))
+  const anyOfType = style.concepts.filter((c) => c.type === type)
+  const match = pool.length ? pool : anyOfType
+  const from = [...match].sort((a, b) => a.depth - b.depth).slice(0, J13.pickFrom)
+  if (!from.length) return blitzLook ? { concept, effect: { sawBlitz: true, slide } } : { concept }
+  const next = from[hash32(`${n}:${offId}:j13pick`) % from.length]
+  const effect: J13Effect = { audible: { from: concept.name, to: next.name } }
+  if (blitzLook) {
+    effect.sawBlitz = true
+    effect.slide = slide
+    // The hot route goes to the quickest receiver the QB would throw to — the
+    // specific man, picked by his own route ratings, never a unit.
+    if (next.type === 'pass') {
+      const catchers = [...topGroup(world, offId, ['WR'], 4), ...topGroup(world, offId, ['TE'], 1)]
+      const hot = hashPick(catchers, (p) => Math.max(1, eff(p, 'DRR') + eff(p, 'CIT') * 0.5), hash32(`${n}:${offId}:j13hot`))
+      if (hot) effect.hotRoute = hot.id
+    }
+  }
+  return { concept: next, effect }
+}
+
 type J12DefMove = 'shadowWR1' | 'spyQB'
 type J12OffMove = 'doubleRusher' | 'chipEdge'
 
@@ -3572,7 +3852,7 @@ function proximityWeight(p: Player, coverId: string | undefined): number {
 /** J8c: dev accumulator (turned on by `j8cProbe`): the mean individual terms. */
 export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0): PlayOutcome {
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
@@ -3715,6 +3995,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J12: what the animation needs — the shell was disguised and whether the QB was
   // fooled by it (undefined when J12 is off, so the OFF Play record is unchanged).
   const j12Fields: Pick<PlayOutcome, 'disguised' | 'qbFooled'> = disguised ? { disguised: true, qbFooled } : {}
+  // J13: the QB's own read deviation (0 when there was no check; 0 when J13 is
+  // off, so the OFF path is untouched). Every J13 term is scaled by it, so the
+  // league means hold while the individual QB decides.
+  const j13Dev = j13 ? j13ReadDev(world, qb) : 0
+  const j13Fields: Pick<PlayOutcome, 'audible' | 'hotRoute' | 'slide'> = j13
+    ? { audible: j13.audible, hotRoute: j13.hotRoute, slide: j13.slide }
+    : {}
   const pressureVals = dl.map((p) => Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70))
   // G11 doubleRusher / J12 DOUBLE & CHIP: the committed blocker takes the best
   // rusher down a notch.
@@ -3753,7 +4040,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // is decided by the specific pair (never a line average). Undefined when OFF.
   const olChem = getJ37() && ol.length >= 2 ? olHandoffChem(world, offId, ol) : undefined
   const pb: RushResult | undefined = PROT_ON
-    ? rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, olChem)
+    ? rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, j13, j13Dev, olChem)
     : undefined
   if (pb && PB_STAT.on) {
     PB_STAT.n++
@@ -3771,6 +4058,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Real rate is ~6.9% of dropbacks (NFL) / higher pressure in college; scaled by pass share.
   // G6 max protect: sacks give up 40% less often.
   const protectMult = hasFix(env, offId, 'maxProtect') ? 0.6 : 1
+  // J13: a QB who DIAGNOSED the blitz look — he set the protection slide and, on a
+  // check, signalled the hot route — gets the ball out before the free rusher
+  // arrives; a poor-read QB does not, and the free rusher gets home. The sack term
+  // moves with the QB's own read deviation (and the blitz look is snap-, not
+  // QB-, selected), so the league sack rate is held while elite vs poor separate.
+  const j13Read = clamp(j13Dev / 20, -1, 1)
+  const j13Sack = !j13 ? 1 : clamp(
+    1 - (j13.sawBlitz ? j13Read * J13.blitzSackW : 0) - (j13.hotRoute ? j13Read * J13.hotW : 0),
+    0.5, 1.4)
   // ── J10b: the QB's own response to the pressure J8b resolved ────────────────
   // One deterministic call: his own AWR/TUP/TOR + experience pick step up /
   // slide / escape / throw away / hold, and his poise scales the big cone/circle
@@ -3783,7 +4079,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // sacks; a QB who reads the disguise gets the ball out. Linear and zero-mean.
   // J10b: the QB's own pocket response (a poised QB who steps up is sacked less,
   // one who holds more) multiplies in — centred, so the league sack rate holds.
-  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus) * (pp ? pp.sackMult : 1), 0.02, 0.13)
+  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus) * (pp ? pp.sackMult : 1) * j13Sack, 0.02, 0.13)
 
   // ── R7: per-dropback pressure decision (stats only) ─────────────────────────
   // Derived from the existing `pressureEdge` by a per-play hash, so no rng() draw
@@ -4004,7 +4300,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
-      qbId: qb?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...olFailFields,
+      qbId: qb?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...olFailFields,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
@@ -4398,7 +4694,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
       ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...chemFields, ...olFailFields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -4526,13 +4822,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...chemFields, ...olFailFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...chemFields, ...olFailFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -4556,7 +4852,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   return maybeScramble(offId, n, qb, qbStyle, pressured, incomplete)
 }
 
-function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world)): PlayOutcome {
+function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), j13?: J13Effect): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only.
@@ -4913,6 +5209,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     readKeyId: J8A2_ON ? readKey?.id : undefined,
     biteIds: J8A2_ON && biteIds.length ? biteIds : undefined,
     fillId: J8A2_ON ? alley.player?.id : undefined,
+    ...(j13 ? { audible: j13.audible, hotRoute: j13.hotRoute, slide: j13.slide } : {}),
     ...(glPoaId ? { glPoaId } : {}),
     ...(glStopId ? { glStopId } : {}),
     onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
@@ -6783,6 +7080,18 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     }
   }
 
+  // J13 (FUTURES #33): before the snap the specific QB checks the called play
+  // against the look the defence shows (box count + a blitz look, as the J12
+  // disguise lets him see it). A check changes the concept; a hot route and a
+  // protection slide ride the outcome for the animation and for J8b. Deterministic
+  // (hashes only, no rng) and OFF adds nothing, so that path is byte-identical.
+  let j13: J13Effect | undefined
+  if (J13_ON && fourthChoice !== 'fake') {
+    const pre = j13PreSnap(world, s, offId, defId, concept, envFor(s))
+    concept = pre.concept
+    j13 = pre.effect
+  }
+
   // Defensive penalty — typed by hash within the R2 yardage tier, automatic first down.
   const penFields = getIndividual() ? penaltyFields(world, s, concept, offId, defId) : undefined
   const defDisc = (getCoachSubs() ? disciplineMult(world, defId) : ocEffect(world, defId).discipline) * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
@@ -6907,8 +7216,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     if (a !== 0) call = { edge: (call?.edge ?? 0) + a, sackMult: call?.sackMult ?? 1 }
   }
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0)
-    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0, j13)
+    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery, j13)
   // J38: record the featured play + its star (animation), count it for the
   // diminishing returns, and flag jet motion. No rng draw.
   if (featuredOn() && concept.featured) {
