@@ -19,6 +19,7 @@ import {
   executeTrade,
   findDeals,
   findPackagesFor,
+  pickAssetLabel,
   playerTradeValue,
   type TradeAsset,
 } from './trade'
@@ -84,14 +85,14 @@ export function deadlineRoles(world: World): { contenders: string[]; sellers: st
   }
 }
 
-/** Human label for one asset, e.g. "A. Cooper (WR, 84)" or "2027 Rd 2". */
+/** Human label for one asset, e.g. "A. Cooper (WR, 84)" or "2027 Rd 1 #1 (NYJ)". */
 export function deadlineAssetName(world: World, a: TradeAsset): string {
   if (a.kind === 'player') {
     const p = findPlayer(world, a.id)
     return p ? `${p.name} (${p.pos}, ${p.ovr})` : 'Player'
   }
   const pk = world.draftPicks.find((x) => x.id === a.id)
-  return pk ? `${pk.season} Rd ${pk.round}` : 'Pick'
+  return pk ? pickAssetLabel(world, pk) : 'Pick'
 }
 
 function makeOffer(
