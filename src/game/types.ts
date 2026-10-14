@@ -386,6 +386,10 @@ export type StaffRole =
   | 'OL Coach'
   | 'DL Coach'
   | 'Secondary Coach'
+  // FUTURES #28: market-only seats. Never added to NFL_STAFF_ROLES/generateStaffPool,
+  // so no world's rng draw order changes; AI clubs never hold them.
+  | 'WR Coach'
+  | 'LB Coach'
   | 'Scout'
   | 'Director of Player Personnel'
   | 'General Manager'
@@ -893,6 +897,13 @@ export interface CareerState {
     /** FUTURES 21: 'hc' while running a club, 'available' once a club moves on. */
     status?: 'hc' | 'available'
   }[]
+  /**
+   * FUTURES #28: staff dead money by season — buyouts the club is still paying
+   * after a firing or a mid-contract replacement. Optional; old saves have none.
+   */
+  staffDeadMoney?: { season: number; amount: number }[]
+  /** FUTURES #28: pending staff offers (re-sign / poach) awaiting your answer. */
+  staffOffers?: import('./engine/staffMarket').StaffOffer[]
   /** The Wilderness after a firing (#17). */
   wilderness?: { path: string; untilSeason: number; blurb: string } | null
   /** College NIL collective budget (#15). */
