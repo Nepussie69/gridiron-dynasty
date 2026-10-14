@@ -11,7 +11,7 @@
 
 import type { CareerState, LedgerEntry, LedgerKind, Player, Recommendation } from '../types'
 import type { World } from './generate'
-import { tierFor } from './career'
+import { roleTitle } from './career'
 import { STARTERS, depthAt } from './depth'
 import { unscaleOvr } from './ovrScale'
 import type { GameSim } from './playsim'
@@ -44,7 +44,7 @@ export function pushLedger(career: CareerState, entry: Omit<LedgerEntry, 'id' | 
     id: `led_${career.season}_${career.week}_${LEDGER_SEQ++}`,
     season: career.season,
     week: career.week,
-    role: tierFor(career.path, career.level).title,
+    role: roleTitle(career),
     ...entry,
   }
   if (!career.ledger) career.ledger = []

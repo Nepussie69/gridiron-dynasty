@@ -30,7 +30,7 @@ export function ContractExplainer({ player, className }: { player?: Player; clas
       ? 'You own the cap: you negotiate and sign extensions yourself.'
       : canNegotiate
         ? 'You negotiate extensions, but the GM still signs off on anything over market or short on room.'
-        : 'Contracts unlock at Director of Player Personnel. Keep climbing.'
+        : 'Contracts unlock at General Manager.'
 
   return (
     <div className={className}>

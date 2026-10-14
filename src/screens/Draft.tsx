@@ -216,7 +216,7 @@ export function Draft() {
           deciding
             ? 'You hold the pen. Stack the board and make the call when your club is on the clock.'
             : advising
-              ? 'You advise: rank your board. The Director weighs your list against consensus — and the game grades whether he listened.'
+              ? 'You advise: rank your board. The GM weighs your list against consensus — and the game grades whether he listened.'
               : 'You are building the board for the club — the final call comes higher up until you earn it.'
         }
         right={
@@ -268,7 +268,7 @@ export function Draft() {
         message={
           advising ? (
             <>
-              <b className="font-600 text-ink">You advise on the draft at your rung.</b> Rank your board; the Director
+              <b className="font-600 text-ink">You advise on the draft at your rung.</b> Rank your board; the GM
               weighs your list against consensus, and the pick is his.
             </>
           ) : (
@@ -344,7 +344,7 @@ export function Draft() {
               <SectionTitle right={<Badge tone="neutral">{board.length} ranked</Badge>}>Your Board</SectionTitle>
               <div className="space-y-1">
                 {board.length === 0 && (
-                  <p className="text-small text-muted">Rank prospects from the board — your top names get the Director's attention.</p>
+                  <p className="text-small text-muted">Rank prospects from the board — your top names get the GM's attention.</p>
                 )}
                 {board.map((id, i) => {
                   const p = league.draft.find((x) => x.id === id)

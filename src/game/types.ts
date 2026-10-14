@@ -625,6 +625,8 @@ export interface CareerTier {
 export interface JobOffer {
   id: string
   title: string
+  /** Backlog 415: which side of the ball a coordinator offer is for. */
+  side?: 'off' | 'def'
   teamId: string
   tier: LeagueTier
   level: number

@@ -160,7 +160,9 @@ function mandateNudge(ask: OwnerAsk, career: CareerState): number {
 
 /** Which budget channels this rung can actually use. */
 export function budgetChannels(world: World, career: CareerState): { travel: boolean; room: boolean; combine: boolean } {
-  const combineRung = career.path === 'personnel' && (career.level === 4 || career.level === 5)
+  // Backlog 415: the personnel rungs that used to hold the combine budget (4/5)
+  // are gone. The GM is the personnel job now, so he keeps that channel.
+  const combineRung = career.path === 'personnel'
   return { travel: travelOpen(world, career), room: hasRoom(career), combine: combineRung }
 }
 

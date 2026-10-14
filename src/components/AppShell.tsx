@@ -42,7 +42,7 @@ import { cn } from '../lib/cn'
 import { money } from '../lib/format'
 import { rootTeamVars, TEAM_VAR_NAMES } from '../lib/teamColor'
 import { useGame, useWorld, type ScreenId } from '../store/gameStore'
-import { tierFor } from '../game/engine/career'
+import { roleTitle } from '../game/engine/career'
 import { isHeadCoachCareer } from '../game/engine/access'
 import { capSpace, recordOf, recordStr, rosterOf, scheduleFor, teamAvgOvr } from '../game/selectors'
 import type { Team } from '../game/types'
@@ -765,7 +765,7 @@ export function Sidebar() {
           <Avatar name={career?.gmName ?? 'You'} size={34} />
         </span>
         <div className={cn('min-w-0 flex-1 leading-tight', full)}>
-          <b className="block truncate font-cond text-[14px] font-700 text-ink">{career ? tierFor(career.path, career.level).title : '—'}</b>
+          <b className="block truncate font-cond text-[14px] font-700 text-ink">{career ? roleTitle(career) : '—'}</b>
           <span className="block truncate text-label text-muted">
             {career?.path === 'coach' ? 'Coaching' : 'Personnel'} · {career?.season ?? league.season}
           </span>

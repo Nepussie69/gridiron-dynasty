@@ -259,7 +259,7 @@ export function Ledger() {
                   </div>
                   {e.accepted !== undefined && (
                     <div className="mt-1 font-cond text-label uppercase tracking-[0.06em] text-muted">
-                      {e.accepted ? 'Director listened' : 'Overridden'}
+                      {e.accepted ? 'GM listened' : 'Overridden'}
                     </div>
                   )}
                 </div>

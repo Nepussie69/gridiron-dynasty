@@ -139,35 +139,48 @@ export interface CareerTier {
   blurb: string
   /** The rung's single verb (#1). Drives which mechanics surface. */
   verb: RungVerb
+  /**
+   * Backlog 415: a rung that no longer exists as a job. Removed rungs stay in the
+   * array so `level` still indexes it (the many `level >= N`, `verbFor` and
+   * authority checks keep working) but nothing may ever show or offer them — use
+   * `activeLadder` / `nextRung` / `keptLevel`, never a raw index.
+   */
+  removed?: boolean
 }
 
 const gate = (r: Partial<Reputation>) => r
+const gone = true
 
 /**
  * COACH ladder: on-field roles. Advances on results + leadership + scheme.
  * PERSONNEL ladder: scouting/front office. Advances on evaluation + roster.
  * Both converge on the NFL.
+ *
+ * Backlog 415 (user): only THREE jobs exist — NFL Offensive/Defensive
+ * Coordinator, NFL Head Coach, and General Manager. Every other rung is marked
+ * removed; it keeps its number (so per-level gates and checks still line up) but
+ * is never displayed, offered or landed on.
  */
 export const COACH_LADDER: CareerTier[] = [
-  { level: 0, title: 'Graduate Assistant', tier: 'FBS', path: 'coach', gate: gate({}), verb: 'adapt', blurb: 'Break down film and run the scout team for a Group of Five program.' },
-  { level: 1, title: 'Position Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 12, leadership: 12 }), verb: 'lead', blurb: 'Own a position room. Develop players who get drafted.' },
-  { level: 2, title: 'Offensive/Defensive Coordinator', tier: 'FBS', path: 'coach', gate: gate({ results: 28, leadership: 21 }), verb: 'adapt', blurb: 'Call the plays. Your unit is your résumé.' },
-  { level: 3, title: 'Group of Five Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 43, leadership: 33, profile: 20 }), verb: 'lead', blurb: 'Run a program. Win your conference.' },
-  { level: 4, title: 'Power Four Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 58, leadership: 48, profile: 42 }), verb: 'lead', blurb: 'Blue-blood pressure. Compete for the playoff.' },
-  { level: 5, title: 'NFL Position Coach / Quality Control', tier: 'NFL', path: 'coach', gate: gate({ results: 40, profile: 34 }), verb: 'lead', blurb: 'Cross over to the league and prove you belong.' },
-  { level: 6, title: 'NFL Coordinator', tier: 'NFL', path: 'coach', gate: gate({ results: 52, scheme: 40, profile: 46 } as never), verb: 'adapt', blurb: 'Run one side of the ball at the highest level.' },
+  { level: 0, title: 'Graduate Assistant', tier: 'FBS', path: 'coach', gate: gate({}), verb: 'adapt', blurb: 'Break down film and run the scout team for a Group of Five program.', removed: gone },
+  { level: 1, title: 'Position Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 12, leadership: 12 }), verb: 'lead', blurb: 'Own a position room. Develop players who get drafted.', removed: gone },
+  { level: 2, title: 'Offensive/Defensive Coordinator', tier: 'FBS', path: 'coach', gate: gate({ results: 28, leadership: 21 }), verb: 'adapt', blurb: 'Call the plays. Your unit is your résumé.', removed: gone },
+  { level: 3, title: 'Group of Five Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 43, leadership: 33, profile: 20 }), verb: 'lead', blurb: 'Run a program. Win your conference.', removed: gone },
+  { level: 4, title: 'Power Four Head Coach', tier: 'FBS', path: 'coach', gate: gate({ results: 58, leadership: 48, profile: 42 }), verb: 'lead', blurb: 'Blue-blood pressure. Compete for the playoff.', removed: gone },
+  { level: 5, title: 'NFL Position Coach / Quality Control', tier: 'NFL', path: 'coach', gate: gate({ results: 40, profile: 34 }), verb: 'lead', blurb: 'Cross over to the league and prove you belong.', removed: gone },
+  { level: 6, title: 'Offensive/Defensive Coordinator', tier: 'NFL', path: 'coach', gate: gate({ results: 52, scheme: 40, profile: 46 } as never), verb: 'adapt', blurb: 'Run one side of the ball at the highest level — the side is your choice.' },
   { level: 7, title: 'NFL Head Coach', tier: 'NFL', path: 'coach', gate: gate({ results: 62, leadership: 54, profile: 58 }), verb: 'lead', blurb: 'You answer to the owner now.' },
 ]
 
 export const PERSONNEL_LADDER: CareerTier[] = [
-  { level: 0, title: 'Local Scout', tier: 'FBS', path: 'personnel', gate: gate({}), verb: 'predict', blurb: 'Break down film for a small program. Prove you can find players.' },
-  { level: 1, title: 'Area Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 13 }), verb: 'predict', blurb: 'Own a region. File reports that change a roster.' },
-  { level: 2, title: 'Regional Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 24, profile: 11 }), verb: 'predict', blurb: 'Cover multiple states for a Power program.' },
-  { level: 3, title: 'National Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 35, profile: 20 }), verb: 'predict', blurb: 'Cross-check the board from coast to coast.' },
-  { level: 4, title: 'Assistant Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 45, profile: 31 }), verb: 'persuade', blurb: 'Run the college board for an NFL club.' },
-  { level: 5, title: 'Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 62, roster: 32, profile: 44 }), verb: 'persuade', blurb: 'You own the draft board now.' },
-  { level: 6, title: 'Director of Player Personnel', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 68, roster: 46, profile: 52 }), verb: 'persuade', blurb: 'Pro and college. One step from the chair.' },
-  { level: 7, title: 'Assistant General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 54, leadership: 38, profile: 62 }), verb: 'allocate', blurb: 'Run the building day to day.' },
+  { level: 0, title: 'Local Scout', tier: 'FBS', path: 'personnel', gate: gate({}), verb: 'predict', blurb: 'Break down film for a small program. Prove you can find players.', removed: gone },
+  { level: 1, title: 'Area Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 13 }), verb: 'predict', blurb: 'Own a region. File reports that change a roster.', removed: gone },
+  { level: 2, title: 'Regional Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 24, profile: 11 }), verb: 'predict', blurb: 'Cover multiple states for a Power program.', removed: gone },
+  { level: 3, title: 'National Scout', tier: 'FBS', path: 'personnel', gate: gate({ evaluation: 35, profile: 20 }), verb: 'predict', blurb: 'Cross-check the board from coast to coast.', removed: gone },
+  { level: 4, title: 'Assistant Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 45, profile: 31 }), verb: 'persuade', blurb: 'Run the college board for an NFL club.', removed: gone },
+  { level: 5, title: 'Director of College Scouting', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 62, roster: 32, profile: 44 }), verb: 'persuade', blurb: 'You own the draft board now.', removed: gone },
+  { level: 6, title: 'Director of Player Personnel', tier: 'NFL', path: 'personnel', gate: gate({ evaluation: 68, roster: 46, profile: 52 }), verb: 'persuade', blurb: 'Pro and college. One step from the chair.', removed: gone },
+  { level: 7, title: 'Assistant General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 54, leadership: 38, profile: 62 }), verb: 'allocate', blurb: 'Run the building day to day.', removed: gone },
   { level: 8, title: 'General Manager', tier: 'NFL', path: 'personnel', gate: gate({ roster: 64, leadership: 42, profile: 70, results: 34 }), verb: 'allocate', blurb: 'Final say on the 53. Go win a championship.' },
 ]
 
@@ -175,22 +188,128 @@ export function ladderFor(path: CareerPath): CareerTier[] {
   return path === 'coach' ? COACH_LADDER : PERSONNEL_LADDER
 }
 
+// ── The two coordinator jobs (Backlog 415 amendment) ─────────────────────────
+/**
+ * The user asked for "offensive coordinator and defensive coordinator" as two
+ * separate jobs. Both live at the SAME internal level (6) and differ only by the
+ * side of the ball, which is the existing off/def archetype choice. Keeping one
+ * level means every `level >= 6`, `verbFor(path, level)` and capability check
+ * keeps working exactly as before.
+ */
+export const COORDINATOR_LEVEL = 6
+export type CoachSide = 'off' | 'def'
+
+export interface CoordinatorJob {
+  side: CoachSide
+  /** The ladder card title (keeps the NFL prefix, like the other rungs). */
+  card: string
+  /** The user's own title — never "NFL Coordinator". */
+  title: string
+  /** The one-line ladder blurb. */
+  blurb: string
+  /** The week-to-week job, shown under "What you do". */
+  does: string
+}
+
+export const COORDINATOR_JOBS: CoordinatorJob[] = [
+  {
+    side: 'off',
+    card: 'NFL Offensive Coordinator',
+    title: 'Offensive Coordinator',
+    blurb: 'Run the offense at the highest level — install the scheme and call every play.',
+    does: "Install the offensive scheme, call the plays, and own the offense's weekly game plan.",
+  },
+  {
+    side: 'def',
+    card: 'NFL Defensive Coordinator',
+    title: 'Defensive Coordinator',
+    blurb: 'Run the defense at the highest level — set the front and call the coverage.',
+    does: "Install the defensive scheme, call the fronts, coverages and pressures, and own the defense's weekly game plan.",
+  },
+]
+
+/** The coordinator job for a side of the ball (defaults to offense). */
+export function coordinatorJob(side: CoachSide | undefined): CoordinatorJob {
+  return side === 'def' ? COORDINATOR_JOBS[1] : COORDINATOR_JOBS[0]
+}
+/** The user-facing coordinator title for a side — no "NFL" prefix. */
+export function coordinatorTitle(side: CoachSide | undefined): string {
+  return coordinatorJob(side).title
+}
+/** Which side of the ball a career owns (defense only when it says so). */
+export function sideOf(career: Pick<CareerState, 'path' | 'unitFocus'>): CoachSide {
+  return career.unitFocus === 'def' ? 'def' : 'off'
+}
+
+/** Every rung the user can actually hold, in order (removed rungs filtered out). */
+export function activeLadder(path: CareerPath): CareerTier[] {
+  return ladderFor(path).filter((r) => !r.removed)
+}
+
+/** The next rung the user can actually be promoted into, or undefined at the top. */
+export function nextRung(path: CareerPath, level: number): CareerTier | undefined {
+  return activeLadder(path).find((r) => r.level > level)
+}
+
+/**
+ * The lowest still-existing rung at or above `level`. Used to migrate old saves
+ * off a removed rung without ever dropping the user below the NFL floor.
+ */
+export function keptLevel(path: CareerPath, level: number): number {
+  const active = activeLadder(path)
+  const at = active.find((r) => r.level >= level)
+  return (at ?? active[active.length - 1]).level
+}
+
 /**
  * The lowest rung of each ladder that exists in the NFL-only universe. The
- * college side has been removed, so a career starts here and never drops below.
+ * college side is gone, and so are the sub-coordinator jobs: a career starts as
+ * an NFL coordinator (coach) or the general manager (personnel) and never drops
+ * below that.
  */
-export const MIN_NFL_LEVEL: Record<CareerPath, number> = { coach: 5, personnel: 4 }
+export const MIN_NFL_LEVEL: Record<CareerPath, number> = { coach: 6, personnel: 8 }
 export function minNflLevel(path: CareerPath): number {
   return MIN_NFL_LEVEL[path]
 }
-/** The NFL rungs of a ladder (the only ones reachable in this build). */
+/** The rungs the user can hold (the only ones reachable in this build). */
 export function nflLadder(path: CareerPath): CareerTier[] {
-  return ladderFor(path).filter((r) => r.level >= minNflLevel(path))
+  return activeLadder(path).filter((r) => r.level >= minNflLevel(path))
+}
+
+/** A rung as shown in the UI. The coordinator rung appears twice — one card per
+ * side of the ball — and each card carries its own blurb and "What you do". */
+export interface LadderCard extends CareerTier {
+  side?: CoachSide
+  does?: string
+}
+
+/**
+ * The ladder to DISPLAY: identical to `nflLadder`, except the coach coordinator
+ * rung is split into its offensive and defensive cards (both internal level 6).
+ * Pure presentation — no engine check reads this.
+ */
+export function displayLadder(path: CareerPath): LadderCard[] {
+  return nflLadder(path).flatMap((r): LadderCard[] => {
+    if (path === 'coach' && r.level === COORDINATOR_LEVEL) {
+      return COORDINATOR_JOBS.map((j) => ({ ...r, title: j.card, blurb: j.blurb, side: j.side, does: j.does }))
+    }
+    return [{ ...r }]
+  })
 }
 
 export function tierFor(path: CareerPath, level: number): CareerTier {
   const ladder = ladderFor(path)
   return ladder[clamp(level, 0, ladder.length - 1)]
+}
+
+/**
+ * The user's own job title right now. The coordinator rung names its side, so
+ * the header reads "Offensive Coordinator" / "Defensive Coordinator" rather than
+ * the generic ladder label. Deterministic — no rng.
+ */
+export function roleTitle(career: CareerState): string {
+  if (career.path === 'coach' && career.level === COORDINATOR_LEVEL) return coordinatorTitle(sideOf(career))
+  return tierFor(career.path, career.level).title
 }
 
 /** One-line framing of a rung's verb, for UI copy (#1). */
@@ -246,8 +365,7 @@ export function meetsGate(rep: Reputation, t: CareerTier): boolean {
 
 /** How close (0..1) the user is to qualifying for the next rung. */
 export function progressToNext(rep: Reputation, path: CareerPath, level: number): { pct: number; missing: string[] } {
-  const ladder = ladderFor(path)
-  const next = ladder[level + 1]
+  const next = nextRung(path, level)
   if (!next) return { pct: 1, missing: [] }
   const missing: string[] = []
   let sum = 0
@@ -291,16 +409,43 @@ function pickInterestedTeam(rng: () => number, ceiling: number): string {
 export function generateJobOffers(world: World, career: CareerState): JobOffer[] {
   const rng = makeRng(world.seed + world.season * 524287 + career.level + (career.path === 'coach' ? 99991 : 0))
   const offers: JobOffer[] = []
-  const ladder = ladderFor(career.path)
-  const next = ladder[career.level + 1]
-  if (!next) return offers
+  const next = nextRung(career.path, career.level)
   const rep = career.reputation
   const overall = overallRep(rep)
   const ceiling = prestigeCeiling(overall)
-  if (!meetsGate(rep, next)) {
-    // Partial qualification can still earn a "reach" interview if you're close.
-    const { pct } = progressToNext(rep, career.path, career.level)
-    if (pct < 0.85) return offers
+  // A promotion only appears when you clear the next rung's gate (or are close
+  // enough for a reach interview). Otherwise you are in the re-entry market: a
+  // fired coordinator hears from clubs about coordinator jobs (on either side of
+  // the ball) and a GM hears about other GM chairs — never a removed rung.
+  const canPromote =
+    !!next && (meetsGate(rep, next) || progressToNext(rep, career.path, career.level).pct >= 0.85)
+
+  if (!canPromote) {
+    // ── Re-entry market: another club wants you at your current rung ──────────
+    const here = tierFor(career.path, career.level)
+    const margin = overall - 40
+    const count = margin >= 45 ? 3 : margin >= 25 ? 2 : 1
+    for (let i = 0; i < count; i++) {
+      const teamId = pickInterestedTeam(rng, ceiling)
+      if (offers.some((o) => o.teamId === teamId)) continue
+      // A coach at the coordinator rung can re-enter on either side of the ball.
+      const side: CoachSide | undefined =
+        career.path === 'coach' && career.level === COORDINATOR_LEVEL ? (rng() < 0.5 ? 'off' : 'def') : undefined
+      const title = side ? coordinatorJob(side).title : here.title
+      offers.push({
+        id: `reentry_${world.season}_${career.level}_${side ?? 'na'}_${teamId}`,
+        title,
+        side,
+        teamId,
+        tier: here.tier,
+        level: career.level,
+        salary: salaryFor(career.path, career.level),
+        years: 4,
+        interest: clamp(50 + Math.round((overall - 40) * 1.5) + Math.round(rng() * 20), 35, 99),
+        note: `A league club is interested in you for its ${title.toLowerCase()} role.`,
+      })
+    }
+    return offers
   }
 
   const margin = overall - 40
@@ -324,7 +469,7 @@ export function generateJobOffers(world: World, career: CareerState): JobOffer[]
   }
 
   // ── Fast-track: a standout résumé can skip a rung ─────────────────────────
-  const skip = ladder[career.level + 2]
+  const skip = nextRung(career.path, next.level)
   if (skip && !offers.some((o) => o.level === skip.level)) {
     let sum = 0
     let n = 0
@@ -363,7 +508,7 @@ export function makeInterview(offer: JobOffer, world: World, career: CareerState
   const rng = makeRng(world.seed + offer.teamId.length * 7919 + career.level)
   const rival = `${rpick(rng, RIVAL_FIRST)} ${rpick(rng, RIVAL_LAST)}`
   // Fit: does your reputation match the role's priorities?
-  const t = { coach: COACH_LADDER, personnel: PERSONNEL_LADDER }[career.path][offer.level]
+  const t = tierFor(career.path, offer.level)
   let fitSum = 0
   let n = 0
   for (const [k, v] of Object.entries(t.gate)) {
@@ -414,6 +559,10 @@ export function promote(career: CareerState, offer: JobOffer): CareerState {
     )
   }
   rep.profile = clamp(rep.profile + 3, 0, 100)
+  // A coordinator can take an offer on either side of the ball, so the new job
+  // sets the side. Every other rung keeps the side the career already had.
+  const unitFocus =
+    career.path === 'coach' && offer.side ? offer.side : career.unitFocus
   return {
     ...career,
     teamId: offer.teamId,
@@ -421,13 +570,14 @@ export function promote(career: CareerState, offer: JobOffer): CareerState {
     tier: offer.tier,
     salary: offer.salary,
     jobSecurity: 72,
+    unitFocus,
     // FUTURES 22: the mandate belongs to the club, so a new job means the new
     // owner's expectations — not the old club's.
     ownerExpectation: ownerMandate(offer.teamId, offer.tier),
     reputation: rep,
     history: [
       ...career.history,
-      { season: career.season, team: career.teamId, role: tierFor(career.path, career.level).title, record: '', outcome: `Hired as ${offer.title}` },
+      { season: career.season, team: career.teamId, role: roleTitle(career), record: '', outcome: `Hired as ${offer.title}` },
     ],
   }
 }
@@ -449,7 +599,7 @@ export function demote(world: World, career: CareerState): CareerState {
     reputation: { ...career.reputation, profile: clamp(career.reputation.profile - 10, 0, 100), results: clamp(career.reputation.results - 6, 0, 100) },
     history: [
       ...career.history,
-      { season: career.season, team: career.teamId, role: tierFor(career.path, career.level).title, record: '', outcome: 'Fired — took a step back' },
+      { season: career.season, team: career.teamId, role: roleTitle(career), record: '', outcome: 'Fired — took a step back' },
     ],
   }
 }

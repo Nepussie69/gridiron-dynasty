@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ArrowRight, Award, Fingerprint, Ghost, HelpCircle, Sparkles, Target } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { money } from '../lib/format'
-import { ladderFor, tierFor } from '../game/engine/career'
+import { COORDINATOR_LEVEL, coordinatorJob, roleTitle, tierFor } from '../game/engine/career'
 import { portfolioItems } from '../game/engine/portfolio'
 import { counterOffer } from '../game/engine/counter'
 import type { JobOffer } from '../game/types'
@@ -240,7 +240,7 @@ export function SeasonModal() {
   }
 
   if (modal === 'offers') {
-    const current = career ? tierFor(career.path, career.level).title : ''
+    const current = career ? roleTitle(career) : ''
     const canPitch = career ? portfolioItems(league, career).length > 0 : false
     const myTeam = career ? league.byId[career.teamId] : null
     const liveCounter = !!career && career.counter?.season === league.season && !career.counter.taken
@@ -274,7 +274,9 @@ export function SeasonModal() {
           <div className="space-y-3">
             {offers.map((o) => {
               const team = league.byId[o.teamId]
-              const rung = ladderFor(career?.path ?? 'personnel')[o.level]
+              const rung = tierFor(career?.path ?? 'personnel', o.level)
+              // Backlog 415: a coordinator offer carries its own side's blurb.
+              const rungBlurb = o.level === COORDINATOR_LEVEL && o.side ? coordinatorJob(o.side).blurb : rung.blurb
               return (
                 <div key={o.id} className="rounded-[var(--r-md)] border border-line p-3">
                   <div className="flex items-center gap-3">
@@ -291,7 +293,7 @@ export function SeasonModal() {
                     </div>
                   </div>
                   <div className="mt-2 flex items-center gap-2 rounded-[var(--r-md)] bg-surface-2 p-2 text-label text-muted">
-                    <Badge tone="info">{rung.tier}</Badge> {rung.blurb}
+                    <Badge tone="info">{rung.tier}</Badge> {rungBlurb}
                   </div>
                   <Button variant="primary" className="mt-2 w-full" onClick={() => (canPitch ? setPrep(o) : acceptOffer(o))}>
                     Sit for the interview — {o.title}

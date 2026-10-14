@@ -37,18 +37,19 @@ import { OVR_BANDS, ovrBand, unscaleOvr } from './ovrScale'
 import { simulatePlayoffs, simWeek } from './sim'
 import { depthAt, STARTERS } from './depth'
 import {
+  activeLadder,
   canDraft,
   demote,
   earnSkillPoints,
   generateJobOffers,
   gradeObjectives,
-  ladderFor,
   makeInterview,
   minNflLevel,
   promote,
   resolveInterview,
   reviewSeason,
   roleObjectives,
+  roleTitle,
   salaryFor,
   spendSkillPointsEvenly,
   tierFor,
@@ -203,8 +204,8 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
   const rng = makeRng(opts.seed ?? 987654)
   const world = buildWorld(opts.seed ?? 987654, opts.data ?? null)
   let career = makeCareer(world, path)
-  const ladder = ladderFor(path)
-  const topLevel = ladder.length - 1
+  const ladder = activeLadder(path)
+  const topLevel = ladder[ladder.length - 1].level
 
   const snapshots: BalanceSeason[] = []
   let promotions = 0
@@ -287,7 +288,7 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
       seasonHits: scout.hits,
       jobSecurity,
       roleMastery: roleMasteryMap,
-      history: [...career.history, { season: career.season, team: career.teamId, role: tierFor(career.path, career.level).title, record: `${rec?.wins ?? 0}-${rec?.losses ?? 0}`, outcome: wonTitle ? 'Won a championship' : madePlayoffs ? 'Made the playoffs' : `${scout.graded} recommends` }],
+      history: [...career.history, { season: career.season, team: career.teamId, role: roleTitle(career), record: `${rec?.wins ?? 0}-${rec?.losses ?? 0}`, outcome: wonTitle ? 'Won a championship' : madePlayoffs ? 'Made the playoffs' : `${scout.graded} recommends` }],
     }
     if (demotedNow) {
       const before = career.teamId
@@ -339,7 +340,7 @@ export function runBalance(opts: { seasons?: number; seed?: number; path?: 'coac
     snapshots.push({
       season: world.season,
       level: career.level,
-      title: tierFor(career.path, career.level).title,
+      title: roleTitle(career),
       overallRep: Math.round(rep.evaluation * 0.28 + rep.roster * 0.24 + rep.leadership * 0.18 + rep.results * 0.2 + rep.profile * 0.1),
       jobSecurity,
       wins: rec?.wins ?? 0,

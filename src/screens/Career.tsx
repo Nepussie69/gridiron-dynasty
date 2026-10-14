@@ -3,13 +3,16 @@ import { ArrowUp, Briefcase, CheckCircle2, Circle, Copy, Plus, Repeat2, Sparkles
 import { cn } from '../lib/cn'
 import { jobTone, money, type Tone } from '../lib/format'
 import {
+  displayLadder,
   masteryCarryOver,
   nflLadder,
   overallRep,
   progressToNext,
   roleMastery as getRoleMastery,
+  roleTitle,
   roleObjectives,
   salaryFor,
+  sideOf,
   tierFor,
   unitRanks,
   VERB_BLURB,
@@ -131,8 +134,11 @@ export function Career() {
   // Only the NFL rungs are reachable in this build, so the player sees the NFL
   // ladder — and, because nflLadder filters rungs, rung.level is not its index.
   const ladder = nflLadder(career.path)
-  const current = tierFor(career.path, career.level)
-  const currentRung = ladder.findIndex((r) => r.level === career.level)
+  // Backlog 415: the coach ladder shows two coordinator cards, one per side.
+  const mySide = sideOf(career)
+  const cards = displayLadder(career.path)
+  const current = { ...tierFor(career.path, career.level), title: roleTitle(career) }
+  const currentRung = cards.findIndex((r) => r.level === career.level && (r.side === undefined || r.side === mySide))
   const next = ladder.find((r) => r.level > career.level)
   const rec = recordOf(league, career.teamId)
   const overall = overallRep(career.reputation)
@@ -488,15 +494,15 @@ export function Career() {
                 <h3 className="font-display text-[20px] font-800 italic uppercase leading-none tracking-[0.01em] text-ink">
                   {career.path === 'coach' ? 'Coaching Ladder' : 'Personnel Ladder'}
                 </h3>
-                <Badge tone="neutral">Level {currentRung >= 0 ? currentRung + 1 : 1} of {ladder.length}</Badge>
+                <Badge tone="neutral">Level {currentRung >= 0 ? currentRung + 1 : 1} of {cards.length}</Badge>
               </div>
               <div className="space-y-1">
-                {ladder.map((rung) => {
+                {cards.map((rung) => {
                   const done = rung.level < career.level
-                  const active = rung.level === career.level
+                  const active = rung.level === career.level && (rung.side === undefined || rung.side === mySide)
                   return (
                     <div
-                      key={rung.level}
+                      key={`${rung.level}:${rung.side ?? ''}`}
                       className={cn(
                         'flex items-center gap-3 rounded-[var(--r-md)] border px-3 py-2',
                         active ? 'border-line-strong bg-[var(--team-tint)] shadow-[inset_3px_0_0_var(--team-accent)]' : done ? 'border-line opacity-70' : 'border-line',

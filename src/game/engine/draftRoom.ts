@@ -22,7 +22,7 @@ import type { World } from './generate'
 import { clamp, hash32 } from './rng'
 import { schemeFit } from './style'
 import { mentorFor } from './people'
-import { tierFor } from './career'
+import { roleTitle } from './career'
 import { adviceWeight } from './draft'
 
 // ── Philosophy ───────────────────────────────────────────────────────────────
@@ -465,7 +465,7 @@ export function roomSeats(world: World, career: CareerState): RoomSeat[] {
 }
 
 function userTitle(career: CareerState): string {
-  return tierFor(career.path, career.level).title
+  return roleTitle(career)
 }
 
 // ── Blending ─────────────────────────────────────────────────────────────────

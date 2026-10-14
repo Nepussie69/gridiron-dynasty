@@ -87,13 +87,14 @@ import {
   earnSkillPoints,
   generateJobOffers,
   gradeObjectives,
-  ladderFor,
+  keptLevel,
   makeInterview,
   minNflLevel,
   promote,
   resolveInterview,
   reviewSeason,
   roleObjectives,
+  roleTitle,
   salaryFor,
   tierFor,
   unitRanks,
@@ -707,7 +708,7 @@ interface GameStore {
   toggleLockerEffort: () => void
   /** L15 (FUTURES 16): auto-pick the top leaders and pair every young player. */
   autoLockerRoom: () => void
-  startCareer: (opts: { name: string; path: CareerPath; archetype: string; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId; slot?: number }) => Promise<void>
+  startCareer: (opts: { name: string; path: CareerPath; archetype: string; side?: 'off' | 'def'; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId; slot?: number }) => Promise<void>
   resetCareer: () => void
   advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
   /** L12.6 C1: step the offseason calendar one stage (resign → FA → draft → camp → season). */
@@ -1318,7 +1319,7 @@ export const useGame = create<GameStore>((set, get) => ({
     )
   },
 
-  startCareer: async ({ name, path: chosenPath, archetype, teamId: chosenTeamId, startLevel = 0, seed, scenarioId, slot: chosenSlot }) => {
+  startCareer: async ({ name, path: chosenPath, archetype, side, teamId: chosenTeamId, startLevel = 0, seed, scenarioId, slot: chosenSlot }) => {
     if (get().busy) {
       get().showToast('Please wait for the current save action to finish.')
       return
@@ -1377,13 +1378,14 @@ export const useGame = create<GameStore>((set, get) => ({
       const teamId = scenario.forceLowestPrestige
         ? [...NFL_TEAMS].sort((a, b) => a.prestige - b.prestige)[0].id
         : chosenTeamId
-      const ladder = ladderFor(path)
-      const level = scenario.level ?? Math.max(minNflLevel(path), Math.min(ladder.length - 1, startLevel))
+      // Backlog 415: a scenario or picker can only ever place the user on a rung
+      // that still exists (coach 6/7, personnel 8).
+      const level = scenario.level !== null ? keptLevel(path, scenario.level) : keptLevel(path, startLevel)
       const tier = tierFor(path, level).tier
       const resolvedTeam = world.byId[teamId]?.tier === tier ? teamId : 'BUF'
       // Starting at a higher rung seeds the reputation needed to have earned it.
       const seedRep: Reputation = { ...ZERO_REP }
-      for (const [k, v] of Object.entries(ladder[level].gate)) {
+      for (const [k, v] of Object.entries(tierFor(path, level).gate)) {
         ;(seedRep as unknown as Record<string, number>)[k] = Math.max(
           (seedRep as unknown as Record<string, number>)[k] ?? 0,
           (v as number) + 2,
@@ -1401,7 +1403,10 @@ export const useGame = create<GameStore>((set, get) => ({
         level,
         salary: salaryFor(path, level),
         jobSecurity: 70,
-        unitFocus: path === 'coach' ? (archetype === 'def' ? 'def' : archetype === 'ceo' ? 'both' : 'off') : undefined,
+        // Backlog 415: a coordinator is offensive or defensive — the picker's side
+        // choice (falling back to the off/def archetype) is the side of the ball;
+        // there is no third "both sides" job for the user.
+        unitFocus: path === 'coach' ? (side ?? (archetype === 'def' ? 'def' : 'off')) : undefined,
         ownerExpectation: ownerMandate(resolvedTeam, tier),
         tier,
         recommendationsMade: 0,
@@ -5282,15 +5287,16 @@ function slotSummaryFromSave(p: SaveData): SlotSummaryPatch {
   const c = p.career
   if (!c) return {}
   const team = p.world?.byId?.[c.teamId]
-  let roleTitle = ''
+  let roleLabel = ''
   try {
-    roleTitle = tierFor(c.path, c.level).title
+    // Backlog 415: never label a slot with a rung that no longer exists.
+    roleLabel = roleTitle({ ...c, level: keptLevel(c.path === 'coach' ? 'coach' : 'personnel', c.level) })
   } catch {
-    roleTitle = ''
+    roleLabel = ''
   }
   return {
     managerName: c.gmName ?? '',
-    roleTitle,
+    roleTitle: roleLabel,
     teamName: team ? (team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name) : (c.teamId ?? ''),
     season: c.season ?? 0,
     week: c.week ?? 0,
@@ -5303,19 +5309,19 @@ function summarizeRaw(data: unknown, savedAt: number, label: string): SlotMeta {
   const p = (data ?? {}) as Partial<SaveData>
   const c = p.career ?? null
   const team = c && p.world?.byId ? p.world.byId[c.teamId] : undefined
-  let roleTitle = ''
+  let roleLabel = ''
   if (c && typeof c.level === 'number') {
     try {
-      roleTitle = tierFor(c.path, c.level).title
+      roleLabel = roleTitle({ ...c, level: keptLevel(c.path === 'coach' ? 'coach' : 'personnel', c.level) })
     } catch {
-      roleTitle = ''
+      roleLabel = ''
     }
   }
   return {
     schema: 1,
     label,
     managerName: c?.gmName ?? '',
-    roleTitle,
+    roleTitle: roleLabel,
     teamName: team ? (team.tier === 'NFL' ? `${team.city} ${team.name}` : team.name) : (c?.teamId ?? ''),
     season: c?.season ?? p.world?.season ?? 0,
     week: c?.week ?? p.world?.week ?? 0,
@@ -5424,7 +5430,7 @@ function restoreSaveData(p: SaveData): Partial<GameStore> {
   awards = restoreAwards(p.awards)
   // L15: this week's injury calls belonged to the dropped game day, so they go
   // with it; the report is rebuilt from the (restored) injuries on the new week.
-  const career = { ...reconcileCareerTeam(world, migrateCareer(p.career!, !careerWasScaled)), injuryCalls: undefined }
+  const career = migrateLoadedCareer(world, p.career!, !careerWasScaled)
   return {
     career,
     activeTeamId: p.activeTeamId && world.byId[p.activeTeamId] ? p.activeTeamId : career.teamId,
@@ -5457,7 +5463,7 @@ function describeSave(p: SaveData, savedAt: number, usedBackup: boolean): SaveIn
     savedAt,
     season: c.season,
     teamName: summary.teamName ?? c.teamId,
-    title: summary.roleTitle ?? tierFor(c.path, c.level).title,
+    title: summary.roleTitle ?? roleTitle(c),
     tier: c.tier,
     usedBackup,
   }
@@ -5521,6 +5527,25 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
     },
     skills: { ...ZERO_SKILLS },
   }
+}
+
+/** Backlog 415: load-migration hook. Bring a saved career up to the trimmed
+ * ladder and, when the trim moved it off a removed rung, log one inbox note so
+ * the user knows why the job changed. Deterministic — no rng. Exported so the
+ * node ladder probe can exercise the exact load path every removed level. */
+export function migrateLoadedCareer(w: World, c: CareerState, rescaleOvrValues = false): CareerState {
+  const wasLevel = c.level
+  const career: CareerState = { ...reconcileCareerTeam(w, migrateCareer(c, rescaleOvrValues)), injuryCalls: undefined }
+  if (career.level !== wasLevel) {
+    pushCareerNews(w, career, {
+      category: 'Career',
+      headline: `Your job has changed: you are the ${roleTitle(career)}`,
+      body: `The league no longer staffs the job this career held, so you now hold the ${roleTitle(career)} post with the ${
+        w.byId[career.teamId]?.name ?? career.teamId
+      }. Your reputation, history and résumé carried over untouched.`,
+    })
+  }
+  return career
 }
 
 /** After migrating a legacy world/career pair, make sure the career sits on a
@@ -5916,7 +5941,7 @@ function runEndOfRegularSeason(
         {
           season: career.season,
           team: career.teamId,
-          role: tierFor(career.path, career.level).title,
+          role: roleTitle(career),
           record: `${rec?.wins ?? 0}-${rec?.losses ?? 0}`,
           outcome: wonTitle
             ? 'Won a championship'
@@ -6056,8 +6081,8 @@ function runEndOfRegularSeason(
       }
       pushCareerNews(world, careerNext, {
         category: 'Career',
-        headline: `Fired: ${tierFor(career.path, career.level).title} role ends`,
-        body: `After a season that fell short, you were let go as ${tierFor(career.path, career.level).title} for the ${world.byId[career.teamId].name}. The Wilderness is open — a year on TV, consulting, a sports agency, or the UFL. Pick your road back.`,
+        headline: `Fired: ${roleTitle(career)} role ends`,
+        body: `After a season that fell short, you were let go as ${roleTitle(career)} for the ${world.byId[career.teamId].name}. The Wilderness is open — a year on TV, consulting, a sports agency, or the UFL. Pick your road back.`,
       })
     } else if (wonTitle) {
       pushCareerNews(world, careerNext, {
@@ -6087,7 +6112,7 @@ function runEndOfRegularSeason(
       const totalObjs = objs.length
       pushCareerNews(world, careerNext, {
         category: 'Career',
-        headline: `${world.season} season review: ${tierFor(career.path, career.level).title}`,
+        headline: `${world.season} season review: ${roleTitle(career)}`,
         body: `You finished ${rec?.wins ?? 0}-${rec?.losses ?? 0} with the ${world.byId[career.teamId].name}, meeting ${met} of ${totalObjs} objectives. ${
           met >= totalObjs - 0
             ? 'A strong body of work — your stock is rising.'
@@ -8431,8 +8456,8 @@ export async function careerSmoke(
     }
   }
 
-  // 1. Start the career on the requested rung (coach 5 / personnel 4).
-  const startLevel = path === 'coach' ? 5 : 4
+  // 1. Start the career on the lowest rung that still exists (coach 6 / personnel 8).
+  const startLevel = path === 'coach' ? 6 : 8
   get().startCareer({
     name: 'Smoke',
     path,

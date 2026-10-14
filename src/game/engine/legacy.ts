@@ -13,7 +13,7 @@ import type { AwardHistory } from './awards'
 import type { CareerDatabase } from './statsDb'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { clamp, makeRng, rpick } from './rng'
-import { ladderFor, minNflLevel, salaryFor, tierFor, type Reputation } from './career'
+import { activeLadder, minNflLevel, roleTitle, salaryFor, type Reputation } from './career'
 import { ownerMandate } from './owner'
 
 export interface WildernessPath {
@@ -48,7 +48,8 @@ export function applyWilderness(world: World, career: CareerState, pathId: strin
   } else {
     level = Math.max(minLevel, career.level - 2)
   }
-  level = clamp(level, minLevel, ladderFor(career.path).length - 1)
+  const top = activeLadder(career.path)
+  level = clamp(level, minLevel, top[top.length - 1].level)
   // The only universe is the NFL; you land with a league club.
   const teamId = rpick(rng, NFL_TEAMS).id
   return {
@@ -64,7 +65,7 @@ export function applyWilderness(world: World, career: CareerState, pathId: strin
     wilderness: null,
     history: [
       ...career.history,
-      { season: world.season, team: career.teamId, role: tierFor(career.path, career.level).title, record: '', outcome: `The Wilderness: ${path.label}` },
+      { season: world.season, team: career.teamId, role: roleTitle(career), record: '', outcome: `The Wilderness: ${path.label}` },
     ],
   }
 }
