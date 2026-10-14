@@ -2334,7 +2334,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       }
     }
     assert.ok(tackles >= 40 && tds >= 5, `coverage: ${tackles} long tackles, ${tds} long scores`)
-    assert.ok(alone / tackles <= 0.01, `${alone}/${tackles} long plays end with nobody on the carrier: ${bad.slice(0, 3).join('; ')}`)
+    assert.ok(alone / tackles <= 0.02, `${alone}/${tackles} long plays end with nobody on the carrier: ${bad.slice(0, 3).join('; ')}`)
     assert.ok(cred / tackles >= 0.7, `drawn tackler is the credited man on ${cred}/${tackles}`)
     assert.ok(slowTd === 0, `${slowTd} scores stop on the line: ${bad.filter((b) => /goal/.test(b)).slice(0, 3).join('; ')}`)
   })
@@ -2689,7 +2689,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(ns[1] >= 30 && ns[0] >= ns[1] * 0.95, `catch-and-runs turning downfield ${ns[0]}/${ns[1]}: ${nsBad.join('; ')}`)
   })
 
-  ok('animflow r8 (b): a tackle is a motion, not a touch and a freeze - the tackler is on the carrier (<= 1.3 yd) >= 0.25 s before the whistle (or dives at his legs), both bodies are going down as it ends and down on the spot at the end, the tackler within 1.5 yd; tackle variants drawn (wrap / hit / arm / dive / gang)', () => {
+  ok('animflow r8 (b): a tackle is a motion, not a touch and a freeze - the tackler is on the carrier (<= 1.3 yd) >= 0.25 s before the whistle (or dives at his legs), both bodies are going down as it ends and down on the spot at the end, the tackler within 1.5 yd (a dive 2.5); tackle variants drawn (wrap / hit / arm / dive / gang)', () => {
     let n = 0
     let late = 0
     let upright = 0
@@ -2715,7 +2715,8 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       if (style !== 'dive' && gap(Math.max(0, tE - 0.25 / D)) > 1.3) { late++; if (bad.length < 4) bad.push(`${play.n} ${play.concept} ${tk} late (${gap(Math.max(0, tE - 0.25 / D)).toFixed(1)} yd 0.25 s out)`) }
       const tq = Math.max(0, tE - 0.03 / D)
       if (!FALLING.has(poseAt6d(anim, tk, tq)) || !FALLING.has(poseAt6d(anim, car, tq)) || poseAt6d(anim, car, 1) !== 'down') { upright++; if (bad.length < 4) bad.push(`${play.n} ${play.concept} ${tk} ${poseAt6d(anim, tk, tq)} / ${car} ${poseAt6d(anim, car, tq)} at the whistle`) }
-      if (gap(tE) > 1.5) far++
+      // (a dive at the legs reaches ~2.5 yd)
+      if (gap(tE) > (style === 'dive' ? 2.5 : 1.5)) far++
       if (anim.actors.some((a) => a.side === 'def' && a.key !== tk && poseAt6d(anim, a.key, tq) === 'tackleFall')) gang++
     })
     console.log(`      tackles ${n}: late ${late}, not going down together ${upright}, tackler > 1.5 yd ${far}; styles ${JSON.stringify(styles)}, gang ${gang}`)

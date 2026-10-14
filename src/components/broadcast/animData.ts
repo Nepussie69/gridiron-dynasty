@@ -656,6 +656,9 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     // The carrier goes down with him over the same beat (a big hit: from the hit on).
     if (tackleT - fs > 1e-6) fallBy[carrierKey] = { t0: fs, t1: tackleT }
     downBy[carrierKey] = { t0: tackleT, t1: 1 }
+    // (a catch tackled on the spot: the catch pose gives way to the fall - never caught upright at the end)
+    const cw = catchBy[carrierKey]
+    if (cw && fallBy[carrierKey] && cw.t1 > fallBy[carrierKey].t0) cw.t1 = Math.max(cw.t0, fallBy[carrierKey].t0)
   }
 
   // animflow r6a: a recorded QB hit is a hit after the throw — the rusher
