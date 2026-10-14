@@ -4638,10 +4638,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         ...(wrr.depthErrYd ? { wrDepthYd: wrr.depthErrYd } : {}),
       }
     : {}
-  // J52: the wrong depth a misread draws (animation only): the ball goes to where
-  // the receiver actually is, so the emitted air differs from the design. The
-  // sim's own probabilities keep using `passAir` / the concept depth.
-  const wrAirYd = wrr && wrr.depthErrYd ? clamp(passAir + wrr.depthErrYd, 0, 60) : passAir
+  // J52: the misread's wrong depth rides on `wrDepthYd` only. `passDepth` stays
+  // the sim's own air yards: playAnim places the catch from it, so shifting it
+  // without the yards would draw a catch past the tackle spot.
   const manW = dStyle.manCoverage
   let muSep = 0
   let coverRel = 0
@@ -5024,7 +5023,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
-      ...(DEPTH_AWARE_ON ? { passDepth: wrAirYd, passConceptDepth: concept.depth } : {}),
+      ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
       timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
@@ -5147,7 +5146,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return maybeScramble(offId, n, qb, qbStyle, pressured, {
       type: 'pass', concept: concept.name, yards: gain, blitz,
       result: oob ? `${baseResult} (out of bounds)` : baseResult,
-      turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: wrAirYd, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
+      turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
       outOfBounds: oob || undefined,
       fumbleId: strip ? stopper : undefined, muffedCatch: muff || undefined,
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
@@ -5159,7 +5158,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: wrAirYd, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
