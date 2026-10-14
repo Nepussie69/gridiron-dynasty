@@ -1,38 +1,36 @@
-# Claude handover — Gridiron Dynasty (2026-10-12 ~21:05 AEDT, chat 8)
+# Claude handover — Gridiron Dynasty (2026-10-14 ~21:15 AEDT, chat 9)
 
-Read AGENTS.md first. One orchestrator chat at a time. Status as a ranked table with **expected times** (✅ done · 🔄 running · ⏳ queued · ⏸️ on hold); "table green tick" = full table incl. ETAs, "check deepseek" = per-job status, "cores" = load + sims. Log every user request/landing in PLAYTEST_BACKLOG.md (last row 368). User: "keep going down the list".
+Read AGENTS.md first. One orchestrator chat at a time. Status = ranked table with expected times (✅ 🔄 ⏳ ⏸️); "table green tick" = full table incl. ETAs. Log every user request/landing in PLAYTEST_BACKLOG.md (last row 402). User: "keep pushing" = keep going down the list.
 
 ## Goal
-FUTURES + playtest fixes: NFL-realistic play where every effect comes from the individual players on the play (no team/unit averages; big elite-vs-poor spread) and a realistic 2.5D broadcast animation. DeepSeek implements engine/feature jobs (`~/gridiron-work/ds-wt <name> <abs prompt>`); Claude sub-agents: Opus for animation, Sonnet for reviews and (user-approved) J10a + QB cone.
+NFL-realistic play where every effect comes from the individual players on the play (no averages, big elite-vs-poor spread), a realistic 2.5D broadcast, and the user's playtest fixes.
 
-## Current state (main local ahead of GitHub 345c798 — backlog/J3c/DF1/camlock commits; Pages = 345c798; 4173 held)
-- Merged this chat: J2 4th-down, #29 fog polish, Round 8 part 1 (04f34fc: in-stride, J38 featured drawn, qbFooled, J36 steer, J3b catch point, forced OOB 59/68), J3c recentre (punts 4.42–4.57 still > 4.4 band — residual), #27 DF1 draft philosophy engine, camera lock 91c1b6f (fixed angle; setting gd.view.cameraAngle).
-- **Claude agents running (die on clear → relaunch from briefs if no result):**
-  - J10a on Sonnet, wt/j10s (c7ad535; final 3×500 done) → brief prompts/j10s-relaunch.txt. FINAL goes to logs/j10s-verify.out. Ignore logs/j10a-* (orphan DeepSeek session in wt/realismj10a still writes them).
-  - Camera follow-up on Opus, wt/camlock: one sideline all game + tilt for kicks → prompts/camlock2-relaunch.txt.
-  - Round 8 on Opus, wt/animflow: route speed + sprint gait + launch accel, then tackling + rest of OOB → prompts/anim8-relaunch.txt.
-- **QB cone drawing built** (Sonnet, wt/qbcone f983cc4, off wt-j10s): merge right AFTER J10a merges.
-- **DeepSeek running (relaunched ~20:22 with prompts/cont6-<name>.txt):** realismj13 (audibles re-verify on merged tree), realismj37 (QB–WR chemistry), fut15 (#15 injury decisions phase A), fut28 (#28 coordinators C1; engine probe 34/34). Waiter: `~/gridiron-work/wait-any.sh realismj13 realismj37 fut15 fut28` (background).
+## Current state
+- GitHub main + Pages = **6cd5ff9** (live). Local main **ad9fea3** is 13 commits ahead: jind merged (a2f5b24, byte-identical results) + backlog rows. Push only on the user's explicit ok.
+- **Rule since today: all new jobs on DeepSeek** (memory subagent-model-split); ask before any Claude sub-agent. Exception: the user put Round 8 on Sonnet.
+- Running DeepSeek (≤5): realismj37 (J37 re-centring, cont7), realismpunts (punts 4.5 → ≤4.4), fut15b (#15 B wiring), fut28c2 (#28 C2 store), tradevalue (row 399, positional trade values from nflverse data, launched 21:10).
+- **staffmoney (row 398) FINISHED**: review ~/gridiron-work/logs/staffmoney-verify.out → commit in wt/staffmoney → merge.
+- Queued chain (background `launch-after.sh`): boxdef (row 400, defensive box score) → scoutquick (row 401, scouting quick buttons) → realismiq (row 402, veteran playbook learning). Each waits for the previous one to launch, then for a free slot (<5 jobs, load <8).
+- **Sonnet Round 8 agent (wt/animflow, latest c4e4947) dies on clear** → relaunch from ~/gridiron-work/prompts/r8-sonnet-relaunch.txt if logs/animflow-r8-verify.out has no Sonnet FINAL. User priority: players running out of bounds unforced.
 
 ## Decisions and why
-- Merge one at a time; keep both sides of conflicts (playsim.ts toggle blocks; outcome spreads `...j12Fields, ...scoutFields, ...j13Fields/visionFields`; `passDepth: passAir, passConceptDepth`). Stale-base job: commit WIP in worktree, `git merge main`, resolve, then relaunch a continuation.
-- Accept: OFF byte-identical, eq 20/20, no band worse than main >0.2; a drift that IS the intended effect is OK. Never accept shrinking an individual effect to hit bands (J3c tried steerRate 0.03 → restored 0.14).
-- check-broadcast failures after engine merges = presentation → animation round. Full check-broadcast currently aborts early at "DOUBLE shown 19/23" (animflow 6d) on main — pre-existing; new blocks are verified standalone.
-- Push/Pages only on the user's explicit ok for that push (`git push origin main`; `zsh scripts/publish-pages.sh main`). Before push: build, lint 4, `calib.mjs 33333 20 --eq` = 20/20, secret scan.
+- Merge one job at a time: commit WIP in the worktree, `git merge --no-edit main` there, then merge to main. Keep both sides of conflicts; outcome spreads keep every `...xFields` (now `...j13Fields, ...iuPassFields`).
+- Accept: OFF byte-identical, eq 20/20, no band worse than main by >0.2, lint exactly 4. Never shrink an individual effect to hit a band.
+- Before a push: build, lint 4, `calib.mjs 33333 20 --eq` 20/20, secret scan, then `git push origin main` + `zsh scripts/publish-pages.sh main`, then confirm the live index-*.js changed.
+- QB cone is on by default in 2.5D (user). HC trade control keeps the draft pause on the HC's slot (needed for draft-day trades).
 
 ## Next steps
-1. Re-arm the DeepSeek waiter (above). Check the 3 Claude agents' results/commits; relaunch any that died from its brief.
-2. J10a lands → review logs/j10s-verify.out → merge wt-j10s → gates → merge wt-qbcone → backlog row → `rm ~/gridiron-work/.j10s-live` if still there. Then launch J10b (prompts/realism-j10-stub.txt) and the anim round for audible/read visuals.
-3. As DeepSeek jobs land: verify, commit in worktree, merge, gates, backlog. Then queued: realism-jind (prompts/realism-jind.txt — replace 13 relAvg unit averages; also fold in the punts residual), #52 WR reads (prompts/realism-j52.txt, after J10a + J37), phase 2 of #15/#27/#28 (specs NEXT_PHASE_FUT_*.md: B/C, DF2/DF3, C2/C3), J11, #7/#24/#26 (have specs), #39–51.
-4. Keep ≤5 DeepSeek jobs; launch only when load < 8.
+1. Review + merge staffmoney. Check the Sonnet Round 8 agent (relaunch if dead). Re-arm checks on the 5 DeepSeek jobs (`tail ~/gridiron-work/logs/<name>.log`, `<name>-verify.out` FINAL).
+2. As jobs land: verify → merge → backlog row → status table → ask to push.
+3. After J37 merges: #52 WR reads (prompts/realism-j52.txt). Then #15 C UI, #28 C3 UI, #27 DF2/DF3, J11, #7/#24/#26, #39–51; an animation round for J13 audibles (hook exists in qbReads.ts); punter directional punting by his own ratings (offered, row 376); J10b throwaway rate 2.8% vs NFL 9.1%.
 
 ## Gotchas
-- **Mass exits (exit 130 on all jobs at once)** happened 3× today. One cause was ds-push `stop_session` (interrupting one OpenCode session kills all) — now commented out in ~/.claude/bin/ds-push. 20:20 happened anyway (unknown cause). Relaunch with prompts/cont6-*.txt (generic continuation header + original brief).
-- ds-push watchdog now IDLE 1800 s / HARD 5400 s (for new launches).
-- Load control: calib-slot.sh = 3 slots at load < 8 (J10a priority via ~/gridiron-work/.j10s-live). **sim-governor.sh** (nohup, MAXRUN=5) SIGSTOPs node sims beyond 5, resumes oldest-first, j10s first (≤4), and keeps sims of dead jobs listed in ~/gridiron-work/.governor-dead paused. Stop it: `touch ~/gridiron-work/.governor-stop`. Restart after reboot if load is high. Claude may NOT kill DeepSeek's leftover node sims (classifier) — add their worktree to .governor-dead or give the user a pkill line.
-- calib.mjs runs sometimes end without the EQUIVALENCE line (killed/paused) — re-run `calib.mjs 33333 20 --eq` alone.
-- Relative paths in `git worktree add` resolve from the repo — always use absolute ~/gridiron-work/wt/<name>.
-- Keep this chat lean: grep verify summaries, delegate reviews; chat 8 hit 280k.
+- Fixed today: an endless play-call moment (J38 featured play not among options) hung EVERY gameDayEquivalence run → any pre-119cf89 tree hangs at eq game 19.
+- calib-slot.sh counts only running sims; `.governor-dead` keeps paused sims of dead jobs out of slots (fut15, fut28, fut28-base, realismj13, realismj3c, realismj10a, fut27 are listed — their old hung sims stay paused). Run any new sims for those names from another dir (a re-used worktree named fut15/fut28/realismj13 gets paused).
+- Interrupting one OpenCode session can kill all live DeepSeek clients — kill the ds-push-<name> wrapper + client first, interrupt after, then check the others.
+- opencode.ai DNS outages kill jobs (ENOTFOUND) → relaunch with ds-wt (same worktree continues).
+- Claude may not kill DeepSeek's node sims (classifier) → .governor-dead or give the user a `kill` line.
+- Keep this chat lean: grep verify files, don't read big logs; chat 9 hit 340k.
 
 ## Key files
-PLAYTEST_BACKLOG.md rows 348–368 · FUTURES.md (#52 WR reads, #53 = J10a) · ~/gridiron-work/prompts/ (relaunch briefs above, cont6-*, realism-jind, realism-j52, j10/j11 stubs) · ~/gridiron-work/logs/ (j10s-*, *-verify.out, animflow-report.out, sim-governor.log) · ~/gridiron-work/{calib-slot.sh, sim-governor.sh, wait-any.sh, ds-wt}
+PLAYTEST_BACKLOG.md rows 369–402 · ~/gridiron-work/prompts/ (staffmoney, tradevalue, boxdef, scoutquick, realism-iq, realism-punts, fut15-b, fut28-c2, cont7-realismj37, animflow-r8, r8-sonnet-relaunch) · ~/gridiron-work/logs/*-verify.out · ~/gridiron-work/{ds-wt, launch-when-cool.sh, launch-when-slot.sh, launch-after.sh, calib-slot.sh, sim-governor.sh (MAXRUN=7)}
