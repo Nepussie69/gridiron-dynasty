@@ -7,6 +7,7 @@ import { fitLabel } from '../game/engine/style'
 import { careerTotals, coverageGrade, seasonLine } from '../game/engine/stats'
 import { isReturnEligible, returnInputs, returnRating, RETURN_INFO, RETURN_WEIGHTS, returnScore } from '../game/engine/returns'
 import { experienceLabel } from '../game/engine/progress'
+import { coachHoldsTradePen } from '../game/engine/access'
 import { canAskGm, gmAskCovers } from '../game/engine/gmAsk'
 import { gmTargetNeed, monthKeyOf } from '../game/engine/gmDesk'
 import { useGame, useWorld } from '../store/gameStore'
@@ -375,6 +376,8 @@ function GmRequestPanel({ player }: { player: Player }) {
 
   const mine = player.teamId === career.teamId
   const freeAgent = !player.teamId
+  // A head coach holding the trade pen makes that call himself (Trade Center) — nothing to ask the GM.
+  if (!mine && !freeAgent && coachHoldsTradePen(career)) return null
   const covers = gmAskCovers(career, player.pos)
   const asked = career.gmRequestLog?.[player.id] === monthKeyOf(league.season, league.week)
   const untouchables = career.gmUntouchables ?? []

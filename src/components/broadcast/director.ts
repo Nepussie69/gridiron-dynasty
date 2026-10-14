@@ -150,12 +150,27 @@ export interface DirectorRule {
 
 export type DirectorProfile = 'live' | 'replay' | 'phone'
 
+/**
+ * Backlog 357 ("keep camera angle still"): 'fixed' holds one camera angle for
+ * the whole play — yaw 0, the rig's height and its snap tilt — and frames the
+ * action by panning the focus and zooming (span) only; rule-provided height /
+ * aim / heading are ignored. 'dynamic' is the B5b director (raises on piles,
+ * tilts up on deep balls, slight re-angles).
+ */
+export type CameraAngleMode = 'fixed' | 'dynamic'
+/** Fixed angle: the widest zoom (span, yd) containment may open to hold a high ball. */
+export const FIXED_SPAN_MAX = 66
+/** Fixed angle: watched points higher than this (yd) are held at this height (see reset). */
+export const FIXED_WATCH_Z = 10
+
 export interface DirectorOptions {
   rules?: DirectorRule[]
   profile?: DirectorProfile
   viewport?: { w: number; h: number }
   /** px at the bottom the DOM playback controls cover; the safe frame stays above them (animflow r5). */
   bottomClearPx?: number
+  /** Backlog 357: 'fixed' = one constant angle (pan + zoom only). Default 'dynamic'. */
+  angle?: CameraAngleMode
 }
 
 export interface ShotFrame extends Shot {
@@ -334,6 +349,9 @@ export function createDirector(opts: DirectorOptions = {}): Director {
     ? { width: Math.max(1, opts.viewport.w), height: Math.max(1, opts.viewport.h) }
     : { ...VIEWS[profile] }
   const rules = opts.rules ?? []
+  const fixedAngle = opts.angle === 'fixed'
+  /** The snap tilt (radians, looking down at the ground focus from the rig). */
+  const RIG_PITCH = Math.atan2(0 - rig.height, rig.back)
   // B5b: absolute clamps for a rule-provided camera height.
   const MIN_CAM_Z = Math.max(4, rig.height * 0.5)
   // Height cap reverted from +24 back to +18 (exactly keepCarrier's +18 raise).
@@ -574,17 +592,19 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       cx: clamp(preSnapShot.cx, 2, 118),
       cy: clamp(preSnapShot.cy, 2, FIELD_H - 2),
       span: clamp(preSnapShot.span, 20, PRE_SPAN_MAX),
-      z: clamp(preSnapShot.z ?? rig.height, MIN_CAM_Z, MAX_CAM_Z),
-      yaw: clamp(preSnapShot.yaw ?? 0, -MAX_YAW_RAD, MAX_YAW_RAD),
-      pitch: preSnapShot.pitch,
+      z: fixedAngle ? rig.height : clamp(preSnapShot.z ?? rig.height, MIN_CAM_Z, MAX_CAM_Z),
+      yaw: fixedAngle ? 0 : clamp(preSnapShot.yaw ?? 0, -MAX_YAW_RAD, MAX_YAW_RAD),
+      pitch: fixedAngle ? RIG_PITCH : preSnapShot.pitch,
     }
 
     // ── integrate ─────────────────────────────────────────────────────────────
     // The planned target keeps a little more room at the bottom than the hard
     // check, so the eased, rate-limited camera never lets the carrier dip under
     // the controls while it catches up (a keepCarrier raise moves him fast).
-    const shotContain: ContainOpts<Shot> = { ...commonContain, insetBottom: (commonContain.insetBottom ?? SAFE_INSET) + 0.04, maxShift: 24, spanMin: 20, spanMax: PRE_SPAN_MAX, iterations: 6 }
-    const hardContain: ContainOpts<Shot> = { ...commonContain, maxShift: 8, spanMin: 20, spanMax: PRE_SPAN_MAX, iterations: 4 }
+    // Backlog 357: a fixed angle cannot tilt up to a high ball, so containment may zoom wider.
+    const liveSpanMax = fixedAngle ? FIXED_SPAN_MAX : PRE_SPAN_MAX
+    const shotContain: ContainOpts<Shot> = { ...commonContain, insetBottom: (commonContain.insetBottom ?? SAFE_INSET) + 0.04, maxShift: 24, spanMin: 20, spanMax: liveSpanMax, iterations: 6 }
+    const hardContain: ContainOpts<Shot> = { ...commonContain, maxShift: 8, spanMin: 20, spanMax: liveSpanMax, iterations: 4 }
     const hasRules = rules.length > 0
     const out: ShotFrame[] = new Array(nFrames + 1)
     let cx = preSnapOut.cx
@@ -729,7 +749,7 @@ export function createDirector(opts: DirectorOptions = {}): Director {
         const fast = clamp01((sp - FAST_SPAN_V0) / (FAST_SPAN_V1 - FAST_SPAN_V0)) * keepLead
         fastRun = fast
         if (fast > 0) wantSpan = Math.min(wantSpan, lerp(wantSpan, FAST_SPAN_MAX, fast))
-        wantZ = rig.height * (1 + FAST_RISE * clamp01((Math.abs(cv.x) - FAST_RISE_V0) / (FAST_RISE_V1 - FAST_RISE_V0)) * keepLead)
+        if (!fixedAngle) wantZ = rig.height * (1 + FAST_RISE * clamp01((Math.abs(cv.x) - FAST_RISE_V0) / (FAST_RISE_V1 - FAST_RISE_V0)) * keepLead)
       }
       wantX = clamp(wantX, 3, 117)
       wantY = clamp(wantY, 3, FIELD_H - 3)
@@ -769,9 +789,26 @@ export function createDirector(opts: DirectorOptions = {}): Director {
         }
       }
 
+      // Backlog 357: a fixed angle keeps only the rules' pan / zoom. It cannot
+      // tilt up to a ball high in the air (a punt's apex sits above the rig's
+      // horizon), so containment holds the ball's ground spot (its shadow and
+      // landing marker) and the ball itself up to FIXED_WATCH_Z; chasing a
+      // point no pan or zoom can reach would only drag the frame off the play.
+      if (fixedAngle) desired = { cx: desired.cx, cy: desired.cy, span: desired.span, z: rig.height, yaw: 0, pitch: RIG_PITCH }
+
       // ── rule 5: plan containment into the target (before easing) ─────────
+      if (fixedAngle) {
+        const nw = watch.length
+        for (let i = 0; i < nw; i++) {
+          const w = watch[i]
+          if ((w.z ?? 0) > FIXED_WATCH_Z) {
+            watch[i] = { x: w.x, y: w.y, z: FIXED_WATCH_Z }
+            watch.push({ x: w.x, y: w.y, z: 0 })
+          }
+        }
+      }
       const fit = containShot(desired, watch, shotContain).shot
-      desired = { ...desired, cx: clamp(fit.cx, 1, 119), cy: clamp(fit.cy, 1, FIELD_H - 1), span: clamp(fit.span, 20, 55) }
+      desired = { ...desired, cx: clamp(fit.cx, 1, 119), cy: clamp(fit.cy, 1, FIELD_H - 1), span: clamp(fit.span, 20, fixedAngle ? FIXED_SPAN_MAX : 55) }
 
       // ── spring + per-frame limits ────────────────────────────────────────
       const dt = Math.max(1e-4, (times[k] - times[k - 1]) * duration)
@@ -802,7 +839,7 @@ export function createDirector(opts: DirectorOptions = {}): Director {
 
       // ── hard containment (safety net): obey the same per-frame limits ────
       let clamped = false
-      const cand: Shot = { cx: nx, cy: ny, span: nextSpan, z: nextZ, yaw: nextYaw, pitch: nextPitch }
+      const cand: Shot = fixedAngle ? { cx: nx, cy: ny, span: nextSpan, z: rig.height, yaw: 0, pitch: RIG_PITCH } : { cx: nx, cy: ny, span: nextSpan, z: nextZ, yaw: nextYaw, pitch: nextPitch }
       const hard = containShot(cand, watch, hardContain)
       if (hard.shifted || hard.widened) {
         const tx = clamp(hard.shot.cx, 1, 119)
@@ -819,10 +856,10 @@ export function createDirector(opts: DirectorOptions = {}): Director {
       // A height / aim / heading change the rate-limited pan cannot keep up with
       // (a keepCarrier raise) waits a frame rather than dropping a watched point
       // (the carrier) under the controls (animflow r5).
-      let fz = nextZ
-      let fpitch = nextPitch
-      let fyaw = nextYaw
-      if ((fz !== cz || fpitch !== cpitch || fyaw !== cyaw) && (clamped || ruleId === 'keepCarrier')) {
+      let fz = fixedAngle ? rig.height : nextZ
+      let fpitch = fixedAngle ? RIG_PITCH : nextPitch
+      let fyaw = fixedAngle ? 0 : nextYaw
+      if (!fixedAngle && (fz !== cz || fpitch !== cpitch || fyaw !== cyaw) && (clamped || ruleId === 'keepCarrier')) {
         const bot = viewport.height * (1 - (commonContain.insetBottom ?? SAFE_INSET))
         const outBy = (sh: Shot) => {
           let worst = 0
