@@ -1,4 +1,4 @@
-import { ArrowRight, ChevronRight, Cloud, CloudRain, CloudSnow, CloudSun } from 'lucide-react'
+import { ArrowRight, ChevronRight, Cloud, CloudRain, CloudSnow, CloudSun, HeartPulse } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { mult, ordinal, signed } from '../lib/format'
 import { depthGroup } from '../game/engine/depth'
@@ -24,6 +24,7 @@ import { ownerFiringLine, ownerName, ownerPersonalityLabel, ownerProfile } from 
 import { rivalFor } from '../game/engine/rivalry'
 import { stakesFor, stakesText } from '../game/engine/primetime'
 import { hasRoom } from '../game/engine/room'
+import { hasGameThisWeek, injuryReport } from '../game/engine/injuryCalls'
 import { advanceLabel, canCoach as canCoachNow, stageOf } from '../ui/nav'
 import {
   Badge,
@@ -302,6 +303,9 @@ export function Dashboard() {
         </>
       )}
 
+      {/* FUTURES #15: this week's injury calls, one line, before the checklist. */}
+      <InjuryNudge className="mb-4" />
+
       <WeeklyChecklist className="mb-5" />
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
@@ -488,6 +492,44 @@ export function Dashboard() {
         />
       )}
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUTURES #15: the week's pending injury calls, one line on the dashboard.
+// Questionable / Doubtful players still need a Play hurt / Sit call on the Game
+// Plan; an Out (or IR) player is never a choice, so he never counts here, and a
+// player already sent out hurt drops off the line.
+// ─────────────────────────────────────────────────────────────────────────────
+function InjuryNudge({ className }: { className?: string }) {
+  const league = useWorld()
+  const career = useGame((s) => s.career)
+  const setScreen = useGame((s) => s.setScreen)
+  if (!career || !hasGameThisWeek(league, career.teamId)) return null
+  const pending = injuryReport(league, career).filter((r) => r.status !== 'OUT' && r.call !== 'play')
+  const q = pending.filter((r) => r.status === 'Q').length
+  const d = pending.filter((r) => r.status === 'D').length
+  if (!q && !d) return null
+  const parts = [q ? `${q} questionable` : '', d ? `${d} doubtful` : ''].filter(Boolean)
+  return (
+    <Card className={className}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <HeartPulse size={15} className="shrink-0 text-warn" aria-hidden />
+        <span className="label">Injury report</span>
+        <span className="text-body text-ink-2">
+          <strong className="font-600 text-ink">{parts.join(' · ')}</strong> — decide on Game Plan
+        </span>
+        <Button
+          size="sm"
+          variant="quiet"
+          className="ml-auto shrink-0"
+          icon={<ArrowRight size={13} aria-hidden />}
+          onClick={() => setScreen('gameplan')}
+        >
+          Game Plan
+        </Button>
+      </div>
+    </Card>
   )
 }
 
