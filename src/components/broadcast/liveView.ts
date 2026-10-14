@@ -25,11 +25,12 @@ import { SidelineLayer } from './sideline'
 import { WeatherLayer, type FieldWeather } from './weatherFx'
 import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from './graphics'
-import { type Director, type DirectorProfile } from './director'
+import { type CameraAngleMode, type Director, type DirectorProfile } from './director'
 import { createBroadcastDirector } from './directorRules'
 import { ReplayPlayer, type ReplayFrame, type ReplayPhase, type ReplayPlan } from './replay'
-import { TelestratorLayer, attachTelestrator } from './telestrator'
-import { useViewSettings, usePhone, deviceKey, type ViewSettings, type AutoQState, type QualitySetting } from './viewSettings'
+import { TelestratorLayer, attachTelestrator, composeHooks } from './telestrator'
+import { QbConeLayer } from './visionCone'
+import { useViewSettings, usePhone, getViewSettings, qbConeOn, deviceKey, type ViewSettings, type AutoQState, type QualitySetting } from './viewSettings'
 
 // ── B4 hook: the real ball + effects (merged into main after this branch) ────
 //
@@ -181,6 +182,8 @@ export interface LivePlay {
   strongSideY: number
   /** animflow 6b-wx: the game's field weather (null: indoors, weather off or none). */
   weather: FieldWeather | null
+  /** The passer, for the QB cone's rating-derived fallback. */
+  qb?: Player
 }
 
 export interface LivePlayInput {
@@ -292,6 +295,7 @@ export function buildLivePlay(input: LivePlayInput): LivePlay {
     possession: offHome ? 'home' : 'away',
     strongSideY: strongSideWorldY(anim, dir),
     weather: input.weather ?? null,
+    qb: input.actors.get('qb'),
   }
 }
 
@@ -314,6 +318,11 @@ export interface LiveBroadcastOptions {
   onQuality?: (q: QualityLevel, auto: AutoQualityState | null) => void
   onFallback?: (f: Exclude<Fallback, null>) => void
   onAutoQ?: (a: AutoQState) => void
+  /**
+   * Backlog 357: 'fixed' (default) holds one camera angle — pan + zoom only,
+   * replays keep the live angle, no camera shake; 'dynamic' = the B5b director.
+   */
+  cameraAngle?: CameraAngleMode
 }
 
 function mirrorPose(p: CameraPose, dir: Direction): CameraPose {
@@ -336,10 +345,12 @@ export class LiveBroadcast {
   readonly sideline: SidelineLayer
   /** animflow 6b-wx: rain / snow / breath / wind on the field. */
   readonly weather: WeatherLayer
+  /** QB vision cone + placement circle (ground plane; off by default in 2.5D). */
+  readonly qbCone = new QbConeLayer()
 
   private opts: LiveBroadcastOptions
   private director: Director | null = null
-  private applier = createProfileApplier(CAMERA_PROFILES.phone)
+  private applier: ReturnType<typeof createProfileApplier>
   private play: LivePlay | null = null
   private t = 0
   private quality: QualityLevel
@@ -376,6 +387,7 @@ export class LiveBroadcast {
 
   constructor(canvas: HTMLCanvasElement, opts: LiveBroadcastOptions) {
     this.opts = opts
+    this.applier = createProfileApplier(CAMERA_PROFILES.phone, { fixed: this.fixedAngle })
     this.quality = opts.qualitySetting === 'auto' ? (opts.qualityStart ?? 'full') : opts.qualitySetting
     this.auto = opts.qualitySetting === 'auto' ? new AutoQuality(this.quality) : null
     this.pacer = new FramePacer(QUALITY[this.quality].fps)
@@ -395,7 +407,7 @@ export class LiveBroadcast {
     this.gfx = new GraphicsLayer(this.layer, readGfxTokens(canvas))
     this.gfx.bottomInset = opts.hudBottomInset ?? 0
     this.renderer.hooks.actors = this.layer.hook
-    this.renderer.hooks.ground = this.weather.ground
+    this.renderer.hooks.ground = composeHooks(this.weather.ground, this.qbCone.hook)
     this.renderer.hooks.weather = this.weather.air
     this.renderer.hooks.overlay = this.gfx.hook
     // B8: telestrations under the HUD, the REPLAY bug + wipe over it. The
@@ -411,8 +423,17 @@ export class LiveBroadcast {
     this.raf = requestAnimationFrame(this.loop)
   }
 
+  private get fixedAngle(): boolean {
+    return (this.opts.cameraAngle ?? 'fixed') === 'fixed'
+  }
+
+  private get angle(): CameraAngleMode {
+    return this.fixedAngle ? 'fixed' : 'dynamic'
+  }
+
   private directorProfile(phase: 'live' | 'replay' = this.opts.phase): DirectorProfile {
-    return this.opts.profile === 'phone' ? 'phone' : phase === 'replay' ? 'replay' : 'live'
+    // Backlog 357: with a fixed angle a replay keeps the live rig (it may slow down / zoom, not re-angle).
+    return this.opts.profile === 'phone' ? 'phone' : phase === 'replay' && !this.fixedAngle ? 'replay' : 'live'
   }
 
   private viewport(): { w: number; h: number } {
@@ -433,7 +454,7 @@ export class LiveBroadcast {
     this.rp = new ReplayPlayer(plan)
     // The replay director: the higher replay rig (the phone rig + the phone
     // lens's replay variant on a phone), with B5b's special-teams rules.
-    this.rpDirector = createBroadcastDirector({ profile: this.directorProfile('replay'), viewport: this.viewport(), bottomClearPx: this.opts.hudBottomInset })
+    this.rpDirector = createBroadcastDirector({ profile: this.directorProfile('replay'), viewport: this.viewport(), bottomClearPx: this.opts.hudBottomInset, angle: this.angle })
     this.rpDirector.reset(lp.play, lp.anim)
     this.tele.setReplay(plan, lp.anim, lp.actorPlay.offClub, lp.actorPlay.defClub, lp.actorPlay.numbers)
     this.rpLead = Math.max(0, leadSec)
@@ -526,10 +547,11 @@ export class LiveBroadcast {
     })
     this.gfx.setTimeline(lp.tl)
     this.weather.weather = lp.weather
+    this.qbCone.set(lp.play, lp.anim, lp.qb)
     this.weather.qtr = lp.play.qtr ?? 1
     this.weather.club = club(this.opts.homeTeamId)
     // B5 director with B5b's special-teams rules (kicks, returns, FG/PAT).
-    this.director = createBroadcastDirector({ profile: this.directorProfile(), viewport: this.viewport(), bottomClearPx: this.opts.hudBottomInset })
+    this.director = createBroadcastDirector({ profile: this.directorProfile(), viewport: this.viewport(), bottomClearPx: this.opts.hudBottomInset, angle: this.angle })
     this.director.reset(lp.play, lp.anim)
     this.applier.reset()
     this.pacer.reset()
@@ -597,6 +619,8 @@ export class LiveBroadcast {
     const t = inReplay && rf ? rf.t : this.t
     const phase: 'live' | 'replay' = inReplay ? 'replay' : this.opts.phase
     this.layer.t = t
+    this.qbCone.t = t
+    this.qbCone.enabled = qbConeOn(getViewSettings(), 'broadcast')
     // animflow r6b: the live end frame's hold drives the substitutions' jog.
     this.layer.post = inReplay ? 0 : this.endHold
     // Live: once the play ends, the graphics clock runs on into the result
@@ -631,6 +655,8 @@ export class LiveBroadcast {
           viewport: { w: cssW, h: cssH },
           // animflow r6a: open the phone lens at the snap, easing in over 1 s.
           wide: inReplay ? 0 : clamp01Num(1 - (t * (lp.anim.duration / 1000) - 0.14) / 1.0),
+          // Backlog 357: the fixed lens keeps the action above the playback controls.
+          bottomClear: this.fixedAngle ? (this.opts.hudBottomInset ?? 0) : undefined,
         }
         camera = this.applier.apply(camera, ctx, `${lp.play.n}:${inReplay ? 'r' : 'l'}`)
       }
@@ -638,7 +664,8 @@ export class LiveBroadcast {
       camera = { pos: [60, -30, 20], target: [60, MID_WIDTH, 0], fovDeg: 43 }
     }
     // B4 camera shake on top of the final pose (bounded; 0 under reduced motion).
-    if (this.ballFx && lp) camera = this.ballFx.shakePose(camera, t)
+    // Backlog 357: a fixed angle stays still (no shake).
+    if (this.ballFx && lp && !this.fixedAngle) camera = this.ballFx.shakePose(camera, t)
     const frame: BroadcastFrame = {
       camera,
       losYard: lp?.los ?? null,

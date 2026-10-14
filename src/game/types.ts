@@ -753,6 +753,15 @@ export interface CareerState {
   conviction?: { season: number; ids: string[] }
   /** K4: the prospects you've red-flagged this draft (max 2). */
   redFlags?: { season: number; ids: string[] }
+  /**
+   * FUTURES #27 DF1: your club's draft philosophy for the current draft. The
+   * room argues all season; the tilt only applies when the stored `season`
+   * matches the live season (i.e. you set it for this draft). Optional — an old
+   * save has none and picks exactly as before.
+   */
+  draftPhilosophy?: import('./engine/draftRoom').DraftPhilosophy & { season: number }
+  /** FUTURES #27 DF4: give AI clubs hashed draft identities (off by default). */
+  aiDraftIdentities?: boolean
   /** K1: this week's game-plan wrinkle per side, plus the last few weeks of film. */
   wrinkles?: {
     season: number
@@ -910,6 +919,13 @@ export interface CareerState {
   deadlineAI?: boolean
   /** L14: draft-day pick clock (off by default; when on, the clock auto-takes your pick). */
   draftClock?: boolean
+  /**
+   * Head-coach careers only: who holds the pen on trades. Missing or 'gm' = the
+   * GM decides (the coach advises and asks the GM); 'coach' = the head coach
+   * proposes, accepts and executes trades himself, and the club's AI GM makes
+   * none involving his club on its own. Old saves load as 'gm'.
+   */
+  tradeControl?: 'gm' | 'coach'
   /** L12.8 V3: the clubs scouted this week (once per club per week; resets each week). */
   scoutedClubs?: { season: number; week: number; teamIds: string[] }
   /** The starting situation this career began from (F3). */
