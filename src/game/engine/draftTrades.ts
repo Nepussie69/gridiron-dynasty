@@ -21,6 +21,7 @@ import {
   findDeals,
   findPackagesFor,
   isTradeablePick,
+  pickAssetLabel,
   type TradeAsset,
 } from './trade'
 
@@ -49,14 +50,18 @@ function findPlayer(world: World, id: string): Player | undefined {
   return world.players.find((p) => p.id === id)
 }
 
-/** Human label for one trade asset, e.g. "A. Cooper (WR, 84)" or "2027 Rd 2". */
+/**
+ * Human label for one trade asset, e.g. "A. Cooper (WR, 84)" or, for a pick, its
+ * year, round, slot and original club: "2027 Rd 1 #1 (NYJ)". A projected slot
+ * is marked "~" ("2028 Rd 1 ~#24 (DAL)").
+ */
 export function draftAssetName(world: World, a: TradeAsset): string {
   if (a.kind === 'player') {
     const p = findPlayer(world, a.id)
     return p ? `${p.name} (${p.pos}, ${p.ovr})` : 'Player'
   }
   const pk = world.draftPicks.find((x) => x.id === a.id)
-  return pk ? `${pk.season} Rd ${pk.round}${pk.comp ? ' (comp)' : ''}` : 'Pick'
+  return pk ? pickAssetLabel(world, pk) : 'Pick'
 }
 
 function valueOf(world: World, assets: TradeAsset[]): number {
@@ -119,7 +124,7 @@ export function buildDraftTradeDownOffers(world: World, userTeamId: string, limi
   const offers = deals.slice(0, Math.max(limit, 4)).map((d, i): DraftTradeOffer => {
     const abbr = world.byId[d.partnerId]?.abbr ?? d.partnerId
     const getStr = d.get.map((a) => draftAssetName(world, a)).join(' + ')
-    const giveStr = `${pick.season} Rd ${pick.round}`
+    const giveStr = draftAssetName(world, { kind: 'pick', id: pick.id })
     return {
       id: `dt_down_${world.season}_${world.draftState.pickIndex}_${d.partnerId}_${i}`,
       partnerId: d.partnerId,

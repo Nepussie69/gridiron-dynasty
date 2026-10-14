@@ -27,7 +27,140 @@ const TRAINING_GAIN_PER_SEASON = 14
 /** Team side a player belongs to. */
 const sideOf = (p: Player) => (p.side === 'DEF' ? 'DEF' : 'OFF')
 
-/** Younger players learn faster; older players plateau. */
+// ── Backlog 402: veteran learning & scheme carry-over ────────────────────────
+// Dev-only toggle in the setStamina pattern. Default ON. With it OFF every
+// function below evaluates the ORIGINAL main expressions (ageFactor × devFactor,
+// the old carried-experience reset, pct 0), so the OFF calibration is
+// byte-identical to unmodified main. No rng() draw is added or removed either way.
+let VET_LEARNING_ON = true
+export function setVetLearning(on: boolean) {
+  VET_LEARNING_ON = on
+}
+/** Backlog 402: read the veteran-learning toggle so a probe/calibration copy can restore it. */
+export function getVetLearning(): boolean {
+  return VET_LEARNING_ON
+}
+
+/**
+ * Backlog 402: every constant this job adds, in one place.
+ *
+ * The learning rate is the player's OWN football IQ — his awareness plus the
+ * position's mental rating — times his NFL experience and honours. It is never a
+ * team, unit or roster mean. Both the rate and the seeded mastery are divided by
+ * a league centre (measured over a fresh NFL league) so the league's average
+ * learning speed and average starting mastery do not drift; only the
+ * individual spread widens (an elite-AWR 15-year QB learns far faster than a
+ * rookie, a low-AWR veteran does not).
+ */
+export const VET_LEARNING = {
+  /** AWR (0–99) of a league-average learner: the IQ term is 1.0 here. */
+  iqCenter: 70,
+  /** Rate gained per point of the position's mental rating away from iqCenter. */
+  iqW: 0.05,
+  /** How much the position mental rating (PRC for DB/LB, BCV for RB) blends with AWR. */
+  mentalBlend: 0.5,
+  /** Lowest IQ term allowed, so an unaware player still learns from live reps. */
+  iqFloor: 0.30,
+  /** Experience (NFL seasons; age−21 as a proxy) where the experience term is full. */
+  expCap: 14,
+  /** Rate gained per NFL season of experience (J10a's read-exp slope, on learning). */
+  expW: 0.07,
+  /** Young players take more live reps: a modest physical fresh-learner bonus. */
+  freshAge: 23,
+  freshBonus: 0.12,
+  /** Rate gained per career honour (Pro Bowl / All-Pro / MVP stored in SeasonStats.awards). */
+  accoladeW: 0.05,
+  accoladeCap: 0.4,
+  /** League re-centre for the LEARNING rate: mean rate over a fresh NFL league,
+   *  so the league's average learning speed over the seasons is unchanged while
+   *  the individual spread (IQ/experience) widens. */
+  rateCenter: 1.735,
+  /** Carry-over: how the veteran's own rate scales the knowledge he imports. */
+  carryRateW: 0.55,
+  carryRateCap: 1.4,
+  carryRateFloor: 0.3,
+  /** Carry-over similarity when a scheme is unknown/blank. */
+  carryUnknown: 0.35,
+  /** Carry-over similarity for an unlisted same-side pair. */
+  carryDefault: 0.25,
+}
+
+/**
+ * Backlog 402: scheme similarity (0–1) for the knowledge a mover brings with him.
+ * Same scheme = 1 (a new club running his system: he knows the concepts). The
+ * spec's families: West Coast ↔ Pro Style, Air Raid ↔ Spread. Unlisted same-side
+ * pairs fall to carryDefault.
+ */
+const SCHEME_SIM: Record<string, Record<string, number>> = {
+  // offence
+  'Air Raid': { Spread: 0.55, 'Pro Style': 0.3, 'West Coast': 0.3, 'RPO Heavy': 0.3 },
+  Spread: { 'Air Raid': 0.55, 'RPO Heavy': 0.5, 'West Coast': 0.35, 'Pro Style': 0.3 },
+  'West Coast': { 'Pro Style': 0.55, Spread: 0.35, 'RPO Heavy': 0.35, 'Air Raid': 0.3 },
+  'Pro Style': { 'West Coast': 0.55, 'RPO Heavy': 0.45, 'Air Raid': 0.3, Spread: 0.3 },
+  'RPO Heavy': { Spread: 0.5, 'Pro Style': 0.45, 'West Coast': 0.35, 'Air Raid': 0.3 },
+  // defence
+  '4-3 Base': { Multiple: 0.5, '4-2-5 Nickel': 0.45, '3-4 Base': 0.35, 'Blitz Heavy': 0.35 },
+  '3-4 Base': { Multiple: 0.5, 'Blitz Heavy': 0.4, '4-3 Base': 0.35, '4-2-5 Nickel': 0.35 },
+  '4-2-5 Nickel': { '4-3 Base': 0.45, Multiple: 0.45, 'Blitz Heavy': 0.45, '3-4 Base': 0.35 },
+  Multiple: { '4-3 Base': 0.5, '3-4 Base': 0.5, '4-2-5 Nickel': 0.45, 'Blitz Heavy': 0.4 },
+  'Blitz Heavy': { Multiple: 0.4, '3-4 Base': 0.4, '4-2-5 Nickel': 0.45, '4-3 Base': 0.35 },
+}
+
+/** Backlog 402: similarity of two schemes (1 = identical, 0 = nothing shared). */
+export function schemeSimilarity(from: string, to: string): number {
+  if (!from || !to) return VET_LEARNING.carryUnknown
+  if (from === to) return 1
+  return SCHEME_SIM[from]?.[to] ?? VET_LEARNING.carryDefault
+}
+
+/** The position's mental rating, blended with AWR (PRC for DB/LB, BCV for RB). */
+function mentalRating(p: Player, attrs: Record<string, number>): number {
+  const awr = attrs.AWR ?? VET_LEARNING.iqCenter
+  const mental = p.side === 'DEF' ? (attrs.PRC ?? awr) : p.pos === 'RB' ? (attrs.BCV ?? awr) : awr
+  return awr + (mental - awr) * VET_LEARNING.mentalBlend
+}
+
+/** NFL seasons on the player's record, or age−21 as a proxy for a fresh world. */
+function nflExperience(p: Player): number {
+  const st = p.stats
+  if (st && st.length) {
+    let seasons = 0
+    for (const s of st) if (s.level === 'NFL') seasons++
+    if (seasons > 0) return seasons
+  }
+  return Math.max(0, p.age - 21)
+}
+
+/** Career honours (Pro Bowl / All-Pro / MVP…) stored per season in SeasonStats.awards. */
+function careerHonours(p: Player): number {
+  let n = 0
+  for (const s of p.stats ?? []) for (const a of s.awards ?? []) if (a) n++
+  return n
+}
+
+/**
+ * Backlog 402: the player's raw football-IQ learning rate. IQ (his own AWR +
+ * position mental rating) and experience dominate; a young player keeps a modest
+ * physical fresh-learner bonus; career honours add a little. Uses `playerAttrs`,
+ * the same effective rating function the sim uses (incl. dev-plan gains).
+ */
+function iqLearnRate(p: Player): number {
+  const attrs = playerAttrs(p)
+  const iq = mentalRating(p, attrs)
+  const iqTerm = Math.max(VET_LEARNING.iqFloor, 1 + (iq - VET_LEARNING.iqCenter) * VET_LEARNING.iqW)
+  const exp = Math.min(VET_LEARNING.expCap, nflExperience(p))
+  const expTerm = 1 + exp * VET_LEARNING.expW
+  const accTerm = 1 + Math.min(VET_LEARNING.accoladeCap, careerHonours(p) * VET_LEARNING.accoladeW)
+  const fresh = p.age <= VET_LEARNING.freshAge ? 1 + VET_LEARNING.freshBonus : 1
+  return iqTerm * expTerm * accTerm * fresh
+}
+
+/** Backlog 402: the learning multiplier the sim uses (the IQ rate, centred on the league mean). */
+export function vetLearnMultiplier(p: Player): number {
+  return iqLearnRate(p) / VET_LEARNING.rateCenter
+}
+
+/** Younger players learn faster; older players plateau. (Legacy off-path only.) */
 function ageFactor(age: number): number {
   if (age <= 23) return 1.25
   if (age <= 26) return 1.1
@@ -78,9 +211,16 @@ export function masteryCeiling(fit: number, cohesionValue: number): number {
   return Math.round(personalCeiling * (cohesionFloor + cohesionValue * (1 - cohesionFloor)))
 }
 
-/** Ensure a player has a playbook state for the scheme/team he's currently in. */
+/**
+ * Ensure a player has a playbook state for the scheme/team he's currently in.
+ * Backlog 402: on a team/scheme change a veteran keeps transferable knowledge —
+ * the share of his old system that carries over (a scheme-similarity table) times
+ * his own IQ/experience rate. The mastery CEILING (fit × cohesion) is unchanged and
+ * still caps it. With the toggle OFF this is the original reset (experience ×0.15,
+ * pct 0), byte-identical to main.
+ */
 export function initPlaybook(
-  _p: Player,
+  p: Player,
   teamId: string,
   scheme: string,
   prev?: PlaybookState,
@@ -91,9 +231,22 @@ export function initPlaybook(
   if (prev && prev.scheme === scheme && prev.teamId === teamId) {
     return { ...prev, staffYears: staffTenure, cohesion: coh }
   }
-  // Scheme or team changed — experience resets, but a veteran keeps a small head start.
-  const carried = prev ? Math.min(prev.experience * 0.15, 8) : 0
-  return {
+  if (!VET_LEARNING_ON) {
+    // Scheme or team changed — experience resets, but a veteran keeps a small head start.
+    const carried = prev ? Math.min(prev.experience * 0.15, 8) : 0
+    return {
+      pct: 0,
+      experience: Math.round(carried),
+      reps: 0,
+      teamYears: 0,
+      staffYears: staffTenure,
+      cohesion: coh,
+      scheme,
+      teamId,
+    }
+  }
+  const carried = prev ? carryOverExperience(p, prev, scheme) : 0
+  const state: PlaybookState = {
     pct: 0,
     experience: Math.round(carried),
     reps: 0,
@@ -103,6 +256,24 @@ export function initPlaybook(
     scheme,
     teamId,
   }
+  // Show the inherited knowledge at once so the label/UI reads it (pct is capped by the ceiling).
+  return applyCap(state, schemeFit(p, scheme, sideOf(p)))
+}
+
+/**
+ * Backlog 402: how much of the old system a mover keeps. Shared concepts (the
+ * scheme-similarity table) × his own IQ/experience rate — a rookie with no prior
+ * system carries nothing, an elite-AWR veteran into a similar scheme starts well
+ * above "new to system".
+ */
+function carryOverExperience(p: Player, prev: PlaybookState, toScheme: string): number {
+  const sim = schemeSimilarity(prev.scheme, toScheme)
+  const rate = iqLearnRate(p) / VET_LEARNING.rateCenter
+  const iqFactor = Math.max(
+    VET_LEARNING.carryRateFloor,
+    Math.min(VET_LEARNING.carryRateCap, 1 + VET_LEARNING.carryRateW * (rate - 1)),
+  )
+  return Math.min(100, prev.experience * sim * iqFactor)
 }
 
 /** Recompute the cohesion cap and clamp mastery to it. */
@@ -244,9 +415,14 @@ export function gainGameReps(
   const fit = schemeFit(p, p.playbook.scheme, sideOf(p))
   const attrs = playerAttrs(p)
   const awr = attrs.AWR ?? 70
-  const gain =
-    REP_GAIN_PER_GAME * ageFactor(p.age) * devFactor(p.dev) * snapShare *
-    (0.9 + 0.2 * production) * (1 + (awr - 70) / 200) * development * gainMult
+  // Backlog 402: the ON path replaces age×dev (and the small AWR nudges) with the
+  // player's own IQ×experience learning rate. The OFF path is the exact main
+  // expression, so the OFF calibration stays byte-identical.
+  const gain = VET_LEARNING_ON
+    ? REP_GAIN_PER_GAME * vetLearnMultiplier(p) * snapShare *
+      (0.9 + 0.2 * production) * development * gainMult
+    : REP_GAIN_PER_GAME * ageFactor(p.age) * devFactor(p.dev) * snapShare *
+      (0.9 + 0.2 * production) * (1 + (awr - 70) / 200) * development * gainMult
   const before = p.playbook.pct
   const experience = Math.min(100, p.playbook.experience + gain)
   const next = applyCap({ ...p.playbook, reps: p.playbook.reps + 1, experience }, fit)
@@ -257,7 +433,10 @@ export function gainGameReps(
 export function gainSeasonTraining(p: Player): PlaybookState | undefined {
   if (!p.playbook) return undefined
   const fit = schemeFit(p, p.playbook.scheme, sideOf(p))
-  const gain = TRAINING_GAIN_PER_SEASON * ageFactor(p.age) * devFactor(p.dev)
+  // Backlog 402: training reps scale with the same IQ×experience learning rate.
+  const gain = VET_LEARNING_ON
+    ? TRAINING_GAIN_PER_SEASON * vetLearnMultiplier(p)
+    : TRAINING_GAIN_PER_SEASON * ageFactor(p.age) * devFactor(p.dev)
   const experience = Math.min(100, p.playbook.experience + gain)
   return applyCap({ ...p.playbook, teamYears: p.playbook.teamYears + 1, experience, seasonGain: 0 }, fit)
 }
@@ -417,17 +596,23 @@ export function leagueMasteryMeans(world: { players: Player[]; roster?: Record<s
   return { QB: m('QB'), RB: m('RB'), REC: m('REC'), OL: m('OL'), DL: m('DL'), LB: m('LB'), DB: m('DB') }
 }
 
-/** L12.13 M4: a one-line "how mastery shows up in games" read for the tooltip. */
+/**
+ * L12.13 M4: a one-line "how mastery shows up in games" read for the tooltip.
+ * Backlog 402: appends a short read on how fast this player picks up a system
+ * (his own IQ×experience learning rate) so the tooltip explains a veteran's head
+ * start. With the toggle OFF the string is unchanged (byte-identical to main).
+ */
 export function masteryEffectText(p: Player, mean: number): string {
   const rel = (p.playbook?.pct ?? 0) - mean
   const f = (x: number) => `${x >= 0 ? '+' : ''}${x.toFixed(1)}`
+  const learn = VET_LEARNING_ON ? ` · learns ×${vetLearnMultiplier(p).toFixed(2)}` : ''
   switch (masteryGroup(p.pos)) {
-    case 'QB': return `reads ${f(rel * 0.04)}, accuracy ${f(rel * 0.025)}`
-    case 'REC': return `separation ${f(rel * 0.03)}, hands ${f(rel * 0.02)}`
-    case 'OL': return `pass pro ${f(rel * 0.03)}, run block ${f(rel * 0.03)}`
-    case 'DL': return `run fits ${f(rel * 0.03)}, rush ${f(rel * 0.025)}`
-    case 'LB': return `run fits ${f(rel * 0.03)}, coverage ${f(rel * 0.02)}`
-    case 'DB': return `coverage ${f(rel * 0.03)}, run fits ${f(rel * 0.02)}`
+    case 'QB': return `reads ${f(rel * 0.04)}, accuracy ${f(rel * 0.025)}${learn}`
+    case 'REC': return `separation ${f(rel * 0.03)}, hands ${f(rel * 0.02)}${learn}`
+    case 'OL': return `pass pro ${f(rel * 0.03)}, run block ${f(rel * 0.03)}${learn}`
+    case 'DL': return `run fits ${f(rel * 0.03)}, rush ${f(rel * 0.025)}${learn}`
+    case 'LB': return `run fits ${f(rel * 0.03)}, coverage ${f(rel * 0.02)}${learn}`
+    case 'DB': return `coverage ${f(rel * 0.03)}, run fits ${f(rel * 0.02)}${learn}`
     default: return ''
   }
 }

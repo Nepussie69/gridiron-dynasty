@@ -189,6 +189,8 @@ export interface GameStatLine {
   defTDAllowed?: number
   /** L12 R4b: interceptions made on plays this defender was the cover man. */
   defIntsCov?: number
+  /** 405: passes defensed — break-ups (plus interceptions) credited to the cover man. */
+  passDef?: number
   /** R5: tackles the defender failed to finish. */
   missedTackles?: number
   /** R5: missed tackles a carrier/receiver forced. */
