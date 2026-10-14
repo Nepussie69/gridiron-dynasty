@@ -188,6 +188,23 @@ export function setJ8c(on: boolean) {
 export function getJ8c(): boolean {
   return COVERAGE_INDIV_ON
 }
+// Jind (/J39): dev-only toggle for the LAST unit averages on the play (the
+// setStamina/J13 pattern). `relAvg` averaged a rating across a whole unit — the
+// DL+LB pursuit mean, the LB run-extras mean, the CB+S coverage-extras mean and
+// the DL/LB/S recognition mean, plus seven one-line sites that read a unit mean
+// the same way. With this on every one of those is the SPECIFIC man (or the 1–2
+// men) the engine already puts on the play, carrying a league-level intercept so
+// only the centre moves. Default ON; with it OFF every `relAvg` expression is the
+// original unit average, so the rng() stream and every resolved play are
+// byte-identical to main.
+let INDIV_UNITS_ON = true
+export function setIndividualUnits(on: boolean) {
+  INDIV_UNITS_ON = on
+}
+/** Jind: read the current individual-units toggle so a probe can restore it. */
+export function getIndividualUnits(): boolean {
+  return INDIV_UNITS_ON
+}
 // J9 (FUTURES #32): individual coach sub-ratings. The flag itself lives in
 // coachSubs.ts; re-exported here so the probe and every site share one switch.
 // Default ON; OFF falls back to the exact pre-J9 expressions (byte-identical).
@@ -987,6 +1004,21 @@ export interface Play {
   intId?: string
   /** L11.5 Q7: the defender in coverage on the target (derived, never an rng draw). */
   coverId?: string
+  // ── Jind (/J39): the specific man each unit-average site now reads ──────────
+  /** Jind: the nearest pursuer who decided the run's pursuit read. */
+  iuPursuerId?: string
+  /** Jind: the LB at the point of attack on the run. */
+  iuLbId?: string
+  /** Jind: the DL at the point of attack on the run. */
+  iuPoaDlId?: string
+  /** Jind: the hook/flat LB whose recognition read was tested on the pass. */
+  iuRecogId?: string
+  /** Jind: the lineman whose Q4 protection stamina was read. */
+  iuProtId?: string
+  /** Jind: the front man whose Q4 rush stamina was read. */
+  iuDlStaId?: string
+  /** Jind: the long-run chase multiplier applied on the J8a-off path (debug). */
+  iuChaseF?: number
   // ── J7: matchups & busts ────────────────────────────────────────────────────
   /** J7: the covering defender chosen at target time (mirrors `coverId`); the
    *  matchup record. Undefined when the matchups layer is off. */
@@ -1601,6 +1633,118 @@ function dbCoverageExtras(cbs: Player[], saf: Player[]): number {
 function recognition(dl: Player[], lbs: Player[], saf: Player[]): number {
   return (relAvg('PRC', dl) + relAvg('PRC', lbs) + relAvg('PRC', saf)) / 3
 }
+
+// ── Jind (/J39): the last unit averages on the play ──────────────────────────
+// Every one of the `relAvg` sites above/ below is now the SPECIFIC man (or the
+// 1–2 men) the engine already puts on the play — never a unit or roster mean:
+//
+//   * run pursuit        → the carrier's nearest pursuer (the J8a hash-picked
+//                          chaser) and the next man in the chase, their own
+//                          PUR/SPD (the J8a chase model owns the speed edge);
+//   * LB run extras      → the LB at the point of attack and the next LB over;
+//   * DB coverage extras → the defender covering the target (`coverId`) and his
+//                          help safety, their own ACC/AGI/STR;
+//   * recognition        → the hook/flat LB whose read is tested on the PA /
+//                          screen, with the cover man behind him, his own PRC;
+//   * Q4 stamina and front STR → the point-of-attack man, or a deterministic
+//                          pair of front men when the site has no POA.
+//
+// Every pick is a deterministic hash of the play (no rng() draw is added or
+// removed), each man is read relative to his own POS_MEAN, and each site carries
+// a league-level INTERCEPT (`IU.*Center`, the measured mean of that site's
+// deciding-player value over the probe population) so the individual weight
+// stays FULL and only the centre is corrected: the elite-vs-poor spread is the
+// deciding man's own, several times the unit-mean spread it replaces.
+// `setIndividualUnits(false)` restores the exact `relAvg` expressions.
+export const IU = {
+  /** How much of a two-man pair the lead man carries (the rest is the second). */
+  pairLead: 0.7,
+  /** The credited tackler's weight alongside the nearest pursuer (normalised). */
+  tacklerW: 0.35,
+  /** League mean of each site's deciding-player value (the re-centre intercept). */
+  runPursuitCenter: 2.43,
+  lbRunCenter: -0.02,
+  dbCovCenter: -0.01,
+  recogCenter: -0.03,
+  dlStaCenter: -0.02,
+  protStaCenter: -0.01,
+  poaStrCenter: -0.02,
+  dbStaCenter: -0.02,
+  prsCenter: 0.00,
+  spdCenter: -0.01,
+} as const
+
+/** Jind: a player's POS_MEAN-relative rating (0 when he is not on the play). */
+function iuRel(p: Player | undefined, key: string): number {
+  if (!p) return 0
+  return rmean(p.pos, key, mkAttrs(p)[key] ?? 70)
+}
+
+/** Jind: the lead man full weight, the second man the remainder. */
+function iuPair(lead: number, second: number): number {
+  return lead * IU.pairLead + second * (1 - IU.pairLead)
+}
+
+/** Jind: 1–2 deterministic front men for a site with no point of attack. */
+function iuPickN(list: Player[], key: string, n: number): Player[] {
+  return hashPickN(list, () => 1, hash32(key), n)
+}
+
+/** Jind: the front man nearest the action by the gap weights (never a unit). */
+function iuSecondByWeight(list: Player[], w: number[], lead: Player | undefined): Player | undefined {
+  let best = -1
+  for (let i = 0; i < list.length && i < w.length; i++) {
+    if (list[i].id === lead?.id) continue
+    if (best < 0 || w[i] > w[best]) best = i
+  }
+  return best < 0 ? undefined : list[best]
+}
+
+/** Jind: the pursuit read — the nearest pursuer (and the next man in the chase),
+ *  their own PUR/SPD. Replaces `runPursuit`'s DL+LB unit mean. */
+function runPursuitInd(chaser: Player | undefined, second: Player | undefined, tackler: Player | undefined): number {
+  const blend = (p: Player) => iuRel(p, 'PUR') * 0.7 + iuRel(p, 'SPD') * 0.4
+  const lead = chaser ?? second
+  if (!lead) return 0
+  const pair = chaser && second ? iuPair(blend(chaser), blend(second)) : blend(lead)
+  const tk = tackler && tackler.id !== chaser?.id ? blend(tackler) : undefined
+  const v = tk === undefined ? pair : (pair + tk * IU.tacklerW) / (1 + IU.tacklerW)
+  return v - IU.runPursuitCenter
+}
+
+/** Jind: the LB extras blend (the same weights as `lbRunExtras`), one man. */
+function lbExtraBlend(p: Player): number {
+  return iuRel(p, 'PRC') * 0.16 + iuRel(p, 'BSH') * 0.16 + iuRel(p, 'STR') * 0.08 +
+    iuRel(p, 'ACC') * 0.08 + iuRel(p, 'AGI') * 0.08
+}
+
+/** Jind: LB run extras from the LB at the point of attack and the next LB over. */
+function lbRunExtrasInd(poaLb: Player | undefined, second: Player | undefined): number {
+  const lead = poaLb ?? second
+  if (!lead) return 0
+  const v = poaLb && second ? iuPair(lbExtraBlend(poaLb), lbExtraBlend(second)) : lbExtraBlend(lead)
+  return v - IU.lbRunCenter
+}
+
+/** Jind: coverage extras from the covering defender and his help safety. */
+function dbCoverageExtrasInd(coverPlayer: Player | undefined, helpS: Player | undefined): number {
+  const blend = (p: Player) => iuRel(p, 'ACC') * 0.05 + iuRel(p, 'AGI') * 0.05 + iuRel(p, 'STR') * 0.03
+  const lead = coverPlayer ?? helpS
+  if (!lead) return 0
+  const v = coverPlayer && helpS ? iuPair(blend(coverPlayer), blend(helpS)) : blend(lead)
+  return v - IU.dbCovCenter
+}
+
+/** Jind: the recognition read of the man whose zone the ball is tested in — the
+ *  hook/flat LB, with the cover man behind him. Replaces `recognition`'s
+ *  DL/LB/S PRC mean. */
+function recognitionInd(coverPlayer: Player | undefined, helpS: Player | undefined, flatLb: Player | undefined): number {
+  const lead = flatLb ?? coverPlayer ?? helpS
+  if (!lead) return 0
+  const v = iuRel(lead, 'PRC') * 0.6 + iuRel(coverPlayer ?? helpS, 'PRC') * 0.4
+  return v - IU.recogCenter
+}
+
 /** E2: a tackler's TAK squeezes yards after the catch. */
 function tacklerYacShrink(id: string | undefined, groups: Player[][]): number {
   if (!id) return 0
@@ -2428,6 +2572,15 @@ export interface PlayOutcome {
   intId?: string
   /** L11.5 Q7: coverage defender on the target. */
   coverId?: string
+  // ── Jind (/J39): the specific man each unit-average site now reads ──────────
+  iuPursuerId?: string
+  iuLbId?: string
+  iuPoaDlId?: string
+  iuRecogId?: string
+  iuProtId?: string
+  iuDlStaId?: string
+  /** Jind: the long-run chase multiplier applied on the J8a-off path (debug). */
+  iuChaseF?: number
   /** J8c: the covering defender who broke the pass up (bookkeeping/animation). */
   pbuId?: string
   // ── J7: matchups & busts ────────────────────────────────────────────────────
@@ -3629,7 +3782,10 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // ── L12 E2: unit-level relative ratings (centered; no rng) ──────────────────
   const isQ4 = (env?.qtr ?? 0) >= 4
   const olStrRel = avg(ol.map((p) => rmean(p.pos, 'STR', mkAttrs(p).STR ?? 70)))
-  const recog = recognition(dl, lbs, saf)
+  // Jind: with the layer on the PA/screen read is the SPECIFIC hook/flat LB's,
+  // resolved at the use site (he is picked after the coverage resolver runs), so
+  // the unit mean is not even computed. OFF keeps the DL/LB/S PRC mean exactly.
+  const recog = INDIV_UNITS_ON ? 0 : recognition(dl, lbs, saf)
 
   const qbA = qb ? mkAttrs(qb) : {}
   const qbStyle = qb ? styleProfile(qb) : styleProfile({ traits: [''] } as Player)
@@ -3677,7 +3833,10 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   let pressure = avg(pressureVals)
   // L12 E2: DL quickness/power joins the rush; a tired front loses push in Q4.
   pressure += dlRushExtras(dl, olStrRel) * E2_W
-  if (isQ4) pressure += relAvg('STA', dl) * 0.12 * E2_W
+  // Jind: Q4 front fatigue is the ONE front man nearest the action, his own STA
+  // (never the whole DL's mean).
+  const iuDlSta = INDIV_UNITS_ON ? iuPickN(dl, `${n}:${defId}:iudlsta`, 1) : []
+  if (isQ4) pressure += (INDIV_UNITS_ON ? staRel(iuDlSta) - IU.dlStaCenter : relAvg('STA', dl)) * 0.12 * E2_W
   // G11 spyQB spends a rusher (−4); G12 DL rotation trades pressure by quarter.
   if (effDefMove === 'spyQB') pressure -= J12_ON ? J12.spyPress : 4
   if (usage && userDef) {
@@ -3688,7 +3847,10 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       pressure += q4 ? 1.5 : -1.5
     }
   }
-  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70)) - (isQ4 ? relAvg('STA', [...ol, qb]) * 0.08 * E2_W : 0) + clamp(masteryRelAvg(ol, means) * 0.04, -2, 2)
+  // Jind: Q4 protection fatigue is the ONE lineman nearest the action plus the
+  // QB himself, their own STA (never the whole OL+QB mean).
+  const iuProtSta = INDIV_UNITS_ON ? iuPickN(ol, `${n}:${offId}:iuprotsta`, 1) : []
+  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70)) - (isQ4 ? (INDIV_UNITS_ON ? staRel([...iuProtSta, qb]) - IU.protStaCenter : relAvg('STA', [...ol, qb])) * 0.08 * E2_W : 0) + clamp(masteryRelAvg(ol, means) * 0.04, -2, 2)
   const defPlan = planFor(defId, 'def')
   // G6 third-down heat: extra blitz on the opponent's 3rd downs.
   const heat = hasFix(env, defId, 'thirdDownHeat') && env?.down === 3 ? 0.15 : 0
@@ -3918,6 +4080,16 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       ? { airTimeS: +airTimeFor(tp.ballSpeed, passAir).toFixed(2), throwType: tp.type, pocketAction: pp?.action, throwAway: throwAwayNow || undefined }
       : {}
 
+  // Jind: the man whose recognition read the PA / screen is tested against — the
+  // hook/flat LB (and the cover man behind him). Picked here (a pure hash) so both
+  // the probe fields and the read below use the same man.
+  const flatLb = lbs.length ? lbs[hash32(`${n}:${defId}:flatlb`) % lbs.length] : undefined
+  // Jind: the men the layer put on the play (probe + animation). Never added when
+  // the layer is off, so the OFF Play record is unchanged.
+  const iuPassFields: Pick<PlayOutcome, 'iuRecogId' | 'iuProtId' | 'iuDlStaId'> = INDIV_UNITS_ON
+    ? { iuRecogId: flatLb?.id, iuProtId: iuProtSta[0]?.id ?? qb?.id, iuDlStaId: iuDlSta[0]?.id ?? pb?.credit?.id }
+    : {}
+
   if (rng() < sackChance) {
     // R2: a sack costs ≈ 7 yards (real 2015–2024).
     const y = -Math.round(5 + rng() * 5)
@@ -3941,7 +4113,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
-      qbId: qb?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields,
+      qbId: qb?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...iuPassFields,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
@@ -3980,10 +4152,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // E1: the coverage defender, for the release-vs-press term (no rng draw).
   const coverPlayer = coverId ? [...cbs, ...saf, ...lbs].find((p) => p.id === coverId) : undefined
   // J8c: the specific deep safety helping over the top on this side.
-  const helpS = COVERAGE_INDIV_ON ? j8cHelp(n, defId, saf, coverId) : undefined
+  const helpS = COVERAGE_INDIV_ON || INDIV_UNITS_ON ? j8cHelp(n, defId, saf, coverId) : undefined
   // L12 E2: RB/TE targets are covered by linebackers, so their MCV joins man.
   // (OFF only: with J8c the covering LB's own MCV already decides his cover.)
-  if (!COVERAGE_INDIV_ON && target && (target.pos === 'TE' || target.pos === 'RB' || target.pos === 'FB')) manCov += relAvg('MCV', lbs) * 0.35 * E2_W
+  // Jind: the man covering the back is the covering defender himself, not the LB
+  // unit's MCV mean.
+  if (!COVERAGE_INDIV_ON && target && (target.pos === 'TE' || target.pos === 'RB' || target.pos === 'FB')) manCov += (INDIV_UNITS_ON ? iuRel(coverPlayer, 'MCV') : relAvg('MCV', lbs)) * 0.35 * E2_W
   // ── J7: MATCHUPS & BUSTS ────────────────────────────────────────────────────
   // The covering defender (never an rng draw). Off → every value is zero and no
   // Play field is added, so the base sim is untouched.
@@ -4161,7 +4335,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       const spd = helpS ? rmean('S', 'SPD', mkAttrs(helpS).SPD ?? 70) : 0
       bigPlayRisk *= clamp(1 + prs * J8C.deepPrsW - spd * J8C.deepSpdW, 0.6, 1.5)
     } else {
-      bigPlayRisk *= clamp(1 + (relAvg('PRS', cbs) * 0.004 - relAvg('SPD', saf) * 0.003) * E2_W, 0.6, 1.5)
+      // Jind: the covering corner's own press (PRS) and the help safety's own
+      // speed (SPD) — the men on the play, not the CB/safety unit means.
+      bigPlayRisk *= clamp(1 + (INDIV_UNITS_ON
+        ? (iuRel(coverPlayer, 'PRS') - IU.prsCenter) * 0.004 - (iuRel(helpS, 'SPD') - IU.spdCenter) * 0.003
+        : (relAvg('PRS', cbs) * 0.004 - relAvg('SPD', saf) * 0.003)) * E2_W, 0.6, 1.5)
     }
   }
   // J7: a coverage bust means the receiver is already gone — a big-play chance.
@@ -4173,13 +4351,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     ? rmean(coverPlayer.pos, 'ACC', coverA?.ACC ?? 70) * 0.05
       + rmean(coverPlayer.pos, 'AGI', coverA?.AGI ?? 70) * 0.05
       + rmean(coverPlayer.pos, 'STR', coverA?.STR ?? 70) * 0.03
-    : dbCoverageExtras(cbs, saf) * E2_W
+    : (INDIV_UNITS_ON ? dbCoverageExtrasInd(coverPlayer, helpS) : dbCoverageExtras(cbs, saf) * E2_W)
   // The help safety's own AWR (a uniform safety pick, so the league level holds).
   const awrInd = COVERAGE_INDIV_ON
     ? (helpS ? mkAttrs(helpS).AWR ?? 70 : saf.length ? mkAttrs(saf[0]).AWR ?? 70 : 70) * J8C.awrW
     : avg(saf.map((p) => mkAttrs(p).AWR ?? 70)) * 0.08
   // Recognition of the nearest defenders (covering defender + help + a flat LB).
-  const flatLb = lbs.length ? lbs[hash32(`${n}:${defId}:flatlb`) % lbs.length] : undefined
+  // Jind: the read that is tested is the hook/flat LB's, with the cover man behind
+  // him — his own PRC, not the DL/LB/S unit mean. (`flatLb` is picked above.)
   const recogInd = COVERAGE_INDIV_ON
     ? clamp(
         (coverPlayer ? recognitionRel(coverPlayer) : 0) * 0.5 +
@@ -4187,7 +4366,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         (flatLb ? recognitionRel(flatLb) : 0) * 0.2,
         -25, 25,
       )
-    : recog
+    : (INDIV_UNITS_ON ? recognitionInd(coverPlayer, helpS, flatLb) : recog)
   let coverage = coverSkill * dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) + awrInd
   // L12 E2: the covering defender's own athleticism (replaces the all-DB mean).
   coverage += extraInd
@@ -4198,7 +4377,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   if (concept.depth <= 2 && concept.yac >= 0.8) coverage += recogInd * 0.4 * E2_W
   if (isQ4) coverage += (COVERAGE_INDIV_ON
     ? (coverA && coverPlayer ? rmean(coverPlayer.pos, 'STA', coverA.STA ?? 70) : 0)
-    : relAvg('STA', [...cbs, ...saf, ...lbs, ...dl])) * J8C.q4StaW * E2_W
+    : (INDIV_UNITS_ON ? iuRel(coverPlayer, 'STA') - IU.dbStaCenter : relAvg('STA', [...cbs, ...saf, ...lbs, ...dl]))) * J8C.q4StaW * E2_W
   const edge = qAccuracy + separation - coverage * 1.15 - concept.depth * 0.5 - 145 // centered ~0
   if (J8C_STAT.on) { J8C_STAT.n++; J8C_STAT.cov += coverage; J8C_STAT.sep += separation; J8C_STAT.compRaw += compRaw; J8C_STAT.qAcc += qAccuracy; J8C_STAT.sk += coverSkill; J8C_STAT.ks += dStyle.coverage * planOverrides.coverMult * (hasFix(env, defId, 'loadTheBox') ? 0.96 : 1) }
   // Play-action: a run-heavy offense gets a passing bonus as the defense bites.
@@ -4332,7 +4511,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
       ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...iuPassFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -4460,13 +4639,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -4631,8 +4810,14 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const poiOl = ol[gapIndex(gKey, ol.length)]
   const poiDl = dl[gapIndex(gKey, dl.length)]
   const poiLb = lbs[gapIndex(`${gKey}:lb`, lbs.length)]
-  const runPursuers = J8A_ON ? pickPursuers(`${gKey}:chase`, lbs, saf, cbs) : []
-  const runClose = J8A_ON ? chaseInfo(carrier, runPursuers, `${gKey}:chase`) : { edge: 0, headStart: 0, angle: 0, nP: 0 } as Chase
+  const runPursuers = J8A_ON || INDIV_UNITS_ON ? pickPursuers(`${gKey}:chase`, lbs, saf, cbs) : []
+  const runClose = J8A_ON || INDIV_UNITS_ON ? chaseInfo(carrier, runPursuers, `${gKey}:chase`) : { edge: 0, headStart: 0, angle: 0, nP: 0 } as Chase
+  // Jind: the pursuit read's second man (the next pursuer in the chase) and the
+  // point-of-attack LB's next man over — the only site inputs the individual
+  // replacement needs that the J8a/J8c branches did not already hold.
+  const iuChaser = runClose.chaser
+  const iuChaser2 = runPursuers.find((p) => p.id !== iuChaser?.id)
+  const iuLb2 = iuSecondByWeight(lbs, wLb, poiLb)
   // J8a2: the per-defender read loop. The man who read it right and filled the gap
   // is the read key; the alley filler is a hash-picked safety's own run support;
   // the front defenders who took a wrong first step (bit) are recorded for the
@@ -4662,7 +4847,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const runDef = ((dp
     ? runDefBase * (1 + (dp.aggression - 0.5) * 0.06 - (dp.coverage <= 0 ? 0.03 : 0))
     : runDefBase) * boxMult)
-    + (J8A_ON ? (poiDl ? rmean(poiDl.pos, 'STR', eff(poiDl, 'STR')) : 0) * 0.05 * E2_W : relAvg('STR', dl) * 0.05 * E2_W)
+    + (J8A_ON || INDIV_UNITS_ON ? (poiDl ? rmean(poiDl.pos, 'STR', eff(poiDl, 'STR')) : 0) : relAvg('STR', dl)) * 0.05 * E2_W
     // J8a2: the safety who fills the alley — his own run support (centred on the
     // safeties on the field, so the pick cannot drift the run-defence mean).
     + (J8A2_ON ? alley.value * J8A2.alleyW : 0)
@@ -4675,7 +4860,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
       })
       + gapValue(lbs, wLb, (p) => { return rmean(p.pos, 'PRC', eff(p, 'PRC')) * 0.16 + rmean(p.pos, 'BSH', eff(p, 'BSH')) * 0.16 + rmean(p.pos, 'STR', eff(p, 'STR')) * 0.08 + rmean(p.pos, 'ACC', eff(p, 'ACC')) * 0.08 + rmean(p.pos, 'AGI', eff(p, 'AGI')) * 0.08 }) * E2_W
       + clamp((poiLb ? masteryOffset(poiLb, means) : 0) * 0.05, -3, 3)
-    : avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + lbRunExtras(lbs) * E2_W + clamp(masteryRelAvg(lbs, means) * 0.05, -3, 3)
+    : avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + (INDIV_UNITS_ON ? lbRunExtrasInd(poiLb, iuLb2) : lbRunExtras(lbs) * E2_W) + clamp(masteryRelAvg(lbs, means) * 0.05, -3, 3)
   const elusiveness = carrier?.pos === 'QB'
     ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1 + rmean('QB', 'RUN', cA.RUN ?? 70) * 0.4 * E2_W
     : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
@@ -4701,7 +4886,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const spyPenalty = effDefMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? (J12_ON ? J12.spyPress : 3) : 0
   const spyQbRun = J12_ON && effDefMove === 'spyQB' && carrier?.pos === 'QB' ? J12.spyRun : 0
   const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty - spyQbRun + (J8A_ON ? interiorShortStrength(ol, gKey) : olShortStrength(ol, distance)) + (J8A2_ON ? fbKick(fb, poiDl ?? poiLb) : fbLeadBlock(fb)) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
-    + (isQ4 ? (J8A_ON ? staRel([poiOl, carrier]) - staRel([poiDl, runClose.chaser]) : relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
+    + (isQ4 ? (J8A_ON || INDIV_UNITS_ON ? staRel([poiOl, carrier]) - staRel([poiDl, runClose.chaser]) : relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25 * (env?.wx?.runVarianceMult ?? 1), gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -4724,12 +4909,22 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R2: on a money down a runner lowers his shoulder to the marker.
   if (gain > 0 && env?.down === 3) gain += R2.moneyYards
   // L12 E2 / J8a: the long-run tail. OFF keeps the team DL/LB PUR+SPD mean cap;
-  // ON replaces it with the individual chase multiplier (carrier speed + head
-  // start vs the nearest hash-picked pursuer), centred so the mean tail holds.
+  // J8a replaces it with the individual chase multiplier (carrier speed + head
+  // start vs the nearest hash-picked pursuer); Jind applies the SAME individual
+  // pursuit on the J8a-off path too — the nearest pursuer's own SPD/PUR (the J8a
+  // chase speed, centred by `chaseCenter`) times the 1-2 men in the chase's own
+  // PUR/SPD blend (centred by `IU.runPursuitCenter`) — never the DL+LB unit mean.
+  let iuChaseF: number | undefined
   if (gain > 20) {
     const chaseF = J8A_ON
       ? (runClose.chaser ? chaseTailMult(runClose) : 1)
-      : clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4)
+      : INDIV_UNITS_ON
+        ? clamp(
+            (runClose.chaser ? chaseTailMult(runClose) : 1) * (1 - runPursuitInd(iuChaser, iuChaser2, undefined) * 0.004 * E2_W),
+            J8A.chaseLo, J8A.chaseHi,
+          )
+        : clamp(1 - runPursuit(dl, lbs) * 0.004 * E2_W, 0.55, 1.4)
+    iuChaseF = chaseF
     gain = 20 + Math.round((gain - 20) * chaseF * (1 + fatDiff * R15.fatBig))
   }
   // R2: the long-TD rate is tuned separately from the short run game.
@@ -4851,6 +5046,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     ...(glStopId ? { glStopId } : {}),
     onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     ...scoutFields,
+    ...(INDIV_UNITS_ON ? { iuPursuerId: iuChaser?.id, iuLbId: poiLb?.id, iuPoaDlId: poiDl?.id, iuChaseF } : {}),
   }
 }
 
