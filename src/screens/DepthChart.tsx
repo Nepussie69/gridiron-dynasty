@@ -26,7 +26,7 @@ import {
 } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
 import { PlayerName } from '../components/PlayerHoverCard'
-import { InjuryChip } from '../components/PlayerTable'
+import { InjuryStatusBadge } from '../components/InjuryReport'
 
 // One card per position, so `depthAt` drives each card directly.
 type CardDef = { label: string; pos: Position }
@@ -279,7 +279,8 @@ function Unit({
                               </span>
                             )}
                           </span>
-                          <InjuryChip player={p} />
+                          {/* FUTURES #15: a played-hurt player reads "Q · playing" here. */}
+                          <InjuryStatusBadge player={p} world={world} compact />
                         </button>
                         {editable && (
                           <div className="flex shrink-0 items-center gap-1">
@@ -457,7 +458,7 @@ function ReturnerCard({
                     <span className="font-cond text-label font-700 uppercase text-muted">{p.pos}</span>
                     {isKr && <Badge tone="neutral">KR</Badge>}
                     {isPr && <Badge tone="info">PR</Badge>}
-                    {out && <Badge tone="loss">OUT {p.injured?.games}W</Badge>}
+                    {out && <InjuryStatusBadge player={p} world={world} compact />}
                   </span>
                   <span className="mt-0.5 block truncate font-cond text-micro tnum text-muted" title={RETURN_INFO}>
                     {returnStrip(p)}
