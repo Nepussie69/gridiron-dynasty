@@ -5030,34 +5030,47 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     else zoneDrop(m[dk], { fromSec: 0.1, toSec: trailEnd, releaseSec, landmark: { x: los + 8, y: dk === 'cb0' ? 8 : dk === 'cb1' ? FIELD_H - 8 : MID_Y + (dk === 'lb0' ? -8 : dk === 'lb2' ? 8 : 0) }, zcv: attrOf(m[dk].player, 'ZCV'), threat: m[deepKey], catchPt })
   }
 
-  // animflow r6d (J12 disguise): the shell the offence sees before the snap. The post-snap shell is
-  // what the safeties actually do (one rolled down to a man / the blitz = single high; both deep = two
-  // high). An honest look shows it; a disguised one (play.disguised) shows the other and rotates at the
-  // snap — two-high rolling to single-high, or a safety walked down to the box bailing to his half.
+  // animflow r6d (J12 disguise) / animflow r8: the pre-snap shell. What the safeties DO after the snap
+  // is measured at the moment the shell is read (1.75 s in; a man >= 10 yd past the line of scrimmage
+  // counts as deep), and the shown alignment is chosen against it: a disguised look (play.disguised)
+  // shows a DIFFERENT count and rotates to the real one at/after the snap, an honest look shows its own.
+  // Every placement is a move small enough (<= 5 yd) to be recovered smoothly at ~4.6 yd/s and to land
+  // exactly at the snap, so the count holds whatever the stream does to route speeds.
   const preSpots: Record<string, Pt> = {}
   {
-    const down = (k: string) => used.has(k) || isBlitzer(k)
-    const sDown = ['s0', 's1'].filter((k) => m[k] && down(k))
-    const postSingle = sDown.length === 1
-    const postTwo = sDown.length === 0
-    const showSingle = play.disguised ? postTwo : postSingle
-    if (showSingle && !postSingle) {
-      // Two-high played, single-high shown: s1 walked down into the box, s0 in the middle.
-      const side = f.s1.y < MID_Y ? -1 : 1
-      preSpots.s1 = { x: los + 7.5, y: clampY(MID_Y + side * 8) }
-      preSpots.s0 = { x: f.s0.x, y: clampY(MID_Y - side * 1.5) }
-    } else if (showSingle) {
-      // Honest single-high: the man coming down already shows it (his man / blitz alignment); the
-      // other safety sits in the middle of the field.
-      const hi = sDown[0] === 's0' ? 's1' : 's0'
-      preSpots[hi] = { x: f[hi].x, y: clampY(MID_Y + (f[hi].y < MID_Y ? -1.5 : 1.5)) }
-    } else if (play.disguised) {
-      // Single-high (or zero) played, two-high shown: each man coming down starts on the deep half on
-      // his own side of the field (straight back from his man, not across it).
-      for (const k of sDown) {
-        const y0 = m[k].path[0].y
-        preSpots[k] = { x: Math.max(f[k].x - 1, m[k].path[0].x), y: clampY(MID_Y + clampN(y0 - MID_Y, -12, 12)) }
-      }
+    const K = ['s0', 's1'].filter((k) => m[k])
+    if (K.length) {
+      const READ_SEC = 1.75
+      const DEEP_YD = 10
+      const MAX_MOVE = 5
+      const readX = (k: string) => posAt(m[k].path, Math.min(READ_SEC, m[k].path[m[k].path.length - 1].t)).x
+      const postDeep = K.filter((k) => readX(k) - los >= DEEP_YD)
+      // 'N' as he is aligned, 'D' on a deep half (11 yd), 'S' cheated down (9 yd)
+      type Show = 'D' | 'S' | 'N'
+      const preX = (k: string, want: number) => m[k].path[0].x + clampN(clampX(los + want) - m[k].path[0].x, -MAX_MOVE, MAX_MOVE)
+      const posOf = (k: string, s: Show) => (s === 'D' ? preX(k, 11) : s === 'S' ? preX(k, 9) : m[k].path[0].x)
+      const combos: Show[][] = []
+      for (const a of ['D', 'S', 'N'] as const) for (const b of ['D', 'S', 'N'] as const) combos.push(K.length > 1 ? [a, b] : [a])
+      const count = (c: Show[]) => K.filter((k, i) => posOf(k, c[i]) - los >= DEEP_YD).length
+      // The look we would draw if it were free: a disguise shows the other count (the safety who is
+      // least deep cheats down out of a two-deep look, or both show a half out of a single-high one),
+      // an honest look shows its own. Then prefer the fewest men moved.
+      const walk = postDeep.length >= 2 ? postDeep.reduce((a, k) => (readX(k) <= readX(a) ? k : a)) : undefined
+      const preferred: Show[] = play.disguised
+        ? postDeep.length >= 2
+          ? K.map((k) => (k === walk ? 'S' : 'D'))
+          : K.map(() => 'D')
+        : K.map(() => 'N')
+      const want = (c: Show[]) => (play.disguised ? count(c) !== postDeep.length : count(c) === postDeep.length)
+      const rank = (c: Show[]) => (c.every((s, i) => s === preferred[i]) ? 0 : 10) + c.filter((s) => s !== 'N').length
+      const pick = [...combos].sort((a, b) => rank(a) - rank(b)).find(want)
+      if (pick)
+        for (let i = 0; i < K.length; i++) {
+          const k = K[i]
+          if (pick[i] === 'N') continue
+          const p0 = m[k].path[0]
+          preSpots[k] = { x: posOf(k, pick[i]), y: pick[i] === 'S' ? clampY(p0.y + (MID_Y - p0.y > 0 ? 1.5 : -1.5)) : p0.y }
+        }
     }
   }
   const finishPass = (rest: Parameters<typeof finish>[2]) => {
@@ -5065,8 +5078,11 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       if (!m[k]) continue
       // Back on his script before he matters: a blitzer by ~1 s, a cover man before the release.
       // (animflow r8: at r8 route speeds the ball comes out sooner - a rotation still gets ~1 s, so the
-      // shown look is shown in full; he is back on his script by the catch.)
-      presnapShift(m[k], pt, isBlitzer(k) || k === pressureKey ? SNAP + 0.9 : Math.min(catchSec - 0.15, Math.max(releaseSec - 0.1, SNAP + 1.15)))
+      // shown look is shown in full; he is back on his script by the catch. The shown shell needs a
+      // window long enough that its count lands exactly at the snap (~5 yd at 4.6 yd/s) and ends well
+      // before the shell is read at 1.75 s.)
+      const endSec = isBlitzer(k) || k === pressureKey ? SNAP + 0.9 : Math.min(catchSec - 0.15, Math.max(releaseSec - 0.1, SNAP + 1.15))
+      presnapShift(m[k], pt, Math.max(endSec, SNAP + 1.3))
     }
     return finish(f, m, rest)
   }
