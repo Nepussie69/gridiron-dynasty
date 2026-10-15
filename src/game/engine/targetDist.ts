@@ -38,7 +38,7 @@ import { playerAttrs } from '../data/ratings'
 import { POS_MEAN } from './ratingMeans'
 import { unscaleOvr } from './ovrScale'
 
-let TARGET_DIST_ON = true
+let TARGET_DIST_ON = false // orchestrator 2026-10-15: OFF until the joint emergent calibration (combined with qbrun + E2 it ran passing volume over the bands)
 
 /** JOB realism-targets: enable/disable the reworked target distribution. */
 export function setTargetDist(on: boolean) {
