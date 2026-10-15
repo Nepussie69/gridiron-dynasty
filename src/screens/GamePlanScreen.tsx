@@ -17,6 +17,7 @@ import { WrinkleCard } from '../components/WrinkleCard'
 import { InstallCard } from '../components/InstallCard'
 import { KeysCard } from '../components/KeysCard'
 import { PracticeCard } from '../components/PracticeCard'
+import { PlayCallingCard } from '../components/PlayCallingCard'
 import { canWrinkle } from '../game/engine/wrinkle'
 import { teamRatings } from '../game/engine/depth'
 import { coachLabels } from '../game/engine/playsim'
@@ -278,6 +279,7 @@ export function GamePlanScreen() {
         <SectionTitle>Situational</SectionTitle>
         <div className="grid items-start gap-4 lg:grid-cols-2">
           <CallSheetCard disabled={readOnly} />
+          <PlayCallingCard disabled={readOnly} />
           <MatchupCard disabled={readOnly} />
           <UsageCard disabled={readOnly} />
           <SpecialTeamsCard disabled={readOnly} />
