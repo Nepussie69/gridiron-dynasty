@@ -405,7 +405,26 @@ export interface GameDay {
   /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. */
   callStart?: 'off' | 'def' | 'both'
   callSwitches?: { at: number; mode: 'off' | 'def' | 'both' | undefined }[]
+  /** Backlog 436: the seed this game kicked off with (week seed + fresh dice), so a rebuild replays it exactly. */
+  seed?: number
 }
+
+/**
+ * Backlog 436 (user 2026-10-15: "Fresh dice each kickoff"): every kickoff of the
+ * user's game, and every fast sim of it, rolls a fresh salt on top of the week
+ * seed, so a reloaded game plays out differently. The salt lives on the live
+ * game and the schedule entry, never in the career, so a reload rolls again.
+ * Headless runs (calibration, equivalence, smokes, probes) have no `window` and
+ * keep salt 0 — byte-identical to the fixed week seed.
+ */
+let freshDice = typeof window !== 'undefined'
+export function setFreshDice(on: boolean): void {
+  freshDice = on
+}
+function rollDice(): number {
+  return freshDice ? 1 + Math.floor(Math.random() * 1_000_000_000) : 0
+}
+const weekSeed = (week: number) => world.seed + week * 7919 + 101
 
 let world: World = buildWorld(20261004)
 let statDb: CareerDatabase = newDatabase()
@@ -1579,7 +1598,10 @@ export const useGame = create<GameStore>((set, get) => ({
       if (!opts?.userSim) activatePlayHurt(world, career)
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
-      sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101, userCtx(career), weatherForGame(userGame))
+      // Backlog 436: a fast-simmed game rolls fresh dice too (a coached one set
+      // `diceSalt` at kickoff).
+      if (!opts?.userSim) userGame.diceSalt = rollDice() || undefined
+      sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, weekSeed(week) + (userGame.diceSalt ?? 0), userCtx(career), weatherForGame(userGame))
       finalizeGame(world, userGame, sim.homeScore, sim.awayScore)
       // Record career stats for both teams' players (college or pro).
       const level = world.byId[userGame.homeId].tier === 'NFL' ? 'NFL' : 'CFB'
@@ -1861,7 +1883,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast("Only your team's games have full play-by-play.")
       return
     }
-    const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, undefined, weatherForGame(game))
+    const sim = simulatePlayByPlay(world, game.homeId, game.awayId, weekSeed(game.week) + (game.diceSalt ?? 0), undefined, weatherForGame(game))
     sim.box = boxScore(world, sim)
     sim.film = game.film
     sim.keys = game.keys
@@ -1888,7 +1910,7 @@ export const useGame = create<GameStore>((set, get) => ({
         // L15: keep the injured-availability state live across the rebuild (a
         // no-op for a player whose injury was already moved to `hurtSaved`).
         activatePlayHurt(world, career)
-        const rebuilt = createGame(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, { ...oldCtx, callAll: gd.callStart }, old.weather)
+        const rebuilt = createGame(world, game.homeId, game.awayId, gd.seed ?? weekSeed(game.week), { ...oldCtx, callAll: gd.callStart }, old.weather)
         let ok = true
         let guard = 4000
         while (ok && rebuilt.plays.length < keepPlays && !rebuilt.done && guard-- > 0) {
@@ -1943,11 +1965,15 @@ export const useGame = create<GameStore>((set, get) => ({
     // activates; the fast path does it in `advanceWeek`).
     activatePlayHurt(world, career)
     // L12.6: "call every play" only applies to a coached game, never to fast sim.
-    const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, { ...ctx, callAll: career.callMode }, weatherForGame(game))
+    // Backlog 436: fresh dice every kickoff (0 headless), kept on the schedule
+    // entry so the play-by-play re-sim matches.
+    game.diceSalt = rollDice() || undefined
+    const seed = weekSeed(week) + (game.diceSalt ?? 0)
+    const state = createGame(world, game.homeId, game.awayId, seed, { ...ctx, callAll: career.callMode }, weatherForGame(game))
     // L11.5 Q2: run out the first drive so the user sees the game start.
     const moment = runUntil(world, state, 'drive')
     set({
-      gameDay: { gameId: game.id, state, moment, plan, personnel: career.personnel ?? {}, changes: [], callStart: career.callMode, callSwitches: [] },
+      gameDay: { gameId: game.id, state, moment, plan, personnel: career.personnel ?? {}, changes: [], callStart: career.callMode, callSwitches: [], seed },
       match: finishGame(state),
       matchSeq: get().matchSeq + 1,
       tick: get().tick + 1,

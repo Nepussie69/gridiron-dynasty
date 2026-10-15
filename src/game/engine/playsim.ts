@@ -34,6 +34,7 @@ import {
   readOrder, routeForCandidate, qbReach, readBias, checkdownBias, visionThrow, eyeSkill,
   isCheckRoute, visionOn, VISION as VISION_CFG, type VisionThrow,
 } from './vision'
+import { wrRead, wrReadsOn, WRREAD as WRREAD_CFG, WRR_STAT, type WrRead } from './wrReads'
 import {
   throwOn, passStyle, chooseThrowType, throwPlan, airTimeFor, pocketPlan, readAvoidBias,
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
@@ -264,6 +265,12 @@ export function getJ36(): boolean {
 // re-expressed and no target weight moves, so its rng() stream and every resolved
 // play are byte-identical to the pre-J10a engine.
 export { setVision, getVision } from './vision'
+// J52: dev-only toggle for the receiver coverage-read layer (the setJ13 pattern).
+// The flag and every helper live in `wrReads.ts`; re-exported here so the probe
+// and the OFF calibration copy share one switch. Default ON; with it OFF no read
+// is computed, no separation/INT term moves and no Play field is added, so every
+// resolved play is byte-identical to the pre-J52 engine.
+export { setWrReads, getWrReads } from './wrReads'
 // J10b: dev-only toggle for the QB throw-power / throw-type / pocket-presence
 // layer (the setStamina pattern). The flag and every helper live in `throw.ts`;
 // re-exported here so the probe and the OFF calibration copy share one switch.
@@ -1021,6 +1028,16 @@ export interface Play {
   ballOffsetYd?: number
   /** J10a: the defender who jumped the stared-down route (INT / break-up). */
   eyeJumpId?: string
+  // ── J52: the receiver's own coverage read (animation) ──────────────────────
+  /** J52: the conversion the target receiver's read won ('sit' vs zone, 'hot' vs
+   *  blitz, 'fade' vs press, 'keepRunning' vs man). */
+  wrConverted?: 'sit' | 'keepRunning' | 'fade' | 'hot'
+  /** J52: the receiver and the QB were not on the same page (wrong route/depth). */
+  wrMisread?: boolean
+  /** J52: the receiver's own read rating vs the league's receivers (probe). */
+  wrRead?: number
+  /** J52: the wrong depth the misread drew (yards; animation). */
+  wrDepthYd?: number
   // ── J10b: throw power, throw type & pocket presence (animation) ─────────────
   /** J10b: the ball's estimated flight time (s) from release to arrival. */
   airTimeS?: number
@@ -2697,6 +2714,16 @@ export interface PlayOutcome {
   ballOffsetYd?: number
   /** J10a: the defender who jumped the stared-down route (INT / break-up). */
   eyeJumpId?: string
+  // ── J52: the receiver's own coverage read (animation) ──────────────────────
+  /** J52: the conversion the target receiver's read won ('sit' vs zone, 'hot' vs
+   *  blitz, 'fade' vs press, 'keepRunning' vs man). */
+  wrConverted?: 'sit' | 'keepRunning' | 'fade' | 'hot'
+  /** J52: the receiver and the QB were not on the same page (wrong route/depth). */
+  wrMisread?: boolean
+  /** J52: the receiver's own read rating vs the league's receivers (probe). */
+  wrRead?: number
+  /** J52: the wrong depth the misread drew (yards; animation). */
+  wrDepthYd?: number
   // ── J10b: throw power, throw type & pocket presence (animation) ─────────────
   /** J10b: the ball's estimated flight time (s) from release to arrival. */
   airTimeS?: number
@@ -4575,6 +4602,45 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Play field is added, so the base sim is untouched.
   const coverA = coverPlayer ? mkAttrs(coverPlayer) : undefined
   const covPos = coverPlayer?.pos
+  // ── J52 (FUTURES #52): the receiver's own post-snap coverage read ───────────
+  // The target reads the coverage he is running against — man / zone / press, the
+  // blitz, the safety rotation — with his own AWR + route rating + experience and
+  // his J37 chemistry with THIS quarterback. A clean read that agrees with the
+  // QB's page converts the route (sit vs zone, keep running vs man, fade vs
+  // press, hot vs blitz); anything else is a misread (wrong route/depth, a
+  // tighter window, a bigger pick chance). One deterministic call, no rng draw
+  // added or removed; undefined when the layer is off, so the OFF path is
+  // byte-identical (no term, no Play field). See `wrReads.ts`.
+  const wrr: WrRead | undefined = wrReadsOn() && target
+    ? wrRead({
+        world, n, offId, defId, wr: target, qb, route: vRoute, depth: concept.depth,
+        // The coverage the defence actually played on this snap.
+        man: dStyle.manCoverage >= 0.5,
+        press: dStyle.manCoverage >= 0.5 && concept.depth <= 19 && !!coverA &&
+          rmean(covPos, 'PRS', coverA.PRS ?? 70) > 0,
+        blitz,
+        twoHigh: hasFix(env, defId, 'twoDeep') || (saf.length >= 2 && !helpS),
+        // The J12 disguise hid the look, and whether it sold the QB a false one
+        // (the passer is then still reading the wrong shell after the snap).
+        disguised, qbFooled,
+        // The covering defender's own disguise skill (his PRC/AWR, centred).
+        dbSkill: coverA && covPos ? eyeSkill(covPos, coverA.PRC, coverA.AWR) : 0,
+        chemRel,
+      })
+    : undefined
+  // J52: the read the animation needs (undefined when off, so the OFF Play record
+  // is unchanged). `wrConverted` is the conversion; a misread is flagged and
+  // carries the wrong depth he ran.
+  const wrFields: Pick<PlayOutcome, 'wrConverted' | 'wrMisread' | 'wrRead' | 'wrDepthYd'> = wrr
+    ? {
+        ...(wrr.convert ? { wrConverted: wrr.convert } : { wrMisread: true }),
+        wrRead: +wrr.skill.toFixed(1),
+        ...(wrr.depthErrYd ? { wrDepthYd: wrr.depthErrYd } : {}),
+      }
+    : {}
+  // J52: the misread's wrong depth rides on `wrDepthYd` only. `passDepth` stays
+  // the sim's own air yards: playAnim places the catch from it, so shifting it
+  // without the yards would draw a catch past the tackle spot.
   const manW = dStyle.manCoverage
   let muSep = 0
   let coverRel = 0
@@ -4701,6 +4767,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     (pEdge ? pEdge.pass : 0) +
     // L12.13 M3: a receiver's mastery of the system shows in his separation.
     (target && (target.pos === 'WR' || target.pos === 'TE') ? clamp(masteryOffset(target, means) * 0.06, -3, 3) : 0) +
+    // J52: the coverage read. A converted route (sit vs zone, keep running vs
+    // man, fade vs press, hot vs blitz) is separation at the catch point; a
+    // misread leaves him at the wrong depth/route. Centred on the league's
+    // measured mean read quality, so the league level holds and only the
+    // individual spread moves.
+    (wrr ? (wrr.q - WRREAD_CFG.sepCentre) * WRREAD_CFG.sepW : 0) +
     // J7: the covering defender, mismatches and coverage busts.
     muSepNet * MU.sepToRating
   // The covering defender's own cover ability (J8c). The *level* is a league
@@ -4903,8 +4975,23 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // BOTH the fresh pairs and the high pick rates), so the INT leg is centred on its own
   // `CHEM.intShift` — measured with J37_STAT so the league's mean pick rate holds.
   const intPre = R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1)
-  const intProb = clamp(pairChem !== undefined ? intPre * (1 - (chemRel - skillCen * CHEM.intShiftFrac) * CHEM.intW) : intPre, 0.005, 0.06)
+  // J52: a busted read throws into a closing window — the pick chance rises; a
+  // converted route throws to a receiver in phase with his QB, so it falls a
+  // little. One relative multiplier, centred on the league's measured mean read
+  // quality (the J37 `intShiftFrac` role), so the league pick rate holds while
+  // elite and poor readers separate. 1 when the layer is off.
+  const intWr = wrr ? clamp(1 + (WRREAD_CFG.intCentre - wrr.q) * WRREAD_CFG.intW, WRREAD_CFG.intLo, WRREAD_CFG.intHi) : 1
+  const intPair = pairChem !== undefined ? intPre * (1 - (chemRel - skillCen * CHEM.intShiftFrac) * CHEM.intW) : intPre
+  const intProb = clamp(intPair * intWr, 0.005, 0.06)
   if (J37_STAT.on && pairChem !== undefined) J37_STAT.dInt += intProb - clamp(intPre, 0.005, 0.06)
+  if (WRR_STAT.on && wrr) {
+    WRR_STAT.n++
+    WRR_STAT.sumQ += wrr.q
+    WRR_STAT.sumSkill += wrr.skill
+    WRR_STAT.dSep += (wrr.q - WRREAD_CFG.sepCentre) * WRREAD_CFG.sepW
+    WRR_STAT.dInt += intProb - clamp(intPair, 0.005, 0.06)
+    if (wrr.convert) WRR_STAT.conv++
+  }
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -4937,7 +5024,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
       ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -5065,13 +5152,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
