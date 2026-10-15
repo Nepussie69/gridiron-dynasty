@@ -552,7 +552,15 @@ export function applyReadPaths(anim: PlayAnim, play: Play, ctx: AnimContext = {}
   if (!plan) return anim
   const out: PlayAnim & WithReads = { ...anim, reads: plan }
   const pl = plan.place
-  if (pl && (pl.sx || pl.sy)) out.actors = anim.actors.map((a) => (a.key === pl.key ? { ...a, path: adjustPath(a.path, plan) } : a))
+  if (pl && (pl.sx || pl.sy)) {
+    // animflow 6c (J7, animresid): the man covering him moves with him. The receiver's line
+    // adjust is a drawing of him closing on a ball placed off his line; the coverage man's
+    // recorded separation (separationYd) is a bracket, so he takes the same displacement and the
+    // separation at the catch (and all through the run) is the recorded one exactly.
+    const covK = keyForId(anim, ctx, play.coverId)
+    const move = (k: string) => k === pl.key || (!!covK && k === covK && k !== plan.jump?.key)
+    if (out.actors.some((a) => move(a.key))) out.actors = out.actors.map((a) => (move(a.key) ? { ...a, path: adjustPath(a.path, plan) } : a))
+  }
   if (pl) out.ball = placeBall(out, play, plan)
   if (plan.jump) {
     const jk = plan.jump.key
@@ -624,7 +632,8 @@ function backCheckPath(path: WP[], plan: ReadPlan): WP[] | null {
 }
 
 /** A completion placed past his reach: his line bends toward the ball over the last 0.45 s
- *  and back onto it over the next 0.45 s (the catch time, the run after it and the end spot unchanged). */
+ *  and, after the catch, drifts back onto the recorded line over the rest of the run
+ *  (the catch time, the run after it and the end spot unchanged). */
 /** Seconds each way of the line adjust: 0.45 s, longer for a big shift so the lateral speed it adds stays <= ~4.3 yd/s (a 2.6 yd shift in 0.45 s added 8+ yd/s: a 13 yd/s spike at the catch). */
 const adjustSec = (pl: { sx: number; sy: number }): number => clampN((1.5 * Math.hypot(pl.sx, pl.sy)) / 4.3, 0.45, 0.9)
 
@@ -633,13 +642,18 @@ function adjustPath(path: WP[], plan: ReadPlan): WP[] {
   const C = plan.catchT!
   const W = adjustSec(pl) / plan.D
   const a = Math.max(0, C - W)
-  const b = Math.min(1, C + W)
+  // animflow r7a (animresid): after the catch he eases back onto his recorded line over the WHOLE
+  // run to the whistle, not over a 0.45 s beat. Springing back right after the catch put a second
+  // lateral sign change inside every shifted catch-and-run (an out-and-back bump in the carry
+  // window) — only a 2.6 yd shift, but it made the carrier weave. He holds the adjusted line
+  // through the run and drifts back onto it, so the end spot and the tackle are untouched.
+  const b = Math.min(1, Math.max(C + W, path[path.length - 1]?.t ?? C))
   const out: WP[] = path.filter((w) => w.t < a - 1e-9).map((w) => ({ ...w }))
   const n = Math.max(4, Math.ceil(((b - a) * plan.D) / 0.04))
   for (let i = 0; i <= n; i++) {
     const t = a + ((b - a) * i) / n
     const p = posAt(path, t)
-    const u = t <= C ? sm((t - a) / Math.max(1e-9, C - a)) : 1 - sm((t - C) / Math.max(1e-9, b - C))
+    const u = t <= C ? sm((t - a) / Math.max(1e-9, C - a)) : Math.max(0, 1 - (t - C) / Math.max(1e-9, b - C))
     out.push({ t, x: p.x + pl.sx * u, y: p.y + pl.sy * u })
   }
   for (const w of path) if (w.t > b + 1e-9) out.push({ ...w })

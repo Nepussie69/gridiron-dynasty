@@ -2660,6 +2660,65 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(bad.length === 0, `${bad.length} weaving carries: ${bad.slice(0, 4).join('; ')}`)
   })
 
+  // ── animresid (amendment 2026-10-15): a ball carrier never stands still ─────
+  ok('animresid: after the catch the carrier never stands still - a >= 0.4 s stretch under 1 yd/s on <= 5% of completions, never >= 1.0 s, and he is at 3 yd/s within 0.6 s (p90); runs never stall', () => {
+    store.useGame.getState().startCareer({ name: 'S', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const DT = 0.05
+    const res: Record<'pass' | 'run', { stall: number; start: number }[]> = { pass: [], run: [] }
+    const bad: string[] = []
+    for (let g = 0; g < 10; g++) {
+      const home = nfl[(g * 7 + 1) % nfl.length].id
+      const away = nfl[(g * 7 + 4) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 307 + g * 811)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        const kind: 'pass' | 'run' | null = play.type === 'pass' && play.result === 'Complete' && !play.turnover ? 'pass' : play.type === 'run' && !play.kneel ? 'run' : null
+        if (!kind) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const D = anim.duration / 1000
+        const ev = anim.events ?? []
+        const holder = anim.holders.filter((h) => h.key).at(-1)
+        if (!holder?.key) continue
+        const a = anim.actors.find((x) => x.key === holder.key)
+        if (!a) continue
+        // from the catch (a completion) or the handoff (a run) to the end event, less the last 0.25 s
+        const startT = kind === 'pass' ? (ev.find((e) => e.kind === 'catch')?.t ?? holder.t) : holder.t
+        const endE = ev.find((e) => ['tackle', 'outOfBounds', 'score', 'safety', 'down', 'fumble'].includes(e.kind) && e.t > startT)
+        const endS = (endE ? endE.t : 1) * D - 0.25
+        let s = startT * D
+        let first: number | null = null
+        let stretch = 0
+        let longest = 0
+        let p = posAt(a.path, s / D)
+        while (s + DT <= endS) {
+          const q = posAt(a.path, (s + DT) / D)
+          const v = Math.hypot(q.x - p.x, q.y - p.y) / DT
+          if (first == null && v >= 3) first = s + DT - startT * D
+          if (v < 1) stretch += DT
+          else stretch = 0
+          longest = Math.max(longest, stretch)
+          p = q
+          s += DT
+        }
+        res[kind].push({ stall: longest, start: first ?? endS - startT * D })
+        if (longest >= 1.0) bad.push(`${kind} ${play.n} ${play.concept}: ${longest.toFixed(2)} s under 1 yd/s after the ${kind === 'pass' ? 'catch' : 'handoff'}`)
+      }
+    }
+    const pct = (v: number[], q: number) => { const s = [...v].sort((x, y) => x - y); return s.length ? s[Math.floor((s.length - 1) * q)] : 0 }
+    const p = res.pass
+    const over = p.filter((r) => r.stall >= 0.4).length / p.length
+    const p90 = pct(p.map((r) => r.start), 0.9)
+    console.log(`      stall: completions ${p.length} >=0.4s ${(over * 100).toFixed(1)}% >=1.0s ${p.filter((r) => r.stall >= 1.0).length} start-to-3yd/s p90 ${p90.toFixed(2)}; runs ${res.run.length} >=0.4s ${res.run.filter((r) => r.stall >= 0.4).length} >=1.0s ${res.run.filter((r) => r.stall >= 1.0).length}`)
+    assert.ok(p.length >= 250, `coverage: ${p.length} completions, ${res.run.length} runs`)
+    assert.ok(over <= 0.05, `${(over * 100).toFixed(1)}% of completions stand still >= 0.4 s`)
+    assert.ok(p.filter((r) => r.stall >= 1.0).length === 0, `completions stand still >= 1.0 s: ${bad.slice(0, 4).join('; ')}`)
+    assert.ok(p90 <= 0.6, `start-to-3 yd/s p90 ${p90.toFixed(2)} s`)
+    assert.ok(res.run.length >= 400 && res.run.filter((r) => r.stall >= 0.4).length === 0, `runs stall: ${res.run.filter((r) => r.stall >= 0.4).length} of ${res.run.length}`)
+  })
+
   ok('animflow 6d (J6): a kneel is a victory formation and the QB ends on a knee at the spot; a spike goes into the turf off the snap; a carrier out of bounds crosses the sideline', () => {
     let kneels = 0
     let spikes = 0
