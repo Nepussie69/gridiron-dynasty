@@ -21,7 +21,22 @@ import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV
 export { setPuntFix, getPuntFix } from './decisions'
 import { leagueMasteryMeans, masteryGroup, teamCohesion, type MasteryMeans } from './playbook'
 import { DEFAULT_ST, normalizeSpecial, kickReturnMods, puntMods, onsideChance, surpriseChance, alertness, alertFakeEdge, type KickoffCall, type ReturnStrategy, type PuntStrategy, type SpecialTeamsPlan } from './specialCalls'
-import { SCHEME_MENUS, SCHEME_MENUS_REALISM, MENU_REALISM, PLAYBOOK, conceptFromPlaybook, formationForConcept, type Personnel } from '../data/playbookData'
+import { SCHEME_MENUS, SCHEME_MENUS_REALISM, MENU_REALISM, PLAYBOOK, conceptFromPlaybook, formationForConcept, formationHasFullback, type Personnel } from '../data/playbookData'
+import {
+  audibleOptions,
+  callerFor,
+  checkFor,
+  classOfPlay,
+  defAudibleOptions,
+  isTwoMinute,
+  lookFor,
+  qbCheck,
+  resolveAudible,
+  resolveDefAudible,
+  sheetFor,
+  sheetPick,
+  type PlayCallingPlan,
+} from './playcalling'
 import { airYardsFor, depthAwareGain } from './airYards'
 import { mod, schemeFit, styleProfile } from './style'
 import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, spendChallenge, inBoothWindow, type ReviewSnapshot } from './review'
@@ -40,6 +55,9 @@ import {
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
 } from './throw'
 import { FEATURED_CONCEPT, electFeatured, featuredPassEdge, featuredRunEdge, featuredIntMult, featuredOn, type FeaturedPlay } from './featured'
+// FUTURES #7 (H1): the halftime speech card and its second-half edge. Pure, no
+// rng — the verdict is a hash and the edge is the sum of individual responses.
+import { buildSpeechOptions, speechOutcome, speechSituation, withSpeech, type SpeechCtx, type SpeechOutcome, type SpeechId } from './halftimeSpeech'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -1231,6 +1249,8 @@ export interface GameSim {
   fatigue?: Record<string, number>
   /** animflow r6b: the game's weather (read-only, for the broadcast's rain / snow / wind). */
   weather?: GameWeather
+  /** FUTURES #7: the decided halftime speech per club (film / post-game aftermath). */
+  speech?: Record<string, SpeechOutcome>
 }
 
 /** L11.5 Q3: one mid-game change to the user's live plan. */
@@ -3117,6 +3137,8 @@ interface SimEnv {
   /** FUTURES #6: bounded, centered weather effects for this offence & quarter.
    *  Undefined (or all-neutral) when no weather was supplied or weather is off. */
   wx?: WxEffects
+  /** FUTURES #7: the decided halftime speech per club (Q3+ edge), if any. */
+  speech?: Record<string, SpeechOutcome>
 }
 
 /**
@@ -3858,6 +3880,84 @@ function j13PreSnap(world: World, s: GameState, offId: string, defId: string, co
   return { concept: next, effect }
 }
 
+// ── FUTURES #26: the user's audible (design 4) ───────────────────────────────
+// Extends J13 rather than forking it. J13 owns the box-based read; this owns the
+// MATRIX-based audible — the QB changing the called class against the defence's
+// actual call, which he sees through the look (truthful or disguised). The QB's
+// own AWR + experience decide, never a team mean. Hashes only, no rng draw.
+const AUD_BOX: Record<DefCall, number> = { blitz: 7, man: 6, zone: 6, stack: 8, twoHigh: 6 }
+
+/** The human-readable look line on the audible card. */
+function lookText(def: DefCall): string {
+  return `${DEF_CALL_LABEL[def].toLowerCase()} (${AUD_BOX[def]} in box)`
+}
+
+/**
+ * The offensive audible on a call the user made. Returns 'moment' when the card
+ * paused, `{ play, look }` when the QB checked (the caller applies it), or null
+ * to keep the called play.
+ */
+function offAudible(world: World, s: GameState, concept: Concept, aiDef: DefCall): 'moment' | { play: string; look: DefCall } | null {
+  const plan = s.ctx?.calling
+  if (!plan || plan.audibles === 'off') return null
+  // A coordinator who does not keep the offence never audibles it.
+  if (!scopeAllows(s.ctx!.scope, 'off')) return null
+  const qb = j13Qb(world, s.offId, envFor(s))
+  if (!qb) return null
+  const oppRead = s.ctx?.oppRead
+  const sharp = !!oppRead && oppRead.week === world.week && oppRead.oppId === s.defId && oppRead.sharp
+  const key = `${s.n}:${s.offId}:aud`
+  const { shown } = lookFor(aiDef, eff(qb, 'AWR'), sharp, key)
+  // The check-with-me play (or the `checks` override): the opposite class from the
+  // same formation. A check that needs a fullback the club has not got is dropped,
+  // and the card never offers one either.
+  const hasFb = !!topGroup(world, s.offId, ['FB'], 1)[0]
+  const canLineUp = (p: string) => hasFb || !formationHasFullback(formationForConcept(p))
+  let checkName = checkFor(concept.name, plan.checks)
+  if (checkName && !canLineUp(checkName)) checkName = undefined
+  const curCls = offClassFor(concept.type, concept.depth)
+  const checkCls = checkName ? classOfPlay(checkName) : undefined
+  if (plan.audibles === 'qb') {
+    const to = qbCheck(shown, curCls, checkCls, j13ReadDev(world, qb), key)
+    return to && checkName && classOfPlay(checkName) === to ? { play: checkName, look: shown } : null
+  }
+  // 'ask': the card. It sits after the call answer, so the drawn look is cached.
+  const opts = audibleOptions(concept.name, plan.checks, canLineUp)
+  if (opts.length < 2) return null // nothing to check to — never raise an empty card
+  const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  const choice = decide(s, {
+    kind: 'audible', side: 'off', teamId: s.offId, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
+    yard: s.yard, title: `Audible — the look is ${lookText(shown)}`,
+    options: opts.map((o) => ({ id: o.id, label: o.label, hint: o.hint })),
+    defaultId: 'keep', ask: true, margin,
+  })
+  if (choice === null) return 'moment'
+  const play = resolveAudible(choice, concept.name)
+  return play !== concept.name ? { play, look: shown } : null
+}
+
+/**
+ * The defensive audible (design 4, 'ask' only): after the AI's class and concept
+ * are drawn, the user sees the offence's formation/personnel and may rotate,
+ * pressure or load the box. The drawn class/concept are cached by the caller.
+ */
+function defAudible(s: GameState, offConcept: Concept, cur: DefCall): 'moment' | DefCall | null {
+  const plan = s.ctx?.calling
+  if (!plan || plan.audibles !== 'ask') return null
+  if (!scopeAllows(s.ctx!.scope, 'def')) return null
+  const userTeam = s.ctx!.userTeamId
+  const margin = userTeam === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  const choice = decide(s, {
+    kind: 'audible', side: 'def', teamId: userTeam, qtr: s.qtr, clock: fmtClock(s.clock), down: s.down, distance: s.distance,
+    yard: s.yard, title: `Audible — they show ${formationForConcept(offConcept.name)}, ${offConcept.personnel ?? '11'} personnel`,
+    options: defAudibleOptions().map((o) => ({ id: o.id, label: o.label, hint: o.hint })),
+    defaultId: 'stay', ask: true, margin,
+  })
+  if (choice === null) return 'moment'
+  const next = resolveDefAudible(choice, cur)
+  return next !== cur ? next : null
+}
+
 type J12DefMove = 'shadowWR1' | 'spyQB'
 type J12OffMove = 'doubleRusher' | 'chipEdge'
 
@@ -4080,8 +4180,8 @@ function proximityWeight(p: Player, coverId: string | undefined): number {
 export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect): PlayOutcome {
-  const ocEff = ocEffect(world, offId)
-  const dcEff = ocEffect(world, defId)
+  const ocEff = withSpeech(ocEffect(world, offId), env, offId)
+  const dcEff = withSpeech(ocEffect(world, defId), env, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
   // AI-vs-AI snaps never see them.
   const userTeamId = env?.userTeamId
@@ -5183,8 +5283,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
 }
 
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), j13?: J13Effect): PlayOutcome {
-  const ocEff = ocEffect(world, offId)
-  const dcEff = ocEffect(world, defId)
+  const ocEff = withSpeech(ocEffect(world, offId), env, offId)
+  const dcEff = withSpeech(ocEffect(world, defId), env, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only.
   const userTeamId = env?.userTeamId
   const userOff = !!userTeamId && userTeamId === offId
@@ -5975,7 +6075,7 @@ function fmtClock(sec: number) {
 }
 
 // ── Resumable game state (L10 G1) ─────────────────────────────────────────────
-export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff' | 'challenge'
+export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'audible' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff' | 'challenge' | 'speech'
 /** Which side a moment belongs to (Design rule 5). 'hc' = head-coach only. */
 export type MomentSide = 'off' | 'def' | 'both' | 'hc'
 /** G7 two-minute offensive mode for the current possession. */
@@ -6014,6 +6114,8 @@ export interface DecisionLog {
   read?: number
   /** L10 G9: the opponent's call on a `call`/`defCall` snap, for the film grade. */
   vs?: string
+  /** FUTURES #26: the QB checked the user's call pre-snap (the audible's record). */
+  audible?: { from: string; to: string; look: DefCall }
 }
 export interface GameCtx {
   userTeamId: string
@@ -6031,10 +6133,16 @@ export interface GameCtx {
   usage?: UsageSet
   /** L13: the user's personnel packages for this game. */
   personnel?: PersonnelSet
-  /** L12.6: call every snap on this side (coached games only); unset = key moments only. */
-  callAll?: 'off' | 'def' | 'both'
+  /** L12.6: call every snap on this side (coached games only); unset = key moments only.
+   *  FUTURES #26: 'sheet' is `career.callMode`'s value and never triggers the
+   *  every-snap path — the situational sheet (`calling`) decides instead. */
+  callAll?: 'off' | 'def' | 'both' | 'sheet'
   /** FUTURES #4: the user's special-teams plan (kicks + return strategies). */
   special?: SpecialTeamsPlan
+  /** FUTURES #26: who calls each situation, the user's call sheet and audibles rule. */
+  calling?: PlayCallingPlan
+  /** FUTURES #7: the user's halftime-speech context (leadership, captains, history). */
+  speech?: SpeechCtx
 }
 export interface GameState {
   rng: Rng
@@ -6138,6 +6246,16 @@ export interface GameState {
   challenges?: Record<string, ChallengeState>
   /** J38: featured plays called so far this game, per key (diminishing returns). */
   featuredCount?: Record<string, number>
+  /**
+   * FUTURES #26: the drawn AI call cached before an audible pause, so re-entry
+   * after the user answers never redraws from the rng (design hook 2).
+   */
+  callLooks?: Record<string, { def?: DefCall; cls?: OffClass; concept?: string }>
+  // ── FUTURES #7: halftime speech ────────────────────────────────────────────
+  /** The decided speech per club (only the user's club ever speaks). */
+  speech?: Record<string, SpeechOutcome>
+  /** The speech card has been resolved this halftime. */
+  speechDone?: boolean
 }
 
 const MAX_PLAYS = 210
@@ -6177,15 +6295,16 @@ function pushPlay(s: GameState, p: Omit<Play, 'n' | 'qtr' | 'clock' | 'offId' | 
 
 // ── Decision points (L10 G2) ──────────────────────────────────────────────────
 const MOMENT_CAPS: Record<MomentKind, number> = {
-  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2, challenge: 3,
+  fourth: 3, two: 2, call: 2, defCall: 2, audible: 3, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2, challenge: 3, speech: 1,
 }
 /** Cap on the big moments. Play calls (call/defCall) have their own caps and do
  *  not count here, so they can never crowd out halftime or a late 2-point try. */
 const TOTAL_MOMENT_CAP = 8
-const isPlayCall = (k: MomentKind) => k === 'call' || k === 'defCall'
-/** Moments exempt from the total cap: play calls and (FUTURES #5) red flags, so a
- *  challenge can never crowd out halftime or a late 2-point try. */
-const capExempt = (k: MomentKind) => isPlayCall(k) || k === 'challenge'
+const isPlayCall = (k: MomentKind) => k === 'call' || k === 'defCall' || k === 'audible'
+/** Moments exempt from the total cap: play calls, (FUTURES #5) red flags and
+ *  (FUTURES #7) the halftime speech, so a speech can never crowd out halftime or
+ *  a late 2-point try. */
+const capExempt = (k: MomentKind) => isPlayCall(k) || k === 'challenge' || k === 'speech'
 
 interface DecisionSpec {
   kind: MomentKind
@@ -6507,13 +6626,34 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
     }
     s.qbChangeChecked = true
   }
+  // FUTURES #7: the HC's halftime speech, after the X&O and QB cards. Only the
+  // user's club speaks; a stay-the-course answer stores nothing, so the default
+  // game is untouched. The verdict is a hash and the edge is the sum of the
+  // players' own responses — no rng() draw is added.
+  if (s.ctx && !s.speechDone) {
+    const userTeam = s.ctx.userTeamId
+    const margin = userTeam === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+    const benchedQbId = s.qbOverride[userTeam] ? depthGroup(world, userTeam, ['QB'], 2)[0]?.id : undefined
+    const card = buildSpeechOptions(world, s.plays, userTeam, s.ctx.speech, { margin, benchedQbId })
+    const choice = decide(s, {
+      kind: 'speech', side: 'hc', teamId: userTeam, qtr: 2, clock: '0:00', down: null, distance: null, yard: s.yard,
+      title: 'Halftime speech', options: card.options, defaultId: card.defaultId, staffRead: card.staffRead, ask: true, margin,
+    })
+    if (choice === null) return 'moment'
+    if (choice !== 'stayCourse') {
+      const sit = speechSituation(world, s.plays, userTeam, margin)
+      const key = `${s.homeId}:${s.awayId}:${userTeam}:${s.plays.length}:${world.seed}:${world.week}`
+      ;(s.speech ??= {})[userTeam] = speechOutcome(world, userTeam, choice as SpeechId, s.ctx.speech, key, { sit, starId: card.starId })
+    }
+    s.speechDone = true
+  }
   return stepHalftime(world, s)
 }
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId) }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId), speech: s.speech }
 }
 
 /** FUTURES #6: the centred weather effects for one offence (undefined = neutral). */
@@ -6713,9 +6853,41 @@ function situationalOutcome(world: World, s: GameState, kind: 'kneel' | 'spike')
   return { type: 'pass', concept: 'Spike', yards: 0, result: 'Incomplete (spike)', turnover: false, qbId: qb?.id, spike: true, ...fields }
 }
 
+/**
+ * FUTURES #26 probe (dev only, default off): counts the rng() draws a game
+ * consumes. With it off the stream is the plain `makeRng`, so every resolved
+ * play is byte-identical to main; it only measures, it never changes a draw.
+ */
+export const PC_DEV = { on: false, draws: 0, sheetOff: 0, sheetMiss: 0, sheetDraws: 0, selDraws: 0, selSnaps: 0 }
+
+/**
+ * FUTURES #26 (design 3): a staff-called user snap runs the USER'S sheet when it
+ * has plays for this bucket. The coordinator's own draw has already happened (and
+ * is discarded), so this adds no rng draw; an empty sheet or a club without the
+ * fullback the pick needs leaves the standing concept alone. Pure hash pick.
+ */
+function sheetOffCall(world: World, s: GameState, offId: string, bucket: Bucket, standing: Concept): Concept {
+  const calling = s.ctx?.calling
+  if (!calling || offId !== s.ctx!.userTeamId) return standing
+  const list = sheetFor(calling, 'off', bucket) as string[]
+  if (!list.length) return standing
+  const before = PC_DEV.on ? PC_DEV.draws : -1
+  const pick = sheetPick(list, `${s.n}:sheet:${offId}`)
+  const sheeted = pick ? conceptFromPlaybook(pick) : undefined
+  const blocked = pick ? formationHasFullback(formationForConcept(pick)) && !topGroup(world, offId, ['FB'], 1)[0] : false
+  if (PC_DEV.on && PC_DEV.draws !== before) PC_DEV.sheetDraws += 1
+  if (sheeted && !blocked) {
+    if (PC_DEV.on) PC_DEV.sheetOff += 1
+    return sheeted
+  }
+  if (PC_DEV.on) PC_DEV.sheetMiss += 1
+  return standing
+}
+
 export function createGame(world: World, homeId: string, awayId: string, seed: number, ctx?: GameCtx, weather?: GameWeather): GameState {
   const isCollege = world.byId[homeId].tier !== 'NFL'
-  const rng = makeRng(seed)
+  const rngBase = makeRng(seed)
+  const rng: Rng = PC_DEV.on ? () => { PC_DEV.draws += 1; return rngBase() } : rngBase
   // L12.13 M3: league mastery means and per-team mental-error multipliers are
   // fixed for the game (no rng drawn here, so the stream is unchanged).
   const means = leagueMasteryMeans(world)
@@ -6767,6 +6939,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     logged: {},
     halfAdjustDone: false,
     qbChangeChecked: false,
+    speechDone: false,
     twoMinDrives: 0,
     mastery: means,
     mental: { [homeId]: teamMental(homeId), [awayId]: teamMental(awayId) },
@@ -7366,17 +7539,27 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
 
   // L12.6: in "call every play" mode the user's side is asked on every snap.
   const callAll = s.ctx?.callAll
+  // FUTURES #26: with a call sheet the user's side is also asked when this
+  // situation is theirs ('me'). An empty `callers` reproduces 'key' exactly.
+  const calling = s.ctx?.calling
+  const twoMin = isTwoMinute(s.qtr, s.clock)
+  const offAsked = calling ? callerFor(calling, 'off', bucket, twoMin) === 'me' : false
+  const defAsked = calling ? callerFor(calling, 'def', bucket, twoMin) === 'me' : false
   const callTriggered = offIsUser && (!isFourth || fourthChoice === 'go') && (
-    callAll === 'off' || callAll === 'both' ||
+    callAll === 'off' || callAll === 'both' || offAsked ||
     (s.down === 3 && s.distance <= 3) ||
     (s.yard >= 80 && s.down >= 3) ||
     (s.qtr === 4 && s.clock <= 120 && marginOf(s.offId) >= -8 && marginOf(s.offId) <= 0)
   )
   const defCallTriggered = defIsUser && (
-    callAll === 'def' || callAll === 'both' ||
+    callAll === 'def' || callAll === 'both' || defAsked ||
     (s.down === 3 && s.yard >= 40) ||
     (s.qtr === 4 && s.clock <= 120 && marginOf(s.ctx!.userTeamId) >= 1 && marginOf(s.ctx!.userTeamId) <= 8)
   )
+
+  // FUTURES #26 probe (dev only): draws consumed by the concept selection, so the
+  // sheet can be shown to add none. Off by default; never changes a draw.
+  const selD0 = PC_DEV.on ? PC_DEV.draws : 0
 
   if (callTriggered) {
     // The standing concept is what pickConcept would have chosen — one draw, and
@@ -7387,6 +7570,9 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       standing = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
       // J38: the standing/auto call may be a featured play for a qualifying star.
       standing = applyFeatured(world, s, standing, offId, defId)
+      // FUTURES #26 (design 3): even when this is a standing order (a key moment
+      // the cap no longer asks), the coordinator calls from the user's sheet.
+      standing = sheetOffCall(world, s, offId, bucket, standing)
       s.callConcepts[id] = standing
     }
     const read = tendencyRead(world, s, s.defId, 'def', bucket)
@@ -7404,11 +7590,25 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     if (choice === null) return 'moment'
     concept = (choice === standing.name && !callCards().some((c) => c.name === choice) ? standing : undefined) ??
       style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
-    const aiDef = drawAIDefCall(world, s, s.defId, bucket)
+    // FUTURES #26: the drawn AI call is cached before any audible pause, so
+    // re-entry after the user answers never redraws it (the rng stream holds).
+    const cachedLook = s.callLooks?.[id]
+    const aiDef = cachedLook?.def ?? drawAIDefCall(world, s, s.defId, bucket)
+    ;(s.callLooks ??= {})[id] = { ...cachedLook, def: aiDef }
     // The matrix only applies to a call the user made; a standing order plays the
     // snap exactly as fast sim would (no edge either way).
     const last = s.decisions[s.decisions.length - 1]
     if (last && last.momentId === id && last.source === 'user') {
+      // FUTURES #26 (design 4): the QB's audible on a call the user made. 'qb' is
+      // silent and decided by his own read; 'ask' is a card. Extends J13 (this
+      // runs before it, so J13's own box read still has the final word).
+      const audible = offAudible(world, s, concept, aiDef)
+      if (audible === 'moment') return 'moment'
+      if (audible && audible.play !== concept.name) {
+        const from = concept.name
+        concept = conceptFromPlaybook(audible.play) ?? concept
+        last.audible = { from, to: audible.play, look: audible.look }
+      }
       call = callEffect(offClassFor(concept.type, concept.depth), aiDef)
       last.outcome = call.edge > 0 ? 'won' : call.edge < 0 ? 'lost' : 'push'
       last.vs = aiDef
@@ -7426,12 +7626,25 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     })
     if (choice === null) return 'moment'
     userDefCall = choice as DefCall
-    const aiCls = drawAIOffClass(world, s, s.offId, bucket)
-    concept = pickConceptOfClass(s.rng, style, aiCls)
+    // FUTURES #26: the drawn class/concept are cached before the D audible pause,
+    // so re-entry after the answer never redraws them (the rng stream holds). The
+    // cached name is the pre-featured pick; applyFeatured is deterministic.
+    const cachedLook = s.callLooks?.[id]
+    const aiCls = cachedLook?.cls ?? drawAIOffClass(world, s, s.offId, bucket)
+    const cachedConcept = cachedLook?.concept ? conceptFromPlaybook(cachedLook.concept) : undefined
+    if (cachedConcept) concept = cachedConcept
+    else {
+      concept = pickConceptOfClass(s.rng, style, aiCls)
+      ;(s.callLooks ??= {})[id] = { ...cachedLook, cls: aiCls, concept: concept.name }
+    }
     // J38: the AI playcaller mixes in a featured play for a qualifying star.
     concept = applyFeatured(world, s, concept, offId, defId)
     const last = s.decisions[s.decisions.length - 1]
     if (last && last.momentId === id && last.source === 'user') {
+      // FUTURES #26 (design 4): the D-side audible ('ask' only).
+      const dAud = defAudible(s, concept, userDefCall)
+      if (dAud === 'moment') return 'moment'
+      if (dAud) userDefCall = dAud
       call = callEffect(aiCls, userDefCall)
       last.outcome = call.edge > 0 ? 'won' : call.edge < 0 ? 'lost' : 'push'
       last.vs = aiCls
@@ -7457,8 +7670,13 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       concept = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
       // J38: the playcaller mixes in a featured play for a qualifying star.
       concept = applyFeatured(world, s, concept, offId, defId)
+      // FUTURES #26 (design 3): a staff-called user snap runs the USER'S sheet
+      // when it has plays for this bucket. The rng draw above is kept (then
+      // discarded), so the stream holds; an empty sheet changes nothing.
+      concept = sheetOffCall(world, s, offId, bucket, concept)
     }
   }
+  if (PC_DEV.on) { PC_DEV.selDraws += PC_DEV.draws - selD0; PC_DEV.selSnaps += 1 }
 
   // J13 (FUTURES #33): before the snap the specific QB checks the called play
   // against the look the defence shows (box count + a blitz look, as the J12
@@ -7617,7 +7835,12 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // the rng stream are unchanged. A booth review record rides the pushed play.
   const off = officiate(world, s, out, fourthChoice)
   const playIdx = s.plays.length
-  const defCall = userDefCall ?? (defIsUser ? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN) : undefined)
+  // FUTURES #26 (design 3): a standing defensive snap runs the USER'S D sheet
+  // when it has calls for this bucket; otherwise the plan's own call as before.
+  const defSheetCall = defIsUser && calling
+    ? sheetPick(sheetFor(calling, 'def', bucket) as DefCall[], `${s.n}:sheet:${defId}`)
+    : undefined
+  const defCall = userDefCall ?? (defIsUser ? (defSheetCall ?? defCallForPlan(planFor(defId, 'def') ?? BALANCED_PLAN)) : undefined)
   // C2: a challenge-domain close call keeps the truth plus a pre-apply snapshot,
   // so the hurt club can throw the flag at the start of the next step.
   if (off.challenge) {
@@ -7702,6 +7925,7 @@ export function finishGame(s: GameState): GameSim {
     specialists: s.specialists,
     fatigue: s.fat,
     weather: s.weather,
+    speech: s.speech,
   }
 }
 

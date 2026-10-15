@@ -111,4 +111,4 @@ None on game sim: the draft runs offseason and calibration measures fresh-world 
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| DF1 / DF2 / DF3 / DF4 | ⏳ |
+| DF1 / DF2 / DF3 / DF4 | DF1 ✅ (row 366) · DF2 ✅ 2026-10-15 (row 439) · DF3 ⏳ · DF4 ⏳ |
