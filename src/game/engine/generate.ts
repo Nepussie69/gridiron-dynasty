@@ -882,13 +882,22 @@ const STREET_MIX: [Position, number][] = [
   ['C', 7], ['DE', 16], ['DT', 16], ['LB', 22], ['CB', 22], ['S', 14], ['K', 3], ['P', 3],
 ]
 
-/** Per-player street rating (raw scale): mostly fringe, with a real tail. */
+/**
+ * Per-player street rating (raw scale): mostly fringe, with a real tail.
+ *
+ * fastars (backlog 478): the old tail gave 3% of the pool a raw 88–97 rating —
+ * roughly six FABRICATED 90+ free agents on the street at every career start
+ * (the generated "released stars" in the user's screenshot). An unsigned 85+
+ * player in week 1 is essentially unheard of in the NFL, so the tail is now a
+ * rarer, lower-ceiling fading vet: ~0.5 raw-85+ body per 200, none above raw 90.
+ * The COUNT, position mix and draw order are unchanged, so nothing else moves.
+ */
 function streetOvrRaw(rng: Rng): number {
   const r = rng()
   if (r < 0.6) return rint(rng, 46, 66) // camp bodies / fringe
-  if (r < 0.86) return rint(rng, 66, 78) // replacement depth
-  if (r < 0.97) return rint(rng, 78, 88) // starter-quality vets
-  return rint(rng, 88, 97) // released stars
+  if (r < 0.93) return rint(rng, 66, 78) // replacement depth
+  if (r < 0.997) return rint(rng, 78, 85) // starter-quality vets
+  return rint(rng, 85, 90) // a rare released star
 }
 
 /** One unsigned street player: mixed age (young fringe + released vets), no
