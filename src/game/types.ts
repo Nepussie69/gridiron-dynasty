@@ -799,6 +799,12 @@ export interface CareerState {
   callMode?: 'off' | 'def' | 'both' | 'sheet'
   /** FUTURES #26: who calls each situation, the call sheet, and the audibles rule. */
   playCalling?: import('./engine/playcalling').PlayCallingPlan
+  /**
+   * FUTURES #7 (H2): the halftime-speech standing order for simmed games.
+   * 'stay' (default) answers STAY THE COURSE; 'staff' lets the staff read the
+   * room and pick the best-fitting speech. Unset = 'stay' (baseline).
+   */
+  halftimeAuto?: 'stay' | 'staff'
   /** L12 W2: the keys to the game picked for a week. */
   keys?: { week: number; season: number; ids: string[] }
   /** L12 W2: the season's key-hit ledger, capped at ±3 leadership. */

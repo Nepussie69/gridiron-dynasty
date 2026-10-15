@@ -22,6 +22,7 @@
 
 import type { Player } from '../types'
 import type { World } from './generate'
+import type { SpeechId, SpeechResult } from './halftimeSpeech'
 import { clamp } from './rng'
 
 /** How many captains a room can name. */
@@ -32,6 +33,8 @@ export const MAX_MENTEES = 6
 export const MAX_MENTEE_AGE = 23
 /** At or above this distraction score a player reads as a problem. */
 export const PROBLEM_MIN = 62
+/** FUTURES #7 (H2): the halftime speeches kept for the season (repetition + the record). */
+export const MAX_SPEECHES = 17
 /** Growth multiplier a mentor can add to a young player's offseason step. */
 const MENTOR_MIN = 0.10
 const MENTOR_MAX = 0.26
@@ -45,7 +48,36 @@ export interface LockerRoomState {
   mentors: Record<string, string>
   /** Opt-in: the club's morale moves its on-field effort. Off by default. */
   effort?: boolean
+  /**
+   * FUTURES #7 (H2): this season's halftime speeches, newest last (cap 17). The
+   * record drives the repetition penalty (the same speech in the last 3 games)
+   * and the locker-room card. Optional — a legacy save has none.
+   */
+  speeches?: SpeechRecord[]
 }
+
+/** One halftime speech this season, as the locker room keeps it. */
+export interface SpeechRecord {
+  week: number
+  id: SpeechId
+  result: SpeechResult
+  starId?: string
+}
+
+/**
+ * Append a speech to the season's record (newest last, capped). Pure; the caller
+ * writes the returned state back onto the career.
+ */
+export function recordSpeech(lr: LockerRoomState, rec: SpeechRecord): LockerRoomState {
+  const speeches = [...(lr.speeches ?? []), rec]
+  return { ...lr, speeches: speeches.slice(-MAX_SPEECHES) }
+}
+
+/** The ids of the club's last `n` speeches, most recent last (repetition penalty). */
+export function recentSpeeches(lr: LockerRoomState | undefined, n: number): SpeechId[] {
+  return (lr?.speeches ?? []).slice(-n).map((s) => s.id)
+}
+
 
 /** This season's locker-room state, fresh if the stored one is from an earlier season. */
 export function lockerRoomState(
