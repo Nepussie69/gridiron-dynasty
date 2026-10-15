@@ -28,6 +28,12 @@ export const DEF_SCHEMES = ['4-3 Base', '3-4 Base', '4-2-5 Nickel', 'Multiple', 
 // ── L11.5 Q8: front-office staff have focus + front-office specialties ─────────
 export const SCOUT_FOCUS = ['College East', 'College West', 'Pro', 'Character']
 export const DPP_FOCUS = ['Pro scouting', 'Negotiation', 'Cap', 'Analytics']
+// The GM works the scouting/negotiation/cap lanes. He is deliberately NOT an
+// analytics lane: `analyticsRating()` touches the sim (a club's replay read),
+// so keeping the AI GM out of it leaves every AI club's challenge behaviour —
+// and the calibrated sim — exactly as it was. His analytics-adjacent read is
+// his own `drafting`/`trading`/`cap` temperament (generate.ts).
+export const GM_FOCUS = ['Pro scouting', 'Negotiation', 'Cap']
 export const FRONT_SPECIALTIES = ['Talent ID', 'Character reads', 'Negotiation', 'Cap management', 'Analytics']
 
 // ── FUTURES 19: the analytics department ─────────────────────────────────────
@@ -69,7 +75,8 @@ export function isFrontOfficeRole(role: string): boolean {
 /** Focus options for a front-office role (empty for coaches). */
 export function focusOptions(role: string): string[] {
   if (role === 'Scout') return SCOUT_FOCUS
-  if (role === 'Director of Player Personnel' || role === 'General Manager') return DPP_FOCUS
+  if (role === 'General Manager') return GM_FOCUS
+  if (role === 'Director of Player Personnel') return DPP_FOCUS
   return []
 }
 

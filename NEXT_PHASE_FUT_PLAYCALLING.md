@@ -104,5 +104,5 @@ P3a and P3b run in parallel worktrees. Avoid `resolvePass`/`resolveRun`, because
 |---|---|
 | Spec | ✅ 2026-10-11 |
 | P1 engine | ✅ merged 2026-10-15 (row 442) |
-| P2 store | ⏳ |
-| P3a / P3b UI | ⏳ |
+| P2 store | ✅ 2026-10-15 (row 455) |
+| P3a / P3b UI | ✅ merged 2026-10-15 (rows 469, 470) |

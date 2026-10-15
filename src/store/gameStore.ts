@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   buildWorld,
   captureDivisionFinish,
+  ensureGeneralManagers,
   fitToCap,
   indexPlayers,
   regenerateSchedule,
@@ -17,6 +18,9 @@ import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, 
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
 import { isTrickKind, TRICK } from '../game/engine/trickPlays'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
+// FUTURES #26 P2: the coach-playcalling plan (who calls each situation, the call
+// sheet, the audibles rule). Types + normalise come from the P1 engine module.
+import { normalizePlayCalling, type PlayCallingPlan } from '../game/engine/playcalling'
 import { gameWeather, setWeather, getWeather, type GameWeather, type WeatherGame } from '../game/engine/weather'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills, userSeat } from '../game/engine/coaching'
 import {
@@ -76,6 +80,10 @@ import {
   runInSeasonFreeAgency,
   marketPrice,
   ROSTER_FLOOR,
+  ROSTER_OFFSEASON_MAX,
+  ROSTER_TARGET,
+  recommendedCuts,
+  rosterLimit,
   fillNflRosters,
   runAIResign,
   runAITrades,
@@ -641,6 +649,11 @@ interface GameStore {
   tick: number
   ready: boolean
   screen: ScreenId
+  /**
+   * offseason90: the Cutdown view is open on the Roster screen (the club is over
+   * 53 in the offseason and must trim before week 1).
+   */
+  cutdownOpen: boolean
   career: CareerState | null
   activeTeamId: string
   /** L12.8 V1: the club shown on the read-only team page (null → the active club). */
@@ -683,8 +696,9 @@ interface GameStore {
   answerGameMoment: (choiceId: string) => Promise<void>
   /** T2M: call a timeout on the next dead ball (game day dock). */
   callTimeout: () => void
-  /** L12.6: how often a coached game asks for your call (applies from the next snap). */
-  setCallMode: (mode: 'key' | 'off' | 'def' | 'both', keepPlays?: number) => boolean
+  /** L12.6: how often a coached game asks for your call (applies from the next snap).
+   *  FUTURES #26: 'sheet' asks only in the situations the plan hands to you. */
+  setCallMode: (mode: 'key' | 'off' | 'def' | 'both' | 'sheet', keepPlays?: number) => boolean
   /** FUTURES #7 (H2): the halftime-speech standing order for simmed games. */
   setHalftimeAuto: (mode: 'stay' | 'staff') => void
   simGameDayToEnd: () => Promise<void>
@@ -698,6 +712,9 @@ interface GameStore {
   setPlanTargets: (side: 'off' | 'def', ids: string[]) => void
   /** L10 G4: the user's 4th-down / 2-point / timeout call sheet. */
   setCallSheet: (sheet: CallSheet) => void
+  /** FUTURES #26: the coach-playcalling plan (situational callers, the sheet,
+   *  audibles). Normalised on write and on load; undefined = today's default. */
+  setPlayCalling: (plan: PlayCallingPlan | undefined) => void
   /** FUTURES #4: the user's special-teams kick + return strategies. */
   setSpecialTeams: (plan: SpecialTeamsPlan) => void
   /** FUTURES #24: install up to two trick plays on this week's game plan. */
@@ -751,9 +768,20 @@ interface GameStore {
   startCareer: (opts: { name: string; path: CareerPath; archetype: string; side?: 'off' | 'def'; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId; slot?: number }) => Promise<void>
   resetCareer: () => void
   advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
-  /** L12.6 C1: step the offseason calendar one stage (resign → FA → draft → camp → season). */
+  /** L12.6 C1: step the offseason calendar one stage (resign → FA → draft → camp → season).
+   *  offseason90: `sim` marks a sim-through, so cutdown day auto-applies the staff's
+   *  recommended cuts (with an inbox note) instead of blocking once for the Cutdown view. */
   advanceStage: () => void
-  startNextSeason: () => void
+  startNextSeason: (opts?: { sim?: boolean }) => void
+  /** offseason90: open/close the Cutdown view on the Roster screen. */
+  openCutdown: () => void
+  closeCutdown: () => void
+  /**
+   * offseason90 cutdown day: cut the lowest-rated surplus down to ROSTER_TARGET
+   * (every ROSTER_FLOOR minimum kept), through the normal release path, and file
+   * an inbox note naming everyone released. Returns the names cut.
+   */
+  applyRecommendedCuts: () => string[]
   dismissModal: () => void
   /** Resume the validated save held by the career hub. */
   continueCareer: () => void
@@ -954,6 +982,31 @@ function bump(set: (p: Partial<GameStore>) => void, get: () => GameStore) {
   set({ tick: get().tick + 1 })
 }
 
+/**
+ * offseason90: release one player from a club through the normal path — book his
+ * dead money and send him to the waiver wire (in season) or the free-agent pool
+ * (in the offseason). Shared by `releasePlayer` and cutdown day so the savings
+ * and dead money a cut predicts are exactly what the Cap screen then shows.
+ */
+function releaseFromRoster(teamId: string, p: Player): number {
+  const roster = world.roster[teamId] ?? []
+  const idx = roster.indexOf(p)
+  if (idx < 0) return 0
+  const dead = deadMoney(p.contract)
+  world.deadMoney[teamId] = (world.deadMoney[teamId] ?? 0) + dead
+  roster.splice(idx, 1)
+  p.teamId = null
+  const original = { ...p.contract }
+  p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+  // W2: in-season releases go on the waiver wire, not straight to free agency.
+  if (world.phase === 'regular') {
+    placeOnWaivers(world, p, teamId, original, dead)
+  } else {
+    world.freeAgents.push(p)
+  }
+  return dead
+}
+
 /** Mark a weekly-checklist task complete on the career (immutably). */
 function withFlag(career: CareerState, key: string): CareerState {
   return { ...career, weekFlags: { ...(career.weekFlags ?? {}), [key]: true } }
@@ -1069,6 +1122,7 @@ export const useGame = create<GameStore>((set, get) => ({
   tick: 0,
   ready: false,
   screen: 'career',
+  cutdownOpen: false,
   career: null,
   activeTeamId: 'BUF',
   teamViewId: null,
@@ -1465,6 +1519,11 @@ export const useGame = create<GameStore>((set, get) => ({
         ambitions: [],
       }
       career = applyScenario(world, career, scenario)
+      // gmpersona: every NFL club has an AI General Manager — except the club
+      // whose GM seat this career holds (personnel L8), where the user is the GM.
+      // Deterministic from (teamId, season): no rng draw, so the world and sim
+      // stay byte-identical.
+      ensureGeneralManagers(world, userGmTeamId(career))
       career.seasonQuestion = makeSeasonQuestion(world, career)
       career.devBaseline = snapshotDevBaseline(world, career)
       // L11.5 Q14: the opening inbox was written for Buffalo; re-point it at this club.
@@ -1538,7 +1597,8 @@ export const useGame = create<GameStore>((set, get) => ({
     // While a coached game is in progress, only its own finish may advance the week.
     if (get().gameDay && !opts?.userSim) return
     if (world.phase === 'offseason') {
-      get().startNextSeason()
+      // offseason90: a sim-through applies cutdown day's recommended cuts.
+      get().startNextSeason({ sim: true })
       return
     }
     const week = world.week
@@ -2151,6 +2211,22 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  setPlayCalling: (plan) => {
+    const career = get().career
+    if (!career) return
+    // FUTURES #26 P2: normalise whatever the Game Plan card hands us (junk sheet
+    // entries, unknown callers and audibles are dropped) and store it on the
+    // career. `undefined` clears it back to today's default (no plan at all).
+    // The live game keeps its own copy from kickoff, so a mid-game edit never
+    // rewrites the game in progress — the same rule as the plan/personnel.
+    const clean = normalizePlayCalling(plan)
+    const next = { ...career }
+    if (clean) next.playCalling = clean
+    else delete next.playCalling
+    set({ career: withFlag(next, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
   setSpecialTeams: (plan) => {
     const career = get().career
     if (!career) return
@@ -2289,7 +2365,7 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
-  startNextSeason: () => {
+  startNextSeason: (opts) => {
     const career = get().career
     if (!career) return
     if (world.phase !== 'offseason') return
@@ -2306,6 +2382,10 @@ export const useGame = create<GameStore>((set, get) => ({
     // FUTURES 12: any undecided fifth-year option lapses when the new season
     // begins (the fast path never saw the camp deadline).
     finalizeFifthYearOptions(world, career)
+    // offseason90: cutdown day. The club must be at 53 or fewer before the new
+    // season opens; a manual step is blocked once for the Cutdown view, a
+    // sim-through trims to the staff's recommendation (with an inbox note).
+    if (!cutdownReady(set, get, !opts?.sim)) return
     world.season += 1
     // FUTURES #37: pair chemistry decays slowly in the offseason — a pair that
     // spent the winter apart comes back a little less in sync.
@@ -2390,6 +2470,10 @@ export const useGame = create<GameStore>((set, get) => ({
     seasonCareer = staffTick.career
     const staffPoach = rollPoachOffers(world, seasonCareer)
     seasonCareer = staffPoach.career
+    // gmpersona: keep the AI GM on every club across the rollover (he keeps the
+    // id he was hired with, so his tenure runs on), and clear the seat on a club
+    // the user's own career now runs as GM. Deterministic — no rng draw.
+    ensureGeneralManagers(world, userGmTeamId(seasonCareer))
     for (const off of staffTick.expired) {
       pushCareerNews(world, seasonCareer, {
         category: 'Career',
@@ -3365,6 +3449,18 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = world.freeAgents.findIndex((p) => p.id === id)
     if (idx < 0) return
     const p = world.freeAgents[idx]
+    // offseason90: the club may run a 90-man offseason camp; from week 1 the
+    // active roster is the usual 53.
+    const roster = (world.roster[career.teamId] ??= [])
+    const limit = rosterLimit(world)
+    if (roster.length >= limit) {
+      get().showToast(
+        limit > ROSTER_TARGET
+          ? `Offseason camp roster is full (${limit}). Cut a player before signing another.`
+          : 'Active roster is full (53). Release a player first.',
+      )
+      return
+    }
     // W1: a released player carries a zeroed contract, so price the signing
     // here (one year at market, pro-rated for the weeks left in season).
     // L12.9 K2: a winning-culture club signs him at a discounted asking price.
@@ -3440,24 +3536,46 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const roster = world.roster[career.teamId] ?? []
-    const idx = roster.findIndex((p) => p.id === id)
-    if (idx < 0) return
-    const p = roster[idx]
-    const dead = deadMoney(p.contract)
-    world.deadMoney[career.teamId] = (world.deadMoney[career.teamId] ?? 0) + dead
-    roster.splice(idx, 1)
-    p.teamId = null
-    const original = { ...p.contract }
-    p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
-    // W2: in-season releases go on the waiver wire, not straight to free agency.
-    if (world.phase === 'regular') {
-      placeOnWaivers(world, p, career.teamId, original, dead)
-    } else {
-      world.freeAgents.push(p)
-    }
+    const p = roster.find((x) => x.id === id)
+    if (!p) return
+    const dead = releaseFromRoster(career.teamId, p)
     bump(set, get)
     get().showToast(`${p.name} released. Dead money: $${(dead / 1e6).toFixed(1)}M.`)
     get().save()
+  },
+
+  // ── offseason90: cutdown day ────────────────────────────────────────────────
+  openCutdown: () => {
+    set({ cutdownOpen: true, screen: 'roster' })
+  },
+
+  closeCutdown: () => set({ cutdownOpen: false }),
+
+  applyRecommendedCuts: () => {
+    const career = get().career
+    if (!career) return []
+    const roster = world.roster[career.teamId] ?? []
+    if (roster.length <= ROSTER_TARGET) return []
+    // The staff cuts the lowest-rated surplus first, keeping every position
+    // floor — the same order the league's own trimmer uses.
+    const cuts = recommendedCuts(roster, ROSTER_TARGET)
+    const names: string[] = []
+    let dead = 0
+    for (const p of cuts) {
+      names.push(`${p.name} (${p.pos}, ${p.ovr} OVR)`)
+      dead += releaseFromRoster(career.teamId, p)
+    }
+    if (names.length) {
+      pushCareerNews(world, career, {
+        category: 'Roster',
+        headline: `Cutdown day: ${names.length} released to reach ${ROSTER_TARGET}`,
+        body: `The staff trimmed the roster to ${ROSTER_TARGET} before week 1, booking $${(dead / 1e6).toFixed(1)}M in dead money. Released: ${names.join(', ')}. They are free agents now and can be signed to the practice squad.`,
+      })
+    }
+    set({ cutdownOpen: false })
+    bump(set, get)
+    get().save()
+    return names
   },
 
   claimWaiver: (playerId) => {
@@ -4105,8 +4223,13 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = ps.findIndex((p) => p.id === id)
     if (idx < 0) return
     const roster = (world.roster[career.teamId] ??= [])
-    if (roster.length >= 53) {
-      get().showToast('Active roster is full (53). Release a player first.')
+    const limit = rosterLimit(world)
+    if (roster.length >= limit) {
+      get().showToast(
+        limit > ROSTER_TARGET
+          ? `Offseason camp roster is full (${limit}). Cut a player before promoting another.`
+          : 'Active roster is full (53). Release a player first.',
+      )
       return
     }
     const p = ps.splice(idx, 1)[0]
@@ -4511,6 +4634,12 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = staff.findIndex((m) => m.id === staffId)
     if (idx < 0) return
     const m = staff[idx]
+    // gmpersona: the GM's chair is the owner's to fill, not yours — you work for
+    // him (or, at the GM rung, you ARE him, and there is no AI GM to fire).
+    if (m.role === 'General Manager') {
+      get().showToast(`${m.name} answers to the owner, not to you.`)
+      return
+    }
     // FUTURES #28 (C2) §7: a mid-contract departure costs 50% of the remaining years,
     // paid out over those seasons as dead staff money against the budget.
     const buyout = m.contractYears > 0 ? staffBuyout(m) : 0
@@ -4920,6 +5049,9 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const usage = career.usage
   const personnel = career.personnel
   const special = career.specialTeams
+  // FUTURES #26 P2: the situational call sheet and audibles rule travel with the
+  // live ctx (unset on a save that never opened the card: today's behaviour).
+  const calling = career.playCalling
   // FUTURES #24: tricks are an offense-side tool, like the script.
   const tricks = hasOff ? career.tricks : undefined
   const ocTricks = hasOff ? career.ocTricks : undefined
@@ -4934,12 +5066,12 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
     recent: recentSpeeches(lr, 3),
     auto: career.halftimeAuto,
   }
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech }
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech, calling }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech, calling,
   }
 }
 
@@ -5623,6 +5755,14 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   if (base.personnel) {
     base.personnel = { off: normalizeOffPersonnel(base.personnel.off), def: normalizeDefPackage(base.personnel.def) }
   }
+  // FUTURES #26 P2: the coach-playcalling plan is optional on legacy saves (an old
+  // save simply keeps today's behaviour). A stored plan is re-normalised here, so
+  // a hand-edited or older shape can never reach the sim.
+  if (base.playCalling) {
+    const plan = normalizePlayCalling(base.playCalling)
+    if (plan) base.playCalling = plan
+    else delete base.playCalling
+  }
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
     const sheet = base.callSheet ?? DEFAULT_CALL_SHEET
@@ -5646,6 +5786,17 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   }
 }
 
+/**
+ * gmpersona: the club whose GM seat the USER holds, or null when an AI GM fills
+ * every seat. Personnel L8 is the GM rung (draftRoom.userSeatKey): there the user
+ * IS the General Manager, so his own club gets no AI GM. Below that rung (and on
+ * the whole coach path) the club's GM is the AI man he works for.
+ */
+export function userGmTeamId(c: CareerState | null | undefined): string | null {
+  if (!c) return null
+  return c.path === 'personnel' && c.level >= 8 ? c.teamId : null
+}
+
 /** Backlog 415: load-migration hook. Bring a saved career up to the trimmed
  * ladder and, when the trim moved it off a removed rung, log one inbox note so
  * the user knows why the job changed. Deterministic — no rng. Exported so the
@@ -5653,6 +5804,11 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
 export function migrateLoadedCareer(w: World, c: CareerState, rescaleOvrValues = false): CareerState {
   const wasLevel = c.level
   const career: CareerState = { ...reconcileCareerTeam(w, migrateCareer(c, rescaleOvrValues)), injuryCalls: undefined }
+  // gmpersona: a save written before clubs had a General Manager gets one AI GM
+  // per NFL club on load — except the user's own GM seat, which stays empty
+  // because the user is the GM. Deterministic from (teamId, season): no rng draw,
+  // and idempotent, so every later load lands on the same men.
+  ensureGeneralManagers(w, userGmTeamId(career))
   if (career.level !== wasLevel) {
     pushCareerNews(w, career, {
       category: 'Career',
@@ -5768,6 +5924,38 @@ function resolveFrenzyWindow(world: World, career: CareerState | null) {
 }
 
 /**
+ * offseason90 (cutdown day): the user's club may run a 90-man offseason camp,
+ * but week 1 wants 53 or fewer. Returns true when the new season may start.
+ *
+ * Over the limit, a deliberate step (the Advance button) is blocked ONCE with a
+ * clear message and lands the user on the Cutdown view; a sim-through (or a
+ * second Advance without visiting) applies the staff's recommended cuts and
+ * files an inbox note naming every player released — never a silent cut.
+ */
+function cutdownReady(
+  set: (p: Partial<GameStore>) => void,
+  get: () => GameStore,
+  allowBlock: boolean,
+): boolean {
+  const career = get().career
+  if (!career) return true
+  const roster = world.roster[career.teamId] ?? []
+  if (roster.length <= ROSTER_TARGET) {
+    if (get().cutdownOpen) set({ cutdownOpen: false })
+    return true
+  }
+  if (allowBlock && !get().cutdownOpen) {
+    set({ cutdownOpen: true, screen: 'roster' })
+    get().showToast(
+      `Cutdown day: ${roster.length} on the roster — cut ${roster.length - ROSTER_TARGET} more before week 1.`,
+    )
+    return false
+  }
+  get().applyRecommendedCuts()
+  return true
+}
+
+/**
  * L12.6 C1: run every offseason stage that hasn't happened yet, in calendar
  * order and exactly once. `startNextSeason` calls this so a fast path from any
  * stage (probe, import, stall) still produces a legal new season.
@@ -5786,7 +5974,9 @@ function completeOffseasonStages(world: World, career: CareerState | null) {
   }
   // The draft + UDFAs can push rosters over 53; the FA trim ran before them, so
   // cut back to a legal 53 here (same trimmer the FA market uses).
-  trimNflRosters(world)
+  // offseason90: the user's club is spared — it runs a 90-man camp until cutdown
+  // day, where the staff's recommended cuts bring it to 53 before week 1.
+  trimNflRosters(world, career?.teamId)
   // rosterfloor: the trims and the draft's uneven class can leave a club short of
   // 53 (the March market only ever fills positions to FA_NEEDS = 51). Top every
   // AI club back up to the NFL's 53 with the best best-fit bodies its own cap
@@ -8751,8 +8941,12 @@ export async function careerSmoke(
     // Every club carries a legal roster and fits under the cap.
     const cap = capForSeason(world.season)
     for (const [teamId, roster] of Object.entries(world.roster)) {
-      if (roster.length < 45 || roster.length > 60) {
-        violations.push(`${where}: ${teamId} roster has ${roster.length} players (need 45–60)`)
+      // offseason90: the user's club may run a 90-man camp between the new league
+      // year and cutdown day; everyone else keeps 45–60, and from week 1 the
+      // user's club does too (cutdown day enforces 53 before the season starts).
+      const max = world.phase === 'offseason' && teamId === career.teamId ? ROSTER_OFFSEASON_MAX : 60
+      if (roster.length < 45 || roster.length > max) {
+        violations.push(`${where}: ${teamId} roster has ${roster.length} players (need 45–${max})`)
       }
       const used = roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[teamId] ?? 0)
       if (used > cap * 1.05) {

@@ -36,7 +36,6 @@ export function DraftTradePanel({ className }: { className?: string }) {
   const accept = useGame((s) => s.acceptDraftTradeOffer)
   const tradeUp = useGame((s) => s.proposeDraftTradeUp)
   const setClock = useGame((s) => s.setDraftClock)
-  const expire = useGame((s) => s.draftClockExpired)
   const [pending, setPending] = useState<{ offer: DraftTradeOffer; up: boolean } | null>(null)
 
   const open = draftOpen(world) && !world.draftState.complete
@@ -121,7 +120,6 @@ export function DraftTradePanel({ className }: { className?: string }) {
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5 font-cond text-small font-700 uppercase tracking-wide text-ink">
               <Clock size={13} aria-hidden /> Pick clock
-              {clockOn && mine && deciding && <PickClock key={pickIndex} on onExpire={expire} />}
             </span>
             <span className="mt-0.5 block text-micro leading-snug text-muted">
               Off by default. When on, a 90-second clock runs while you are on the clock; if it runs out your club takes
@@ -186,7 +184,9 @@ export function DraftTradePanel({ className }: { className?: string }) {
 }
 
 /** A live countdown for the current pick. Remounts per pick, so it always starts fresh. */
-function PickClock({ on, onExpire }: { on: boolean; onExpire: () => void }) {
+/** Row 459: the running pick clock lives in the Draft header chip, so it keeps
+ *  counting whichever board view (List / Cards / Room / Trades) is open. */
+export function PickClock({ on, onExpire }: { on: boolean; onExpire: () => void }) {
   const [left, setLeft] = useState(CLOCK_SECONDS)
   useEffect(() => {
     if (!on) return

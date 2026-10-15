@@ -27,7 +27,7 @@ import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from './graphics'
 import { type CameraAngleMode, type Director, type DirectorProfile } from './director'
 import { createBroadcastDirector } from './directorRules'
-import { ReplayPlayer, type ReplayFrame, type ReplayPhase, type ReplayPlan } from './replay'
+import { ReplayPlayer, liveTelestrations, type ReplayFrame, type ReplayPhase, type ReplayPlan } from './replay'
 import { TelestratorLayer, attachTelestrator, composeHooks } from './telestrator'
 import { QbConeLayer } from './visionCone'
 import { useViewSettings, usePhone, getViewSettings, qbConeOn, deviceKey, type ViewSettings, type AutoQState, type QualitySetting } from './viewSettings'
@@ -382,6 +382,8 @@ export class LiveBroadcast {
   private rpLastNow = 0
   private rpPaused = false
   private rpSpeed = 1
+  /** Sim to end: live telestrations are off (fast playback), like a replay's 'fast'. */
+  private simming = false
   /** Called when the replay phase changes (null = no replay on screen). */
   onReplay: ((phase: LiveReplayPhase | null) => void) | null = null
 
@@ -528,6 +530,39 @@ export class LiveBroadcast {
     this.setReplayPhase(f.phase)
   }
 
+  /**
+   * The live play's telestrations (the Drawings setting, default every play):
+   * the same set a replay of the play would build, painted in live anim time.
+   * Cleared for 'Replays only' / 'Off', for sim to end, and on the replay-only
+   * overlay canvas (which never shows the live view).
+   */
+  private setupLiveTele(lp: LivePlay): void {
+    if (this.opts.phase === 'replay') {
+      this.tele.setLive(null, null)
+      return
+    }
+    const items = liveTelestrations(lp.play, lp.anim, {
+      setting: getViewSettings().drawings,
+      playback: this.simming ? 'fast' : 'live',
+      reducedMotion: !!this.opts.reducedMotion,
+    })
+    this.tele.setLive(items, items.length ? lp.anim : null, lp.actorPlay.numbers)
+  }
+
+  /** Re-read the Drawings setting for the play on screen (the setting changed). */
+  refreshLiveTele(): void {
+    if (!this.play) return
+    this.setupLiveTele(this.play)
+    this.lastSig = ''
+  }
+
+  /** Sim to end: live drawings are off (fast playback), like a replay's 'fast'. */
+  setSimming(on: boolean): void {
+    if (on === this.simming) return
+    this.simming = on
+    this.refreshLiveTele()
+  }
+
   /** Load one recorded play. */
   setPlay(lp: LivePlay): void {
     // A new play always ends a replay of the previous one (never blocks the game).
@@ -562,6 +597,8 @@ export class LiveBroadcast {
     // B4: (re)compose the ball + effects for this recorded play (no-op until the
     // main merge supplies ballFx.ts).
     void this.attachBallFx(lp)
+    // Live telestrations (the Drawings setting; a new snap replaces the last).
+    this.setupLiveTele(lp)
   }
 
   private async attachBallFx(lp: LivePlay): Promise<void> {
@@ -621,6 +658,8 @@ export class LiveBroadcast {
     this.layer.t = t
     this.qbCone.t = t
     this.qbCone.enabled = qbConeOn(getViewSettings(), 'broadcast')
+    // Live telestrations sample the live anim time (a replay owns its own clock).
+    this.tele.setLiveTime(t)
     // animflow r6b: the live end frame's hold drives the substitutions' jog.
     this.layer.post = inReplay ? 0 : this.endHold
     // Live: once the play ends, the graphics clock runs on into the result

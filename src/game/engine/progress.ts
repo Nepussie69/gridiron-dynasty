@@ -492,16 +492,56 @@ export const ROSTER_FLOOR: Record<string, number> = {
 
 /** The NFL's in-season roster limit — the size every AI club carries into week 1. */
 export const ROSTER_TARGET = 53
+/**
+ * offseason90 (user 2026-10-15): the NFL's offseason camp limit. A club may carry
+ * up to 90 through free agency, the draft, UDFAs, promotions, claims and trades,
+ * and must be down to ROSTER_TARGET by week 1 (cutdown day). Only the user's club
+ * gets this window in this job — AI clubs still work to ROSTER_TARGET.
+ */
+export const ROSTER_OFFSEASON_MAX = 90
 /** The league's legal roster minimum (45–60 is the invariant every save must keep). */
 export const ROSTER_MIN = 45
 
 /**
+ * offseason90: the roster limit that applies to the user's club right now — a
+ * 90-man camp in the offseason, the usual 53 from week 1.
+ */
+export function rosterLimit(world: World): number {
+  return world.phase === 'offseason' ? ROSTER_OFFSEASON_MAX : ROSTER_TARGET
+}
+
+/**
+ * offseason90: the surplus bodies a club cuts to reach `target`, lowest-rated
+ * first, never touching a position already at its ROSTER_FLOOR minimum — the
+ * same ordering `trimNflRosters` uses. Deterministic (no rng) and read-only: the
+ * caller applies the cuts through the normal release path so the cap maths and
+ * the dead money are exactly the ones the Cap screen shows.
+ */
+export function recommendedCuts(roster: Player[], target: number = ROSTER_TARGET): Player[] {
+  const counts: Record<string, number> = {}
+  for (const p of roster) counts[p.pos] = (counts[p.pos] ?? 0) + 1
+  const cuts: Player[] = []
+  for (const p of [...roster].sort((a, b) => a.ovr - b.ovr)) {
+    if (roster.length - cuts.length <= target) break
+    if ((counts[p.pos] ?? 0) <= (ROSTER_FLOOR[p.pos] ?? 2)) continue
+    counts[p.pos] -= 1
+    cuts.push(p)
+  }
+  return cuts
+}
+
+/**
  * Cut every NFL roster down to 53, lowest-rated surplus first. Without this,
  * drafted players accumulate forever and the cap model drifts out of reality.
+ *
+ * offseason90: `skipTeamId` (the user's club in the offseason) is left alone —
+ * it runs a 90-man camp until cutdown day. League-only runs pass nothing, so the
+ * headless sim and the AI markets are untouched.
  */
-export function trimNflRosters(world: World) {
+export function trimNflRosters(world: World, skipTeamId?: string | null) {
   for (const t of world.teams) {
     if (t.tier !== 'NFL') continue
+    if (skipTeamId && t.id === skipTeamId && world.phase === 'offseason') continue
     const roster = world.roster[t.id] ?? []
     if (roster.length <= 53) continue
     const counts: Record<string, number> = {}
@@ -596,7 +636,8 @@ export function freeAgentContract(
 export const FA_NEEDS: Readonly<Record<string, number>> = { QB: 3, RB: 3, WR: 6, TE: 3, OT: 4, OG: 4, C: 2, DE: 4, DT: 4, LB: 6, CB: 6, S: 4, K: 1, P: 1 }
 
 export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDatabase) {
-  trimNflRosters(world)
+  // offseason90: the user's club keeps its 90-man camp through the March market.
+  trimNflRosters(world, skipTeamId)
   const rng = makeRng(world.seed + world.season * 90001)
   const needed = FA_NEEDS
   const freeCopy = [...world.freeAgents].sort((a, b) => b.ovr - a.ovr)
@@ -694,7 +735,7 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
   }
   world.freeAgents = world.freeAgents.filter((p) => !taken.has(p.id))
   // Z1c: the X1 top-up can push a roster past 53; trim again at the very end.
-  trimNflRosters(world)
+  trimNflRosters(world, skipTeamId)
   // Z1b: adopt any newly signed players into `world.players`.
   indexPlayers(world)
 }

@@ -14,6 +14,7 @@ import { MAX_TRAVEL_COVERAGE, coverageOf } from '../game/engine/scoutTravel'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { CombineCard } from '../components/CombineCard'
+import { DraftPhilosophyCard } from '../components/DraftPhilosophyCard'
 import { ScoutTravelCard } from '../components/ScoutTravelCard'
 import { DataTable, type Column } from '../components/DataTable'
 import { RowQuickActions, type QuickAction } from '../components/RowQuickActions'
@@ -29,6 +30,7 @@ import {
   OverflowMenu,
   PageHeader,
   RatingTile,
+  RangeBubble,
   RookieRangeBadges,
   SectionTitle,
   Sheet,
@@ -40,6 +42,8 @@ import { usePhone, useMediaQuery, WIDE_QUERY } from '../ui/hooks'
 
 const POS_FILTERS = ['ALL', 'QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S']
 /** Free character reads a week — the cap the store's `investigateCharacter` enforces. */
+/** Row 460: sort key for a rookie read's [lo, hi] range (its midpoint). */
+const rangeMid = (r: [number, number]) => (r[0] + r[1]) / 2
 const MAX_CHARACTER_READS = 2
 /** The four calls. Every chip is neutral; Pass is muted, never red. */
 const RECS: { id: Recommendation; label: string }[] = [
@@ -230,19 +234,33 @@ export function Scouting() {
       sortValue: (p) => p.pos,
       render: (p) => <span className="font-cond text-small font-700 uppercase text-ink-2">{p.pos}</span>,
     },
+    // Row 460: Now and Ceiling are separate columns so each sorts up or down on its
+    // own (midpoint of your read's range; out-of-region prospects sort last).
     {
-      key: 'range',
-      label: 'Now · Ceiling',
-      headerTitle: 'Your rookie read on the NFL scale, separated from the college grade. Tightens as you scout and travel.',
+      key: 'now',
+      label: 'Now',
+      headerTitle: 'Where he opens as a rookie — your read on the NFL scale, separate from the college grade. Tightens as you scout and travel.',
       card: 'meta',
-      sortValue: (p) => reads.get(p.id)?.center ?? 0,
+      sortValue: (p) => (reads.get(p.id)?.visible ? rangeMid(ranges.get(p.id)!.now) : -1),
       render: (p) => {
         const r = reads.get(p.id)!
         if (!r.visible) {
           return <span className="whitespace-nowrap rounded-[var(--r-xs)] bg-surface-3 px-1.5 py-1 font-cond text-small font-700 uppercase text-muted">OUT of region</span>
         }
         const rr = ranges.get(p.id)!
-        return <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact />
+        return <RangeBubble kind="NOW" lo={rr.now[0]} hi={rr.now[1]} compact />
+      },
+    },
+    {
+      key: 'ceil',
+      label: 'Ceiling',
+      headerTitle: 'How high he can climb — your read on the NFL scale. Ceilings are harder to call, so the range is wider.',
+      card: 'meta',
+      sortValue: (p) => (reads.get(p.id)?.visible ? rangeMid(ranges.get(p.id)!.ceiling) : -1),
+      render: (p) => {
+        if (!reads.get(p.id)!.visible) return null
+        const rr = ranges.get(p.id)!
+        return <RangeBubble kind="CEIL" lo={rr.ceiling[0]} hi={rr.ceiling[1]} compact />
       },
     },
     {
@@ -462,6 +480,7 @@ export function Scouting() {
         }
       >
         <div className="flex flex-col gap-4">
+          <DraftPhilosophyCard className="order-2 lg:order-4" />
           <Card pad={false} className="order-1 overflow-hidden lg:order-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
               <SectionTitle spacing="none">Class Board</SectionTitle>
