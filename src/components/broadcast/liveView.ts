@@ -27,7 +27,7 @@ import { GraphicsLayer, readGfxTokens } from './graphicsDraw'
 import { buildGraphicsTimeline, type GraphicsTimeline, type PersonInfo } from './graphics'
 import { type CameraAngleMode, type Director, type DirectorProfile } from './director'
 import { createBroadcastDirector } from './directorRules'
-import { ReplayPlayer, liveTelestrations, type ReplayFrame, type ReplayPhase, type ReplayPlan } from './replay'
+import { ReplayPlayer, liveRouteTraces, liveTelestrations, type ReplayFrame, type ReplayPhase, type ReplayPlan } from './replay'
 import { TelestratorLayer, attachTelestrator, composeHooks } from './telestrator'
 import { QbConeLayer } from './visionCone'
 import { useViewSettings, usePhone, getViewSettings, qbConeOn, deviceKey, type ViewSettings, type AutoQState, type QualitySetting } from './viewSettings'
@@ -541,12 +541,16 @@ export class LiveBroadcast {
       this.tele.setLive(null, null)
       return
     }
-    const items = liveTelestrations(lp.play, lp.anim, {
+    const opts = {
       setting: getViewSettings().drawings,
-      playback: this.simming ? 'fast' : 'live',
+      playback: (this.simming ? 'fast' : 'live') as 'fast' | 'live',
       reducedMotion: !!this.opts.reducedMotion,
-    })
-    this.tele.setLive(items, items.length ? lp.anim : null, lp.actorPlay.numbers)
+    }
+    const items = liveTelestrations(lp.play, lp.anim, opts)
+    // livetele3: every route runner's own plain trace, live (the target is only
+    // highlighted at the release, inside the item set).
+    const traces = liveRouteTraces(lp.play, lp.anim, opts)
+    this.tele.setLive(items, items.length || traces.length ? lp.anim : null, lp.actorPlay.numbers, traces)
   }
 
   /** Re-read the Drawings setting for the play on screen (the setting changed). */

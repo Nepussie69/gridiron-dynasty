@@ -30,7 +30,7 @@ import { BROADCAST_TOKENS, clubSlab, layoutScale, MIN_TEXT_PX, rgba, type ClubSl
 import { posAt } from './interp.ts'
 import type { ClubLike } from './palette.ts'
 import type { LayerHook, LayerInfo } from './renderer.ts'
-import { teleState, type ReplayFrame, type ReplayPlan, type TeleInk, type Telestration } from './replay.ts'
+import { teleState, type LiveRouteTrace, type ReplayFrame, type ReplayPlan, type TeleInk, type Telestration } from './replay.ts'
 
 /** Telestrator pen: the broadcast yellow marker (not a UI token; pen ink on turf). */
 export const TELE_PEN = '#FFE14D' // check-hex-allow: telestrator pen ink (broadcast marker yellow), not a UI colour
@@ -41,6 +41,9 @@ export const TELE_TEXT = { big: 26, label: 17, sub: 14, bug: 17, bugSub: 14 } as
 /** Live drawings are a touch lighter than a replay's (readability on every play). */
 const LIVE_STROKE_SCALE = 0.82
 const LIVE_ALPHA = 0.92
+/** Plain route traces (livetele3): thin, low alpha, so no route stands out before the throw. */
+const TRACE_W = 2.4
+const TRACE_ALPHA = 0.5
 
 /** Deepest the pocket outline reaches behind the shallowest OL (yd). */
 const POCKET_MAX_DEPTH = 6.5
@@ -118,7 +121,7 @@ export class TelestratorLayer {
   /** Element ids drawn last frame. */
   lastDrawn: string[] = []
   /** The live play's telestrations (null = none): drawn on every play, no replay needed. */
-  private live: { items: Telestration[]; anim: BroadcastAnim; numbers: Record<string, number> } | null = null
+  private live: { items: Telestration[]; anim: BroadcastAnim; numbers: Record<string, number>; traces: LiveRouteTrace[] } | null = null
   /** Live anim time (0..1) the live drawings sample; the live view sets it each frame. */
   liveT = 0
   /** Stroke width scale: live drawings are a touch thinner than a replay's. */
@@ -151,10 +154,12 @@ export class TelestratorLayer {
    * replay's — under the HUD, with the same labels / avoid rules — but timed in
    * live anim seconds and with no REPLAY bug, wipe or freeze wash. null clears
    * them (the next snap, a replay starting, sim to end). `numbers` feed the
-   * double-team label; the replay's own numbers are kept separately.
+   * double-team label; the replay's own numbers are kept separately. `traces`
+   * (livetele3) are the plain all-receiver routes drawn under the items.
    */
-  setLive(items: Telestration[] | null, anim: BroadcastAnim | null, numbers?: Record<string, number>): void {
-    this.live = items && items.length > 0 && anim ? { items, anim, numbers: numbers ?? {} } : null
+  setLive(items: Telestration[] | null, anim: BroadcastAnim | null, numbers?: Record<string, number>, traces?: LiveRouteTrace[]): void {
+    const t = traces ?? []
+    this.live = anim && ((items?.length ?? 0) > 0 || t.length > 0) ? { items: items ?? [], anim, numbers: numbers ?? {}, traces: t } : null
   }
 
   clearLive(): void {
@@ -167,7 +172,7 @@ export class TelestratorLayer {
   }
 
   private liveActive(): boolean {
-    return !!(this.live && this.live.items.length > 0 && this.mode === 'full')
+    return !!(this.live && (this.live.items.length > 0 || this.live.traces.length > 0) && this.mode === 'full')
   }
 
   private active(): boolean {
@@ -222,6 +227,30 @@ export class TelestratorLayer {
         return p ? { x: p.x, y: p.y } : null
       }
       const labels: { text: string; sub?: string; at: Pt; ink: string; size: number }[] = []
+      // livetele3: every route runner's plain trace (thin, low alpha) under the
+      // items — the eventual target included, so no route stands out before the
+      // throw; his highlight only lands on top at the release.
+      if (liveOn && this.live!.traces.length) {
+        const D = Math.max(0.05, (anim.duration || 0) / 1000)
+        const tStep = 0.03 / D
+        for (const tr of this.live!.traces) {
+          const hi = Math.min(t, tr.t1)
+          if (hi <= tr.t0) continue
+          const p = anim.actors.find((a) => a.key === tr.key)?.path
+          if (!p) continue
+          const pts: Pt[] = []
+          for (let u = tr.t0; u < hi; u += tStep) {
+            const q = posAt(p, u)
+            const s = P(q.x, q.y)
+            if (s) pts.push(s)
+          }
+          const qe = posAt(p, hi)
+          const se = P(qe.x, qe.y)
+          if (se) pts.push(se)
+          this.plainStroke(ctx, pts, S, TRACE_W, TELE_PEN, TRACE_ALPHA, alphaScale)
+          st.strokes++
+        }
+      }
       for (const it of items) {
         const s = teleState(it, sec)
         if (s.alpha <= 0) continue
@@ -407,6 +436,25 @@ export class TelestratorLayer {
     ctx.lineWidth = w * S * k
     ctx.stroke()
     ctx.setLineDash([])
+  }
+
+  /** A plain route trace: one thin, low-alpha ink pass over a dark halo (no glow, no arrow). */
+  private plainStroke(ctx: CanvasRenderingContext2D, pts: Pt[], S: number, w: number, col: string, alpha: number, scale: number): void {
+    if (pts.length < 2) return
+    const a = ctx.globalAlpha
+    ctx.setLineDash([])
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+    ctx.globalAlpha = a * alpha * 0.9
+    ctx.strokeStyle = 'rgba(0,0,0,.5)'
+    ctx.lineWidth = (w + 2) * S * this.wScale
+    ctx.stroke()
+    ctx.globalAlpha = a * alpha * scale
+    ctx.strokeStyle = col
+    ctx.lineWidth = w * S * this.wScale
+    ctx.stroke()
+    ctx.globalAlpha = a
   }
 
   private arrowHead(ctx: CanvasRenderingContext2D, a: Pt, b: Pt, S: number, col: string): void {

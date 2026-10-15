@@ -73,19 +73,20 @@ export function qbConeAt(play: Play, anim: PlayAnim, t: number, qb?: Player): { 
   }
   let ring: RingShape | null = null
   const tl = plan.looks.find((l) => l.role !== 'read')
-  if (catchT != null && tl && t >= tl.t0 && t < catchT + 0.14) {
-    // On the target from the moment his eyes settle there; the circle grows as the rush
-    // closes (exactly placeRadiusYd from the release on); the ball spot once it is thrown.
+  // livetele3 (user 2026-10-15): the placement circle sat on the eventual catch
+  // spot from the moment his eyes settled there — before the throw, which told
+  // the user where the ball was going. It now appears only once he releases (the
+  // eyes settle on the target at plan.endT), so nothing reveals the target early.
+  if (catchT != null && tl && t >= endT && t < catchT + 0.14) {
     const pl = plan.place
     const cx = pl ? pl.ix : plan.aimX
     const cy = pl ? pl.iy : plan.aimY
-    const grow = sm(((t - tl.t0) * D) / 0.15)
+    const grow = sm(((t - endT) * D) / 0.15)
     const out = t <= catchT + 0.06 ? 1 : 1 - sm((t - catchT - 0.06) / 0.08)
-    const thrown = t > endT
     const bx = pl ? pl.ix + pl.dx : plan.aimX
     const by = pl ? pl.iy + pl.dy : plan.aimY
     const r = radiusAt(plan, Math.min(t, endT))
-    ring = { cx, cy, r, bx, by, alpha: grow * out * (thrown ? 1 : 0.6), outside: Math.hypot(bx - cx, by - cy) > r, ...(thrown ? {} : { noBall: true }) }
+    ring = { cx, cy, r, bx, by, alpha: grow * out, outside: Math.hypot(bx - cx, by - cy) > r }
   }
   return { cone, ring }
 }
