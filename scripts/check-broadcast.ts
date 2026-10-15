@@ -2942,6 +2942,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const styles: Record<string, number> = {}
     let gang = 0
     const bad: string[] = []
+    const farBad: string[] = []
     const FALLING = new Set(['tackleFall', 'dive', 'fall', 'down'])
     games6d(6, 47, (play, anim) => {
       const ev = anim.events ?? []
@@ -2961,12 +2962,12 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       const tq = Math.max(0, tE - 0.03 / D)
       if (!FALLING.has(poseAt6d(anim, tk, tq)) || !FALLING.has(poseAt6d(anim, car, tq)) || poseAt6d(anim, car, 1) !== 'down') { upright++; if (bad.length < 4) bad.push(`${play.n} ${play.concept} ${tk} ${poseAt6d(anim, tk, tq)} / ${car} ${poseAt6d(anim, car, tq)} at the whistle`) }
       // (a dive at the legs reaches ~2.5 yd)
-      if (gap(tE) > (style === 'dive' ? 2.5 : 1.5)) far++
+      if (gap(tE) > (style === 'dive' ? 2.5 : 1.5)) { far++; if (farBad.length < 4) farBad.push(`${play.n} ${play.type} ${play.result} tk ${tk} ${style} gap ${gap(tE).toFixed(1)} at ${tE.toFixed(2)}s of ${D.toFixed(2)}s press ${play.pressureId ?? '-'} beat ${play.beatenBlockerId ?? '-'}`) }
       if (anim.actors.some((a) => a.side === 'def' && a.key !== tk && poseAt6d(anim, a.key, tq) === 'tackleFall')) gang++
     })
     console.log(`      tackles ${n}: late ${late}, not going down together ${upright}, tackler > 1.5 yd ${far}; styles ${JSON.stringify(styles)}, gang ${gang}`)
     assert.ok(n >= 150, `coverage ${n}`)
-    assert.ok(upright === 0 && far === 0, `touch-and-freeze: ${upright} / ${far} of ${n}: ${bad.join('; ')}`)
+    assert.ok(upright === 0 && far === 0, `touch-and-freeze: ${upright} / ${far} of ${n}: ${[...bad, ...farBad].join('; ')}`)
     assert.ok(late <= n * 0.05, `tackler arrives at the whistle on ${late}/${n}: ${bad.join('; ')}`)
     assert.ok((styles.wrap ?? 0) > 0 && (styles.hit ?? 0) > 0 && (styles.arm ?? 0) > 0 && (styles.dive ?? 0) > 0 && gang > 0, `variants ${JSON.stringify(styles)} gang ${gang}`)
   })
