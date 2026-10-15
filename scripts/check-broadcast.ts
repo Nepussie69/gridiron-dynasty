@@ -84,7 +84,7 @@ import { createBallFx, withBallFx } from '../src/components/broadcast/ballFx.ts'
 import { buildFxSchedule, EVENT_FX, SHAKE_YARDS, shakeAt } from '../src/components/broadcast/fxSchedule.ts'
 import type { AnimEventKind } from '../src/components/playAnim.ts'
 import { holderAt as r6HolderAt, posAt as r6PosAt } from '../src/components/broadcast/interp.ts'
-import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
+import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, liveTelestrations, LONG_FG_YDS, MAX_SPAN_SEC, replayable, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
 import { carrierMove, effAttrs, effRating, fatigueMap, tackleStyle, tiredness } from '../src/components/animRatings.ts'
@@ -684,6 +684,24 @@ ok('graphics: callouts only inside their windows, at most 2 at once, one per anc
       assert.equal(new Set(live.map((c) => c.anchor)).size, live.length)
     }
   }
+})
+
+ok('graphics: a missed / blocked field goal reads NO GOOD, never GOOD or TURNOVER (backlog 452)', () => {
+  const base = GPLAY as unknown as Record<string, unknown>
+  const ev = (kinds: AnimEventKind[]) => kinds.map((kind, i) => ({ t: 0.1 + i * 0.1, kind, keys: ['k'], spot: { x: 50, y: 20 } }))
+  const A = (kinds: AnimEventKind[]): BroadcastAnim => ({ ...GA, events: [{ t: 0.03, kind: 'snap', keys: ['qb'], spot: { x: 35, y: 26 } }, ...ev(kinds)] })
+  const toast = (o: Record<string, unknown>, kinds: AnimEventKind[]) => buildGraphicsTimeline({ ...GIN(), play: { ...base, yards: 0, ...o } as unknown as Play, anim: A(kinds) }).toast
+  const miss = toast({ type: 'fg', result: '55-yd FG is no good', turnover: true }, ['kick', 'kickMiss'])
+  assert.equal(miss.big, 'NO')
+  assert.equal(miss.badge?.label, 'NO GOOD')
+  assert.equal(miss.side, 'off')
+  const noEv = toast({ type: 'fg', result: '55-yd FG is no good', turnover: true }, ['kick'])
+  assert.equal(noEv.big, 'NO', 'the result text alone must not read as made')
+  assert.equal(toast({ type: 'fg', result: '48-yd FG is BLOCKED!', turnover: true }, ['kick']).big, 'NO')
+  assert.equal(toast({ type: 'pat', result: 'Extra point MISSED' }, ['kick', 'kickMiss']).badge?.label, 'NO GOOD')
+  const made = toast({ type: 'fg', result: '49-yd FG is good' }, ['kick', 'kickGood'])
+  assert.equal(made.big, 'GOOD')
+  assert.equal(made.badge?.label, 'GOOD')
 })
 
 ok('graphics: reduced motion has no wipes; sim-to-end shows the chip only; off shows nothing', () => {
@@ -1340,6 +1358,123 @@ ok("B6b: nothing draws in 'fast' (sim to end) or 'off'; reduced motion has no wi
   // partial() keeps the start and stops at the fraction of the length.
   const pl = partial([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], 0.75)
   assert.deepEqual(pl[pl.length - 1], { x: 10, y: 5 })
+})
+
+// ── livetele: the telestrations on every play (the Drawings setting) ─────────
+
+/** Track kinds whose stroke grows with the live anim time (the rest are static). */
+const LIVE_TRACKS = new Set(['route', 'yac', 'pursuit', 'airYards'])
+
+ok('livetele: the live set is the replay plan\'s set; items reveal at their t0/at, tracks never shrink', () => {
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    const plan = replayPlan(play, anim, { setting: 'all' })
+    const live = liveTelestrations(play, anim, { setting: 'every' })
+    assert.ok(live.length > 0, `${name}: no live items`)
+    assert.equal(live.length, plan.tele.length, `${name}: ${live.length} live vs ${plan.tele.length} replay items`)
+    // Same geometry as the replay plan (id / kind / keys / window); only the schedule differs.
+    for (let i = 0; i < live.length; i++) {
+      const a = live[i]
+      const b = plan.tele[i]
+      assert.equal(a.id, b.id, `${name}: item ${i} id ${a.id} vs ${b.id}`)
+      assert.equal(a.kind, b.kind, `${name}: item ${i} kind`)
+      assert.deepEqual(a.keys, b.keys, `${name}: item ${i} keys`)
+      assert.equal(a.t0, b.t0, `${name}: item ${i} t0`)
+      assert.equal(a.t1, b.t1, `${name}: item ${i} t1`)
+      assert.equal(a.at, b.at, `${name}: item ${i} at`)
+    }
+    // Deterministic and pure.
+    assert.deepEqual(liveTelestrations(play, anim, { setting: 'every' }), live)
+    // Only items whose reveal time has been reached ever show; a track's drawn
+    // length is non-decreasing in t; at t = 1 the shown set == the replay set.
+    const lenAt: Record<string, number> = {}
+    for (const t of [0.25, 0.5, 0.75, 1]) {
+      for (const it of live) {
+        const st = teleState(it, t)
+        const reveal = LIVE_TRACKS.has(it.kind) ? it.t0 : it.at
+        if (st.alpha > 0) assert.ok(reveal <= t + 1e-9, `${name}: ${it.id} (reveal ${reveal}) shown at ${t}`)
+        if (!LIVE_TRACKS.has(it.kind)) continue
+        const hi = Math.min(t, it.t1)
+        const p = anim.actors.find((a) => a.key === it.keys[0])?.path
+        if (hi <= it.t0 || !p) continue
+        let len = 0
+        let prev = r6PosAt(p, it.t0)
+        for (let u = it.t0 + 1e-4; u < hi; u += 0.01) {
+          const q = r6PosAt(p, u)
+          len += Math.hypot(q.x - prev.x, q.y - prev.y)
+          prev = q
+        }
+        assert.ok(len >= (lenAt[it.id] ?? 0) - 1e-9, `${name}: ${it.id} track shrank by t=${t}`)
+        lenAt[it.id] = len
+      }
+    }
+    const atEnd = live.filter((it) => teleState(it, 1).alpha > 0).map((it) => it.id).sort()
+    assert.deepEqual(atEnd, plan.tele.map((it) => it.id).sort(), `${name}: t=1 set`)
+  }
+})
+
+ok("livetele: 'Replays only' / 'Off' / sim to end draw nothing live; a 3-yd run still does", () => {
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    assert.equal(liveTelestrations(play, anim, { setting: 'replays' }).length, 0, `${name}: replays-only items`)
+    assert.equal(liveTelestrations(play, anim, { setting: 'off' }).length, 0, `${name}: off items`)
+    assert.equal(liveTelestrations(play, anim, { setting: 'every', playback: 'fast' }).length, 0, `${name}: fast items`)
+    assert.ok(liveTelestrations(play, anim, { setting: 'every' }).length > 0, `${name}: no items`)
+  }
+  // A play that never replays (a 3-yd run) still gets its live set under 'every'.
+  const p3 = { ...RPLAY, yards: 3, endYard: 28, result: 'Run' } as unknown as Play
+  assert.equal(replayPlan(p3, RA, { setting: 'big' }).replay, false, 'a 3-yd run replayed')
+  assert.ok(replayable(p3))
+  assert.ok(liveTelestrations(p3, RA, { setting: 'every' }).length > 0, 'a 3-yd run got no live items')
+  // Kneels and pre-snap fouls (no snap) show nothing live either.
+  assert.equal(liveTelestrations({ ...RPLAY, concept: 'Kneel', yards: -1 } as unknown as Play, RA, { setting: 'every' }).length, 0)
+  const flagOnly = { ...GA, events: [{ t: 0.1, kind: 'flag' as AnimEventKind, keys: [], spot: { x: 1, y: 1 } }] }
+  assert.equal(liveTelestrations(GPLAY, flagOnly, { setting: 'every' }).length, 0)
+})
+
+ok('livetele: live labels stay clear of the HUD rects and each other; no bug or wipe; fast gates', () => {
+  let labels = 0
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    const live = liveTelestrations(play, anim, { setting: 'every' })
+    for (const dpr of [1, 2]) {
+      for (const [cw, ch] of [
+        [375, 410],
+        [1280, 720],
+        [1920, 1080],
+      ]) {
+        const W = cw * dpr
+        const H = ch * dpr
+        const cx = (anim.ball[0].x + anim.ball[anim.ball.length - 1].x) / 2
+        const pose = orbitPose({ focusX: cx, focusY: 24, back: 34, height: 22, yaw: 0, fovDeg: cw < 600 ? 55 : 43 })
+        const cam = makeCamera(pose, { width: W, height: H })
+        const info = { dpr, width: W, height: H }
+        const tele = new TelestratorLayer()
+        tele.setLive(live, anim, { ol1: 77, ol2: 64, dl0: 97 })
+        tele.mode = 'full'
+        tele.avoid = { lastHud: [{ x: 16 * dpr, y: 16 * dpr, w: 300 * dpr, h: 32 * dpr }], lastPlaced: [] }
+        const rec = teleRecorder(W, H)
+        const hook = composeHooks(tele.hook, null, tele.topHook)
+        const frame = { ...frameFor(1, cx), camera: pose }
+        for (let t = 0; t <= 1.0001; t += 1 / 30) {
+          tele.setLiveTime(t)
+          hook(rec.ctx, cam, frame, info)
+          labels += tele.stats.labels
+          for (const a of tele.lastLabels) for (const b of tele.lastLabels) if (a !== b) assert.ok(!rectsOverlap(a, b), `${name}: live labels overlap`)
+          for (const a of tele.lastLabels) assert.ok(!rectsOverlap(a, tele.avoid.lastHud[0]), `${name}: a live label covers the HUD`)
+        }
+        // Live mode never paints the REPLAY bug or the wipe.
+        assert.equal(tele.lastBug, null, `${name}: live drew a bug`)
+        // Sim to end / off: the mode gate draws nothing live.
+        const quiet = teleRecorder(W, H)
+        tele.mode = 'fast'
+        for (let t = 0; t <= 1.0001; t += 1 / 30) {
+          tele.setLiveTime(t)
+          hook(quiet.ctx, cam, frame, info)
+          assert.equal(tele.lastDrawn.length, 0, `${name}: fast drew live items`)
+        }
+        assert.equal(quiet.calls(), 0, `${name}: fast made ${quiet.calls()} calls`)
+      }
+    }
+  }
+  assert.ok(labels > 50, `only ${labels} live labels placed`)
 })
 
 // ── B8: Game Day's replay rules (gameDayReplay) ─────────────────────────────
@@ -2290,6 +2425,51 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(bad.length === 0, `${bad.length} bad sheds: ${bad.slice(0, 4).join('; ')}`)
   })
 
+  // animshed: the same "no teleport" invariant as 6c, but on a WIDER sample (the 6c sample, run out to
+  // 16 games instead of 6). The single-game version misses a rare drawn jump (> 12 yd/s, ~1 in 3,000
+  // pass plays): the 7th game of this sample carries one on the old animation. Nothing here is loosened
+  // - the 0.05 s step, the 0.2 s start and the 12 yd/s bound are the 6c ones.
+  ok('animflow 6c (animshed): no pass rusher is ever drawn above 12 yd/s over a whole play (the 6c invariant on a 16-game sample - the rare drawn jump the 6-game sample misses)', () => {
+    store.useGame.getState().startCareer({ name: 'S', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    let plays = 0
+    let rushers = 0
+    let worst = 0
+    const bad: string[] = []
+    for (let g = 0; g < 16; g++) {
+      const home = nfl[(g * 5) % nfl.length].id
+      const away = nfl[(g * 5 + 2) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 29 + g * 131)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass') continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const D = anim.duration / 1000
+        const A = new Map(anim.actors.map((a) => [a.key, a]))
+        plays++
+        for (const r of ['dl0', 'dl1', 'dl2', 'dl3']) {
+          const a = A.get(r)
+          if (!a || a.path.length < 2) continue
+          rushers++
+          let mx = 0
+          for (let s = 0.2; s < D - 0.05; s += 0.05) {
+            const p = posAt(a.path, s / D)
+            const q = posAt(a.path, (s + 0.05) / D)
+            mx = Math.max(mx, Math.hypot(q.x - p.x, q.y - p.y) / 0.05)
+          }
+          if (mx > worst) worst = mx
+          if (mx > 12) bad.push(`play ${play.n} ${play.concept} ${r}: ${mx.toFixed(1)} yd/s jump (teleport)`)
+        }
+      }
+    }
+    console.log(`      rusher speed 16 games: ${plays} pass plays, ${rushers} drawn rushers, worst ${worst.toFixed(2)} yd/s`)
+    assert.ok(plays >= 500 && rushers >= 1500, `coverage: ${plays} pass plays, ${rushers} drawn rushers`)
+    assert.ok(bad.length === 0, `${bad.length} rusher teleports (bound 12 yd/s): ${bad.slice(0, 4).join('; ')}`)
+  })
+
   ok('animflow 6c (297): a long run / catch-and-run ends with a defender on the carrier (credited tackler when he can get there), never the carrier stopping alone; a score is run through the goal line at speed', () => {
     store.useGame.getState().startCareer({ name: 'B', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
     const world = store.getWorld()
@@ -2525,6 +2705,65 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(bad.length === 0, `${bad.length} weaving carries: ${bad.slice(0, 4).join('; ')}`)
   })
 
+  // ── animresid (amendment 2026-10-15): a ball carrier never stands still ─────
+  ok('animresid: after the catch the carrier never stands still - a >= 0.4 s stretch under 1 yd/s on <= 5% of completions, never >= 1.0 s, and he is at 3 yd/s within 0.6 s (p90); runs never stall', () => {
+    store.useGame.getState().startCareer({ name: 'S', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const DT = 0.05
+    const res: Record<'pass' | 'run', { stall: number; start: number }[]> = { pass: [], run: [] }
+    const bad: string[] = []
+    for (let g = 0; g < 10; g++) {
+      const home = nfl[(g * 7 + 1) % nfl.length].id
+      const away = nfl[(g * 7 + 4) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 307 + g * 811)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        const kind: 'pass' | 'run' | null = play.type === 'pass' && play.result === 'Complete' && !play.turnover ? 'pass' : play.type === 'run' && !play.kneel ? 'run' : null
+        if (!kind) continue
+        const other = play.offId === home ? away : home
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) })
+        const D = anim.duration / 1000
+        const ev = anim.events ?? []
+        const holder = anim.holders.filter((h) => h.key).at(-1)
+        if (!holder?.key) continue
+        const a = anim.actors.find((x) => x.key === holder.key)
+        if (!a) continue
+        // from the catch (a completion) or the handoff (a run) to the end event, less the last 0.25 s
+        const startT = kind === 'pass' ? (ev.find((e) => e.kind === 'catch')?.t ?? holder.t) : holder.t
+        const endE = ev.find((e) => ['tackle', 'outOfBounds', 'score', 'safety', 'down', 'fumble'].includes(e.kind) && e.t > startT)
+        const endS = (endE ? endE.t : 1) * D - 0.25
+        let s = startT * D
+        let first: number | null = null
+        let stretch = 0
+        let longest = 0
+        let p = posAt(a.path, s / D)
+        while (s + DT <= endS) {
+          const q = posAt(a.path, (s + DT) / D)
+          const v = Math.hypot(q.x - p.x, q.y - p.y) / DT
+          if (first == null && v >= 3) first = s + DT - startT * D
+          if (v < 1) stretch += DT
+          else stretch = 0
+          longest = Math.max(longest, stretch)
+          p = q
+          s += DT
+        }
+        res[kind].push({ stall: longest, start: first ?? endS - startT * D })
+        if (longest >= 1.0) bad.push(`${kind} ${play.n} ${play.concept}: ${longest.toFixed(2)} s under 1 yd/s after the ${kind === 'pass' ? 'catch' : 'handoff'}`)
+      }
+    }
+    const pct = (v: number[], q: number) => { const s = [...v].sort((x, y) => x - y); return s.length ? s[Math.floor((s.length - 1) * q)] : 0 }
+    const p = res.pass
+    const over = p.filter((r) => r.stall >= 0.4).length / p.length
+    const p90 = pct(p.map((r) => r.start), 0.9)
+    console.log(`      stall: completions ${p.length} >=0.4s ${(over * 100).toFixed(1)}% >=1.0s ${p.filter((r) => r.stall >= 1.0).length} start-to-3yd/s p90 ${p90.toFixed(2)}; runs ${res.run.length} >=0.4s ${res.run.filter((r) => r.stall >= 0.4).length} >=1.0s ${res.run.filter((r) => r.stall >= 1.0).length}`)
+    assert.ok(p.length >= 250, `coverage: ${p.length} completions, ${res.run.length} runs`)
+    assert.ok(over <= 0.05, `${(over * 100).toFixed(1)}% of completions stand still >= 0.4 s`)
+    assert.ok(p.filter((r) => r.stall >= 1.0).length === 0, `completions stand still >= 1.0 s: ${bad.slice(0, 4).join('; ')}`)
+    assert.ok(p90 <= 0.6, `start-to-3 yd/s p90 ${p90.toFixed(2)} s`)
+    assert.ok(res.run.length >= 400 && res.run.filter((r) => r.stall >= 0.4).length === 0, `runs stall: ${res.run.filter((r) => r.stall >= 0.4).length} of ${res.run.length}`)
+  })
+
   ok('animflow 6d (J6): a kneel is a victory formation and the QB ends on a knee at the spot; a spike goes into the turf off the snap; a carrier out of bounds crosses the sideline', () => {
     let kneels = 0
     let spikes = 0
@@ -2703,6 +2942,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const styles: Record<string, number> = {}
     let gang = 0
     const bad: string[] = []
+    const farBad: string[] = []
     const FALLING = new Set(['tackleFall', 'dive', 'fall', 'down'])
     games6d(6, 47, (play, anim) => {
       const ev = anim.events ?? []
@@ -2722,12 +2962,12 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       const tq = Math.max(0, tE - 0.03 / D)
       if (!FALLING.has(poseAt6d(anim, tk, tq)) || !FALLING.has(poseAt6d(anim, car, tq)) || poseAt6d(anim, car, 1) !== 'down') { upright++; if (bad.length < 4) bad.push(`${play.n} ${play.concept} ${tk} ${poseAt6d(anim, tk, tq)} / ${car} ${poseAt6d(anim, car, tq)} at the whistle`) }
       // (a dive at the legs reaches ~2.5 yd)
-      if (gap(tE) > (style === 'dive' ? 2.5 : 1.5)) far++
+      if (gap(tE) > (style === 'dive' ? 2.5 : 1.5)) { far++; if (farBad.length < 4) farBad.push(`${play.n} ${play.type} ${play.result} tk ${tk} ${style} gap ${gap(tE).toFixed(1)} at ${tE.toFixed(2)}s of ${D.toFixed(2)}s press ${play.pressureId ?? '-'} beat ${play.beatenBlockerId ?? '-'}`) }
       if (anim.actors.some((a) => a.side === 'def' && a.key !== tk && poseAt6d(anim, a.key, tq) === 'tackleFall')) gang++
     })
     console.log(`      tackles ${n}: late ${late}, not going down together ${upright}, tackler > 1.5 yd ${far}; styles ${JSON.stringify(styles)}, gang ${gang}`)
     assert.ok(n >= 150, `coverage ${n}`)
-    assert.ok(upright === 0 && far === 0, `touch-and-freeze: ${upright} / ${far} of ${n}: ${bad.join('; ')}`)
+    assert.ok(upright === 0 && far === 0, `touch-and-freeze: ${upright} / ${far} of ${n}: ${[...bad, ...farBad].join('; ')}`)
     assert.ok(late <= n * 0.05, `tackler arrives at the whistle on ${late}/${n}: ${bad.join('; ')}`)
     assert.ok((styles.wrap ?? 0) > 0 && (styles.hit ?? 0) > 0 && (styles.arm ?? 0) > 0 && (styles.dive ?? 0) > 0 && gang > 0, `variants ${JSON.stringify(styles)} gang ${gang}`)
   })

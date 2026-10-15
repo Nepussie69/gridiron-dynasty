@@ -38,6 +38,10 @@ export const TELE_PEN = '#FFE14D' // check-hex-allow: telestrator pen ink (broad
 /** Label sizes (CSS px at layout scale 1; never below MIN_TEXT_PX). */
 export const TELE_TEXT = { big: 26, label: 17, sub: 14, bug: 17, bugSub: 14 } as const
 
+/** Live drawings are a touch lighter than a replay's (readability on every play). */
+const LIVE_STROKE_SCALE = 0.82
+const LIVE_ALPHA = 0.92
+
 /** Deepest the pocket outline reaches behind the shallowest OL (yd). */
 const POCKET_MAX_DEPTH = 6.5
 
@@ -113,6 +117,12 @@ export class TelestratorLayer {
   lastBug: Rect | null = null
   /** Element ids drawn last frame. */
   lastDrawn: string[] = []
+  /** The live play's telestrations (null = none): drawn on every play, no replay needed. */
+  private live: { items: Telestration[]; anim: BroadcastAnim; numbers: Record<string, number> } | null = null
+  /** Live anim time (0..1) the live drawings sample; the live view sets it each frame. */
+  liveT = 0
+  /** Stroke width scale: live drawings are a touch thinner than a replay's. */
+  private wScale = 1
 
   private plan: ReplayPlan | null = null
   private anim: BroadcastAnim | null = null
@@ -136,6 +146,30 @@ export class TelestratorLayer {
     return this.plan
   }
 
+  /**
+   * The live play's telestrations (from liveTelestrations): painted like a
+   * replay's — under the HUD, with the same labels / avoid rules — but timed in
+   * live anim seconds and with no REPLAY bug, wipe or freeze wash. null clears
+   * them (the next snap, a replay starting, sim to end). `numbers` feed the
+   * double-team label; the replay's own numbers are kept separately.
+   */
+  setLive(items: Telestration[] | null, anim: BroadcastAnim | null, numbers?: Record<string, number>): void {
+    this.live = items && items.length > 0 && anim ? { items, anim, numbers: numbers ?? {} } : null
+  }
+
+  clearLive(): void {
+    this.live = null
+  }
+
+  /** The live play's current anim time (0..1 of the play). */
+  setLiveTime(t: number): void {
+    this.liveT = t < 0 ? 0 : t > 1 ? 1 : t
+  }
+
+  private liveActive(): boolean {
+    return !!(this.live && this.live.items.length > 0 && this.mode === 'full')
+  }
+
   private active(): boolean {
     return !!(this.plan && this.plan.replay && this.anim && this.frame && this.mode === 'full' && this.frame.phase !== 'done')
   }
@@ -153,20 +187,30 @@ export class TelestratorLayer {
     this.lastDrawn = []
     this.lastBug = null
     const st = { strokes: 0, labels: 0, skipped: 0 }
-    if (this.active() && this.frame!.showReplay) {
-      const f = this.frame!
-      const anim = this.anim!
+    // A replay owns the frame while it shows; otherwise the live drawings show
+    // (the same strokes, no bug / wipe / freeze wash).
+    const replayOn = this.active() && this.frame!.showReplay
+    const liveOn = !replayOn && this.liveActive()
+    if (replayOn || liveOn) {
+      const f = replayOn ? this.frame! : null
+      const anim = replayOn ? this.anim! : this.live!.anim
+      const items = replayOn ? this.plan!.tele : this.live!.items
+      const t = replayOn ? f!.t : this.liveT
+      const sec = replayOn ? f!.sec : this.liveT
+      const numbers = replayOn ? this.numbers : this.live!.numbers
+      this.wScale = liveOn ? LIVE_STROKE_SCALE : 1
+      const alphaScale = liveOn ? LIVE_ALPHA : 1
       const dpr = info.dpr
       const S = layoutScale(info.width / dpr) * dpr
-      this.lastBug = this.bugRect(ctx, info)
+      this.lastBug = replayOn ? this.bugRect(ctx, info) : null
       const rects: Rect[] = [...(this.avoid?.lastHud ?? []), ...(this.avoid?.lastPlaced ?? []).map((p) => p.box)]
       if (this.lastBug) rects.push(this.lastBug)
       // The carrier's head is never covered by a label.
-      const holder = this.actors?.holderAt(f.t) ?? null
+      const holder = this.actors?.holderAt(t) ?? null
       const hs = holder ? this.actors?.screenOf(holder) : undefined
       const head = hs ? { x: hs.headX, y: hs.headY, r: Math.max(8 * dpr, hs.scale * 0.14) + 6 * dpr } : null
       ctx.save()
-      if (f.frozen) {
+      if (f?.frozen) {
         ctx.fillStyle = rgba(this.tokens.gold, 0.05)
         ctx.fillRect(0, 0, info.width, info.height)
       }
@@ -178,11 +222,11 @@ export class TelestratorLayer {
         return p ? { x: p.x, y: p.y } : null
       }
       const labels: { text: string; sub?: string; at: Pt; ink: string; size: number }[] = []
-      for (const it of this.plan!.tele) {
-        const s = teleState(it, f.sec)
+      for (const it of items) {
+        const s = teleState(it, sec)
         if (s.alpha <= 0) continue
-        ctx.globalAlpha = s.alpha
-        const lab = this.element(ctx, it, s.draw, f.t, anim, P, S)
+        ctx.globalAlpha = s.alpha * alphaScale
+        const lab = this.element(ctx, it, s.draw, t, anim, P, S, numbers)
         st.strokes++
         this.lastDrawn.push(it.id)
         if (lab && s.label && it.label) labels.push({ text: it.label, sub: lab.sub, at: lab.at, ink: this.ink(it.ink), size: lab.size })
@@ -226,6 +270,7 @@ export class TelestratorLayer {
     anim: BroadcastAnim,
     P: (x: number, y: number, z?: number) => Pt | null,
     S: number,
+    numbers: Record<string, number>,
   ): { at: Pt; size: number; sub?: string } | null {
     const col = this.ink(it.ink)
     const path = (k: string) => anim.actors.find((a) => a.key === k)?.path
@@ -302,7 +347,7 @@ export class TelestratorLayer {
         this.ellipse(ctx, P, cx, cy, 1.7, 1.6, draw, S, col, 3.5)
         const a = P(cx, cy + 2.2)
         const [d, b1, b2] = it.keys
-        const n = (k: string) => this.numbers[k]
+        const n = (k: string) => numbers[k]
         const sub = n(b1) != null && n(b2) != null && n(d) != null ? `#${n(b1)} + #${n(b2)} ON #${n(d)}` : undefined
         return a ? { at: a, size: TELE_TEXT.label, sub } : null
       }
@@ -349,16 +394,17 @@ export class TelestratorLayer {
     ctx.setLineDash(dash ? dash.map((v) => v * S) : [])
     // Soft glow, dark halo, then the ink (no shadowBlur: cheap).
     const a = ctx.globalAlpha
+    const k = this.wScale
     ctx.globalAlpha = a * 0.22
     ctx.strokeStyle = col
-    ctx.lineWidth = (w + 7) * S
+    ctx.lineWidth = (w + 7) * S * k
     ctx.stroke()
     ctx.globalAlpha = a
     ctx.strokeStyle = 'rgba(0,0,0,.45)'
-    ctx.lineWidth = (w + 3) * S
+    ctx.lineWidth = (w + 3) * S * k
     ctx.stroke()
     ctx.strokeStyle = col
-    ctx.lineWidth = w * S
+    ctx.lineWidth = w * S * k
     ctx.stroke()
     ctx.setLineDash([])
   }
@@ -371,7 +417,7 @@ export class TelestratorLayer {
     ctx.lineTo(b.x + Math.cos(ang + 2.6) * L, b.y + Math.sin(ang + 2.6) * L)
     ctx.lineTo(b.x + Math.cos(ang - 2.6) * L, b.y + Math.sin(ang - 2.6) * L)
     ctx.closePath()
-    ctx.lineWidth = 2 * S
+    ctx.lineWidth = 2 * S * this.wScale
     ctx.strokeStyle = 'rgba(0,0,0,.45)'
     ctx.stroke()
     ctx.fillStyle = col

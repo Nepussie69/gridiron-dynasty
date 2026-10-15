@@ -19,6 +19,7 @@
 
 import type { CareerState, DraftProspect, Player, Position, StaffMember } from '../types'
 import type { World } from './generate'
+import { generalManager, gmTemperament } from './generate'
 import { clamp, hash32 } from './rng'
 import { schemeFit } from './style'
 import { mentorFor } from './people'
@@ -310,17 +311,24 @@ export function userDraftWeight(career: CareerState): number {
 }
 
 /** Authority per seat, summing to 1. The pen holds 0.45 unless you are the pen. */
-export function seatWeights(career: CareerState): Record<SeatKey, number> {
+export function seatWeights(career: CareerState, world?: World): Record<SeatKey, number> {
   const out: Record<SeatKey, number> = { scouting: 0, personnel: 0, agm: 0, gm: 0, hc: 0, coord: 0 }
   const seat = userSeatKey(career)
   if (seat === 'gm') {
     out.gm = 1
     return out
   }
-  out.gm = PEN_WEIGHT
-  const wUser = seat ? clamp(userDraftWeight(career), 0, 1 - PEN_WEIGHT) : 0
+  // gmpersona: the pen's authority is HIS own. A sharp GM commands a little more
+  // of the room than a thin one (±15% of the pen share, from his rating alone);
+  // the rest of the building still splits by seat share. No AI club reads this.
+  const gm = world ? generalManager(world, career.teamId) : undefined
+  const penWeight = gm
+    ? PEN_WEIGHT * (0.85 + ((clamp(gm.rating, 52, 92) - 52) / 40) * 0.3)
+    : PEN_WEIGHT
+  out.gm = penWeight
+  const wUser = seat ? clamp(userDraftWeight(career), 0, 1 - penWeight) : 0
   if (seat) out[seat] = wUser
-  let rest = Math.max(0, 1 - PEN_WEIGHT - wUser)
+  let rest = Math.max(0, 1 - penWeight - wUser)
   const others = SEAT_ORDER.filter((k) => k !== seat && k !== 'gm')
   const total = others.reduce((s, k) => s + SEAT_SHARE[k], 0)
   for (let i = 0; i < others.length; i++) {
@@ -379,6 +387,16 @@ function npcVector(world: World, teamId: string, seat: SeatKey, member?: StaffMe
     } else if (member?.focus === 'Negotiation') {
       v.tradeDown = 'Open'
     }
+    // The GM's stance is HIS: a sharp evaluator backs his own board (BPA), a thin
+    // one leans on need; a bold trader works the phones, a cautious one stays put.
+    // Individual — his own temperament from his own id + rating, never a mean.
+    if (seat === 'gm') {
+      const t = gmTemperament(member)
+      if (t.drafting >= 70) v.board = 'BPA'
+      else if (t.drafting <= 55) v.board = 'Need'
+      if (t.trading >= 70) v.tradeDown = 'Open'
+      else if (t.trading <= 45) v.tradeDown = 'Stand pat'
+    }
   } else if (seat === 'hc') {
     const philosophy = mentorFor(world, teamId).philosophy
     if (philosophy === 'tape') v.traitsProduction = 'Production'
@@ -415,7 +433,7 @@ function userVector(world: World, career: CareerState): DraftPhilosophy {
 export function roomSeats(world: World, career: CareerState): RoomSeat[] {
   const teamId = career.teamId
   const staff = world.staff[teamId] ?? []
-  const weights = seatWeights(career)
+  const weights = seatWeights(career, world)
   const userSeat = userSeatKey(career)
   // The coordinator seat is the one whose side has the biggest hole — unless the
   // user IS the coordinator, in which case it is his own side.

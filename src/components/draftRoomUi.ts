@@ -173,7 +173,7 @@ export function roomView(world: World, career: CareerState): RoomView {
   const seats = roomSeats(world, career)
   const args = roomArgument(world, career, SEAT_ORDER.length)
   const bySeat = new Map(args.map((a) => [a.seat, a]))
-  const weights = seatWeights(career)
+  const weights = seatWeights(career, world)
   const blended = blendedVector(world, career)
   const advocate = tradeDownAdvocate(world, career)
   const offerLimit = tradeDownOfferLimit(world, career)
