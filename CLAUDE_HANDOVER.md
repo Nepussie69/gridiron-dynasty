@@ -6,7 +6,7 @@ Read AGENTS.md first. One orchestrator chat at a time. Status = ranked table wit
 NFL-realistic play where every effect comes from the individual players on the play (no averages, big AND symmetric elite-vs-poor spread — defenders count as much as the offence), a realistic 2.5D broadcast, the FUTURES list in order, and the user's playtest fixes.
 
 ## Current state
-- **Live** = d2f94e7. **Local main a4dc5de** is 63 commits ahead (not pushed; push only on the user's ok). Landed this chat: fapool 430, punts 432, ladder 433, J52 WR reads 435, fresh dice per kickoff 437 (orchestrator code: gameStore `rollDice`/`weekSeed`, `gameDay.seed`, `Game.diceSalt`; headless = salt 0), DF2 439, H1 439, P1 playcalling 442, H2 443, rosterfloor 444 (smokes now clean), T1 trick plays 445.
+- **Live** = 2d4d039 (pushed 2026-10-15, row 450). Landed this chat: fapool 430, punts 432, ladder 433, J52 WR reads 435, fresh dice per kickoff 437 (orchestrator code: gameStore `rollDice`/`weekSeed`, `gameDay.seed`, `Game.diceSalt`; headless = salt 0), DF2 439, H1 439, P1 playcalling 442, H2 443, rosterfloor 444 (smokes now clean), T1 trick plays 445.
 - **check-broadcast fails on main** (67/80, "drawn separation off the recorded one by 0.51 yd p75") — marginal animation checks flip when the play stream changes → **animresid** job is fixing the animation (never thresholds). Hold any push until it lands.
 - **Running DeepSeek** (watch the LAST `[push]` line in `~/gridiron-work/logs/<name>.log` + `<name>-verify.out`):
   - **animresid** (prompts/animresid.txt) — continuation running.
