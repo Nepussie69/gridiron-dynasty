@@ -298,6 +298,7 @@ export function MatchView() {
     setPlaying(true)
     setSpeed(1)
     simmingRef.current = false
+    liveCtlRef.current?.setSimming(false)
   }, [matchSeq])
 
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
@@ -499,6 +500,11 @@ export function MatchView() {
   useEffect(() => {
     liveCtlRef.current?.setTime(clock.i === idx ? clock.t : 0)
   }, [clock, idx])
+
+  // The Drawings setting takes effect on the play on screen at once.
+  useEffect(() => {
+    liveCtlRef.current?.refreshLiveTele()
+  }, [vsettings.drawings])
 
   // ── B8: telestrator replays (B6b) ───────────────────────────────────────────
   // After a live play the Replays setting (big plays by default) may replay it
@@ -787,6 +793,7 @@ export function MatchView() {
 
   const simToEnd = () => {
     simmingRef.current = true
+    liveCtlRef.current?.setSimming(true)
     skipBroadcastReplay()
     setPlaying(false)
     void simGameDayToEnd()

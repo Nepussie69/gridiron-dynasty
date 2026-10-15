@@ -677,6 +677,64 @@ export function teleState(item: Telestration, sec: number): { draw: number; alph
   return { draw, alpha: clamp(alpha, 0, 1), label: !!item.label && sec >= item.labelSec && draw >= 0.6 }
 }
 
+// ── live telestration (every play, not only replays) ─────────────────────────
+
+/**
+ * The Drawings setting (gd.view.drawings): draw the telestrations on every
+ * play ('every', the default), keep them replay-only ('replays' = the old
+ * behaviour exactly) or off ('off').
+ */
+export type DrawingsMode = 'every' | 'replays' | 'off'
+
+export interface LiveTeleOptions {
+  setting?: DrawingsMode
+  reducedMotion?: boolean
+  /** 'fast' (sim to end) draws nothing, like a replay's fast playback. */
+  playback?: ReplayPlayback
+  events?: AnimEvent[]
+}
+
+/** How long after the last frame a live telestration holds (cleared on the next snap). */
+const LIVE_TAIL = 0.35
+
+/**
+ * The telestrations to draw on a normal (non-replay) play, in LIVE anim seconds
+ * (0..1 of the play). The set is exactly what a replay of the play would build
+ * (replayPlan with setting 'all', so a play that never replays — a 3-yd run —
+ * still gets its set if it would have one), only the schedule differs:
+ *
+ *   - a track (route / carry, after-catch, air-yards arc, pursuit) appears once
+ *     the anim time reaches its t0 and its stroke grows with the anim time (the
+ *     route as the receiver runs, the arc as the ball flies);
+ *   - a static shape (pocket, separation bracket, double-team circle, catch
+ *     ring) appears at its `at` time, drawing on like a replay's;
+ *   - a label appears once its item is complete;
+ *   - everything holds through the end-of-play hold (the caller clears it on
+ *     the next snap).
+ *
+ * Empty for 'replays' / 'off', for 'fast' playback (sim to end), for a play
+ * that builds nothing (a kneel / spike / PAT / pre-snap foul) and when there is
+ * no item. Pure and deterministic (no DOM, no clock).
+ */
+export function liveTelestrations(play: Play, anim: BroadcastAnim, opts: LiveTeleOptions = {}): Telestration[] {
+  if ((opts.setting ?? 'every') !== 'every') return []
+  if ((opts.playback ?? 'live') === 'fast') return []
+  const events = opts.events ?? anim.events ?? []
+  if (!replayable(play, events)) return []
+  // The same item builder the replay uses; 'all' so a play that does not
+  // qualify for a replay still gets the set a replay of it would show.
+  const plan = replayPlan(play, anim, { setting: 'all', reducedMotion: !!opts.reducedMotion, events })
+  if (!plan.tele.length) return []
+  const drawOn = opts.reducedMotion ? 0 : DRAW_ON
+  const hideSec = 1 + LIVE_TAIL
+  return plan.tele.map((it) => {
+    const track = it.kind !== 'separation' && it.kind !== 'doubleTeam' && it.kind !== 'pocket'
+    const showSec = track ? it.t0 : it.at
+    const labelSec = track ? it.t1 : Math.min(it.at + drawOn, hideSec)
+    return { ...it, showSec, hideSec: Math.max(showSec + 0.05, hideSec), labelSec, drawOn }
+  })
+}
+
 // ── B8: Game Day's replay rules (pure; MatchView + liveView play the result) ──
 
 /** Seconds an automatic replay holds the live end frame + result toast before its wipe. */
