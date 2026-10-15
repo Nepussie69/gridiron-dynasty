@@ -84,7 +84,7 @@ import { createBallFx, withBallFx } from '../src/components/broadcast/ballFx.ts'
 import { buildFxSchedule, EVENT_FX, SHAKE_YARDS, shakeAt } from '../src/components/broadcast/fxSchedule.ts'
 import type { AnimEventKind } from '../src/components/playAnim.ts'
 import { holderAt as r6HolderAt, posAt as r6PosAt } from '../src/components/broadcast/interp.ts'
-import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, LONG_FG_YDS, MAX_SPAN_SEC, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
+import { BIG_GAIN_YDS, customReplayReasons, DEFAULT_REPLAY_TYPES, GAME_DAY_LEAD_SEC, gameDayReplay, liveTelestrations, LONG_FG_YDS, MAX_SPAN_SEC, replayable, REPLAY_REASON_IDS, ReplayPlayer, replayAt, replayPlan, replayReasons, teleState, type ReplayPlan, type ReplayReasonId } from '../src/components/broadcast/replay.ts'
 import { TelestratorLayer, composeHooks, partial } from '../src/components/broadcast/telestrator.ts'
 import type { Play } from '../src/game/engine/playsim.ts'
 import { carrierMove, effAttrs, effRating, fatigueMap, tackleStyle, tiredness } from '../src/components/animRatings.ts'
@@ -1358,6 +1358,123 @@ ok("B6b: nothing draws in 'fast' (sim to end) or 'off'; reduced motion has no wi
   // partial() keeps the start and stops at the fraction of the length.
   const pl = partial([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], 0.75)
   assert.deepEqual(pl[pl.length - 1], { x: 10, y: 5 })
+})
+
+// ── livetele: the telestrations on every play (the Drawings setting) ─────────
+
+/** Track kinds whose stroke grows with the live anim time (the rest are static). */
+const LIVE_TRACKS = new Set(['route', 'yac', 'pursuit', 'airYards'])
+
+ok('livetele: the live set is the replay plan\'s set; items reveal at their t0/at, tracks never shrink', () => {
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    const plan = replayPlan(play, anim, { setting: 'all' })
+    const live = liveTelestrations(play, anim, { setting: 'every' })
+    assert.ok(live.length > 0, `${name}: no live items`)
+    assert.equal(live.length, plan.tele.length, `${name}: ${live.length} live vs ${plan.tele.length} replay items`)
+    // Same geometry as the replay plan (id / kind / keys / window); only the schedule differs.
+    for (let i = 0; i < live.length; i++) {
+      const a = live[i]
+      const b = plan.tele[i]
+      assert.equal(a.id, b.id, `${name}: item ${i} id ${a.id} vs ${b.id}`)
+      assert.equal(a.kind, b.kind, `${name}: item ${i} kind`)
+      assert.deepEqual(a.keys, b.keys, `${name}: item ${i} keys`)
+      assert.equal(a.t0, b.t0, `${name}: item ${i} t0`)
+      assert.equal(a.t1, b.t1, `${name}: item ${i} t1`)
+      assert.equal(a.at, b.at, `${name}: item ${i} at`)
+    }
+    // Deterministic and pure.
+    assert.deepEqual(liveTelestrations(play, anim, { setting: 'every' }), live)
+    // Only items whose reveal time has been reached ever show; a track's drawn
+    // length is non-decreasing in t; at t = 1 the shown set == the replay set.
+    const lenAt: Record<string, number> = {}
+    for (const t of [0.25, 0.5, 0.75, 1]) {
+      for (const it of live) {
+        const st = teleState(it, t)
+        const reveal = LIVE_TRACKS.has(it.kind) ? it.t0 : it.at
+        if (st.alpha > 0) assert.ok(reveal <= t + 1e-9, `${name}: ${it.id} (reveal ${reveal}) shown at ${t}`)
+        if (!LIVE_TRACKS.has(it.kind)) continue
+        const hi = Math.min(t, it.t1)
+        const p = anim.actors.find((a) => a.key === it.keys[0])?.path
+        if (hi <= it.t0 || !p) continue
+        let len = 0
+        let prev = r6PosAt(p, it.t0)
+        for (let u = it.t0 + 1e-4; u < hi; u += 0.01) {
+          const q = r6PosAt(p, u)
+          len += Math.hypot(q.x - prev.x, q.y - prev.y)
+          prev = q
+        }
+        assert.ok(len >= (lenAt[it.id] ?? 0) - 1e-9, `${name}: ${it.id} track shrank by t=${t}`)
+        lenAt[it.id] = len
+      }
+    }
+    const atEnd = live.filter((it) => teleState(it, 1).alpha > 0).map((it) => it.id).sort()
+    assert.deepEqual(atEnd, plan.tele.map((it) => it.id).sort(), `${name}: t=1 set`)
+  }
+})
+
+ok("livetele: 'Replays only' / 'Off' / sim to end draw nothing live; a 3-yd run still does", () => {
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    assert.equal(liveTelestrations(play, anim, { setting: 'replays' }).length, 0, `${name}: replays-only items`)
+    assert.equal(liveTelestrations(play, anim, { setting: 'off' }).length, 0, `${name}: off items`)
+    assert.equal(liveTelestrations(play, anim, { setting: 'every', playback: 'fast' }).length, 0, `${name}: fast items`)
+    assert.ok(liveTelestrations(play, anim, { setting: 'every' }).length > 0, `${name}: no items`)
+  }
+  // A play that never replays (a 3-yd run) still gets its live set under 'every'.
+  const p3 = { ...RPLAY, yards: 3, endYard: 28, result: 'Run' } as unknown as Play
+  assert.equal(replayPlan(p3, RA, { setting: 'big' }).replay, false, 'a 3-yd run replayed')
+  assert.ok(replayable(p3))
+  assert.ok(liveTelestrations(p3, RA, { setting: 'every' }).length > 0, 'a 3-yd run got no live items')
+  // Kneels and pre-snap fouls (no snap) show nothing live either.
+  assert.equal(liveTelestrations({ ...RPLAY, concept: 'Kneel', yards: -1 } as unknown as Play, RA, { setting: 'every' }).length, 0)
+  const flagOnly = { ...GA, events: [{ t: 0.1, kind: 'flag' as AnimEventKind, keys: [], spot: { x: 1, y: 1 } }] }
+  assert.equal(liveTelestrations(GPLAY, flagOnly, { setting: 'every' }).length, 0)
+})
+
+ok('livetele: live labels stay clear of the HUD rects and each other; no bug or wipe; fast gates', () => {
+  let labels = 0
+  for (const [name, anim, play] of REPLAY_FIXTURES) {
+    const live = liveTelestrations(play, anim, { setting: 'every' })
+    for (const dpr of [1, 2]) {
+      for (const [cw, ch] of [
+        [375, 410],
+        [1280, 720],
+        [1920, 1080],
+      ]) {
+        const W = cw * dpr
+        const H = ch * dpr
+        const cx = (anim.ball[0].x + anim.ball[anim.ball.length - 1].x) / 2
+        const pose = orbitPose({ focusX: cx, focusY: 24, back: 34, height: 22, yaw: 0, fovDeg: cw < 600 ? 55 : 43 })
+        const cam = makeCamera(pose, { width: W, height: H })
+        const info = { dpr, width: W, height: H }
+        const tele = new TelestratorLayer()
+        tele.setLive(live, anim, { ol1: 77, ol2: 64, dl0: 97 })
+        tele.mode = 'full'
+        tele.avoid = { lastHud: [{ x: 16 * dpr, y: 16 * dpr, w: 300 * dpr, h: 32 * dpr }], lastPlaced: [] }
+        const rec = teleRecorder(W, H)
+        const hook = composeHooks(tele.hook, null, tele.topHook)
+        const frame = { ...frameFor(1, cx), camera: pose }
+        for (let t = 0; t <= 1.0001; t += 1 / 30) {
+          tele.setLiveTime(t)
+          hook(rec.ctx, cam, frame, info)
+          labels += tele.stats.labels
+          for (const a of tele.lastLabels) for (const b of tele.lastLabels) if (a !== b) assert.ok(!rectsOverlap(a, b), `${name}: live labels overlap`)
+          for (const a of tele.lastLabels) assert.ok(!rectsOverlap(a, tele.avoid.lastHud[0]), `${name}: a live label covers the HUD`)
+        }
+        // Live mode never paints the REPLAY bug or the wipe.
+        assert.equal(tele.lastBug, null, `${name}: live drew a bug`)
+        // Sim to end / off: the mode gate draws nothing live.
+        const quiet = teleRecorder(W, H)
+        tele.mode = 'fast'
+        for (let t = 0; t <= 1.0001; t += 1 / 30) {
+          tele.setLiveTime(t)
+          hook(quiet.ctx, cam, frame, info)
+          assert.equal(tele.lastDrawn.length, 0, `${name}: fast drew live items`)
+        }
+        assert.equal(quiet.calls(), 0, `${name}: fast made ${quiet.calls()} calls`)
+      }
+    }
+  }
+  assert.ok(labels > 50, `only ${labels} live labels placed`)
 })
 
 // ── B8: Game Day's replay rules (gameDayReplay) ─────────────────────────────
