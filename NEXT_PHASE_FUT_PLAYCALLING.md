@@ -105,4 +105,4 @@ P3a and P3b run in parallel worktrees. Avoid `resolvePass`/`resolveRun`, because
 | Spec | ✅ 2026-10-11 |
 | P1 engine | ✅ merged 2026-10-15 (row 442) |
 | P2 store | ✅ 2026-10-15 (row 455) |
-| P3a / P3b UI | ⏳ |
+| P3a / P3b UI | 🔄 2026-10-15: futp3a (PlayCallingCard on Game Plan → Situational) running; futp3b (My sheet mode, Sheet tab, audible card, QB-check toast in MatchView) queued for the next slot (row 467) |
