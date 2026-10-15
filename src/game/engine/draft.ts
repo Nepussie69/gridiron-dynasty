@@ -11,7 +11,8 @@ import { redFlagIds } from './redflag'
 import { roomNote, roomTilt, roomWinner } from './draftRoom'
 import { applyDraftTradeDown, roomTradeDown } from './draftTrades'
 import { makeCharacter } from './character'
-import { type World, indexPlayers } from './generate'
+import { isEvaluator, scoutReport } from './scoutBias'
+import { type World, classCeiling, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
 import { rescaleOvr, unscaleOvr } from './ovrScale'
 
@@ -144,10 +145,42 @@ export interface BoardAdvice {
   board: string[]
   weight: number
 }
-
 /** How much a director trusts your board, from your evaluation reputation + skill. */
 export function adviceWeight(career: CareerState): number {
   return clamp(0.15 + (career.reputation.evaluation / 100) * 0.5 + (career.skills.evaluation / 100) * 0.35, 0.15, 1)
+}
+
+/**
+ * L12.17 DR3: a club's own board. Every NPC club draft off the reports its own
+ * scouts filed (scoutBias), never a shared public list: no two clubs read a
+ * prospect the same way, so one club's miss is another club's steal — and the
+ * user's department board is one voice among thirty-two rather than the only
+ * voice on a league-wide constant.
+ *
+ * The board is the two scouting voices — the area Scout and the Director of
+ * Player Personnel — because that is who stacks a real board: a head coach and
+ * his coordinators weigh in on fit (the room tilt), not on the stacked grade. A
+ * club with neither falls back to any evaluator, then to the public consensus.
+ *
+ * Pure (hash-based) and memoised per call site: a draft makes ~200 picks against
+ * the same class, so the closure caches each club's report per prospect.
+ */
+export function clubBoardOf(world: World, teamId: string): (p: DraftProspect) => number {
+  const staff = world.staff[teamId] ?? []
+  const scouting = staff.filter((m) => m.role === 'Scout' || m.role === 'Director of Player Personnel')
+  const evaluators = scouting.length ? scouting : staff.filter(isEvaluator)
+  if (!evaluators.length) return (p) => p.grade
+  const cache = new Map<string, number>()
+  return (p) => {
+    let v = cache.get(p.id)
+    if (v == null) {
+      let sum = 0
+      for (const m of evaluators) sum += scoutReport(m, p)
+      v = Math.round(sum / evaluators.length)
+      cache.set(p.id, v)
+    }
+    return v
+  }
 }
 
 /** Best available prospect for a team, weighing talent vs. positional need. */
@@ -162,8 +195,12 @@ export function bestAvailableFor(
   if (!available.length) return null
   const needs = teamNeeds(world.roster[teamId] ?? [])
   const scored = available.map((p) => {
-    const needBonus = (needs[p.pos] ?? 0) > 0 ? 6 : 0
-    const posPremium = p.pos === 'QB' || p.pos === 'DE' || p.pos === 'OT' || p.pos === 'CB' ? 2 : 0
+    // L12.17 DR3c: the need reach was +6 (a full round) over a ~4-point top-32
+    // talent spread, so clubs routinely passed a true top-32 man for a need body.
+    // NFL boards are talent-first: a need now buys ~2 grades (3 at QB), so a real
+    // top-32 talent only falls when his own file carries a flag.
+    const needBonus = (needs[p.pos] ?? 0) > 0 ? 1 : 0
+    const posPremium = p.pos === 'QB' ? 3 : p.pos === 'DE' || p.pos === 'OT' || p.pos === 'CB' ? 1 : 0
     let adviceBonus = 0
     if (advice) {
       const idx = advice.board.indexOf(p.id)
@@ -270,11 +307,29 @@ function trueGradeRank(world: World, prospect: DraftProspect): { rank: number; s
 }
 
 /**
- * D1 (L12.7): an NFL rookie's opening OVR and ceiling, as pure a function as the
- * prospect allows. Real-data prospects enter on the curve by their hidden
- * true-grade class rank (so a steal stays a steal) with a compressed pro
- * ceiling; generated prospects keep their ceiling and take the lower of their
- * old and curve OVR. Deterministic apart from ±1 from the prospect id.
+ * L12.17 DR2e: the per-player boom/bust on a rookie's ceiling, by true class
+ * standing. A Rd1 pick busts more often (the stakes, the pressure, the medicals);
+ * a Day-3 body booms more often (nothing to lose, special-teams motor). Applied to
+ * every man individually — deterministic on the prospect id — so no band is a mean
+ * and no `rng()` draw is spent.
+ */
+function slotTail(id: string, rank: number): number {
+  const band = rank <= 32 ? 0 : rank <= 64 ? 1 : rank <= 100 ? 2 : rank <= 150 ? 3 : rank <= 224 ? 4 : 5
+  const BUST = [14, 9, 5, 3, 3, 3]
+  const BOOM = [20, 12, 14, 16, 16, 10]
+  const h = hash32(id, 71) % 100
+  if (h < BUST[band]) return -(5 + (hash32(id, 72) % 6))
+  if (h < BUST[band] + BOOM[band]) return 2 + (hash32(id, 74) % 5)
+  return 0
+}
+
+/**
+ * D1 (L12.7) / L12.17 DR2: an NFL rookie's opening OVR and ceiling, as pure a
+ * function as the prospect allows. Both come from the player's own true-talent
+ * class standing: the opening rating off the L12.7 rank curve, the ceiling off
+ * `classCeiling` (NFL-like rarity — a late-round body does not carry a top-band
+ * ceiling), each with a deterministic per-player wobble from the id. Pure: no
+ * rng draw, so the play sim is untouched.
  */
 export function rookieRatings(
   prospect: DraftProspect,
@@ -282,55 +337,34 @@ export function rookieRatings(
   classSize: number,
 ): { ovr: number; pot: number } {
   const real = !prospect.generated
-  // L12.15 S4: a real prospect's pro ceiling is his college pot compressed onto
-  // the new scale. The very top of the class (college pot 99) otherwise collapses
-  // to one value → one new ceiling (91), stacking the whole 90-92 band on a single
-  // rating. The elite few (rank ≤ 12) keep that ceiling, while a deterministic half
-  // of the rest step one point lower (→ 89) so the pipeline feeds 90-92 less hard
-  // without moving the body of the class.
+  const openWob = (hash32(prospect.id, 13) % 5) - 2
+  // L12.17 DR2d: real-data rookies keep the L12.7 *college-pot* ceiling — their own
+  // physical tape, not their class rank — so the within-class ceiling spread
+  // survives even though the true-talent curve is now steep (a scout's steal is
+  // still a steal, and a Rd3 body can still grow into a job). Generated bodies take
+  // the rank-based `classCeiling`.
   const topTrim = classRank > 12 && prospect.pot >= 99 && hash32(prospect.id, 41) % 2 === 0 ? 1 : 0
   const pot = real ? clamp(Math.round(58 + (prospect.pot - 60) * 0.95) - topTrim, 60, 97) : prospect.pot
-  const jitter = (hash32(prospect.id, 13) % 3) - 1
-  const curve = Math.round(rookieOvrCurve(classRank) + jitter)
+  const curve = Math.round(rookieOvrCurve(classRank) + openWob)
   const today = Math.min(prospect.pot, Math.round(prospect.ovr + 3))
   const base = real ? curve : Math.min(today, curve)
-  // L12.15 S1: the L12.7 curve was tuned on the old scale — map it through the
-  // same remap so a rookie enters on the new scale, with no one over 76.
+  // L12.15 S1: map the old-scale curve through the remap so a rookie enters on the
+  // new scale, with no one over 76. L12.15 S4: the bottom of every class is a
+  // spread of bodies, not one flat rating — the rank curve sets the order, the id
+  // wobble the spread.
   const frac = 0.5
   const raw = Math.min(76, rescaleOvr(Math.max(50, Math.min(base, pot - 3)), frac))
-  // L12.15 S4: a late-round rookie is a replacement-level body, but the bottom
-  // of every class is a spread of bodies, not one flat rating. The raw curve
-  // (rank-derived) sets the order; a deterministic ±2 wobble from the prospect
-  // id gives each late round a real p10–p90 spread with no extra RNG draw.
-  let ovr = raw
-  if (raw < 65) {
-    const wob = (hash32(prospect.id, 29) % 5) - 2
-    ovr = clamp(Math.round((raw + 63) / 2) + wob, 56, 64)
-  }
-  // L12.15 S4: real prospects keep the L12.7 compressed ceiling (topping out near
-  // 90 new-scale). Generated prospects also take a new-scale ceiling from their
-  // class standing, so only a small rank-ordered funnel can ever reach 90+.
-  const mapped = Math.max(ovr, rescaleOvr(pot, frac))
-  const ceiling = real ? mapped : Math.max(mapped, generatedCeiling(classRank, classSize))
-  return { ovr, pot: ceiling }
-}
-
-/**
- * L12.15 S4: the new-scale pro ceiling for a generated prospect, by true-grade
- * class standing (`rank/size`, 1 = best). A static, monotone funnel: the best
- * prospect can become a 98 face, the next few a franchise player, a small
- * handful a quality starter — and everyone past the top ~10% is left to the
- * ordinary formula (≤ ~83). This replaces the old flat +15 ceiling bonus, which
- * put 13–25 players a class at 95–99 and inflated the league over long horizons.
- */
-function generatedCeiling(rank: number, size: number): number {
-  const q = rank / Math.max(1, size)
-  if (q <= 0.0025) return 98
-  if (q <= 0.005) return 96
-  if (q <= 0.008) return 94
-  if (q <= 0.012) return 87
-  if (q <= 0.045) return 84
-  return 0
+  const ovr = raw < 65 ? clamp(Math.round((raw + 63) / 2) + ((hash32(prospect.id, 29) % 5) - 2), 56, 64) : raw
+  const baseCeil = real ? Math.max(ovr, rescaleOvr(pot, frac)) : Math.max(ovr, rescaleOvr(pot, frac), clamp(classCeiling(classRank, classSize), 50, 98))
+  // L12.17 DR2e: a rookie's realised potential is his own draw, never a band mean.
+  // `slotTail` is the per-player boom/bust (motor, coaching fit, medical, a growth
+  // spurt no scout can see); `tilt` is the small opening-OVR shift that gives the
+  // Day-3 rounds their pro-ready bodies (they reach the starter line but rarely the
+  // 85 Pro-Bowl band). Deterministic on the prospect id: no `rng()` draw.
+  const tail = slotTail(prospect.id, classRank)
+  const tilt = classRank <= 32 ? -1 : classRank <= 100 ? 0 : classRank <= 150 ? 1 : 2
+  const ceiling = clamp(baseCeil + tail, 50, 98)
+  return { ovr: clamp(ovr + tilt, 50, 98), pot: ceiling }
 }
 
 /**
@@ -411,6 +445,17 @@ function advancePick(world: World) {
 export function simUntilUser(world: World, career: CareerState | null, max = 0, gmGo = false) {
   const cap = max || totalPicks(world)
   const startIndex = world.draftState.pickIndex
+  // L12.17 DR3: NPC clubs read their own scouts' reports, not a shared public
+  // list. One closure (and report cache) per club for this run of picks.
+  const clubs = new Map<string, (p: DraftProspect) => number>()
+  const boardFor = (teamId: string) => {
+    let f = clubs.get(teamId)
+    if (!f) {
+      f = clubBoardOf(world, teamId)
+      clubs.set(teamId, f)
+    }
+    return f
+  }
   let steps = 0
   while (!world.draftState.complete && steps < cap) {
     if (career && canDraft(career) && currentTeamId(world) === career.teamId) break
@@ -426,8 +471,10 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0, 
     // If the user lacks draft authority but has filed a board, the NPC weighs it.
     const advising = !!career && career.teamId === teamId && !canDraft(career) && (career.userBoard?.length ?? 0) > 0
     const advice: BoardAdvice | undefined = advising ? { board: career!.userBoard!, weight: adviceWeight(career!) } : undefined
-    // The user's club drafts from the department grade (G1), not public consensus.
-    let gradeOf = career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    // The user's club drafts from the department grade (G1), not public consensus;
+    // every NPC club drafts off its own evaluators' filed reports (DR3).
+    let gradeOf =
+      career && teamId === career.teamId ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : boardFor(teamId)
     // K4: your club's simulated picks skip prospects you red-flagged.
     if (gradeOf && career) {
       const flagged = redFlagIds(world, career)
@@ -531,7 +578,8 @@ export function simulateRestOfDraft(world: World, career: CareerState | null) {
     }
     // The user's club is on the clock but the user chose to auto-finish: take best available for them.
     const mine = !!career && teamId === career.teamId
-    const gradeOf = mine ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : undefined
+    // L12.17 DR3: an NPC club drafts off its own evaluators' reports.
+    const gradeOf = mine ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : clubBoardOf(world, teamId)
     // FUTURES #27 DF1: an auto/clock pick uses your own vector at 0.7 plus the
     // room's at 0.3 — you still hear the building before the card goes in.
     const tilt = mine ? roomTilt(world, career, { auto: true }) : undefined
