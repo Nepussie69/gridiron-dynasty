@@ -6448,8 +6448,16 @@ function decide(s: GameState, spec: DecisionSpec): string | null {
   // L12.6: in "call every play" mode the per-game cap on play calls is lifted
   // for the side you chose — every snap asks.
   const callAll = s.ctx?.callAll
-  const uncapped = (spec.kind === 'call' && (callAll === 'off' || callAll === 'both')) ||
-    (spec.kind === 'defCall' && (callAll === 'def' || callAll === 'both'))
+  // FU26/P3b: with "My sheet" ('sheet') the per-game call cap is lifted for
+  // exactly the situations the plan hands to the user ('me') — recomputed with
+  // the same callerFor test the snap trigger uses (spec fields are the moment's
+  // s.down/s.distance/s.yard). Staff situations and audibles keep the caps, so a
+  // default career (no plan) and AI-vs-AI stay byte-identical.
+  const calling = s.ctx?.calling
+  const sheetMine = (side: 'off' | 'def') => callAll === 'sheet' && !!calling &&
+    callerFor(calling, side, bucketFor(spec.down ?? 1, spec.distance ?? 10, spec.yard), isTwoMinute(s.qtr, s.clock)) === 'me'
+  const uncapped = (spec.kind === 'call' && (callAll === 'off' || callAll === 'both' || sheetMine('off'))) ||
+    (spec.kind === 'defCall' && (callAll === 'def' || callAll === 'both' || sheetMine('def')))
   const canAsk = isUser && scopeAllows(s.ctx!.scope, spec.side) && spec.ask &&
     (capExempt(spec.kind) || s.momentsUsed < TOTAL_MOMENT_CAP) && (uncapped || (s.kindUsed[spec.kind] ?? 0) < MOMENT_CAPS[spec.kind])
   if (canAsk) {
