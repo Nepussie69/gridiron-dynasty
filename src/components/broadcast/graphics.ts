@@ -341,7 +341,8 @@ export function buildGraphicsTimeline(input: GraphicsInput): GraphicsTimeline {
   const catchEv = play.type === 'pass' ? first('catch') : undefined
   const intEv = first('interception')
   // A kick changes possession by design: only a lost fumble / muff is a turnover there.
-  const kickPlay = play.type === 'punt' || play.type === 'kickoff'
+  // Backlog 452: so does a missed field goal — its banner is NO GOOD, not TURNOVER.
+  const kickPlay = play.type === 'punt' || play.type === 'kickoff' || play.type === 'fg' || play.type === 'pat'
   const turnover = kickPlay ? has('turnover') || !!play.defTD : !!play.turnover || has('turnover') || !!intEv || !!play.defTD
   const ttt = throwEv && snapEv ? S(throwEv.t) - snapSec : null
   let sep: { value: number; def: string } | null = null
@@ -608,7 +609,9 @@ function buildToast(input: GraphicsInput, c: Ctx): ToastItem {
   } else if (play.type === 'fg' || play.type === 'pat') {
     const two = play.concept === 'Two-point try'
     head = two ? '2-PT TRY' : play.type === 'fg' ? 'FIELD GOAL' : 'EXTRA POINT'
-    const good = has('kickGood') || /good|success/i.test(res)
+    // Backlog 452: "45-yd FG is no good" contains "good" — a miss, block or failed
+    // try never reads as made.
+    const good = has('kickGood') || (/\bgood\b|success/i.test(res) && !/no good|missed|blocked|failed/i.test(res))
     big = two ? (good || td ? 'GOOD' : 'NO') : good ? 'GOOD' : 'NO'
     if (play.type === 'fg') stats.push({ value: `${fgDistance(play)}`, label: 'YDS' })
   } else if (play.type === 'penalty') {

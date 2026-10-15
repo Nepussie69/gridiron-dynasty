@@ -799,6 +799,12 @@ export interface CareerState {
   callMode?: 'off' | 'def' | 'both' | 'sheet'
   /** FUTURES #26: who calls each situation, the call sheet, and the audibles rule. */
   playCalling?: import('./engine/playcalling').PlayCallingPlan
+  /**
+   * FUTURES #7 (H2): the halftime-speech standing order for simmed games.
+   * 'stay' (default) answers STAY THE COURSE; 'staff' lets the staff read the
+   * room and pick the best-fitting speech. Unset = 'stay' (baseline).
+   */
+  halftimeAuto?: 'stay' | 'staff'
   /** L12 W2: the keys to the game picked for a week. */
   keys?: { week: number; season: number; ids: string[] }
   /** L12 W2: the season's key-hit ledger, capped at ±3 leadership. */
@@ -954,6 +960,10 @@ export interface CareerState {
   callSheet?: import('./engine/decisions').CallSheet
   /** FUTURES #4: special-teams kick and return strategies (default = pre-feature sim). */
   specialTeams?: import('./engine/specialCalls').SpecialTeamsPlan
+  /** FUTURES #24: the trick plays installed on this week's game plan (max 2). */
+  tricks?: import('./engine/trickPlays').TrickKind[]
+  /** FUTURES #24: let the staff call the tricks for you when the look is right. */
+  ocTricks?: boolean
   /** L10 G8: this week's opponent film read (a second purchase this week makes it sharp). */
   oppRead?: { week: number; oppId: string; sharp: boolean }
   /** L10 G10: the opening script, an ordered list of concept names (max 8). */

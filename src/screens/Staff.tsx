@@ -52,6 +52,7 @@ import {
 } from '../ui/kit'
 import { gateMenuItem, useAccessLevel, useMediaQuery, usePhone, WIDE_QUERY } from '../ui/hooks'
 import { DataTable, type Column } from '../components/DataTable'
+import { DraftStanceChips } from '../components/DraftPhilosophyCard'
 import { CoachSubRatings } from '../components/CoachSubRatings'
 import { isSubKey, SUB_FLOOR, SUB_META, subsForRole, subValue, type SubKey } from '../components/coachSubsUi'
 import { staffGrade, coordinatorEdge, type CoachEffect } from '../game/engine/coaching'
@@ -78,6 +79,7 @@ import {
   type StaffBudget,
 } from '../game/engine/staffMarket'
 import { ACCESS_META, type AccessLevel } from '../game/engine/access'
+import { roomSeats, type RoomSeat } from '../game/engine/draftRoom'
 import type { Reputation } from '../game/engine/career'
 import type { World } from '../game/engine/generate'
 import {
@@ -303,6 +305,8 @@ interface Ctx {
   menuFor: (m: StaffMember) => MenuItem[]
   inspect: (m: StaffMember) => void
   findFor: (role: string) => void
+  /** FUTURES #27 DF3: this member's seat in the draft room, when he holds one. */
+  stanceFor: (m: StaffMember) => RoomSeat | null
 }
 
 // ── Screen ───────────────────────────────────────────────────────────────────
@@ -508,6 +512,12 @@ export function Staff() {
     return items
   }
 
+  // FUTURES #27 DF3: the draft room's seats by staff id, for your own club only —
+  // the room the engine builds for your picks. AI clubs keep their own logic.
+  const seatByStaff = new Map(
+    (activeTeamId === career.teamId ? roomSeats(league, career) : []).map((s) => [s.id, s] as const),
+  )
+
   const ctx: Ctx = {
     world: league,
     teamId: activeTeamId,
@@ -528,6 +538,7 @@ export function Staff() {
     menuFor,
     inspect: (m) => setSelectedId(m.id),
     findFor,
+    stanceFor: (m) => seatByStaff.get(m.id) ?? null,
   }
 
   const selected = staff.find((m) => m.id === selectedId) ?? null
@@ -1350,6 +1361,7 @@ function HeadCoachSlab({ m, ctx }: { m: StaffMember; ctx: Ctx }) {
             <MemberEffect m={m} ctx={ctx} />
             <StaffTags m={m} ctx={ctx} />
           </div>
+          <SeatStance m={m} ctx={ctx} className="mt-1.5" />
           <CoachSubRatings m={m} className="mt-2" />
         </div>
         <RatingTile value={m.rating} size="lg" tierWord delta label="Staff rating" />
@@ -1411,6 +1423,7 @@ function UnitColumn({
               <StaffTags m={coord} ctx={ctx} />
               {coordinatorRole !== 'Special Teams Coordinator' && <CallsReadout m={coord} ctx={ctx} />}
             </div>
+            <SeatStance m={coord} ctx={ctx} className="col-span-2" />
             <CoachSubRatings m={coord} className="col-span-2" />
             <div className="col-span-2 flex items-center justify-between gap-2">
               <Contract m={coord} />
@@ -1456,6 +1469,13 @@ function UnitColumn({
   )
 }
 
+/** FUTURES #27 DF3: the member's own draft-room stance, when he holds a seat there. */
+function SeatStance({ m, ctx, className }: { m: StaffMember; ctx: Ctx; className?: string }) {
+  const seat = ctx.stanceFor(m)
+  if (!seat) return null
+  return <DraftStanceChips seat={seat} max={2} className={className} />
+}
+
 /** A compact staff row: tag, name + sub line, rating tile, ⋯. Used for position coaches and the front office. */
 function CompactRow({ m, ctx, tag, sub }: { m: StaffMember; ctx: Ctx; tag: string; sub: ReactNode }) {
   return (
@@ -1467,6 +1487,7 @@ function CompactRow({ m, ctx, tag, sub }: { m: StaffMember; ctx: Ctx; tag: strin
           <StaffTags m={m} ctx={ctx} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">{sub}</div>
+        <SeatStance m={m} ctx={ctx} className="mt-1" />
         <CoachSubRatings m={m} className="mt-1" />
         <div className="mt-1">
           <Contract m={m} />
