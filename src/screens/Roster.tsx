@@ -8,9 +8,11 @@ import { rosterOf } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { PlayerCard } from '../components/PlayerCard'
 import { InjuryChip, PlayerTable } from '../components/PlayerTable'
+import { Cutdown } from '../components/Cutdown'
 import { RatingsTable } from '../components/RatingsTable'
 import { StatsTable } from '../components/StatsTable'
 import { mainStatValue, seasonLine } from '../game/engine/stats'
+import { ROSTER_TARGET } from '../game/engine/progress'
 import { RATING_GROUPS, groupPositions } from '../game/data/ratingInfo'
 import type { Player, Position, StatLevel } from '../game/types'
 import {
@@ -78,6 +80,8 @@ export function Roster() {
   const league = useWorld()
   const activeTeamId = useGame((s) => s.activeTeamId)
   const selectPlayer = useGame((s) => s.selectPlayer)
+  const cutdownOpen = useGame((s) => s.cutdownOpen)
+  const openCutdown = useGame((s) => s.openCutdown)
   const level = useAccessLevel('roster')
   const phone = usePhone()
   const [tab, setTab] = useState<(typeof TABS)[number]['id']>('overview')
@@ -211,6 +215,22 @@ export function Roster() {
     </div>
   )
 
+  // offseason90: cutdown day — the season can't start until the club is at 53,
+  // so the Cutdown view takes the screen over (a deliberate "Open" button below
+  // opens it any time the roster is over during the offseason).
+  if (cutdownOpen) {
+    return (
+      <div>
+        <PageHeader
+          eyebrow="Team"
+          title="Cutdown day"
+          subtitle={`${roster.length} on the roster — trim to ${ROSTER_TARGET} before week 1`}
+        />
+        <Cutdown />
+      </div>
+    )
+  }
+
   return (
     <div>
       <PageHeader
@@ -267,6 +287,27 @@ export function Roster() {
         }
       />
 
+      {/* offseason90: the club may run a 90-man camp in the offseason, but week 1
+          needs 53. Open the Cutdown view whenever the roster is over. */}
+      {isNFL && league.phase === 'offseason' && roster.length > ROSTER_TARGET && (
+        <Card className="mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-small font-600 text-ink">
+                Offseason camp: {roster.length} on the roster — {roster.length - ROSTER_TARGET} to cut by week 1.
+              </div>
+              <p className="text-label leading-snug text-muted">
+                Free agency, the draft, UDFAs, claims, promotions and trades can push the club past 53 until cutdown
+                day. The season will not start until the roster is legal.
+              </p>
+            </div>
+            <Button variant="primary" size="sm" onClick={openCutdown}>
+              Open cutdown
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <KpiStrip label="Roster summary" className="mb-4">
         <KpiTile
           label="Players"
@@ -274,7 +315,11 @@ export function Roster() {
           unit="on the roster"
           why={
             <span className="text-muted">
-              {isNFL ? 'A 53-man active roster' : 'The active squad'}
+              {isNFL
+                ? league.phase === 'offseason'
+                  ? 'Offseason camp — trims to 53 on cutdown day'
+                  : 'A 53-man active roster'
+                : 'The active squad'}
               <span className="sm:hidden"> · {injured} injured</span>
             </span>
           }
