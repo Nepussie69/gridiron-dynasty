@@ -27,7 +27,7 @@ import type { CareerState, Player, Position } from '../types'
 import type { World } from './generate'
 import { deadMoney, capSavings, restructure, summarizeCap, remainingContractValue } from './cap'
 import { evaluateTrade, findPackagesFor, type DealOffer } from './trade'
-import { freeAgentContract } from './progress'
+import { freeAgentContract, rosterLimit, ROSTER_TARGET } from './progress'
 import { STARTERS, depthAt, teamRatings, topPlayers } from './depth'
 import { installSides } from './install'
 import { mainStatValue, seasonLine } from './stats'
@@ -430,12 +430,18 @@ export function gmSignDecision(world: World, career: CareerState, playerId: stri
     return { kind: 'sign', outcome: 'declined', reason: 'mandate', message: `The owner wants young legs — not a ${p.age}-year-old on a one-year deal.` }
   }
   const roster = world.roster[career.teamId] ?? []
-  if (roster.length >= 53) {
+  // offseason90: in the offseason camp the club may carry 90, so the GM only
+  // balks at the camp limit; from week 1 this is the usual 53.
+  const limit = rosterLimit(world)
+  if (roster.length >= limit) {
     return {
       kind: 'sign',
       outcome: 'declined',
       reason: 'roster',
-      message: `We're at 53 — I'd have to cut someone before I can add ${p.name}.`,
+      message:
+        limit > ROSTER_TARGET
+          ? `We're at ${limit} — the offseason camp limit. I'd have to cut someone before I can add ${p.name}.`
+          : `We're at 53 — I'd have to cut someone before I can add ${p.name}.`,
     }
   }
   const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, 1, discountPct)

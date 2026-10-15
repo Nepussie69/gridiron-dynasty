@@ -12,7 +12,7 @@ import type { Contract, Player, Position } from '../types'
 import type { World } from './generate'
 import { STARTERS, depthAt } from './depth'
 import { capForSeason, deadMoney } from './cap'
-import { ROSTER_FLOOR, freeAgentContract, marketPrice } from './progress'
+import { ROSTER_FLOOR, freeAgentContract, marketPrice, rosterLimit } from './progress'
 
 export interface WaiverEntry {
   playerId: string
@@ -131,7 +131,9 @@ export function waiverBlockedReason(
   const roster = world.roster[teamId] ?? []
   let hit = roster.reduce((s, q) => s + q.contract.capHit, 0)
   let dead = world.deadMoney[teamId] ?? 0
-  if (roster.length >= 53) {
+  // offseason90: the user's club (noAutoCut) gets the 90-man offseason limit —
+  // its own adds are never accompanied by a cut for it.
+  if (roster.length >= (noAutoCut ? rosterLimit(world) : 53)) {
     if (noAutoCut) return 'roster'
     const cand = surplusCandidate(world, teamId)
     if (!cand) return 'roster'
@@ -217,7 +219,10 @@ export function processWaivers(world: World, userTeamId?: string): {
     const winner = p ? firstClaimant(world, entry, priority, userTeamId) : null
     if (winner && p) {
       const roster = (world.roster[winner] ??= [])
-      if (roster.length >= 53) releaseSurplus(world, winner)
+      // offseason90: the user's club is judged against its own limit (a 90-man
+      // camp in the offseason), so an offseason claim never cuts one of its men.
+      // In-season this is the same 53 test as before.
+      if (roster.length >= (winner === userTeamId ? rosterLimit(world) : 53)) releaseSurplus(world, winner)
       p.teamId = winner
       p.contract = { ...entry.contract }
       p.origin = {

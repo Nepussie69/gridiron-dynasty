@@ -79,6 +79,10 @@ import {
   runInSeasonFreeAgency,
   marketPrice,
   ROSTER_FLOOR,
+  ROSTER_OFFSEASON_MAX,
+  ROSTER_TARGET,
+  recommendedCuts,
+  rosterLimit,
   fillNflRosters,
   runAIResign,
   runAITrades,
@@ -644,6 +648,11 @@ interface GameStore {
   tick: number
   ready: boolean
   screen: ScreenId
+  /**
+   * offseason90: the Cutdown view is open on the Roster screen (the club is over
+   * 53 in the offseason and must trim before week 1).
+   */
+  cutdownOpen: boolean
   career: CareerState | null
   activeTeamId: string
   /** L12.8 V1: the club shown on the read-only team page (null → the active club). */
@@ -758,9 +767,20 @@ interface GameStore {
   startCareer: (opts: { name: string; path: CareerPath; archetype: string; side?: 'off' | 'def'; teamId: string; startLevel?: number; seed?: number; scenarioId?: ScenarioId; slot?: number }) => Promise<void>
   resetCareer: () => void
   advanceWeek: (opts?: { userSim?: GameSim }) => Promise<void>
-  /** L12.6 C1: step the offseason calendar one stage (resign → FA → draft → camp → season). */
+  /** L12.6 C1: step the offseason calendar one stage (resign → FA → draft → camp → season).
+   *  offseason90: `sim` marks a sim-through, so cutdown day auto-applies the staff's
+   *  recommended cuts (with an inbox note) instead of blocking once for the Cutdown view. */
   advanceStage: () => void
-  startNextSeason: () => void
+  startNextSeason: (opts?: { sim?: boolean }) => void
+  /** offseason90: open/close the Cutdown view on the Roster screen. */
+  openCutdown: () => void
+  closeCutdown: () => void
+  /**
+   * offseason90 cutdown day: cut the lowest-rated surplus down to ROSTER_TARGET
+   * (every ROSTER_FLOOR minimum kept), through the normal release path, and file
+   * an inbox note naming everyone released. Returns the names cut.
+   */
+  applyRecommendedCuts: () => string[]
   dismissModal: () => void
   /** Resume the validated save held by the career hub. */
   continueCareer: () => void
@@ -961,6 +981,31 @@ function bump(set: (p: Partial<GameStore>) => void, get: () => GameStore) {
   set({ tick: get().tick + 1 })
 }
 
+/**
+ * offseason90: release one player from a club through the normal path — book his
+ * dead money and send him to the waiver wire (in season) or the free-agent pool
+ * (in the offseason). Shared by `releasePlayer` and cutdown day so the savings
+ * and dead money a cut predicts are exactly what the Cap screen then shows.
+ */
+function releaseFromRoster(teamId: string, p: Player): number {
+  const roster = world.roster[teamId] ?? []
+  const idx = roster.indexOf(p)
+  if (idx < 0) return 0
+  const dead = deadMoney(p.contract)
+  world.deadMoney[teamId] = (world.deadMoney[teamId] ?? 0) + dead
+  roster.splice(idx, 1)
+  p.teamId = null
+  const original = { ...p.contract }
+  p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+  // W2: in-season releases go on the waiver wire, not straight to free agency.
+  if (world.phase === 'regular') {
+    placeOnWaivers(world, p, teamId, original, dead)
+  } else {
+    world.freeAgents.push(p)
+  }
+  return dead
+}
+
 /** Mark a weekly-checklist task complete on the career (immutably). */
 function withFlag(career: CareerState, key: string): CareerState {
   return { ...career, weekFlags: { ...(career.weekFlags ?? {}), [key]: true } }
@@ -1076,6 +1121,7 @@ export const useGame = create<GameStore>((set, get) => ({
   tick: 0,
   ready: false,
   screen: 'career',
+  cutdownOpen: false,
   career: null,
   activeTeamId: 'BUF',
   teamViewId: null,
@@ -1545,7 +1591,8 @@ export const useGame = create<GameStore>((set, get) => ({
     // While a coached game is in progress, only its own finish may advance the week.
     if (get().gameDay && !opts?.userSim) return
     if (world.phase === 'offseason') {
-      get().startNextSeason()
+      // offseason90: a sim-through applies cutdown day's recommended cuts.
+      get().startNextSeason({ sim: true })
       return
     }
     const week = world.week
@@ -2312,7 +2359,7 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
-  startNextSeason: () => {
+  startNextSeason: (opts) => {
     const career = get().career
     if (!career) return
     if (world.phase !== 'offseason') return
@@ -2329,6 +2376,10 @@ export const useGame = create<GameStore>((set, get) => ({
     // FUTURES 12: any undecided fifth-year option lapses when the new season
     // begins (the fast path never saw the camp deadline).
     finalizeFifthYearOptions(world, career)
+    // offseason90: cutdown day. The club must be at 53 or fewer before the new
+    // season opens; a manual step is blocked once for the Cutdown view, a
+    // sim-through trims to the staff's recommendation (with an inbox note).
+    if (!cutdownReady(set, get, !opts?.sim)) return
     world.season += 1
     // FUTURES #37: pair chemistry decays slowly in the offseason — a pair that
     // spent the winter apart comes back a little less in sync.
@@ -3388,6 +3439,18 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = world.freeAgents.findIndex((p) => p.id === id)
     if (idx < 0) return
     const p = world.freeAgents[idx]
+    // offseason90: the club may run a 90-man offseason camp; from week 1 the
+    // active roster is the usual 53.
+    const roster = (world.roster[career.teamId] ??= [])
+    const limit = rosterLimit(world)
+    if (roster.length >= limit) {
+      get().showToast(
+        limit > ROSTER_TARGET
+          ? `Offseason camp roster is full (${limit}). Cut a player before signing another.`
+          : 'Active roster is full (53). Release a player first.',
+      )
+      return
+    }
     // W1: a released player carries a zeroed contract, so price the signing
     // here (one year at market, pro-rated for the weeks left in season).
     // L12.9 K2: a winning-culture club signs him at a discounted asking price.
@@ -3463,24 +3526,46 @@ export const useGame = create<GameStore>((set, get) => ({
       return
     }
     const roster = world.roster[career.teamId] ?? []
-    const idx = roster.findIndex((p) => p.id === id)
-    if (idx < 0) return
-    const p = roster[idx]
-    const dead = deadMoney(p.contract)
-    world.deadMoney[career.teamId] = (world.deadMoney[career.teamId] ?? 0) + dead
-    roster.splice(idx, 1)
-    p.teamId = null
-    const original = { ...p.contract }
-    p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
-    // W2: in-season releases go on the waiver wire, not straight to free agency.
-    if (world.phase === 'regular') {
-      placeOnWaivers(world, p, career.teamId, original, dead)
-    } else {
-      world.freeAgents.push(p)
-    }
+    const p = roster.find((x) => x.id === id)
+    if (!p) return
+    const dead = releaseFromRoster(career.teamId, p)
     bump(set, get)
     get().showToast(`${p.name} released. Dead money: $${(dead / 1e6).toFixed(1)}M.`)
     get().save()
+  },
+
+  // ── offseason90: cutdown day ────────────────────────────────────────────────
+  openCutdown: () => {
+    set({ cutdownOpen: true, screen: 'roster' })
+  },
+
+  closeCutdown: () => set({ cutdownOpen: false }),
+
+  applyRecommendedCuts: () => {
+    const career = get().career
+    if (!career) return []
+    const roster = world.roster[career.teamId] ?? []
+    if (roster.length <= ROSTER_TARGET) return []
+    // The staff cuts the lowest-rated surplus first, keeping every position
+    // floor — the same order the league's own trimmer uses.
+    const cuts = recommendedCuts(roster, ROSTER_TARGET)
+    const names: string[] = []
+    let dead = 0
+    for (const p of cuts) {
+      names.push(`${p.name} (${p.pos}, ${p.ovr} OVR)`)
+      dead += releaseFromRoster(career.teamId, p)
+    }
+    if (names.length) {
+      pushCareerNews(world, career, {
+        category: 'Roster',
+        headline: `Cutdown day: ${names.length} released to reach ${ROSTER_TARGET}`,
+        body: `The staff trimmed the roster to ${ROSTER_TARGET} before week 1, booking $${(dead / 1e6).toFixed(1)}M in dead money. Released: ${names.join(', ')}. They are free agents now and can be signed to the practice squad.`,
+      })
+    }
+    set({ cutdownOpen: false })
+    bump(set, get)
+    get().save()
+    return names
   },
 
   claimWaiver: (playerId) => {
@@ -4128,8 +4213,13 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = ps.findIndex((p) => p.id === id)
     if (idx < 0) return
     const roster = (world.roster[career.teamId] ??= [])
-    if (roster.length >= 53) {
-      get().showToast('Active roster is full (53). Release a player first.')
+    const limit = rosterLimit(world)
+    if (roster.length >= limit) {
+      get().showToast(
+        limit > ROSTER_TARGET
+          ? `Offseason camp roster is full (${limit}). Cut a player before promoting another.`
+          : 'Active roster is full (53). Release a player first.',
+      )
       return
     }
     const p = ps.splice(idx, 1)[0]
@@ -5802,6 +5892,38 @@ function resolveFrenzyWindow(world: World, career: CareerState | null) {
 }
 
 /**
+ * offseason90 (cutdown day): the user's club may run a 90-man offseason camp,
+ * but week 1 wants 53 or fewer. Returns true when the new season may start.
+ *
+ * Over the limit, a deliberate step (the Advance button) is blocked ONCE with a
+ * clear message and lands the user on the Cutdown view; a sim-through (or a
+ * second Advance without visiting) applies the staff's recommended cuts and
+ * files an inbox note naming every player released — never a silent cut.
+ */
+function cutdownReady(
+  set: (p: Partial<GameStore>) => void,
+  get: () => GameStore,
+  allowBlock: boolean,
+): boolean {
+  const career = get().career
+  if (!career) return true
+  const roster = world.roster[career.teamId] ?? []
+  if (roster.length <= ROSTER_TARGET) {
+    if (get().cutdownOpen) set({ cutdownOpen: false })
+    return true
+  }
+  if (allowBlock && !get().cutdownOpen) {
+    set({ cutdownOpen: true, screen: 'roster' })
+    get().showToast(
+      `Cutdown day: ${roster.length} on the roster — cut ${roster.length - ROSTER_TARGET} more before week 1.`,
+    )
+    return false
+  }
+  get().applyRecommendedCuts()
+  return true
+}
+
+/**
  * L12.6 C1: run every offseason stage that hasn't happened yet, in calendar
  * order and exactly once. `startNextSeason` calls this so a fast path from any
  * stage (probe, import, stall) still produces a legal new season.
@@ -5820,7 +5942,9 @@ function completeOffseasonStages(world: World, career: CareerState | null) {
   }
   // The draft + UDFAs can push rosters over 53; the FA trim ran before them, so
   // cut back to a legal 53 here (same trimmer the FA market uses).
-  trimNflRosters(world)
+  // offseason90: the user's club is spared — it runs a 90-man camp until cutdown
+  // day, where the staff's recommended cuts bring it to 53 before week 1.
+  trimNflRosters(world, career?.teamId)
   // rosterfloor: the trims and the draft's uneven class can leave a club short of
   // 53 (the March market only ever fills positions to FA_NEEDS = 51). Top every
   // AI club back up to the NFL's 53 with the best best-fit bodies its own cap
@@ -8785,8 +8909,12 @@ export async function careerSmoke(
     // Every club carries a legal roster and fits under the cap.
     const cap = capForSeason(world.season)
     for (const [teamId, roster] of Object.entries(world.roster)) {
-      if (roster.length < 45 || roster.length > 60) {
-        violations.push(`${where}: ${teamId} roster has ${roster.length} players (need 45–60)`)
+      // offseason90: the user's club may run a 90-man camp between the new league
+      // year and cutdown day; everyone else keeps 45–60, and from week 1 the
+      // user's club does too (cutdown day enforces 53 before the season starts).
+      const max = world.phase === 'offseason' && teamId === career.teamId ? ROSTER_OFFSEASON_MAX : 60
+      if (roster.length < 45 || roster.length > max) {
+        violations.push(`${where}: ${teamId} roster has ${roster.length} players (need 45–${max})`)
       }
       const used = roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[teamId] ?? 0)
       if (used > cap * 1.05) {
