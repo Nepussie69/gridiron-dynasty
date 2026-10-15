@@ -1,5 +1,5 @@
 import type { CareerState, Contract, Player, Position, Recommendation, SeasonStats } from '../types'
-import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT, minSalary, deadMoney } from './cap'
+import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT, minSalary, deadMoney, dealFromAav, restructure } from './cap'
 import { coachEffect } from './coaching'
 import { generateProspectClass, generateStreetPool, indexPlayers, type World } from './generate'
 import { depthAt, STARTERS } from './depth'
@@ -334,43 +334,114 @@ export function ensureProspectPools(world: World) {
 
 // ── AI re-signing & trades: deeper roster management ─────────────────────────
 /**
+ * Make year-1 room without touching the roster: convert base salary into a
+ * prorated signing bonus on the club's biggest deals — the real NFL March move
+ * for a club that is tight against the cap. Deterministic and contract-only.
+ * Returns true when it freed at least `need`.
+ */
+function makeRoom(world: World, teamId: string, roster: Player[], need: number): boolean {
+  if (need <= 0) return true
+  const dead = world.deadMoney[teamId] ?? 0
+  const used = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + dead
+  const start = used()
+  let moves = 0
+  // fastars 478: one restructure per deal (a deal that already carries void years
+  // is done) and at most two deals per club, so the books cannot be pushed into
+  // the future year after year — the earlier version restructured endlessly and
+  // the dead money/void proration alone eventually put clubs over 105%.
+  const deals = [...roster]
+    .filter((p) => (p.contract.voidYears ?? 0) === 0 && (p.contract.base?.[0] ?? 0) > 1_000_000)
+    .sort((a, b) => b.contract.capHit - a.contract.capHit)
+  for (const p of deals) {
+    if (start - used() >= need || moves >= 2) break
+    const next = restructure(p.contract, 1)
+    if (next.capHit < p.contract.capHit) {
+      p.contract = next
+      moves++
+    }
+  }
+  return start - used() >= need
+}
+
+/** How long a club signs its own man for: the young get length, the old a year. */
+function resignYears(p: Player): number {
+  if (p.age <= 25) return 4
+  if (p.age <= 27) return 3
+  if (p.age <= 30) return 2
+  return 1
+}
+
+/**
  * Before free agency opens, AI clubs re-sign their own best expiring players
  * (within the cap) instead of letting the whole roster walk.
+ *
+ * fastars (backlog 478): this pass used to stop after FOUR men, wrote the new
+ * deal with no signing bonus (`signingBonus 0`, `proration 0`, so the whole
+ * market AAV landed in the year-1 cap hit) and gave up the moment
+ * `used + AAV > 98% of the cap`. An elite expiring star on a club sitting at
+ * 97% was therefore never extended and walked — which, together with the
+ * cap-compliance release below, is how Myles Garrett / Justin Jefferson /
+ * Micah Parsons ended up unsigned at week 1.
+ *
+ * Now each club extends its core — the six best expiring men that are projected
+ * starters (or rated 78+) — priced like a real extension (bonus + proration, so
+ * the year-1 hit is roughly two thirds of the AAV), and only while it keeps real
+ * room (86% of its own cap, enough to replace in-season injuries). Replaceable
+ * depth (a non-starter under 78) walks rather than eating the room a star needs;
+ * that is
+ * the front-office trade-off, and it is what stops the payroll from being
+ * packed to the ceiling. A star the club cannot fit is not lost either — it is
+ * kept by the tag pass that runs immediately after this one (`runAITags`), which
+ * adds the year at the end of his deal and so costs nothing against this year's
+ * cap. Every decision uses that club's own roster and its own cap; no league
+ * average is involved. Deterministic: no rng draw is added or removed, so the
+ * play sim is untouched.
  */
 export function runAIResign(world: World, skipTeamId?: string, db?: CareerDatabase) {
-  const rng = makeRng(world.seed + world.season * 5051)
   const capLimit = capForSeason(world.season)
   for (const t of world.teams) {
     if (t.tier !== 'NFL') continue
     if (t.id === skipTeamId) continue
     const roster = world.roster[t.id] ?? []
-    const used = () => roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
-    const expiring = roster.filter((p) => p.contract.years <= 1 && unscaleOvr(p.ovr) >= 72).sort((a, b) => b.ovr - a.ovr)
-    let resigned = 0
-    for (const p of expiring) {
-      if (resigned >= 4) break
-      // L12.9 K2: a qualifying club re-signs at a discounted asking price.
-      const base = marketPrice(p, world.season, world.era?.positionBias?.[p.pos] ?? 1)
-      const pct = db ? cultureDiscountFor(world, db, t.id, p).pct : 0
-      const annual = pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
-      if (used() + annual > capLimit * 0.98) continue
-      const years = 3
-      p.contract = {
-        ...p.contract,
-        years,
-        length: years,
-        base: Array.from({ length: years }, () => annual),
-        signingBonus: 0,
-        proration: 0,
-        guaranteed: Math.round(annual * 1.5),
-        capHit: annual,
-        annual,
-        signedThrough: world.season + years - 1,
-      }
-      p.teamId = t.id
-      resigned++
+    const dead = world.deadMoney[t.id] ?? 0
+    const used = () => roster.reduce((s, p) => s + p.contract.capHit, 0) + dead
+    // The men a club keeps: its projected starters, plus anyone 78+.
+    const keep = new Set<string>()
+    for (const pos of Object.keys(STARTERS) as Position[]) {
+      ;[...roster]
+        .filter((p) => p.pos === pos)
+        .sort((a, b) => b.ovr - a.ovr)
+        .slice(0, STARTERS[pos] ?? 1)
+        .forEach((p) => keep.add(p.id))
     }
-    void rng
+    const expiring = roster
+      .filter((p) => p.contract.years <= 1 && unscaleOvr(p.ovr) >= 68)
+      .sort((a, b) => b.ovr - a.ovr)
+    // A front office re-signs its core, not its whole depth chart: the old pass's
+    // limit of four was the right instinct (it kept payrolls — and therefore
+    // roster-filling room — healthy); its ORDER was the bug (four men, priced so
+    // the whole AAV hit year 1, and only when the club sat at 98% or less). Now
+    // six, priced as real deals, and the depth behind them walks.
+    let extended = 0
+    for (const p of expiring) {
+      if (extended >= 6) break
+      if (!keep.has(p.id) && unscaleOvr(p.ovr) < 78) continue
+      // L12.9 K2: a qualifying club re-signs at a discounted asking price.
+      const bias = world.era?.positionBias?.[p.pos] ?? 1
+      const base = marketPrice(p, world.season, bias)
+      const pct = db ? cultureDiscountFor(world, db, t.id, p).pct : 0
+      const aav = pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
+      const next = dealFromAav(p, world.season, aav, resignYears(p), 0.7)
+      // The club is already carrying his final-year hit, so only the DELTA counts.
+      const delta = next.capHit - p.contract.capHit
+      // Keep real room: the leftover cap is what lets the club replace in-season
+      // injuries, so a roster never runs under the 45-man floor. A star who does
+      // not fit is kept by the tag pass instead (`runAITags`).
+      if (used() + delta > capLimit * 0.86) continue
+      p.contract = next
+      p.teamId = t.id
+      extended++
+    }
   }
 }
 
@@ -378,6 +449,24 @@ export function runAIResign(world: World, skipTeamId?: string, db?: CareerDataba
  * Keep every NFL club under the cap after the offseason. If a team is over, it
  * cuts its worst value-per-dollar players (above position floors) to free agents
  * until it has a little breathing room. Called once, after FA and trades.
+ *
+ * fastars (backlog 478): "worst value per dollar" was read as `ovr / capHit`
+ * ASCENDING — the lowest rating per dollar first — which makes a club's
+ * best-paid STAR its number-one cut (a $65M QB scores 1.5 per million, a $1M
+ * backup scores 65). Seed 33333 season 2026 is exactly that: 17 of 32 clubs were
+ * over 96% of the cap at camp and each released one man, and the men released
+ * were Joe Burrow $63.5M, Lamar Jackson $65.0M, Myles Garrett $51.6M, Micah
+ * Parsons $48.4M, T.J. Watt, Nick Bosa, Ja'Marr Chase, CeeDee Lamb … — the
+ * unsigned 90+ list the user saw at week 1. A front office does the opposite of
+ * cutting its stars:
+ *   1. release the genuinely surplus / overpaid bodies — a man whose cap hit
+ *      sits above his OWN market price (`marketAAV`), ranked by that overpay,
+ *      never a protected starter and never below a position floor;
+ *   2. still over? restructure the biggest deals (base → prorated bonus), the
+ *      real March move for a club tight against the cap — no player is lost;
+ *   3. still over? release the largest cap hits left among the non-starters.
+ * Each club decides on its own roster and its own cap. Deterministic (no rng
+ * draw) and contract-only, exactly like the pass it replaces.
  */
 export function enforceCapCompliance(world: World) {
   const FLOOR: Record<string, number> = {
@@ -387,28 +476,55 @@ export function enforceCapCompliance(world: World) {
     if (t.tier !== 'NFL') continue
     const roster = world.roster[t.id] ?? []
     const limit = capForSeason(world.season)
-    const target = limit * 0.96
+    const target = limit * 0.94
     const used = () => roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
     if (used() <= target) continue
     const counts: Record<string, number> = {}
     for (const p of roster) counts[p.pos] = (counts[p.pos] ?? 0) + 1
-    const order = [...roster].sort(
-      (a, b) => a.ovr / Math.max(1, a.contract.capHit) - b.ovr / Math.max(1, b.contract.capHit),
-    )
-    for (const p of order) {
-      if (used() <= target) break
-      // rosterfloor: the per-position floors below sum to 36, so a pure cap
-      // cutdown can leave an AI club at 44 — under the league's 45 minimum.
-      // Cap compliance never beats the legal roster floor.
-      if (roster.length <= ROSTER_MIN) break
-      if ((counts[p.pos] ?? 0) <= (FLOOR[p.pos] ?? 2)) continue
+    // A club's starters are its protected men: the best STARTERS[pos] by OVR at
+    // every position. They are extended or restructured, never cut for value.
+    const protectedIds = new Set<string>()
+    for (const pos of Object.keys(STARTERS) as Position[]) {
+      ;[...roster]
+        .filter((p) => p.pos === pos)
+        .sort((a, b) => b.ovr - a.ovr)
+        .slice(0, STARTERS[pos] ?? 1)
+        .forEach((p) => protectedIds.add(p.id))
+    }
+    const release = (p: Player) => {
       const idx = roster.indexOf(p)
-      if (idx < 0) continue
+      if (idx < 0) return
       roster.splice(idx, 1)
-      counts[p.pos] -= 1
+      counts[p.pos] = (counts[p.pos] ?? 0) - 1
       p.teamId = null
-      p.contract = { ...p.contract, years: 0, base: [0], proration: 0, guaranteed: 0, capHit: 0 }
+      p.faWeeks = 0
+      p.contract = voidContract(p.contract)
       world.freeAgents.push(p)
+    }
+    // 1. the overpaid surplus: a cap hit above the man's own market price, worst
+    //    first. A fair deal (or a star) is not a cap casualty.
+    const overpaid = roster
+      .filter((p) => !protectedIds.has(p.id) && unscaleOvr(p.ovr) < 88)
+      .map((p) => ({ p, over: p.contract.capHit - marketAAV(p.ovr, p.pos, p.age) }))
+      .sort((a, b) => b.over - a.over || a.p.ovr - b.p.ovr)
+    for (const { p, over } of overpaid) {
+      if (used() <= target || roster.length <= ROSTER_MIN) break
+      if (over <= 0) break
+      if ((counts[p.pos] ?? 0) <= (FLOOR[p.pos] ?? 2)) continue
+      release(p)
+    }
+    // 2. restructure the biggest deals — the NFL's March move.
+    if (used() > target) makeRoom(world, t.id, roster, used() - target)
+    // 3. last resort: the largest cap hits left among the non-starters.
+    if (used() > target) {
+      const rest = [...roster]
+        .filter((p) => !protectedIds.has(p.id))
+        .sort((a, b) => b.contract.capHit - a.contract.capHit)
+      for (const p of rest) {
+        if (used() <= target || roster.length <= ROSTER_MIN) break
+        if ((counts[p.pos] ?? 0) <= (FLOOR[p.pos] ?? 2)) continue
+        release(p)
+      }
     }
   }
 }
@@ -645,8 +761,12 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
   const capLimit = capForSeason(world.season)
   // L12.9 K2: the asking price a qualifying club pays; and FA interest tilts to
   // those clubs, so they get first crack at the market's best bodies.
+  // fastars 478: the ask is the decayed one (`freeAgentAsk`) — identical to
+  // `marketPrice` for a man who has just become a free agent (faWeeks 0), and
+  // lower for one who has sat unsigned while the market moved past him, so the
+  // price falls with time unsigned exactly like the in-season market (408).
   const price = (teamId: string, p: Player, bias: number) => {
-    const base = marketPrice(p, world.season, bias)
+    const base = freeAgentAsk(p, world.season, p.faWeeks ?? 0, bias)
     const pct = db ? cultureDiscountFor(world, db, teamId, p).pct : 0
     return pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
   }
@@ -670,9 +790,13 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
           return used0() + price(t.id, p, eraBias) <= capLimit
         })
         // Over the cap: fill remaining slots with the cheapest body, not a star.
+        // fastars 478: even that body has to fit under the cap (the old path
+        // signed him regardless, which is how clubs arrived at 100-102% of the
+        // cap and then released a franchise player to get legal). A club that
+        // genuinely cannot afford a body leaves the slot to `fillNflRosters`.
         if (!cand) {
           cand = [...freeCopy]
-            .filter((p) => !taken.has(p.id) && p.pos === pos)
+            .filter((p) => !taken.has(p.id) && p.pos === pos && used0() + price(t.id, p, eraBias) <= capLimit * 0.99)
             .sort((a, b) => price(t.id, a, eraBias) - price(t.id, b, eraBias))[0]
         }
         if (!cand) break
@@ -749,6 +873,10 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
  * best body the club's own cap allows, one player at a time, thinnest hole
  * first: the same per-player logic `signBestFit` uses, never a league average.
  * Deterministic — no rng draw, so the play sim is untouched.
+ *
+ * fastars 478: if the books are full the club still reaches the 45-man floor —
+ * with a league-minimum deal, not by taking the field short (the cap-compliance
+ * pass then makes the room, exactly as a real front office does).
  */
 export function fillNflRosters(world: World, skipTeamId?: string | null) {
   const capLimit = capForSeason(world.season)
@@ -766,6 +894,7 @@ export function fillNflRosters(world: World, skipTeamId?: string | null) {
         (a, b) => deficit(b) - deficit(a) || (a < b ? -1 : a > b ? 1 : 0),
       )
       let chosen: Player | null = null
+      let minimum = false
       for (const pos of holes) {
         const bias = world.era?.positionBias?.[pos as Position] ?? 1
         chosen =
@@ -775,13 +904,39 @@ export function fillNflRosters(world: World, skipTeamId?: string | null) {
             .find((p) => usedCap() + marketPrice(p, world.season, bias) <= capLimit) ?? null
         if (chosen) break
       }
+      // fastars 478: a club that cannot fit another market deal is not allowed to
+      // take the field short either — the 45-man floor is a league rule, and a
+      // cap-strapped front office signs a MINIMUM deal and cuts elsewhere (which
+      // the cap-compliance pass then does). Without this, a star-keeping club
+      // whose books are full entered week 1 at 43 players and the smoke's roster
+      // invariant (45–60) failed.
+      if (!chosen && roster.length < ROSTER_MIN) {
+        chosen =
+          [...world.freeAgents].sort(
+            (a, b) => a.ovr - b.ovr || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+          )[0] ?? null
+        minimum = true
+      }
       if (!chosen) break
       const bias = world.era?.positionBias?.[chosen.pos] ?? 1
-      const annual = marketPrice(chosen, world.season, bias)
+      const annual = minimum ? minSalary(Math.max(chosen.age - 22, 0)) : marketPrice(chosen, world.season, bias)
       world.freeAgents = world.freeAgents.filter((p) => p.id !== chosen!.id)
       chosen.teamId = t.id
       chosen.faWeeks = 0
-      chosen.contract = { ...chosen.contract, annual, years: 2, base: [annual, annual], capHit: annual }
+      chosen.contract = minimum
+        ? {
+            ...chosen.contract,
+            annual,
+            years: 1,
+            length: 1,
+            base: [annual],
+            signingBonus: 0,
+            proration: 0,
+            guaranteed: 0,
+            capHit: annual,
+            signedThrough: world.season,
+          }
+        : { ...chosen.contract, annual, years: 2, base: [annual, annual], capHit: annual }
       roster.push(chosen)
       ledgerFreeAgent(world, t.id, 'gained', chosen.ovr)
       signed++

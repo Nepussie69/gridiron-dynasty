@@ -435,7 +435,12 @@ const goalLine: DirectorRule = {
       // up after the runner (he crossed the top of the frame).
       const gl = goalOf(ctx)
       const x = ctx.carrier ? ctx.carrier.x : ctx.ball.x
-      return Math.abs(x - gl) <= 14
+      // realism-qbrun: hold the framing only while the play is NEAR the goal line.
+      // A goal-to-go run that loses ground to ~14 yd short used to keep the shot
+      // parked on the line (cx = gl − 5) with the carrier 9 yd behind it, so the
+      // carrier dropped below the safe frame at the whistle (animflow r5 item 4).
+      // Hand over to the follow once the play is more than ~10 yd from the line.
+      return Math.abs(x - gl) <= 10
     }
     const c = ctx.carrier
     if (!c) return false

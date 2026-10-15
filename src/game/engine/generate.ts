@@ -9,7 +9,7 @@ import { FIRST, LAST, SPECIALTIES } from './names'
 import { FRONT_SPECIALTIES, frontOfficeProfile, generateAnalyticsPool } from './hiring'
 import { freshDraftWindow } from './picks'
 import { makeCharacter } from './character'
-import { makeScoutBias } from './scoutBias'
+import { makeScoutBias, prospectStock } from './scoutBias'
 import { hash32, makeRng, rchance, rint, rpick, clamp, type Rng } from './rng'
 import { rescaleOvr, rescaleQuantile, unscaleOvr } from './ovrScale'
 import { getIndividual, FAST_ROLES, FAST_BLEND, FAST_NORM } from './individual'
@@ -601,27 +601,89 @@ const POS_NOTES = [
 ]
 
 /**
- * L12.15 S4: the new-scale ceiling target for a generated prospect, by his
- * hidden true-grade quantile. The body of the class is a deliberate 60–79
- * depth layer (none of it sub-60), and the top few percent are the scarce
- * 80+ ceilings that `generatedCeiling` then sharpens by class standing.
+ * L12.17 DR1: the class's true-talent curve — the shape of a real draft class.
+ * `rank` is the 1-based *true* talent rank and `size` the class size (q = rank /
+ * size). The top of the class spreads over ~8 grade points, so a class's true
+ * top-32 is a real ranking rather than a coin flip between 40 bodies at 90-92,
+ * and the tail falls away fast: the 200th-best player in a class is an ordinary
+ * talent, not a first-rounder who slipped.
  */
-function prospectNewPot(trueGrade: number): number {
-  const u = Math.min(1, Math.max(0, (trueGrade - 58) / 34))
-  if (u < 0.36) return 60 + (u / 0.36) * 9
-  if (u < 0.96) return 70 + ((u - 0.36) / 0.6) * 9
-  return 80 + ((u - 0.96) / 0.04) * 4
+export function classTrueGrade(rank: number, size: number): number {
+  const q = Math.max(0, Math.min(1, (rank - 0.5) / Math.max(1, size)))
+  // L12.17 DR1b: a sqrt curve (not q^0.62) so the very top separates hardest —
+  // #1 (≈95) over #32 (≈85) over #64 (≈80) — because a +2-3 need reach or a
+  // scout miss must no longer let a true top-32 man fall past the top-64.
+  return Math.max(50, Math.min(99, Math.round(96 - 44 * Math.sqrt(q))))
+}
+
+/**
+ * L12.17 DR2: the new-scale pro ceiling for the `rank`-th true talent of a class.
+ * NFL-like rarity: only a thin top reaches the 85+ star band, but a Rd3-5 body
+ * still carries a starter's ceiling (~77-81), so he can win a job if he develops
+ * — he just rarely becomes a face of the league.
+ *
+ * The curve is a quantile table, not a single formula, so it can match the NFL
+ * starter/Pro-Bowl bands band by band: a gentle slope across the top ~60% (a
+ * Rd3-5 ceiling stays near the ~79 league starter line) and a steep tail for the
+ * Day 3 bodies past pick 224.
+ */
+const CEIL_ANCHORS: [number, number][] = [
+  [0, 84.6],
+  [0.013, 83.2],
+  [0.084, 81.5],
+  [0.168, 79.9],
+  [0.262, 78.6],
+  [0.393, 77],
+  [0.586, 74.9],
+  [0.79, 68.6],
+  [1, 62.5],
+]
+export function classCeiling(rank: number, size: number): number {
+  const q = Math.max(0, Math.min(1, (rank - 0.5) / Math.max(1, size)))
+  let base = CEIL_ANCHORS[CEIL_ANCHORS.length - 1][1]
+  for (let i = 1; i < CEIL_ANCHORS.length; i++) {
+    const [q1, v1] = CEIL_ANCHORS[i]
+    if (q <= q1) {
+      const [q0, v0] = CEIL_ANCHORS[i - 1]
+      base = q1 === q0 ? v1 : v0 + ((v1 - v0) * (q - q0)) / (q1 - q0)
+      break
+    }
+  }
+  const elite = rank <= 1 ? 2 : rank <= 4 ? 1 : 0
+  return Math.max(45, Math.min(94, Math.round(base) + elite))
+}
+
+/**
+ * A deterministic 1-based true-talent rank per class slot: a fixed, hash-derived
+ * permutation of the slots, so the generated list order leaks nothing about the
+ * truth and no rng draw is spent on it.
+ */
+function classRanks(season: number, count: number): number[] {
+  const perm = Array.from({ length: count }, (_, i) => i).sort(
+    (a, b) => hash32(`dq${season}_${a}`, 5) - hash32(`dq${season}_${b}`, 5) || a - b,
+  )
+  const ranks = new Array<number>(count)
+  perm.forEach((idx, r) => (ranks[idx] = r + 1))
+  return ranks
 }
 
 export function generateProspectClass(rng: Rng, season: number, count = 170): DraftProspect[] {
+  const ranks = classRanks(season, count)
   return Array.from({ length: count }, (_, i) => {
     const pos = rpick(rng, PROSPECT_POS)
-    // Public consensus grade with noise vs. hidden true grade.
-    const trueGrade = Math.max(52, Math.min(99, Math.round(70 + (rng() - 0.35) * 34)))
-    const noise = Math.round((rng() - 0.5) * 18)
-    const grade = Math.max(45, Math.min(99, trueGrade + noise))
-    const rank = i + 1
+    // Public consensus grade with noise vs. hidden true grade. L12.17 DR1: the
+    // hidden truth is now read off the class's true-talent curve at this slot's
+    // rank (NFL-like rarity) while the *same* `rng()` draw stays in place as the
+    // per-player wobble, so the world's rng stream — schedule included — is
+    // byte-identical to before this change. `legacy` keeps the old value purely
+    // for `traitsFor`'s draw count (its pool depends on the rating passed in).
+    const u = rng()
+    const legacy = Math.round(70 + (u - 0.35) * 34)
+    const rank = ranks[i]
     const id = `d${season}_${i}`
+    const trueGrade = Math.max(50, Math.min(99, classTrueGrade(rank, count) + Math.round((u - 0.5) * 3)))
+    const noise = Math.round((rng() - 0.5) * 9)
+    const grade = Math.max(45, Math.min(99, trueGrade + prospectStock(id) + noise))
     return {
       id,
       name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
@@ -629,21 +691,18 @@ export function generateProspectClass(rng: Rng, season: number, count = 170): Dr
       college: rpick(rng, CFB_TEAMS).name,
       age: rint(rng, 20, 23),
       ovr: Math.round(48 + grade * 0.24),
-      // L12.15 S4: the ceiling is drawn on the *new* scale (a deliberate 60–79
-      // depth layer with a thin 80–84 tail), then inverted through the same map
-      // so `rookieRatings`' `rescaleOvr` lands it back where intended. The
-      // handful of prospects who can grow into the league's top bands are
-      // assigned a new-scale ceiling by *class standing* in `rookieRatings`.
-      pot: Math.round(unscaleOvr(prospectNewPot(trueGrade))),
+      // L12.17 DR2: the ceiling the player's *own* class standing earns him, on
+      // the new scale and back-inverted so `rookieRatings` lands it where intended.
+      pot: Math.round(unscaleOvr(classCeiling(rank, count))),
       grade,
       trueGrade,
       myGrade: null,
       confidence: rint(rng, 5, 25),
       recommendation: null,
-      projectedRound: Math.max(1, Math.ceil(rank / 32)),
-      projectedPick: ((rank - 1) % 32) + 1,
+      projectedRound: Math.max(1, Math.ceil((i + 1) / 32)),
+      projectedPick: ((i) % 32) + 1,
       scoutConfidence: rint(rng, 20, 60),
-      traits: traitsFor(rng, pos, trueGrade),
+      traits: traitsFor(rng, pos, legacy),
       notes: rpick(rng, POS_NOTES),
       classYear: (['JR', 'SR', 'SR', 'SO'] as const)[rint(rng, 0, 3)],
       production: rint(rng, 40, 99),
@@ -823,13 +882,22 @@ const STREET_MIX: [Position, number][] = [
   ['C', 7], ['DE', 16], ['DT', 16], ['LB', 22], ['CB', 22], ['S', 14], ['K', 3], ['P', 3],
 ]
 
-/** Per-player street rating (raw scale): mostly fringe, with a real tail. */
+/**
+ * Per-player street rating (raw scale): mostly fringe, with a real tail.
+ *
+ * fastars (backlog 478): the old tail gave 3% of the pool a raw 88–97 rating —
+ * roughly six FABRICATED 90+ free agents on the street at every career start
+ * (the generated "released stars" in the user's screenshot). An unsigned 85+
+ * player in week 1 is essentially unheard of in the NFL, so the tail is now a
+ * rarer, lower-ceiling fading vet: ~0.5 raw-85+ body per 200, none above raw 90.
+ * The COUNT, position mix and draw order are unchanged, so nothing else moves.
+ */
 function streetOvrRaw(rng: Rng): number {
   const r = rng()
   if (r < 0.6) return rint(rng, 46, 66) // camp bodies / fringe
-  if (r < 0.86) return rint(rng, 66, 78) // replacement depth
-  if (r < 0.97) return rint(rng, 78, 88) // starter-quality vets
-  return rint(rng, 88, 97) // released stars
+  if (r < 0.93) return rint(rng, 66, 78) // replacement depth
+  if (r < 0.997) return rint(rng, 78, 85) // starter-quality vets
+  return rint(rng, 85, 90) // a rare released star
 }
 
 /** One unsigned street player: mixed age (young fringe + released vets), no
@@ -885,12 +953,20 @@ function realProspectClass(rng: Rng, cfbTeams: RealCfbTeam[], season: number, co
     }
   }
   all.sort((a, b) => b.p.ovr - a.p.ovr)
+  const size = Math.min(count, all.length)
   return all.slice(0, count).map(({ p, school }, i) => {
-    const trueGrade = p.ovr
-    const noise = Math.round((rng() - 0.5) * 10)
-    const grade = Math.max(45, Math.min(99, trueGrade + noise))
+    // L12.17 DR1: the real CFB ranking is kept (the sort above), but the hidden
+    // truth is read off the class's true-talent curve at that rank. Raw CFB OVR is
+    // a top-220 slice of college football, so it made ~88% of the class
+    // first-round-calibre by the engine's own truth. The two `rng()` draws that
+    // used to set the grade and the ceiling stay in place and now drive the
+    // per-player wobble, so the world's rng stream is unchanged.
     const rank = i + 1
+    const j = rng()
     const id = `d${season}_${i}`
+    const trueGrade = Math.max(50, Math.min(99, classTrueGrade(rank, size) + Math.round((j - 0.5) * 3)))
+    const grade = Math.max(45, Math.min(99, trueGrade + prospectStock(id) + Math.round((j - 0.5) * 10)))
+    const potJitter = rint(rng, 0, 9)
     return {
       id,
       name: p.name,
@@ -898,7 +974,7 @@ function realProspectClass(rng: Rng, cfbTeams: RealCfbTeam[], season: number, co
       college: school,
       age: 20 + rint(rng, 0, 3),
       ovr: p.ovr,
-      pot: Math.min(99, p.ovr + rint(rng, 0, 9)),
+      pot: Math.min(99, p.ovr + potJitter),
       grade,
       trueGrade,
       myGrade: null,
@@ -907,7 +983,7 @@ function realProspectClass(rng: Rng, cfbTeams: RealCfbTeam[], season: number, co
       projectedRound: Math.max(1, Math.ceil(rank / 32)),
       projectedPick: ((rank - 1) % 32) + 1,
       scoutConfidence: rint(rng, 20, 60),
-      traits: traitsFor(rng, p.pos, trueGrade),
+      traits: traitsFor(rng, p.pos, p.ovr),
       notes: rpick(rng, POS_NOTES),
       classYear: p.cls,
       production: Math.max(40, Math.min(99, trueGrade + rint(rng, -8, 6))),

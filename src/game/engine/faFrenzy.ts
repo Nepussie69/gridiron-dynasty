@@ -20,13 +20,12 @@ import { teamStrength } from './generate'
 import { STARTERS, depthAt } from './depth'
 import { schemeFit } from './style'
 import { clubCulture, discountFromClub, type ClubCulture } from './culture'
-import { capForSeason, recomputeCapHit } from './cap'
+import { capForSeason, dealFromAav } from './cap'
 import { projectCap, projectedCapHit } from './capPlan'
 import { agentStyle } from './negotiation'
 import { FA_NEEDS, marketPrice } from './progress'
 import { ledgerFreeAgent } from './picks'
 import { hash32, clamp } from './rng'
-import { unscaleOvr } from './ovrScale'
 
 /** How many lots the frenzy runs each March (the top of the market). */
 export const FRENZY_LOTS = 40
@@ -351,33 +350,14 @@ export interface FrenzyDealOffer {
  * `buildExtension`'s shape (signing bonus, proration, escalating base,
  * guarantees) so the cap planner and dead-money rules see a real multi-year
  * deal — used by both the user's and the AI's frenzy signings.
+ *
+ * fastars 478: the deal SHAPE now lives in `cap.dealFromAav`, shared with the AI
+ * re-sign pass so an extension and a signing come off one curve. The numbers
+ * here are unchanged.
  */
 export function buildFreeAgentDeal(p: Player, season: number, offer: FrenzyDealOffer): Contract {
-  const length = clamp(Math.round(offer.years), 1, 5)
-  const total = offer.aav * length
   const guaranteedPct = offer.guarantee === 'low' ? 0.3 : offer.guarantee === 'mid' ? 0.5 : 0.7
-  const raw = unscaleOvr(p.ovr)
-  const bonusPct = raw >= 90 ? 0.46 : raw >= 82 ? 0.36 : raw >= 72 ? 0.24 : 0.14
-  const signingBonus = Math.round(total * bonusPct)
-  const totalBase = total - signingBonus
-  const weights = Array.from({ length }, (_, i) => 0.85 + i * 0.08)
-  const wsum = weights.reduce((a, b) => a + b, 0)
-  const base = weights.map((w) => Math.round((totalBase * w) / wsum))
-  // `guaranteed` is remaining guaranteed BASE; the bonus is already guaranteed
-  // and accounted for through `proration`.
-  const guaranteedBase = Math.max(0, Math.round(total * guaranteedPct) - signingBonus)
-  return recomputeCapHit({
-    years: length,
-    length,
-    base,
-    signingBonus,
-    proration: Math.round(signingBonus / length),
-    guaranteed: guaranteedBase,
-    capHit: 0,
-    annual: offer.aav,
-    signedThrough: season + length - 1,
-    voidYears: 0,
-  })
+  return dealFromAav(p, season, offer.aav, offer.years, guaranteedPct)
 }
 
 // ── Opening the board ────────────────────────────────────────────────────────
@@ -730,6 +710,12 @@ export function resolveFrenzy(
     } else if (lot.status === 'open') {
       lot.status = 'passed'
       passed++
+      // fastars 478: the window ran 7 days and he is still unsigned, so the
+      // unsigned clock starts now — his ask falls from here on (the same decay
+      // the in-season market uses, backlog 408) instead of holding at market
+      // until week 1.
+      const p = findPlayer(world, lot.playerId)
+      if (p) p.faWeeks = Math.max(p.faWeeks ?? 0, 2)
       events.push({ kind: 'pass', lotId: lot.playerId, day: state.day, text: 'no offer he liked — back to the market' })
     }
   }

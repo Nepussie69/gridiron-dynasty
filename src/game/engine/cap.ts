@@ -74,6 +74,46 @@ export function recomputeCapHit(c: Contract): Contract {
   return { ...c, capHit: (c.base[0] ?? 0) + c.proration }
 }
 
+/**
+ * A priced multi-year deal built from an AAV: signing bonus, proration,
+ * escalating base and guarantees, so the year-1 cap hit is well under the AAV
+ * (a real deal, not a flat "AAV per year" placeholder). Shared by the March
+ * frenzy and the AI re-sign pass (fastars 478) so both price contracts the same
+ * way. `guaranteePct` is the share of the total that is guaranteed (the base
+ * part of it; the bonus is guaranteed through `proration`). Deterministic — no
+ * rng draw, so the play sim never moves.
+ */
+export function dealFromAav(p: Player, season: number, aav: number, length: number, guaranteePct = 0.7): Contract {
+  const years = clampYears(length)
+  const total = aav * years
+  const raw = unscaleOvr(p.ovr)
+  const bonusPct = raw >= 90 ? 0.46 : raw >= 82 ? 0.36 : raw >= 72 ? 0.24 : 0.14
+  const signingBonus = Math.round(total * bonusPct)
+  const totalBase = total - signingBonus
+  const weights = Array.from({ length: years }, (_, i) => 0.85 + i * 0.08)
+  const wsum = weights.reduce((a, b) => a + b, 0)
+  const base = weights.map((w) => Math.round((totalBase * w) / wsum))
+  // `guaranteed` is remaining guaranteed BASE; the bonus is already guaranteed
+  // and accounted for through `proration`.
+  const guaranteedBase = Math.max(0, Math.round(total * guaranteePct) - signingBonus)
+  return recomputeCapHit({
+    years,
+    length: years,
+    base,
+    signingBonus,
+    proration: Math.round(signingBonus / years),
+    guaranteed: guaranteedBase,
+    capHit: 0,
+    annual: aav,
+    signedThrough: season + years - 1,
+    voidYears: 0,
+  })
+}
+
+function clampYears(n: number): number {
+  return Math.max(1, Math.min(5, Math.round(n)))
+}
+
 /** Build a veteran market contract. */
 export function makeVeteranContract(rng: Rng, ovr: number, pos: Position, age: number, season: number): Contract {
   const aav = Math.round((marketAAV(ovr, pos, age) * capScale(season)) / 100_000) * 100_000

@@ -62,13 +62,35 @@ function focusValue(axis: ScoutBias['axis'], p: DraftProspect): number {
   }
 }
 
+/**
+ * L12.17 DR4: the league's read on one specific prospect — a medical, character
+ * or small-school drag, occasionally a hype bump. It is a property of the player
+ * (not of the club): every club's file carries it, so it moves where a man is
+ * drafted without any club knowing the truth. Heavy-tailed by design, which is
+ * how a true top-32 talent lasts into Day 3 once in a while — and why the men
+ * who slide are the ones with a flag, not the ones the dice liked.
+ */
+export function prospectStock(id: string): number {
+  const h = hash32(id, 61) % 100
+  // L12.17 DR4c: rarer and shallower again — a true top-32 man lasting past pick
+  // 64 must be the odd flagged body (target 1-5 a class), not a coin flip.
+  if (h < 1) return -4 - (hash32(id, 62) % 6)
+  if (h < 7) return -1 - (hash32(id, 63) % 3)
+  if (h >= 97) return 3 + (hash32(id, 64) % 4)
+  return 0
+}
+
 /** The grade this staffer would file on a prospect: biased and deterministic. */
 export function scoutReport(member: StaffMember, p: DraftProspect): number {
   const bias = member.bias ?? { axis: 'production' as const, magnitude: 0 }
   const mod = focusValue(bias.axis, p) * bias.magnitude
   const rng = localRng(member.id + p.id)
-  const noise = (rng() - 0.5) * 5
-  return clamp(Math.round(p.trueGrade + mod + noise), 40, 99)
+  // L12.17 DR3b: a report is a single pair of eyes. ±4.5 was too noisy once a
+  // club averaged its two evaluators (board |err| ~2.8 vs a ~4-point top-32
+  // spread → true top-32 men sliding past 64). ±3 keeps a club's board a real
+  // read (±2 grades) while a six-report department board still reads tighter.
+  const noise = (rng() - 0.5) * 4
+  return clamp(Math.round(p.trueGrade + prospectStock(p.id) + mod + noise), 40, 99)
 }
 
 /** Fold a filed report vs. the truth into the staffer's Ledger. */
