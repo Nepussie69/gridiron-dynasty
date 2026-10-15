@@ -15,6 +15,7 @@ import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecove
 import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, getStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
+import { isTrickKind, TRICK } from '../game/engine/trickPlays'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { gameWeather, setWeather, getWeather, type GameWeather, type WeatherGame } from '../game/engine/weather'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills, userSeat } from '../game/engine/coaching'
@@ -528,7 +529,9 @@ function updateUserBook(world: World, sim: GameSim, teamId: string) {
  */
 export function recordSpecialAttempts(world: World, sim: GameSim) {
   const attempts = sim.plays.filter((p) => p.stAttempt)
-  if (!attempts.length) return
+  // FUTURES #24 T1: the trick snaps go on the same sheet.
+  const tricks = sim.plays.filter((p) => p.trick)
+  if (!attempts.length && !tricks.length) return
   if (!world.stMemory || world.stMemory.season !== world.season) {
     world.stMemory = { season: world.season, teams: {} }
   }
@@ -538,6 +541,11 @@ export function recordSpecialAttempts(world: World, sim: GameSim) {
     if (a.kind === 'fake') rec.fake += 1
     else if (a.kind === 'onside') rec.onside += 1
     else rec.surprise += 1
+  }
+  for (const p of tricks) {
+    const rec = (world.stMemory.teams[p.offId] ??= emptySTRecord())
+    const t = (rec.tricks ??= {})
+    t[p.trick!] = (t[p.trick!] ?? 0) + 1
   }
 }
 // Teach the stats layer to stamp each season with the scheme played.
@@ -665,6 +673,10 @@ interface GameStore {
   setCallSheet: (sheet: CallSheet) => void
   /** FUTURES #4: the user's special-teams kick + return strategies. */
   setSpecialTeams: (plan: SpecialTeamsPlan) => void
+  /** FUTURES #24: install up to two trick plays on this week's game plan. */
+  setTrickPackage: (kinds: import('../game/engine/trickPlays').TrickKind[]) => void
+  /** FUTURES #24: let the staff call the tricks for you when the look is right. */
+  setOcTricks: (on: boolean) => void
   /** L10 G10: the user's opening script (ordered concept names, max 8). */
   setScript: (concepts: string[]) => void
   /** L10 G11: pre-game matchup assignments for your club. */
@@ -2069,6 +2081,24 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     set({ career: withFlag({ ...career, specialTeams: normalizeSpecial(plan) }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  // FUTURES #24 T1: the tricks installed this week (at most `TRICK.maxPackage`),
+  // and the "let the OC call one" flag. Both are optional career fields, so an
+  // old save loads without them and an unset user plays the pre-feature sim.
+  setTrickPackage: (kinds) => {
+    const career = get().career
+    if (!career) return
+    const pkg = kinds.filter((k) => isTrickKind(k)).slice(0, TRICK.maxPackage)
+    set({ career: withFlag({ ...career, tricks: pkg.length ? pkg : undefined }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  setOcTricks: (on) => {
+    const career = get().career
+    if (!career) return
+    set({ career: withFlag({ ...career, ocTricks: on || undefined }, 'gameplan'), tick: get().tick + 1 })
     get().save()
   },
 
@@ -4834,12 +4864,15 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const usage = career.usage
   const personnel = career.personnel
   const special = career.specialTeams
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special }
+  // FUTURES #24: tricks are an offense-side tool, like the script.
+  const tricks = hasOff ? career.tricks : undefined
+  const ocTricks = hasOff ? career.ocTricks : undefined
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks,
   }
 }
 

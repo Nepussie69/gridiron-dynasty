@@ -39,6 +39,18 @@ import {
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
 } from './throw'
 import { FEATURED_CONCEPT, electFeatured, featuredPassEdge, featuredRunEdge, featuredIntMult, featuredOn, type FeaturedPlay } from './featured'
+import {
+  aiTrickCall, hbThrower, isTrickKind, spikeEligible, TRICK, trickCarrierElusiveness,
+  trickConcept, trickEffect, trickExtraSack, trickOptions, trickPassOverride, trickRunGain, trickSituation, trickSurprise,
+  type TrickEffect, type TrickKind, type TrickPassOut, type TrickSnap,
+} from './trickPlays'
+
+/**
+ * FUTURES #24: the ordinary call-matrix edge plus, on a trick snap ONLY, the
+ * trick's own identity. `callEffect` never sets `trick`, and T1's AI never calls
+ * a trick, so every non-trick (and every neutral/calibration) snap is untouched.
+ */
+type TrickCall = CallEffect & { trick?: TrickSnap }
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -1096,6 +1108,13 @@ export interface Play {
   kneel?: boolean
   /** J6: the QB spiked the ball to stop the clock (a pass attempt, incomplete). */
   spike?: boolean
+  // ── FUTURES #24: trick plays ────────────────────────────────────────────────
+  /** The trick call this snap ran (absent on every ordinary snap). */
+  trick?: TrickKind
+  /** The surprise the defence gave it (0–1), for the film line and the UI. */
+  trickSurprise?: number
+  /** The read pair whose own AWR/PRC decided the snap (probe / film / animation). */
+  trickReadIds?: string[]
   /** J6: the QB escaped the pocket and ran (a rush attempt, not a pass attempt). */
   scramble?: boolean
   /** R7: the defender credited with the pressure (sack, QB hit or hurry). */
@@ -2684,6 +2703,13 @@ export interface PlayOutcome {
   featuredPlayerId?: string
   /** J5: this snap used pre-snap motion (set when the play is pushed). */
   motion?: boolean
+  // ── FUTURES #24: trick plays ────────────────────────────────────────────────
+  /** The trick call this snap ran (absent on every ordinary snap). */
+  trick?: TrickKind
+  /** The surprise the defence gave it (0–1). */
+  trickSurprise?: number
+  /** The read pair whose own AWR/PRC decided the snap. */
+  trickReadIds?: string[]
   // ── J10a: QB progressions, vision cone & placement circle (animation) ───────
   /** J10a: the designed read the ball went to (1 = first read). */
   readNo?: number
@@ -4052,7 +4078,7 @@ function proximityWeight(p: Player, coverId: string | undefined): number {
 /** J8c: dev accumulator (turned on by `j8cProbe`): the mean individual terms. */
 export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect): PlayOutcome {
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: TrickCall, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect, passerOverride?: Player): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
@@ -4075,7 +4101,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const userDefP = userDef ? env?.personnel?.def : undefined
   const offCounts = userOffP ? offenseCounts(userOffP) : undefined
   const offEleven = fillToEleven(world, offId, offenseOnField(world, offId, concept, env?.qbOverride, undefined, env?.fat, offCounts), OFF_FILL)
-  const qb = offEleven.find((p) => p.pos === 'QB')
+  const passer = passerOverride ?? offEleven.find((p) => p.pos === 'QB')
   const ol = offEleven.filter((p) => p.pos === 'OT' || p.pos === 'OG' || p.pos === 'C')
   const backs = offEleven.filter((p) => p.pos === 'RB')
   const rb = backs[0]
@@ -4153,7 +4179,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const pEdge = personnelEdgeFor(world, env, offId, defId)
   // R15: the offence's and defence's average in-game fatigue. Effects use the
   // difference, so a league-average club is exactly neutral.
-  const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...cbs, ...saf]) - unitFatigue(env?.fat, [qb, ...wrs, ...ol, rb, fb])
+  const fatDiff = unitFatigue(env?.fat, [...dl, ...lbs, ...cbs, ...saf]) - unitFatigue(env?.fat, [passer, ...wrs, ...ol, rb, fb])
 
   // ── L12 E2: unit-level relative ratings (centered; no rng) ──────────────────
   const isQ4 = (env?.qtr ?? 0) >= 4
@@ -4163,9 +4189,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // the unit mean is not even computed. OFF keeps the DL/LB/S PRC mean exactly.
   const recog = INDIV_UNITS_ON ? 0 : recognition(dl, lbs, saf)
 
-  const qbA = qb ? mkAttrs(qb) : {}
-  const qbStyle = qb ? styleProfile(qb) : styleProfile({ traits: [''] } as Player)
-  const qbFit = qb ? schemeFit(qb, ocScheme, 'OFF') : 0.5
+  // FUTURES #24: on an HB pass the thrower is the back, and his own passing line
+  // (his THP/accuracy, his AWR, his mobility) replaces the QB's for every throw
+  // read below. `hbThrower` is identity-free for a real QB arm, so an ordinary
+  // snap is untouched, and it never reads a unit mean.
+  const hb = passerOverride && passerOverride.pos !== 'QB' ? hbThrower(passerOverride) : undefined
+  const qbA = hb ? hb.attrs : passer ? mkAttrs(passer) : {}
+  const qbStyle = passer ? styleProfile(passer) : styleProfile({ traits: [''] } as Player)
+  const qbFit = passer ? schemeFit(passer, ocScheme, 'OFF') : 0.5
   // J12 #34: pre-snap disguise. The defence shows a shell and reveals the real
   // coverage at the snap. Disguise quality is the DC's own `disguise` sub plus
   // the safeties actually on the field (their AWR/PRC); the QB reads it with his
@@ -4189,7 +4220,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         ? (rmean(safPick.pos, 'AWR', mkAttrs(safPick).AWR ?? 70) + rmean(safPick.pos, 'PRC', mkAttrs(safPick).PRC ?? 70)) * 0.5
         : 0
       const disgQ = dcDisg * J12.dcDisgW + safDisg * J12.safDisgW
-      const qbRead = rmean('QB', 'AWR', qbA.AWR ?? 70) * J12.qbReadW + Math.max(0, (qb?.age ?? 22) - 22) * J12.qbExpW
+      const qbRead = rmean('QB', 'AWR', qbA.AWR ?? 70) * J12.qbReadW + Math.max(0, (passer?.age ?? 22) - 22) * J12.qbExpW
       const noise = (h01(`j12n1:${n}:${offId}`) + h01(`j12n2:${n}:${offId}`) + h01(`j12n3:${n}:${offId}`) + h01(`j12n4:${n}:${offId}`) - 2) / 0.5774
       qbFooled = disgQ - qbRead - j12ReadCenter(world) + J12.foolBias + noise * J12.readNoise > 0
       disgAdj = qbFooled ? 1 : -1
@@ -4201,7 +4232,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J13: the QB's own read deviation (0 when there was no check; 0 when J13 is
   // off, so the OFF path is untouched). Every J13 term is scaled by it, so the
   // league means hold while the individual QB decides.
-  const j13Dev = j13 ? j13ReadDev(world, qb) : 0
+  const j13Dev = j13 ? j13ReadDev(world, passer) : 0
   const j13Fields: Pick<PlayOutcome, 'audible' | 'hotRoute' | 'slide'> = j13
     ? { audible: j13.audible, hotRoute: j13.hotRoute, slide: j13.slide }
     : {}
@@ -4233,7 +4264,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Jind: Q4 protection fatigue is the ONE lineman nearest the action plus the
   // QB himself, their own STA (never the whole OL+QB mean).
   const iuProtSta = INDIV_UNITS_ON ? iuPickN(ol, `${n}:${offId}:iuprotsta`, 1) : []
-  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70)) - (isQ4 ? (INDIV_UNITS_ON ? staRel([...iuProtSta, qb]) - IU.protStaCenter : relAvg('STA', [...ol, qb])) * 0.08 * E2_W : 0) + clamp(masteryRelAvg(ol, means) * 0.04, -2, 2)
+  const protection = avg(ol.map((p) => mkAttrs(p).PBK ?? 70)) - (isQ4 ? (INDIV_UNITS_ON ? staRel([...iuProtSta, passer]) - IU.protStaCenter : relAvg('STA', [...ol, passer])) * 0.08 * E2_W : 0) + clamp(masteryRelAvg(ol, means) * 0.04, -2, 2)
   const defPlan = planFor(defId, 'def')
   // G6 third-down heat: extra blitz on the opponent's 3rd downs.
   const heat = hasFix(env, defId, 'thirdDownHeat') && env?.down === 3 ? 0.15 : 0
@@ -4286,14 +4317,18 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // slide / escape / throw away / hold, and his poise scales the big cone/circle
   // pressure effect. Only when the layer is on (OFF adds nothing — the sack term
   // below and every circle/accuracy value are then exactly J10a's).
-  const throwOn_ = throwOn() && !!qb
-  const pp: PocketPlan | undefined = throwOn_ ? pocketPlan(qb!, pressureEdge, `${n}:${offId}`) : undefined
-  const pStyle = qb ? passStyle(qb) : undefined
+  const throwOn_ = throwOn() && !!passer
+  const pp: PocketPlan | undefined = throwOn_ ? pocketPlan(passer!, pressureEdge, `${n}:${offId}`) : undefined
+  const pStyle = passer ? passStyle(passer) : undefined
   // J12 #34: a fooled QB holds the ball — a higher share of pressures convert to
   // sacks; a QB who reads the disguise gets the ball out. Linear and zero-mean.
   // J10b: the QB's own pocket response (a poised QB who steps up is sacked less,
   // one who holds more) multiplies in — centred, so the league sack rate holds.
-  const sackChance = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus) * (pp ? pp.sackMult : 1) * j13Sack, 0.02, 0.13)
+  const sackChance0 = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus) * (pp ? pp.sackMult : 1) * j13Sack, 0.02, 0.13)
+  // FUTURES #24: a trick holds the ball longer (the long mesh / the misdirection),
+  // so a trick snap carries its own extra sack chance — a trick-only path that
+  // never runs on an ordinary dropback.
+  const sackChance = call?.trick ? clamp(sackChance0 + trickExtraSack(call.trick.kind), 0.02, 0.22) : sackChance0
 
   // ── R7: per-dropback pressure decision (stats only) ─────────────────────────
   // Derived from the existing `pressureEdge` by a per-play hash, so no rng() draw
@@ -4321,9 +4356,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // the J12 disguise fooled him pre-snap) and the checkdown weight on the back /
   // tight end underneath. All deterministic; the per-candidate scores below take
   // one small extra term each, and no rng() draw is added or removed.
-  const vOn = visionOn() && !!qb
+  const vOn = visionOn() && !!passer
   const vFooled = disguised && qbFooled
-  const vReach = vOn && qb ? qbReach(qb, concept.depth, vFooled) : 0
+  const vReach = vOn && passer ? qbReach(passer, concept.depth, vFooled) : 0
   const vCandRoutes = new Map<string, string | undefined>()
   if (vOn) {
     let widx = 0
@@ -4346,7 +4381,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if (rn === undefined) return 0
     const route = vCandRoutes.get(id)
     const outlet = (pos === 'RB' || pos === 'FB' || pos === 'TE') && !!route && isCheckRoute(route)
-    return outlet ? checkdownBias(true, qb!, pressureEdge, concept.depth)
+    return outlet ? checkdownBias(true, passer!, pressureEdge, concept.depth)
       : readBias(rn, vReach) + (pos === 'TE' ? VISION_CFG.teReadPen : 0)
   }
   // Target selection (L12 S1): a scheme-fitting, style-appropriate receiver gets
@@ -4419,8 +4454,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // fewer timing picks, a brand-new pairing is late. Centred on the league's
   // typical chemistry (shared-weighted), so the league levels hold and only the
   // spread moves. Undefined when the layer is off.
-  const pairChem = getJ37() && qb && target ? skillValue(world, qb.id, target.id) : undefined
-  const chemRel = pairChem !== undefined ? skillRel(world, qb?.id, target?.id) : 0
+  const pairChem = getJ37() && passer && target ? skillValue(world, passer.id, target.id) : undefined
+  const chemRel = pairChem !== undefined ? skillRel(world, passer?.id, target?.id) : 0
   const skillCen = pairChem !== undefined ? skillCentre(world) : 0
   // J37: what the animation needs — the throw's QB–target pair chemistry and the
   // blocker whose adjacent handoff broke (undefined when the layer is off).
@@ -4461,7 +4496,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         // Wind + cold: weather.ts's own centred deep-catch penalty folds in as an
         // mph-equivalent stress, so cold/wind widen a weak arm's circle hardest.
         const wxStress = Math.max(0, 1 - (env?.wx?.deepCatchMult ?? 1)) * THROW_CFG.wxStressEq
-        return throwPlan(qb!, airYd, coverForThrow, type, tightWin, (env?.wind ?? 0) + wxStress, vRoute)
+        return throwPlan(passer!, airYd, coverForThrow, type, tightWin, (env?.wind ?? 0) + wxStress, vRoute)
       })()
     : undefined
   // J10a: the cone + placement circle for this throw. One call, one accuracy
@@ -4474,8 +4509,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // (`accPerRadius`), so the placement error reaches the completion model; the
   // pocket circle is scored by `pp.compAdd` instead (no double counting).
   const extraAcc = tp?.accAdd ?? 0
-  const vThrow: VisionThrow | undefined = vOn && qb && target
-    ? visionThrow(qb, concept.depth, vReadNo, vReach, pressureEdge, env?.fat?.[qb.id] ?? 0, qbStyle.scramble, h01(`${n}:${offId}:vspot`), h01(`${n}:${offId}:vang`), extraCone, extraRadius, extraAcc)
+  const vThrow: VisionThrow | undefined = vOn && passer && target
+    ? visionThrow(passer, concept.depth, vReadNo, vReach, pressureEdge, env?.fat?.[passer.id] ?? 0, qbStyle.scramble, h01(`${n}:${offId}:vspot`), h01(`${n}:${offId}:vang`), extraCone, extraRadius, extraAcc)
     : undefined
   const visionFields: Pick<PlayOutcome, 'readNo' | 'checkdown' | 'coneDeg' | 'placeRadiusYd' | 'ballOffsetYd'> =
     vThrow
@@ -4499,7 +4534,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Jind: the men the layer put on the play (probe + animation). Never added when
   // the layer is off, so the OFF Play record is unchanged.
   const iuPassFields: Pick<PlayOutcome, 'iuRecogId' | 'iuProtId' | 'iuDlStaId'> = INDIV_UNITS_ON
-    ? { iuRecogId: flatLb?.id, iuProtId: iuProtSta[0]?.id ?? qb?.id, iuDlStaId: iuDlSta[0]?.id ?? pb?.credit?.id }
+    ? { iuRecogId: flatLb?.id, iuProtId: iuProtSta[0]?.id ?? passer?.id, iuDlStaId: iuDlSta[0]?.id ?? pb?.credit?.id }
     : {}
 
   if (rng() < sackChance) {
@@ -4525,7 +4560,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
       ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
-      qbId: qb?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...olFailFields, ...iuPassFields,
+      qbId: passer?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...olFailFields, ...iuPassFields,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }
@@ -4801,7 +4836,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const playAction = offPassBias < 0 ? Math.min(2.2, -offPassBias * 1.5) * pacMult * recogMult : 0
   // G11 spyQB: a quarterback spy erases the QB run/pass conflict on those calls.
   const spyPenalty = effDefMove === 'spyQB' && /QB Draw|RPO/.test(concept.name) ? (J12_ON ? J12.spyPress : 3) : 0
-  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + masteryOffset(qb, means) * 0.252 + MASTERY_ANCHOR_QB + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5 - spyPenalty
+  const talentEdge = (edge / 4) + (qAccuracy - 72) * 0.4 + (qbFit - 0.5) * 10 + masteryOffset(passer, means) * 0.252 + MASTERY_ANCHOR_QB + playAction - passLean * PASS_LEAN_EDGE + (call?.edge ?? 0) * 1.5 - spyPenalty
 
   // Completion probability based on real league rate vs. this matchup. Coordinator
   // quality shifts it: a great OC helps, a great DC hurts.
@@ -4868,6 +4903,20 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // lives here, scaled by the QB's own poise — not a second accuracy term.
   if (throwOn_) compProb = clamp(compProb + (pp?.compAdd ?? 0) + THROW_CFG.throwAwayCompCenter, MU.compMin, MU.compMax)
   if (throwAwayNow) compProb = Math.min(compProb, THROW_CFG.throwAwayComp)
+  // FUTURES #24 T1: a back throwing off the run look completes fewer balls — his
+  // own arm (a weak arm, and his own awareness) sets how many fewer. On a TRICK
+  // snap the shared completion model is replaced by the trick's own bimodal
+  // model (the deep window / the back's arm), driven by the specific men on the
+  // rep; ordinary dropbacks keep the shared clamp exactly.
+  let trickOv: TrickPassOut | undefined
+  if (call?.trick) {
+    const armTerm = hb
+      ? clamp((hb.arm - TRICK.hbArmMin) / TRICK.hbArmSpan, 0, 1)
+      : clamp(0.5 + (qAccuracy - 72) * 0.004, 0, 1)
+    const spdRel = target ? rmean(target.pos, 'SPD', tA.SPD ?? 70) - 72 : 0
+    trickOv = trickPassOverride(call.trick, passAir, armTerm, spdRel)
+    compProb = clamp(trickOv.compProb, 0.02, 0.95)
+  } else if (hb) compProb = clamp(compProb + hb.compAdj, MU.compMin, MU.compMax)
   if (J8C_STAT.on) { J8C_STAT.cov2 += coverage * coverage; J8C_STAT.compProb += compProb }
   // G7 hurry: a faster offense forces riskier throws.
   // L12 E2: JMP+PRC replace part of the trait-only ball-hawk in the pick rate.
@@ -4902,8 +4951,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // multiplier is correlated with the play's own pick rate (backup QBs and rookies carry
   // BOTH the fresh pairs and the high pick rates), so the INT leg is centred on its own
   // `CHEM.intShift` — measured with J37_STAT so the league's mean pick rate holds.
-  const intPre = R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1)
-  const intProb = clamp(pairChem !== undefined ? intPre * (1 - (chemRel - skillCen * CHEM.intShiftFrac) * CHEM.intW) : intPre, 0.005, 0.06)
+  const intPre = R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1) * (hb ? hb.intMult : 1)
+  let intProb = clamp(pairChem !== undefined ? intPre * (1 - (chemRel - skillCen * CHEM.intShiftFrac) * CHEM.intW) : intPre, 0.005, 0.06)
+  // FUTURES #24 T1: a trick's own interception model — a read look is picked off
+  // far more (a weak-armed back most of all); a blown-open one is not.
+  if (trickOv) intProb = clamp(trickOv.intProb, 0.003, 0.35)
   if (J37_STAT.on && pairChem !== undefined) J37_STAT.dInt += intProb - clamp(intPre, 0.005, 0.06)
 
   if (rng() < intProb) {
@@ -4937,7 +4989,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
       ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: passer?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -4978,6 +5030,10 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if ((target?.pos === 'RB' || target?.pos === 'FB') && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
     else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
     gain = clamp(gain, -8, 85)
+    // FUTURES #24 T1: the flea flicker's own deep-shot yardage — the air plus the
+    // separation the window buys (the shared depthMix is 0, so a normal deep ball
+    // gains ~11). Trick-only: `trickOv` is set on a trick snap alone.
+    if (trickOv && trickOv.gainAdd) gain = clamp(Math.round(gain * trickOv.gainMult) + trickOv.gainAdd, -8, 98)
     // J3: reshape the completion as air + YAC so a deep concept completes deep
     // and a screen/checkdown gains near the line. The chain above already consumed
     // its rng draws, so ON/OFF streams stay aligned; only the value (and the
@@ -5056,7 +5112,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         : strip ? 'Fumble recovered by the offence'
           : muff ? 'Muffed catch, recovered by the offence'
             : big ? 'Explosive play!' : 'Complete'
-    return maybeScramble(offId, n, qb, qbStyle, pressured, {
+    return maybeScramble(offId, n, passer, qbStyle, pressured, {
       type: 'pass', concept: concept.name, yards: gain, blitz,
       result: oob ? `${baseResult} (out of bounds)` : baseResult,
       turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
@@ -5065,13 +5121,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -5092,10 +5148,10 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   }
   // J6: a pressured QB tucks and runs instead of throwing it away. Taken from the
   // pass-outcome population, so completion % / YPA / sack % are preserved.
-  return maybeScramble(offId, n, qb, qbStyle, pressured, incomplete)
+  return maybeScramble(offId, n, passer, qbStyle, pressured, incomplete)
 }
 
-function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), j13?: J13Effect): PlayOutcome {
+function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: TrickCall, n = 0, means: MasteryMeans = leagueMasteryMeans(world), j13?: J13Effect, carrierOverride?: Player): PlayOutcome {
   const ocEff = ocEffect(world, offId)
   const dcEff = ocEffect(world, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only.
@@ -5178,6 +5234,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   else if (rbPool[1]) carrier = rbPool[1]
   // L12.10 B0: an occasional fullback dive on short yardage (deterministic; no rng).
   if (fbBase && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fbBase
+  // FUTURES #24 T1: a reverse hands the ball to a receiver, so the rep belongs to
+  // the specific wideout (never a unit mean): the trick's own carrier override.
+  if (carrierOverride) carrier = carrierOverride
   // J38: a featured run is built for one star — he takes the snap/carry. The
   // direct-snap back and the jet-motion receiver are the specific men on the play.
   if (featuredOn() && concept.featuredPlayerId) {
@@ -5287,7 +5346,12 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
       + gapValue(lbs, wLb, (p) => { return rmean(p.pos, 'PRC', eff(p, 'PRC')) * 0.16 + rmean(p.pos, 'BSH', eff(p, 'BSH')) * 0.16 + rmean(p.pos, 'STR', eff(p, 'STR')) * 0.08 + rmean(p.pos, 'ACC', eff(p, 'ACC')) * 0.08 + rmean(p.pos, 'AGI', eff(p, 'AGI')) * 0.08 }) * E2_W
       + clamp((poiLb ? masteryOffset(poiLb, means) : 0) * 0.05, -3, 3)
     : avg(lbs.map((p) => (mkAttrs(p).TAK ?? 70) * 0.6 + (mkAttrs(p).PUR ?? 70) * 0.4)) + (INDIV_UNITS_ON ? lbRunExtrasInd(poiLb, iuLb2) : lbRunExtras(lbs) * E2_W) + clamp(masteryRelAvg(lbs, means) * 0.05, -3, 3)
-  const elusiveness = carrier?.pos === 'QB'
+  const elusiveness = carrierOverride
+    // FUTURES #24 T1: a receiver carrying on a reverse runs on his own speed,
+    // burst, change of direction and agility (`trickCarrierElusiveness`, ≈70
+    // scale like the back formula below) — never an average.
+    ? trickCarrierElusiveness(carrierOverride)
+    : carrier?.pos === 'QB'
     ? (cA.SPD ?? 70) * 0.5 + (cA.AGI ?? 70) * 0.4 + (cA.BCV ?? 70) * 0.1 + rmean('QB', 'RUN', cA.RUN ?? 70) * 0.4 * E2_W
     : (cA.BCV ?? 70) * 0.35 + (cA.JKM ?? 70) * 0.2 + (cA.TRK ?? 70) * 0.25 + (cA.SPD ?? 70) * 0.2 + rbElusivenessExtras(carrier?.pos, cA)
 
@@ -5409,6 +5473,13 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
         glStopId = glDefs[0].id
       }
     }
+  }
+  // FUTURES #24 T1: a reverse is boom-or-bust on the defence's own read. When the
+  // front and pursuit bite the specific receiver's own legs break it; when they
+  // read it he is strung out for a loss. Trick-only — the shared run model above
+  // runs exactly as before, and no ordinary carry ever reaches this.
+  if (call?.trick && call.trick.kind === 'reverse') {
+    gain = trickRunGain(call.trick, elusiveness, n, offId)
   }
   const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
@@ -5948,6 +6019,10 @@ export interface GameCtx {
   callAll?: 'off' | 'def' | 'both'
   /** FUTURES #4: the user's special-teams plan (kicks + return strategies). */
   special?: SpecialTeamsPlan
+  /** FUTURES #24: the tricks installed this week (never more than `TRICK.maxPackage`). */
+  tricks?: TrickKind[]
+  /** FUTURES #24: the staff calls the tricks for you when the look is right (T4 rates). */
+  ocTricks?: boolean
 }
 export interface GameState {
   rng: Rng
@@ -6008,6 +6083,11 @@ export interface GameState {
   scriptClassRun: number
   /** G10: which user offensive possession we're on (edge only on the first). */
   userDrive: number
+  /**
+   * FUTURES #24: the tricks each club has already shown in this game, in order —
+   * the second one is a 0.6 read and a repeat a 0.3 read (`gameDecay`).
+   */
+  tricksUsed: Record<string, TrickKind[]>
   /** Moments already written to the decision log, so a re-run never double-logs. */
   logged: Record<string, true>
   /** Halftime bookkeeping so rng only draws once per phase. */
@@ -6677,6 +6757,8 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     scriptLastClass: null,
     scriptClassRun: 0,
     userDrive: 0,
+    // FUTURES #24: no trick has been shown yet in this game.
+    tricksUsed: {},
     logged: {},
     halfAdjustDone: false,
     qbChangeChecked: false,
@@ -7173,6 +7255,27 @@ function dispatchPhase(world: World, s: GameState): 'continue' | 'moment' | 'don
 }
 
 /** One loop iteration of the old simulatePlayByPlay. */
+/** FUTURES #24 T1: the eleven a trick's own concept puts on the field. */
+function trickOffEleven(world: World, s: GameState, offId: string, concept: Concept): Player[] {
+  const userP = s.ctx && s.ctx.userTeamId === offId ? s.ctx.personnel?.off : undefined
+  const counts = userP ? offenseCounts(userP) : undefined
+  return fillToEleven(world, offId, offenseOnField(world, offId, concept, s.qbOverride, undefined, STAMINA_ON ? s.fat : undefined, counts), OFF_FILL)
+}
+
+/**
+ * FUTURES #24 T1: the man an HB pass puts the ball in the hands of — the back on
+ * the field for this snap (his own passing line, never a unit mean).
+ */
+function trickPasserOf(world: World, s: GameState, offId: string, concept: Concept): Player | undefined {
+  return trickOffEleven(world, s, offId, concept).find((p) => p.pos === 'RB')
+}
+
+/** FUTURES #24 T1: the receiver a reverse hands the ball to (WR3, else WR2). */
+function trickCarrierOf(world: World, s: GameState, offId: string, concept: Concept): Player | undefined {
+  const wrs = trickOffEleven(world, s, offId, concept).filter((p) => p.pos === 'WR')
+  return wrs[2] ?? wrs[1] ?? wrs[0]
+}
+
 function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   if (s.done) return 'done'
   if (s.n >= MAX_PLAYS) return 'done'
@@ -7200,7 +7303,11 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // decision in both the coached and the fast path. A kneel/spike is applied
   // through the same outcome applier as a normal scrimmage play.
   if (CLOCK_ON) {
-    const sit = shouldKneel(world, s) ? 'kneel' : shouldSpike(world, s) ? 'spike' : null
+    // FUTURES #24: in the spike window the user's own offence is asked (Spike /
+    // Fake spike ride the call moment), so the automatic spike never pre-empts the
+    // choice. An AI club, and the user's club outside the window, is untouched.
+    const holdSpike = !!s.ctx && s.offId === s.ctx.userTeamId && spikeEligible(trickSituation(s, clockRunning(s)))
+    const sit = shouldKneel(world, s) ? 'kneel' : !holdSpike && shouldSpike(world, s) ? 'spike' : null
     if (sit) {
       const out = situationalOutcome(world, s, sit)
       out.fatOn = [...(out.onFieldOff ?? []), ...(out.onFieldDef ?? [])].map((id) => Math.round((s.fat[id] ?? 0) * 100))
@@ -7274,16 +7381,35 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const offIsUser = !!s.ctx && offId === s.ctx.userTeamId
   const defIsUser = !!s.ctx && defId === s.ctx.userTeamId
   let concept: Concept
-  let call: CallEffect | undefined
+  let call: TrickCall | undefined
   let userDefCall: DefCall | undefined
+  // FUTURES #24 T1: the trick the offence called on this snap, and the defensive
+  // call it faces (drawn after the user answers) — both undefined on a normal snap.
+  let trickKind: TrickKind | undefined
+  let trickDefCall: DefCall | undefined
+  let trickSnapValue: TrickSnap | undefined
 
   // L12.6: in "call every play" mode the user's side is asked on every snap.
   const callAll = s.ctx?.callAll
+  // FUTURES #24 T1: the user's trick package and the pre-snap trick / spike
+  // options. Pure arithmetic and hashes only, and built for the user's own
+  // offence alone — an AI club (and the calibration harness, which has no ctx)
+  // never reaches any of it.
+  const trickPkg: TrickKind[] = offIsUser ? s.ctx!.tricks ?? [] : []
+  const trickRb = offIsUser ? topGroup(world, offId, ['RB'], 1, s.qbOverride)[0] : undefined
+  const trickDefEleven = offIsUser
+    ? fillToEleven(world, defId, defenseOnField(world, defId, undefined, STAMINA_ON ? s.fat : undefined), DEF_FILL)
+    : undefined
+  const trickOffers = offIsUser
+    ? trickOptions(world, s, offId, trickPkg, { rb: trickRb, defEleven: trickDefEleven, clockRunning: clockRunning(s) })
+    : []
   const callTriggered = offIsUser && (!isFourth || fourthChoice === 'go') && (
     callAll === 'off' || callAll === 'both' ||
     (s.down === 3 && s.distance <= 3) ||
     (s.yard >= 80 && s.down >= 3) ||
-    (s.qtr === 4 && s.clock <= 120 && marginOf(s.offId) >= -8 && marginOf(s.offId) <= 0)
+    (s.qtr === 4 && s.clock <= 120 && marginOf(s.offId) >= -8 && marginOf(s.offId) <= 0) ||
+    // A trick (or the real spike) on the table is its own reason to ask.
+    trickOffers.length > 0
   )
   const defCallTriggered = defIsUser && (
     callAll === 'def' || callAll === 'both' ||
@@ -7311,13 +7437,30 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       options: [
         ...callCards().map((c) => ({ id: c.name, label: c.name, hint: c.description })),
         ...(callCards().some((c) => c.name === standing.name) ? [] : [{ id: standing.name, label: standing.name, hint: standing.description }]),
+        // FUTURES #24: the installed tricks (with their surprise meter) and, in
+        // the spike window, the real spike and the fake spike.
+        ...trickOffers,
       ],
       defaultId: standing.name, staffRead: read, ask: true, margin: marginOf(s.offId),
     })
     if (choice === null) return 'moment'
-    concept = (choice === standing.name && !callCards().some((c) => c.name === choice) ? standing : undefined) ??
-      style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
+    // FUTURES #24 T1: the real spike — its own branch, no resolver and no rng
+    // draw. It stops the clock, costs a down and counts as an incomplete pass
+    // attempt (the NFL convention; J6's `situationalOutcome` owns the shape).
+    if (choice === 'spike') {
+      const out = situationalOutcome(world, s, 'spike')
+      out.fatOn = [...(out.onFieldOff ?? []), ...(out.onFieldDef ?? [])].map((id) => Math.round((s.fat[id] ?? 0) * 100))
+      chargeSnaps(s, out)
+      return applyScrimmageOutcome(world, s, out, null, offId, defId, undefined)
+    }
+    const trickChoice = choice.startsWith('trick:') && isTrickKind(choice.slice(6)) ? (choice.slice(6) as TrickKind) : undefined
+    if (trickChoice) trickKind = trickChoice
+    concept = trickChoice
+      ? trickConcept(trickChoice) ?? standing
+      : (choice === standing.name && !callCards().some((c) => c.name === choice) ? standing : undefined) ??
+        style.concepts.find((c) => c.name === choice) ?? conceptFromPlaybook(choice) ?? standing
     const aiDef = drawAIDefCall(world, s, s.defId, bucket)
+    if (trickChoice) trickDefCall = aiDef
     // The matrix only applies to a call the user made; a standing order plays the
     // snap exactly as fast sim would (no edge either way).
     const last = s.decisions[s.decisions.length - 1]
@@ -7370,7 +7513,55 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       concept = pickConcept(s.rng, style, s.down, s.distance, pickPassAdj, sit)
       // J38: the playcaller mixes in a featured play for a qualifying star.
       concept = applyFeatured(world, s, concept, offId, defId)
+      // FUTURES #24: the delegated-OC standing order. `TRICK.aiRate` is 0 in T1
+      // (T4 owns the rates), so this never fires yet; the gate is a pure hash, so
+      // turning it on later cannot move the rng stream.
+      if (offIsUser && s.ctx?.ocTricks) {
+        const ocKind = aiTrickCall(world, s, offId, trickPkg, { rb: trickRb, clockRunning: clockRunning(s) })
+        if (ocKind) { trickKind = ocKind; concept = trickConcept(ocKind) ?? concept }
+      }
     }
+  }
+
+  // FUTURES #24 T1: the trick's surprise, folded into the ordinary call edge. A
+  // trick the defence is not expecting is worth up to +6 edge; a read one is
+  // worse than the look it disguised (-3). Installed tricks carry the +1 the
+  // game plan earned. Pure arithmetic — no rng draw is added or removed.
+  let trickEff: TrickEffect | undefined
+  let trickSurpriseValue: number | undefined
+  if (trickKind) {
+    const trickSit = trickSituation(s, clockRunning(s))
+    const sur = trickSurprise({ world, s, offId, kind: trickKind, defCall: trickDefCall, sit: trickSit, rbOnField: !!trickRb, defEleven: trickDefEleven })
+    trickEff = trickEffect(trickKind, sur.surprise, trickPkg.includes(trickKind))
+    trickSurpriseValue = sur.surprise
+    trickSnapValue = { kind: trickKind, surprise: sur.surprise, readValue: sur.readValue, readIds: sur.readIds }
+    call = { edge: (call?.edge ?? 0) + trickEff.edge, sackMult: (call?.sackMult ?? 1) * trickEff.sackMult, trick: trickSnapValue }
+    // The league remembers: this snap goes on the scouting sheet, and the next
+    // trick this game is a 0.6 read (`gameDecay`).
+    s.tricksUsed[offId] = [...(s.tricksUsed[offId] ?? []), trickKind]
+  }
+
+  // FUTURES #24 T1: the trick's own exchange fumble (a hash, never an rng draw)
+  // — the pitch back that hits the turf, or the bad toss to the back. The ball is
+  // loose at the exchange, so this replaces the snap's outcome entirely.
+  if (trickEff && trickEff.fumbleRate > 0 && h01(`${s.n}:trick:${trickEff.kind}:fum`) < trickEff.fumbleRate) {
+    const offEleven = fillToEleven(world, offId, offenseOnField(world, offId, concept, s.qbOverride, undefined, STAMINA_ON ? s.fat : undefined), OFF_FILL)
+    const defEleven = fillToEleven(world, defId, defenseOnField(world, defId, concept.personnel, STAMINA_ON ? s.fat : undefined), DEF_FILL)
+    const man = trickEff.kind === 'reverse'
+      ? offEleven.find((p) => p.id === trickCarrierOf(world, s, offId, concept)?.id) ?? offEleven.find((p) => p.pos === 'WR')
+      : offEleven.find((p) => p.id === trickPasserOf(world, s, offId, concept)?.id) ?? offEleven.find((p) => p.pos === 'QB')
+    const rec = fumbleRecovery(`${s.n}:${offId}:trickrec`, R16.offRecover)
+    const lost = rec === 'def'
+    const out: PlayOutcome = {
+      type: 'run', concept: concept.name, yards: 0,
+      result: lost ? 'Fumble on the exchange — recovered by the defence' : 'Fumble on the exchange — the offence falls on it',
+      turnover: lost, carrierId: man?.id, fumbleId: man?.id, fumbleCause: 'carry', fumbleRecoveredBy: rec,
+      trick: trickEff.kind, trickSurprise: trickSurpriseValue, trickReadIds: trickSnapValue?.readIds,
+      timeUsed: 8, onFieldOff: offEleven.map((p) => p.id), onFieldDef: defEleven.map((p) => p.id),
+    }
+    out.fatOn = [...out.onFieldOff!, ...out.onFieldDef!].map((id) => Math.round((s.fat[id] ?? 0) * 100))
+    chargeSnaps(s, out)
+    return applyScrimmageOutcome(world, s, out, fourthChoice, offId, defId, undefined)
   }
 
   // J13 (FUTURES #33): before the snap the specific QB checks the called play
@@ -7378,8 +7569,9 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // disguise lets him see it). A check changes the concept; a hot route and a
   // protection slide ride the outcome for the animation and for J8b. Deterministic
   // (hashes only, no rng) and OFF adds nothing, so that path is byte-identical.
+  // A trick is a called surprise, not an audible, so the check never touches it.
   let j13: J13Effect | undefined
-  if (J13_ON && fourthChoice !== 'fake') {
+  if (J13_ON && fourthChoice !== 'fake' && !trickKind) {
     const pre = j13PreSnap(world, s, offId, defId, concept, envFor(s))
     concept = pre.concept
     j13 = pre.effect
@@ -7500,17 +7692,27 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   }
 
   const env = envFor(s)
+  // FUTURES #24 T1: a trick hands the ball to a specific man — the back throws on
+  // the HB pass, the receiver carries on the reverse (both credited in the book).
+  const trickPasser = trickKind === 'hbpass' ? trickPasserOf(world, s, offId, concept) : undefined
+  const trickCarrier = trickKind === 'reverse' ? trickCarrierOf(world, s, offId, concept) : undefined
   // FUTURES #4: an alerted opponent is a beat quicker against a scouted fake. A
   // small negative edge, and exactly 0 when there is no scouting read (a fresh
   // world, a fast sim or the calibration harness is untouched).
   if (fourthChoice === 'fake') {
     const stMem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
     const a = alertFakeEdge(alertness(stMem?.[offId]))
-    if (a !== 0) call = { edge: (call?.edge ?? 0) + a, sackMult: call?.sackMult ?? 1 }
+    if (a !== 0) call = { edge: (call?.edge ?? 0) + a, sackMult: call?.sackMult ?? 1, trick: call?.trick }
   }
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0, j13)
-    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery, j13)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0, j13, trickPasser)
+    : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery, j13, trickCarrier)
+  // FUTURES #24: mark the snap for the play log, the film line and the animation.
+  if (trickKind) {
+    out.trick = trickKind
+    out.trickSurprise = trickSurpriseValue
+    out.trickReadIds = trickSnapValue?.readIds
+  }
   // J38: record the featured play + its star (animation), count it for the
   // diminishing returns, and flag jet motion. No rng draw.
   if (featuredOn() && concept.featured) {

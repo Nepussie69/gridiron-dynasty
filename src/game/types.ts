@@ -952,6 +952,10 @@ export interface CareerState {
   callSheet?: import('./engine/decisions').CallSheet
   /** FUTURES #4: special-teams kick and return strategies (default = pre-feature sim). */
   specialTeams?: import('./engine/specialCalls').SpecialTeamsPlan
+  /** FUTURES #24: the trick plays installed on this week's game plan (max 2). */
+  tricks?: import('./engine/trickPlays').TrickKind[]
+  /** FUTURES #24: let the staff call the tricks for you when the look is right. */
+  ocTricks?: boolean
   /** L10 G8: this week's opponent film read (a second purchase this week makes it sharp). */
   oppRead?: { week: number; oppId: string; sharp: boolean }
   /** L10 G10: the opening script, an ordered list of concept names (max 8). */
