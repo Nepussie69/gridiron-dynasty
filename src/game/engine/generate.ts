@@ -6,11 +6,11 @@ import { CFB_TEAMS } from '../data/cfbTeams'
 import { NFL_TEAMS } from '../data/nflTeams'
 import { SALARY_CAP, capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
-import { frontOfficeProfile, generateAnalyticsPool } from './hiring'
+import { FRONT_SPECIALTIES, frontOfficeProfile, generateAnalyticsPool } from './hiring'
 import { freshDraftWindow } from './picks'
 import { makeCharacter } from './character'
 import { makeScoutBias } from './scoutBias'
-import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
+import { hash32, makeRng, rchance, rint, rpick, clamp, type Rng } from './rng'
 import { rescaleOvr, rescaleQuantile, unscaleOvr } from './ovrScale'
 import { getIndividual, FAST_ROLES, FAST_BLEND, FAST_NORM } from './individual'
 import { playerAttrs } from '../data/ratings'
@@ -446,6 +446,137 @@ function generateStaffPool(rng: Rng, count: number): StaffMember[] {
     const id = `av${i}`
     return { ...m, id, ...frontOfficeProfile(role, id), status: 'Available' as const }
   })
+}
+
+// ── The AI front office: one named General Manager per NFL club ──────────────
+// Every club whose GM seat the USER does not hold has a real General Manager: a
+// name, an age, a 52–92 rating, a front-office focus/specialty (the same
+// `frontOfficeProfile` pattern Scout and the personnel director use) and a
+// temperament — patience with his coach, trade aggression and cap discipline —
+// that gmAsk.ts reads. Everything individual to him comes from
+// `hash32(teamId, season)` on its OWN stream: NOT ONE world rng() draw is added
+// or removed, so rosters, staff, schedule and every other world field (and the
+// calibrated sim) stay byte-identical. The user's own GM seat is never filled by
+// the AI — see `ensureGeneralManagers`.
+
+/** Deterministic id: `gm_<teamId>_<season>`. The season he was hired lives here. */
+export function generalManagerId(teamId: string, season: number): string {
+  return `gm_${teamId}_${season}`
+}
+
+/** The season a GM was created in, read off his id (0 when it is not a GM id). */
+export function gmCreatedSeason(m: StaffMember): number {
+  const mt = /^gm_[A-Za-z0-9]+_(\d+)$/.exec(m.id)
+  return mt ? Number(mt[1]) : 0
+}
+
+/**
+ * One club's AI General Manager. Rating, age, name and contract all come off
+ * `hash32('gm|team|season')`; focus and specialty come off his id through the
+ * shared front-office profile. Deterministic — no rng draws.
+ */
+export function makeGeneralManager(teamId: string, season: number): StaffMember {
+  const h = hash32(`gm|${teamId}|${season}`, 89)
+  const h2 = hash32(`gmc|${teamId}|${season}`, 97)
+  const id = generalManagerId(teamId, season)
+  const rating = clamp(52 + (h % 41), 52, 92) // the front-office rating band
+  return {
+    id,
+    name: `${FIRST[(h >>> 3) % FIRST.length]} ${LAST[(h >>> 13) % LAST.length]}`,
+    role: 'General Manager',
+    age: 38 + ((h >>> 21) % 25), // 38–62
+    rating,
+    specialty: FRONT_SPECIALTIES[(h >>> 7) % FRONT_SPECIALTIES.length],
+    scheme: 'Front office',
+    annual: Math.round((0.9 + (rating / 100) * 2.6) * 1_000_000),
+    contractYears: 2 + (h2 % 4), // 2–5
+    teamId,
+    status: 'Hired',
+    notes: `Signed through ${season + 2 + (h2 % 3)}`,
+    // His own scouting eye: the club's evaluator reports (department.ts) read it.
+    bias: makeScoutBias(`${teamId}|General Manager|${rating}`),
+    // Q8 profile: his draft lane (Pro scouting / Negotiation / Cap) + specialty.
+    ...frontOfficeProfile('General Manager', id),
+  }
+}
+
+/**
+ * A GM's own numbers 0–100: his drafting eye, trade instincts and cap
+ * management, plus his temperament — patience with the coach and trade
+ * aggression. Individual (his own id + rating), never a league mean, and pure,
+ * so the UI and gmAsk.ts read the same man.
+ */
+export interface GmTemperament {
+  /** Scouting eye / drafting. */
+  drafting: number
+  /** Trade instincts. */
+  trading: number
+  /** Cap management. */
+  cap: number
+  /** Patience with the coach: low = no rope, high = all the rope. */
+  patience: number
+  /** Trade aggression: low = cautious, high = bold. */
+  aggression: number
+}
+
+function gmAxis(m: StaffMember, salt: number): number {
+  const h = hash32(`gmax|${m.id}|${salt}`, 131) % 101 // 0–100, individual
+  return Math.round(clamp(m.rating * 0.45 + h * 0.55, 35, 95))
+}
+
+/** His temperament, from his own id + rating. A null GM reads league-ordinary. */
+export function gmTemperament(m: StaffMember | null | undefined): GmTemperament {
+  if (!m) return { drafting: 62, trading: 62, cap: 62, patience: 62, aggression: 62 }
+  return {
+    drafting: gmAxis(m, 1),
+    trading: gmAxis(m, 2),
+    cap: gmAxis(m, 3),
+    patience: gmAxis(m, 4),
+    aggression: gmAxis(m, 5),
+  }
+}
+
+/** The club's AI General Manager, if the seat holds a person. */
+export function generalManager(world: World, teamId: string): StaffMember | undefined {
+  return (world.staff[teamId] ?? []).find((m) => m.role === 'General Manager')
+}
+
+/** Plain words for the Staff screen's "Works with you:" line. */
+export function gmTemperamentWords(m: StaffMember): { patience: string; aggression: string; cap: string } {
+  const t = gmTemperament(m)
+  const band = (v: number, low: string, mid: string, high: string) => (v >= 68 ? high : v <= 42 ? low : mid)
+  return {
+    patience: band(t.patience, 'quick to say no', 'even-keeled', 'patient with his coach'),
+    aggression: band(t.aggression, 'cautious in the market', 'measured in the market', 'aggressive in the market'),
+    cap: band(t.cap, 'free with the cap', 'balanced with the cap', 'strict with the cap'),
+  }
+}
+
+/**
+ * Make sure every NFL club has exactly one AI General Manager — except a club
+ * whose GM seat the USER holds (`userGmTeamId`), which has none because the user
+ * is the GM. New worlds get one at generation; a save written before GMs existed
+ * gets one on load, and the season rollover keeps them. Idempotent; no rng draw.
+ * Returns the ids it added.
+ */
+export function ensureGeneralManagers(world: World, userGmTeamId?: string | null): string[] {
+  const added: string[] = []
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL') continue
+    const staff = (world.staff[t.id] ??= [])
+    const at = staff.findIndex((m) => m.role === 'General Manager')
+    if (t.id === userGmTeamId) {
+      // The user holds the seat: there is no AI person in it.
+      if (at >= 0) staff.splice(at, 1)
+      continue
+    }
+    if (at < 0) {
+      const gm = makeGeneralManager(t.id, world.season)
+      staff.push(gm)
+      added.push(gm.id)
+    }
+  }
+  return added
 }
 
 // ── Prospects ────────────────────────────────────────────────────────────────
@@ -920,6 +1051,9 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     era: makeEra(rng),
   }
   // FUTURES #8: hash-based primetime slots (no rng draws; pairings unchanged).
+  // The AI front office: one named GM per NFL club, on his own hash stream, so
+  // the world rng (and therefore the whole world + sim) is byte-identical.
+  ensureGeneralManagers(world)
   assignSlots(world)
   return world
 }

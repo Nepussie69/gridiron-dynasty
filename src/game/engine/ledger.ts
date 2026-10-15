@@ -262,6 +262,10 @@ export function logCoachCalls(
     const won = calls.filter((d) => d.outcome === 'won').length
     const lost = calls.filter((d) => d.outcome === 'lost').length
     const push = calls.length - won - lost
+    // FUTURES #26: the QB's audibles, and how many of them won the matrix.
+    const audibles = calls.filter((d) => !!d.audible)
+    const audWon = audibles.filter((d) => d.outcome === 'won').length
+    const audNote = audibles.length ? ` · ${audibles.length} audibles (won ${audWon})` : ''
     pending.push({
       kind: 'playCall',
       name: `Play calls vs ${oppTag}`,
@@ -269,7 +273,7 @@ export function logCoachCalls(
       college: '—',
       myGrade: clamp(70 + (won - lost) * 5, 0, 100),
       hit: won >= lost,
-      note: `${won} won · ${lost} lost · ${push} push`,
+      note: `${won} won · ${lost} lost · ${push} push${audNote}`,
     })
   }
 

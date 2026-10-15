@@ -4,6 +4,7 @@
 // Four localStorage-only keys (never a save field, never the sim):
 //   gd.view.game     'auto' | 'broadcast' | 'topdown'   (default 'auto')
 //   gd.view.replays  'big' | 'all' | 'off' | 'custom'   (default 'big')
+//   gd.view.drawings 'every' | 'replays' | 'off'        (default 'every')
 //   gd.view.quality  'auto' | 'full' | 'lite'           (default 'auto')
 //   gd.view.autoQ    JSON of the last Auto measurement
 //   gd.view.qbCone   'off' | 'on'  (unset: on in both views)
@@ -16,7 +17,7 @@
 // useViewSettings() can ride useSyncExternalStore.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useSyncExternalStore } from 'react'
-import { DEFAULT_REPLAY_TYPES, REPLAY_REASON_IDS, type ReplayReasonId } from './replay'
+import { DEFAULT_REPLAY_TYPES, REPLAY_REASON_IDS, type DrawingsMode, type ReplayReasonId } from './replay'
 
 export type GameView = 'auto' | 'broadcast' | 'topdown'
 export type ReplayMode = 'big' | 'all' | 'off' | 'custom'
@@ -43,6 +44,8 @@ export interface ViewSettings {
   replays: ReplayMode
   /** 'custom' replays: which reasons (gd.view.replayTypes). Default: every reason. */
   replayTypes: ReplayReasonId[]
+  /** Telestrations on live plays (gd.view.drawings). Default: every play. */
+  drawings: DrawingsMode
   quality: QualitySetting
   autoQ: AutoQState | null
   cameraAngle: CameraAngleSetting
@@ -54,6 +57,7 @@ export const VIEW_KEYS = {
   game: 'gd.view.game',
   replays: 'gd.view.replays',
   replayTypes: 'gd.view.replayTypes',
+  drawings: 'gd.view.drawings',
   quality: 'gd.view.quality',
   autoQ: 'gd.view.autoQ',
   cameraAngle: 'gd.view.cameraAngle',
@@ -64,6 +68,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = Object.freeze({
   game: 'auto',
   replays: 'big',
   replayTypes: [...DEFAULT_REPLAY_TYPES],
+  drawings: 'every',
   quality: 'auto',
   autoQ: null,
   cameraAngle: 'fixed',
@@ -169,6 +174,7 @@ function readAll(): ViewSettings {
     game: pick(readRaw(VIEW_KEYS.game), ['auto', 'broadcast', 'topdown'] as const, 'auto'),
     replays: pick(readRaw(VIEW_KEYS.replays), ['big', 'all', 'off', 'custom'] as const, 'big'),
     replayTypes: readReplayTypes(),
+    drawings: pick(readRaw(VIEW_KEYS.drawings), ['every', 'replays', 'off'] as const, 'every'),
     quality: pick(readRaw(VIEW_KEYS.quality), ['auto', 'full', 'lite'] as const, 'auto'),
     autoQ: readAutoQ(),
     cameraAngle: pick(readRaw(VIEW_KEYS.cameraAngle), ['fixed', 'dynamic'] as const, 'fixed'),
@@ -212,6 +218,12 @@ export function setGameView(v: GameView): void {
 
 export function setReplayMode(v: ReplayMode): void {
   writeRaw(VIEW_KEYS.replays, v)
+  refresh()
+}
+
+/** The Drawings setting: telestrations on every play / replay-only / off. */
+export function setDrawings(v: DrawingsMode): void {
+  writeRaw(VIEW_KEYS.drawings, v)
   refresh()
 }
 

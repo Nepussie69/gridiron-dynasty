@@ -1,13 +1,17 @@
 import { useState } from 'react'
-import { GraduationCap, Network, Trophy, Users } from 'lucide-react'
+import { Briefcase, GraduationCap, Network, Trophy, Users } from 'lucide-react'
 import { cn } from '../lib/cn'
+import type { StaffMember } from '../game/types'
 import { contactIntel, philosophyLabel, rivalTitle } from '../game/engine/people'
 import { WILDERNESS_PATHS, legacyCase } from '../game/engine/legacy'
 import { traitOrigin } from '../game/engine/earnedTraits'
 import { overallRep } from '../game/engine/career'
 import { accessFor } from '../game/engine/access'
+import { generalManager, gmCreatedSeason, gmTemperamentWords } from '../game/engine/generate'
+import { roomSeats, type RoomSeat } from '../game/engine/draftRoom'
 import { getAwards, getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, ConfirmSheet, RatingBar, TeamCrest } from '../ui/kit'
+import { DraftStanceChips } from './DraftPhilosophyCard'
 import { OwnerCard } from './OwnerCard'
 import { OwnerMeetingCard } from './OwnerMeetingCard'
 
@@ -30,6 +34,8 @@ export function CareerPeople() {
   const legacyPct = Math.min(100, Math.round((legacy.score / legacy.threshold) * 100))
 
   const rivals = [...(world.rivals ?? [])].sort((a, b) => b.level - a.level || b.reputation - a.reputation)
+  // gmpersona: the club's own General Manager (null once the user holds that seat).
+  const myGm = generalManager(world, career.teamId) ?? null
   const ladder = [
     { id: 'you', name: career.gmName, level: myLevel, reputation: myScore, title: 'You', teamId: career.teamId, you: true },
     ...rivals.map((r) => ({ id: r.id, name: r.name, level: r.level, reputation: r.reputation, title: rivalTitle(r), teamId: r.teamId, you: false })),
@@ -59,6 +65,16 @@ export function CareerPeople() {
 
       {/* FUTURES 22: who you answer to, and how much rope you have. */}
       <OwnerCard />
+
+      {/* gmpersona: the other key person in the building — the man in the GM chair. */}
+      {myGm && (
+        <GmCard
+          m={myGm}
+          boss={!(career.path === 'personnel' && career.level >= 8)}
+          seat={roomSeats(world, career).find((s) => s.key === 'gm') ?? null}
+          season={world.season}
+        />
+      )}
 
       {/* FUTURES 25: the periodic sit-down with the owner. */}
       <OwnerMeetingCard />
@@ -255,6 +271,49 @@ export function CareerPeople() {
         </div>
       </ConfirmSheet>
     </div>
+  )
+}
+
+/**
+ * gmpersona: the club's General Manager on the People tab — the key front-office
+ * person you answer to (coach path) or work alongside (personnel ladder). Same
+ * card anatomy as the owner card; his draft-room stance comes from the same
+ * `roomSeats` the draft room reads, and his temperament words from generate.ts.
+ */
+function GmCard({
+  m,
+  boss,
+  seat,
+  season,
+}: {
+  m: StaffMember
+  boss: boolean
+  seat: RoomSeat | null
+  season: number
+}) {
+  const words = gmTemperamentWords(m)
+  const tenure = Math.max(1, season - gmCreatedSeason(m) + 1)
+  return (
+    <Card>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Briefcase size={16} className="shrink-0 text-[var(--team-accent)]" aria-hidden />
+        <h3 className="font-display text-lg font-800 italic uppercase leading-none tracking-[0.01em] text-ink">General Manager</h3>
+        <Badge tone="neutral" className="ml-auto">{boss ? 'your boss' : 'works with you'}</Badge>
+      </div>
+      <div className="font-display text-lg font-800 italic uppercase leading-none text-ink">{m.name}</div>
+      <p className="mt-1 text-small leading-snug text-muted tnum">
+        {m.rating} OVR · {m.focus ?? 'front office'} · {tenure} yr{tenure === 1 ? '' : 's'} in the chair · ${(m.annual / 1_000_000).toFixed(1)}M/yr
+      </p>
+      <p className="mt-2 text-small leading-snug text-ink-2">
+        <span className="font-600 text-ink">Works with you: </span>
+        {words.patience}, {words.aggression}, {words.cap}.
+      </p>
+      {seat && (
+        <div className="mt-2">
+          <DraftStanceChips seat={seat} max={3} />
+        </div>
+      )}
+    </Card>
   )
 }
 

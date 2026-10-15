@@ -1,36 +1,41 @@
-# Claude handover — Gridiron Dynasty (2026-10-15 ~09:20 AEDT, chat 10)
+# Claude handover — Gridiron Dynasty (2026-10-15 ~14:10 AEDT, chat 12)
 
-Read AGENTS.md first. One orchestrator chat at a time. Status = ranked table with ETAs (✅ 🔄 ⏳ ⏸️). Log every user request/landing in PLAYTEST_BACKLOG.md (last row **429**). "push to live" = explicit ok for that one push.
+Read AGENTS.md first. One orchestrator chat at a time. Status = ranked table with ETAs (✅ 🔄 ⏳ ⏸️). Log every user request/landing in PLAYTEST_BACKLOG.md (last row **462**). "push" / "push to live" = explicit ok for that one push (`git push origin main` + `zsh scripts/publish-pages.sh $(git rev-parse HEAD)`; verify live bundle strings with curl).
 
 ## Goal
-NFL-realistic play where every effect comes from the individual players on the play (no averages, big elite-vs-poor spread), a realistic 2.5D broadcast, and the user's playtest fixes.
+NFL-realistic play where every effect comes from the individual players on the play (no averages, big AND symmetric elite-vs-poor spread), a realistic 2.5D broadcast, the FUTURES list in order, and the user's playtest fixes.
 
 ## Current state
-- **Live** (GitHub main + Pages) = **d2f94e7** (index-BSa_E1aQ.js). **Local main eb9ec10** is ahead with: realismloss (row 426, runs lose yards again), #15 C injury report UI (427), #28 C3 staff UI (428), Round 8 camera fix (429). All gated (build, lint 4, eq 20/20; check-broadcast 80/80 on the R8+realismloss tree). Push only on the user's ok.
-- **Ready to merge, final check pending:**
-  1. **ladder** (rows 415/418: only NFL OC / NFL DC → NFL Head Coach, and GM; old saves migrate; careerSmoke start rung moved to coach 6 / personnel 8). wt/ladder committed + main merged (before fut28c3/R8 merges); verify `logs/ladder-verify.out` = PASS (probe 53/0, SIM identical, eq 20/20). Re-run on the merged tree: `cd ~/gridiron-work/wt/ladder && git merge --no-edit main && npm run build && REPO=$PWD nice -n 15 node --import ~/gridiron-work/loader.mjs ~/gridiron-work/logs/ladder-probe.mjs | grep PROBE` → then eq 20 → merge to main.
-  2. **realismpunts** (rows 366/394): punts 4.42/4.67/4.50 → 4.10/4.32/4.07 via each HC's own aggression on the 4th-down call (top-10% go 47%, bottom 8%; league go 23.6% vs NFL 20.5%) + kicker range. Verify `logs/punts-verify.out`. wt/realismpunts committed + main merged (incl. realismloss). **Joint 3×500 --eq --smoke** → `~/gridiron-work/logs/punts-loss-joint.out` (eq 20/20 already printed). Compare bands vs `logs/realismloss-calib-after.out` (≈ current main sim). Accept: punts in band, no band worse than main by >0.2 (pooled 6-seed drift for single-seed misses), smokes 0/0 → merge.
-- **Running DeepSeek** (relaunched as continuations ~09:15 after the overnight outage): **realismj52** (#52 WR reads, prompts/realism-j52.txt; verify likely logs/j52-verify.out), **fapool** (row 408 free-agent pool, prompts/fapool.txt; logs/fapool-verify.out). Check `grep '^\[push\]' ~/gridiron-work/logs/<name>.log | tail -1`.
-- No launch queue left. Round 8 is finished and merged (Sonnet agent done — it dies on clear anyway).
+- **Live = 2d4d039** (pushed this chat, row 450). **Local main ec47f7d is 14 commits ahead** (not pushed): FG "NO GOOD" fix 452, box-score tag width 453, futp2 P2 store 455, Trades view + pick clock in header 459, Now/Ceiling sortable 460, livetele merged 461, plus backlog rows. User plays on live (screenshots match live code).
+- **check-broadcast on main** stops at `animflow 7a` (yac weave 88%) until animresid lands; with `CB_ONLY='^(?!animflow 7a)'` everything else passes (83).
+- **Running DeepSeek** (6 — one over the 5 cap, load low; don't kill). Watch last `[push]` line in `~/gridiron-work/logs/<name>.log` and `<name>-verify.out` head:
+  - **animresid** — check-broadcast fix + AMENDMENT (prompts/animresid.txt bottom): no post-catch stalls (stall probe `logs/animresid-stall-probe.mjs`; main 34.8% catches stall ≥0.4 s; its first FINAL made it worse 40.8% → NOT merged). Accept only if stall≥0.4s ≤5%, ≥1.0s = 0, start-to-3yd/s p90 ≤0.6 s AND check-broadcast 80/80+. wt-animresid already has a merge of main committed.
+  - **speedgap** (prompts/realism-speedgap.txt): accept only if carrier AND defender speed targets pass (Hill ≥14.5 y/c, ≥20% 20+; 3×3 grid). Then tell the user the Hill numbers.
+  - **qbrun** (row 446): QB carries only on sneak/QB draw/option keeps. ON bands slightly worse than main on ypc/missed-tackles (main already misses ypc on 2 seeds) — require pooled drift ≤0.1.
+  - **targets** (row 451): target shares by position/role, concentration, RB checkdown catch%.
+  - **gmpersona** (row 457): named GM per club, Staff Front Office "your boss".
+  - **offseason90** (row 458): user roster up to 90 in offseason, cutdown day to 53 before week 1.
+- **Queued**: draftreal (row 462, `logs/draftreal-queue.out` waiter → launch-when-slot).
 
 ## Decisions and why
-- Merge one job at a time: commit in the worktree, `git merge --no-edit main` there, gate, then merge to main. Keep both sides of conflicts (outcome spreads keep every `...xFields`).
-- Accept: OFF/sim byte-identical where claimed, eq 20/20, no band worse than main by >0.2, lint exactly 4. Never shrink an individual effect to hit a band.
-- Accepted with notes: completion % +0.4 (one seed 0.2 over) from realismloss; draftvalue probe "can't afford #1" on one seed (realistic); covstats max CB TD 10.6/17.
-- Push: build, lint 4, `calib.mjs 33333 20 --eq` 20/20, secret scan of `git diff origin/main..main`, `git push origin main`, `zsh scripts/publish-pages.sh main`, confirm the live index-*.js changed (curl the Pages URL).
+- Merge one job at a time: commit in worktree, `git merge --no-edit main` there, resolve as UNION, build, lint 4, gate (`zsh ~/gridiron-work/gate20.sh <wt> <label>` for store/engine jobs; UI jobs: check-broadcast with CB_ONLY), then `git merge --no-edit wt-<name>` on main.
+- **aircoh** follow-up (not yet written): completions where sim yards < air yards (57% of completions; NFL ~1%) and WR/TE depth swapped (WR aDOT 6.4 vs 10.7, TE 10.5 vs 6.4). Write + launch AFTER speedgap merges (same YAC code).
+- Emergent plays P0 (`~/gridiron-work/prompts/emerp0.txt`) waits for animresid (same files).
+- Review probe SIGNS and side effects, not just the gate (animresid's "hold" passed every gate but caused the stalls the user saw).
 
 ## Next steps
-1. Finish ladder + punts merges (above), backlog rows, status table, ask to push.
-2. **fapool wrote FINAL (logs/fapool-verify.out, ~09:22) — review + merge first** (it touched generate.ts/progress.ts; re-run gates on the merged tree). Then J52 when it lands.
-3. Browser check pending for #15 C and #28 C3 at 375px + dark (spec asks orchestrator to look).
-4. Backlog: #27 DF2/DF3, J11, #7/#24/#26, #39–51; animation round for J13 audibles (hook in qbReads.ts); punter directional punting (row 376); J10b throwaway rate 2.8% vs NFL 9.1%; run ≤0 still 14.7% vs NFL 17.8% and ≥10 yd 9.4% vs 10.6% (realismloss notes).
+1. Handle job completions as the monitor reports them (re-arm a Monitor over the 7 names; `cont.sh <name> <ABS prompt>` when one ends DRAFT).
+2. When animresid lands → confirm full check-broadcast PASS on main, then launch `~/gridiron-work/ds-wt emerp0 /Users/aaron/gridiron-work/prompts/emerp0.txt`.
+3. When speedgap lands → write prompts/aircoh.txt (yards ≥ air on catches, air by the target's own route, YAC ≥0 except ~1%) and launch.
+4. Then queue P3a/P3b playcalling UI (NEXT_PHASE_FUT_PLAYCALLING.md), H3 UI, T2 UI.
+5. Backlog after that: T3/T4, #39–51, J10b throwaway 2.8% vs 9.1%, run ≤0 14.7% vs 17.8%.
 
 ## Gotchas
-- **DeepSeek often ends its turn early** ("Recommended next steps", no verify file) → `~/gridiron-work/cont.sh <name> <ABS original prompt>` relaunches a continuation in the same worktree. `ds-wt` needs an ABSOLUTE prompt path (relative → empty prompt, "You must provide a message").
-- Overnight every try hit the 90-min hard timeout when sims were starved (load 25, calib-slot queue backed up). For a 20-game `--eq` run, skipping calib-slot.sh (nice -n 15) is fine; long calibrations still go through it.
-- Orphan OpenCode sessions keep editing worktrees: `opencode-cli api GET /api/session/active`; interrupt (`POST /api/session/<id>/interrupt`) ONLY when no DeepSeek client is alive. `.governor-dead` is an exact worktree-name match.
-- Job watcher: check only the LAST `[push]` line of a log (older runs' "finished" lines cause false alarms).
-- Keep this chat lean: grep verify files, don't cat big logs; chat 10 hit 350k.
+- DeepSeek ends early often (DRAFT/"IN PROGRESS" verify) → `~/gridiron-work/cont.sh <name> <ABS prompt>`. It writes "FINAL" atop DRAFT files — read first ~40 lines.
+- Lint count: `npm run lint 2>&1 | grep -cE ': (warning|error) '` (= 4). Exporting a hook from a component file adds a warning → put hooks in a .ts file.
+- Browser pane hidden ⇒ broadcast canvas renders black; use JS measurements, not screenshots.
+- Don't chain `sleep` in Bash (blocked) — use run_in_background until-loops or Monitor.
+- Keep this chat lean: grep verify files, don't cat logs.
 
 ## Key files
-PLAYTEST_BACKLOG.md rows 403–429 · ~/gridiron-work/prompts/ · ~/gridiron-work/logs/*-verify.out · ~/gridiron-work/{ds-wt, cont.sh, launch-when-slot.sh, launch-after.sh, calib-slot.sh, sim-governor.sh} · NEXT_PHASE_FUT_INJURYDECISIONS.md / NEXT_PHASE_FUT_CHOOSECOACHES.md (both complete) · FUTURES.md
+PLAYTEST_BACKLOG.md 446–462 · ~/gridiron-work/prompts/{animresid,realism-qbrun,realism-targets,livetele,gmpersona,offseason90,draftreal}.txt · ~/gridiron-work/scratch/{qbrun-probe,targets-probe,stall-probe}.mjs · ~/gridiron-work/analysis/{qbrun_nfl,targets_nfl,yac_neg_nfl}.py (+targets_nfl.json)
