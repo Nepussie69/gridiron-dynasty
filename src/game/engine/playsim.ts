@@ -2178,7 +2178,7 @@ function chaseCaughtExtra(c: Chase, u: number): number {
 // per-player ordering exactly as it is). The mph math lives in pure functions
 // (carrierOpenMph / pursuerMph / openFieldMph / openFieldShift / openFieldRace) so
 // FUTURES #54 (E1) can call the same ones from its live pursuit field.
-let SPEEDGAP_ON = true
+let SPEEDGAP_ON = false // orchestrator 2026-10-16: OFF until the joint emergent calibration (league bands: points +0.48, 3rd down -0.88 pooled)
 /** SPG: the open-field speed layer (default ON). OFF is byte-identical to main. */
 export function setSpeedGap(on: boolean) { SPEEDGAP_ON = on }
 /** SPG: read the toggle so a probe can restore it exactly. */
@@ -2231,6 +2231,19 @@ export const SPG = {
   raceCenter: { pass: -0.592, run: -0.512 } as Record<'pass' | 'run', number>,
   racePerMph: { pass: 0.052, run: 0.055 } as Record<'pass' | 'run', number>,
   raceMax: 0.6,
+  /** SPG: the line-to-gain guard. The layer may shorten a gain, but it may never
+   *  take away a first down the OFF gain already made: if the pre-layer gain
+   *  reached the sticks and the layer's downside (negative shift / run-down /
+   *  level trim) pulled the result short, the result is restored to the marker.
+   *  That is the whole first-down fix (orchestrator direction 2026-10-15): the
+   *  guard sits ONLY at the marker — never as a floor on every down, and never a
+   *  "downside band" that drops the negative half on short gains. Measured on
+   *  2 seeds x 250 paired games (logs/speedgap-tune3.out), the layer's net
+   *  conversions move +0.26 pts with this guard on and the layer centred; the
+   *  downside-band variant (negative half only past 10 yd / the sticks) over-adds
+   *  (+0.80 pts, 3rd-down conversion +1.0) and the unguarded layer under-adds
+   *  (-0.49 pts). The individual spread is identical in all three. */
+  guardMarker: 1,
   /** Yards won by the breakaway and lost when run down — the same base, so the two
    *  sides of the race carry the same mean; `escMax` / `downMax` bound one play. */
   escBase: 7,
@@ -2239,15 +2252,17 @@ export const SPG = {
   downBase: 7,
   downPerMph: 5.5,
   downMax: 20,
-  /** League centring (measured, per side). `centerYdP`: the share of the plays this
-   *  layer touches whose yard total is trimmed by one — it pays back the last
-   *  fraction of a yard the shift/race leave behind, measured on the calibration's
-   *  own simTest (SPG_STAT). The trim is a uniform hash, so it moves the league
-   *  level and never the individual spread. `centerBreakP`: the share of 20+ gains
-   *  capped to 19 — the escape's extra breakaways paid back at the same level, so
-   *  the league's explosive rate (and with it the points / TD bands) is held too. */
-  centerYdP: { pass: 0.49, run: 0.54 } as Record<'pass' | 'run', number>,
-  centerBreakP: { pass: 0, run: 0 } as Record<'pass' | 'run', number>,
+  /** League centring (measured, per side): the mean yardage the layer still adds
+   *  once the shift, the race and the marker guard have run, written as an
+   *  expectation and spent through the same dither as the shift (`dither`, so 0.2
+   *  = a fifth of a yard on average). A hash-uniform level trim, so it moves the
+   *  league mean and never the per-player ordering; it is re-measured with
+   *  SPG_STAT (`shiftPass` / `shiftRun`) on the plays the layer touches.
+   *  `centerBreakP`: the share of 20+ gains capped to 19 — the escape's extra
+   *  breakaways paid back at the same level, so the league's explosive rate (and
+   *  with it points and the TD bands) is held too. */
+  centerYdP: { pass: 0.16, run: 0.08 } as Record<'pass' | 'run', number>,
+  centerBreakP: { pass: 0, run: 0.3 } as Record<'pass' | 'run', number>,
 }
 
 /** SPG: measurement counters (off by default; a probe turns them on). */
@@ -2272,6 +2287,11 @@ export const SPG_STAT = {
   sumPassEdge: 0,
   sumPassEsc: 0,
   sumPassDown: 0,
+  /** SPG: the FINAL shift by kind — the trim is the last level term, so the mean
+   *  of a cell (over the plays the layer touched) is exactly the adjustment
+   *  `centerYdP[kind]` still needs to make that cell mean-neutral. */
+  shiftPass: [0, 0] as [number, number],
+  shiftRun: [0, 0] as [number, number],
 }
 
 /** SPG: deterministic dither rounding — floor plus a hash-decided fraction, so the
@@ -2352,7 +2372,8 @@ export function openFieldRace(gain: number, edge: number, key: string, side: 'pa
     const win = clamp(Math.round(SPG.escBase + SPG.escPerMph * e), 1, SPG.escMax)
     return { gain: gain + win, esc: true, down: false }
   }
-  if (gain >= SPG.raceMin && pDown > 0 && h01(`${key}:down`) < pDown) {
+  const downOk = gain >= SPG.raceMin && pDown > 0 && h01(`${key}:down`) < pDown
+  if (downOk) {
     const loss = clamp(Math.round(SPG.downBase + SPG.downPerMph * -e), 1, SPG.downMax)
     return { gain: Math.max(1, gain - loss), esc: false, down: true }
   }
@@ -2362,32 +2383,40 @@ export function openFieldRace(gain: number, edge: number, key: string, side: 'pa
 /** SPG: the whole-segment transform — the yardage shift on every positive gain,
  *  then the race at the second level. One place, so the pass (after the catch) and
  *  the run (after the line) apply exactly the same open-field math. */
-function speedGapGain(gain: number, edge: number, key: string, pos: string | undefined, kind: 'run' | 'pass', down = 0): number {
+function speedGapGain(gain: number, edge: number, key: string, pos: string | undefined, kind: 'run' | 'pass', down = 0, dist = 0): number {
   if (!SPEEDGAP_ON || gain < SPG.shiftMin || !Number.isFinite(edge)) return gain
   const centre = SPG.edgeCenter[kind]
-  let g = Math.max(1, gain + openFieldShift(edge, centre, key))
+  // The whole after-catch / after-the-line segment: the individual yardage shift
+  // (every positive gain) and then the second-level race. Symmetric — the same
+  // base (`escBase` / `downBase`) on both sides of the race, so a league-average
+  // matchup moves nothing.
+  const sh = openFieldShift(edge, centre, key)
+  let g = Math.max(1, gain + sh)
   const r = openFieldRace(g, edge, key, kind)
   g = r.gain
   // League centring (measured constants, a uniform hash): pay back the residual
-  // mean the shift/race leave, and the extra breakaways the escape adds. Both are
-  // level shifts on every player, so the individual spread is untouched.
+  // mean the shift, the race and the marker guard leave, and the extra breakaways
+  // the escape adds. Both are level shifts on every player, so the individual
+  // spread is untouched.
   if (SPG.centerBreakP[kind] > 0 && g >= 20 && h01(`${key}:cbr`) < SPG.centerBreakP[kind]) g = 19
-  const cyd = SPG.centerYdP[kind]
-  if (cyd > 0 && h01(`${key}:cyd`) < cyd) g = Math.max(1, g - 1)
-  else if (cyd < 0 && h01(`${key}:cyd`) < -cyd) g += 1
-  // Money down (3rd/4th): the marker belongs to the calibrated draw and
-  // R2.moneyYards, so the open-field layer may only ADD ground there — never take
-  // the conversion away. A fast man still breaks the 3rd-down tackle (the escape
-  // and the positive shift stay); a slow one is simply not pushed short of the
-  // sticks by the layer. This is a level guard on one down, not a shrink of any
-  // player's own speed term, and it is what holds the league's 3rd-down rate.
-  // (Measured: extending it to every first-down marker over-adds and pushes the
-  // pass / points bands up — the chain is better held by the centring below.)
-  if (down >= 3 && g < gain) g = gain
+  if (SPG.centerYdP[kind] !== 0) {
+    const t = dither(SPG.centerYdP[kind], `${key}:cyd`)
+    if (t > 0) g = Math.max(1, g - t)
+    else if (t < 0) g += -t
+  }
+  // Line-to-gain guard: the open-field layer may shorten a gain, but it may never
+  // take away a first down the OFF gain already made — the guard sits ONLY at the
+  // marker (a level guard on the one play that matters), not on every down and not
+  // as a "downside band". The goal line is deliberately left to the calibrated
+  // draw, the J8a chase and the J3b goal-line rep, so a fast chaser can still run
+  // a breakaway down short of the house.
+  if (SPG.guardMarker > 0 && dist > 0 && g < dist && gain >= dist) g = dist
   if (SPG_STAT.on) {
     SPG_STAT.n++
     SPG_STAT.sumEdge += edge
     SPG_STAT.sumShift += g - gain
+    const c = kind === 'run' ? SPG_STAT.shiftRun : SPG_STAT.shiftPass
+    c[0]++; c[1] += g - gain
     if (r.esc) SPG_STAT.esc++
     if (r.down) SPG_STAT.down++
     const pk = `${kind}${down >= 3 ? 3 : 1}`
@@ -5524,7 +5553,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
         const shortCar = concept.depth <= SPG.shortDepth || concept.yac >= SPG.shortYac
         const spgEdge = openFieldMph(target, spgMan, shortCar)
         const pre = gain
-        gain = speedGapGain(gain, spgEdge, `${n}:${defId}:passspg`, target.pos, 'pass', env?.down ?? 0)
+        gain = speedGapGain(gain, spgEdge, `${n}:${defId}:passspg`, target.pos, 'pass', env?.down ?? 0, dist)
         spgField = { spgMph: Math.round(spgEdge * 10) / 10, spgChaserId: spgMan.id, ...(SPG_STAT.on ? { spgPre: pre } : {}) }
       }
     }
@@ -5930,7 +5959,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (SPEEDGAP_ON && J8A_ON && carrier && runClose.chaser && gain > 0) {
     const spgEdge = openFieldMph(carrier, runClose.chaser, false)
     const pre = gain
-    gain = speedGapGain(gain, spgEdge, `${n}:${defId}:runspg`, carrier.pos, 'run', env?.down ?? 0)
+    gain = speedGapGain(gain, spgEdge, `${n}:${defId}:runspg`, carrier.pos, 'run', env?.down ?? 0, distance)
     spgRun = { spgMph: Math.round(spgEdge * 10) / 10, spgChaserId: runClose.chaser.id, ...(SPG_STAT.on ? { spgPre: pre } : {}) }
   }
   // J8a: the open-field chase decides whether a long gain reaches the house. The
