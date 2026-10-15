@@ -1038,6 +1038,11 @@ export interface Play {
   pressure?: boolean
   /** The defense sent extra rushers on this pass (animation only). */
   blitz?: boolean
+  /** The linebackers / defensive backs the sim sent as extra rushers on this
+   *  snap, in the order it picked them (animation only). Present on a blitz
+   *  call — an empty list means the call sent none (a spy). Absent on old saves
+   *  and on non-blitz snaps, where the animation falls back to its own pick. */
+  blitzIds?: string[]
   /** J12 #34: the defence showed a disguised shell on this snap (animation). */
   disguised?: boolean
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
@@ -1657,6 +1662,11 @@ export interface RushResult {
   time: number
   /** J37: the blocker whose adjacent handoff (twist/stunt pass-off) broke. */
   handoffFail?: string
+  /** The linebackers / defensive backs who actually rushed the passer on this
+   *  snap (a blitz call only; empty when the call sent none). Recorded so the
+   *  broadcast animation draws exactly the men the sim sent instead of
+   *  hash-picking its own. Presentation only: no rng draw, no sim term. */
+  blitzIds?: string[]
 }
 
 /** J8b: assign every rusher a blocker and score the reps (deterministic only). */
@@ -1785,7 +1795,7 @@ function rushMatchups(
   const time = clamp(PB.baseTime - maxWin * PB.secPerUnit, PB.minTime, PB.maxTime)
   // J37: a rep dropped by the spy call takes its handoff record with it.
   const fail = handoffFail && reps.some((r) => r.blockerId === handoffFail) ? handoffFail : undefined
-  return { edge, reps, credit, maxWin, freeRusher: !!credit?.free, lost, time, handoffFail: fail }
+  return { edge, reps, credit, maxWin, freeRusher: !!credit?.free, lost, time, handoffFail: fail, blitzIds: blitzers.map((r) => r.p.id) }
 }
 /** E2: pursuit (DL/LB PUR + SPD) shrinks the run's big-play tail. */
 function runPursuit(dl: Player[], lbs: Player[]): number {
@@ -2741,6 +2751,11 @@ export interface PlayOutcome {
   pressure?: boolean
   /** The defense sent extra rushers on this pass (animation only). */
   blitz?: boolean
+  /** The linebackers / defensive backs the sim sent as extra rushers on this
+   *  snap, in the order it picked them (animation only). Present on a blitz
+   *  call — an empty list means the call sent none (a spy). Absent on old saves
+   *  and on non-blitz snaps, where the animation falls back to its own pick. */
+  blitzIds?: string[]
   /** J12 #34: the defence showed a disguised shell on this snap (animation). */
   disguised?: boolean
   /** J12 #34: the QB was fooled by the disguise on this snap (animation). */
@@ -4465,6 +4480,17 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     PB_STAT.raw += pb.edge
     PB_STAT.old += (pressure - protection) + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) - fatDiff * R15.fatPress
   }
+  // ── the sim's blitzers, recorded for the animation ─────────────────────────
+  // The broadcast used to hash-pick its own blitzers and drew men the sim never
+  // sent. The men who actually rushed are recorded on the play instead, so the
+  // animation draws exactly them. Presentation only: this reads `pb` (already
+  // computed) and adds no rng() draw and no sim term, so every result, stat and
+  // the OFF path are unchanged. An empty list is recorded by a blitz call that
+  // sent nobody (a spy), so the animation draws no phantom rusher either.
+  const recordedBlitzIds: string[] | undefined = blitz
+    ? (pb?.blitzIds ?? pb?.reps.filter((r) => r.blitz).map((r) => r.id))
+    : undefined
+  const blitzFields: Pick<PlayOutcome, 'blitzIds'> = recordedBlitzIds ? { blitzIds: recordedBlitzIds } : {}
   // A pass-heavy plan is predictable: the defense pins its ears back and sits
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
@@ -4829,7 +4855,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const result = !strip ? (blitz ? 'Sack (blitz)' : 'Sack') : lost ? 'Sack, forced Fumble!' : 'Sack, Fumble recovered by the offence'
     return {
       type: 'pass', concept: concept.name, yards: y, result, turnover: lost,
-      ...pressureFields('sack', sackId), blitz, timeUsed: 24 + Math.floor(rng() * 12),
+      ...pressureFields('sack', sackId), blitz, ...blitzFields, timeUsed: 24 + Math.floor(rng() * 12),
       qbId: passer?.id, sackId, coverId, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...olFailFields, ...iuPassFields,
       stripSack: strip || undefined, fumbleCause: strip ? 'strip' : undefined, fumbleRecoveredBy: recovery,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
@@ -5372,7 +5398,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     return {
       type: 'pass', concept: concept.name, yards: 0,
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
-      turnover: true, blitz,
+      turnover: true, blitz, ...blitzFields,
       ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
       timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: passer?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
@@ -5498,7 +5524,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
           : muff ? 'Muffed catch, recovered by the offence'
             : big ? 'Explosive play!' : 'Complete'
     return maybeScramble(offId, n, passer, qbStyle, pressured, {
-      type: 'pass', concept: concept.name, yards: gain, blitz,
+      type: 'pass', concept: concept.name, yards: gain, blitz, ...blitzFields,
       result: oob ? `${baseResult} (out of bounds)` : baseResult,
       turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
       outOfBounds: oob || undefined,
@@ -5518,7 +5544,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // league completion % by the throwaway rate (a 0-yard "completion"). The
   // intended receiver is dropped (targetId undefined) and `throwAway` is set in
   // throwFields; the result stays 'Incomplete' so every stat counter is exact.
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: onThrowAway ? undefined : target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, ...blitzFields, targetId: onThrowAway ? undefined : target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer. E2: the drop attribution also reads

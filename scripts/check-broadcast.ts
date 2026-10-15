@@ -2021,6 +2021,94 @@ ok('animflow r5: kick / punt returns move all 21 others (lanes, wall, gunners vs
   })
 }
 
+// ── blitzrush (user request, 2026-10-15): the men the animation sends on the
+// blitz are the men the SIM sent. The sim records them on the play
+// (`play.blitzIds`); the animation draws exactly those, so the blitz reads
+// right and no phantom rusher is drawn. The old hash pick stays only as the
+// fallback for a save that predates the field.
+{
+  const { fileURLToPath } = await import('node:url')
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const rj = (n: string) => JSON.parse(readFileSync(`${repo}public/data/${n}.json`, 'utf8'))
+  ;(await import('../src/game/data/realData.ts')).setRealData({ nfl: rj('madden26').players, cfb: rj('cfb26').teams, source: { madden: 'local', cfb: 'local' } })
+  ;(await import('../src/game/data/calibration.ts')).setCalibration(rj('calibration'))
+  const store = await import('../src/store/gameStore.ts')
+  const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
+  const { buildPlayAnim, posAt } = await import('../src/components/playAnim.ts')
+  const { actorPlayers } = await import('../src/components/jersey.ts')
+  const DKEYS = ['dl0', 'dl1', 'dl2', 'dl3', 'lb0', 'lb1', 'lb2', 'cb0', 'cb1', 's0', 's1']
+  // The animation's own pick, kept as the fallback for saves without `blitzIds`.
+  const h01 = (n: number) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x) }
+  const oldPick = (seed: number) => ['lb1', h01(seed + 31) < 0.5 ? 'lb0' : 'lb2', ...(h01(seed + 37) < 0.3 ? ['s1'] : [])]
+  /** Does this dot come at the passer inside 1.5 s of the snap? (paths are 0..1) */
+  const cameAt = (anim: BroadcastAnim, key: string, los: number) => {
+    const a = anim.actors.find((x) => x.key === key)
+    if (!a) return false
+    const secs = anim.duration / 1000
+    const t1 = Math.min(1, 1.5 / secs)
+    const x0 = posAt(a.path, Math.min(1, 0.14 / secs)).x
+    const x1 = posAt(a.path, t1).x
+    return x1 - x0 <= -1.0 && x1 - los <= 4.0
+  }
+  ok('blitzrush: every man the sim sent on the blitz is drawn coming at the passer, and an empty record draws no rusher', () => {
+    store.useGame.getState().startCareer({ name: 'C', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const sim = simulatePlayByPlay(world, nfl[0].id, nfl[1].id, world.seed + 13)
+    let blitz = 0, blitzers = 0, notDrawn = 0, held = 0, heldNowSent = 0, spies = 0, spyHeld = 0, legacySnaps = 0, fallbackSnaps = 0, fallbackDrawn = 0
+    const bad: string[] = []
+    for (let i = 0; i < sim.plays.length; i++) {
+      const play = sim.plays[i]
+      if (play.type !== 'pass' || !play.blitz) continue
+      blitz++
+      const other = play.offId === nfl[0].id ? nfl[1].id : nfl[0].id
+      const actors = actorPlayers(world, play, other, null)
+      const ctx = { next: sim.plays[i + 1] as Play | undefined, actors }
+      const real = buildPlayAnim(play, ctx)
+      const los = 10 + play.startYard
+      const sent = (play.blitzIds ?? []).map((id) => DKEYS.find((k) => actors.get(k)?.id === id)).filter((k): k is string => !!k)
+      if (!play.blitzIds) { legacySnaps++; continue }        // only a save from before the field
+      blitzers += sent.length
+      // (1) every recorded blitzer is drawn at the passer
+      for (const k of sent) if (!cameAt(real, k, los)) { notDrawn++; bad.push(`play ${play.n}: ${k} not drawn at the passer`) }
+      // (2) the RECORD decides: a man an empty record holds in coverage is sent
+      //     at the passer as soon as the record names him (the artifact of a
+      //     cover man tracking a blocking back reads the same either way, so he
+      //     is counted only when the empty build does not send him).
+      if (sent.length) {
+        const empty = buildPlayAnim({ ...play, blitzIds: [] }, ctx)
+        for (const k of sent) {
+          if (cameAt(empty, k, los)) continue
+          held++
+          if (cameAt(real, k, los)) heldNowSent++
+        }
+      } else {
+        // a spy: the old pick's men no longer rush. The legacy build sends them
+        // (or the coverage drags them); the recorded empty list holds them.
+        spies++
+        const legacy = buildPlayAnim({ ...play, blitzIds: undefined }, ctx)
+        for (const k of oldPick(play.n * 17 + play.startYard)) {
+          if (cameAt(legacy, k, los) && !cameAt(real, k, los)) spyHeld++
+        }
+      }
+      // the old hash pick is still the fallback for a save without the field
+      if (fallbackSnaps < 3 && sent.length) {
+        fallbackSnaps++
+        const legacy = buildPlayAnim({ ...play, blitzIds: undefined }, ctx)
+        if (oldPick(play.n * 17 + play.startYard).some((k) => cameAt(legacy, k, los))) fallbackDrawn++
+      }
+    }
+    assert.ok(blitz >= 12, `blitz snaps in the harness game: ${blitz}`)
+    assert.ok(legacySnaps === 0, `${legacySnaps} blitz snaps without the recorded rushers`)
+    assert.ok(blitzers >= 15, `extra rushers recorded: ${blitzers}`)
+    assert.ok(bad.length === 0, `${notDrawn} sim blitzers not drawn: ${bad.slice(0, 4).join('; ')}`)
+    assert.ok(held >= 5 && heldNowSent === held, `coverage-held blitzers now sent at the passer: ${heldNowSent}/${held}`)
+    assert.ok(spies === 0 || spyHeld >= 1, `a spy call holds the old pick's men: ${spyHeld} of ${spies} spy snaps`)
+    assert.ok(fallbackDrawn >= 1, `the old pick is still the fallback (${fallbackDrawn}/${fallbackSnaps} builds)`)
+    console.log(`      blitz: ${blitz} snaps, ${blitzers} extra rushers all drawn; ${heldNowSent}/${held} coverage-held men now sent; ${spies} spy snaps held the old pick ${spyHeld}x; fallback draws on ${fallbackDrawn}/${fallbackSnaps}`)
+  })
+}
+
 ok('SL1 sideline: team areas between the 32s, behind the border, home near / away far; officials placed by mechanics and deterministic', () => {
   const homeC = NFL_TEAMS[0]
   const awayC = NFL_TEAMS[1]
