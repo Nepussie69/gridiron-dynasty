@@ -463,6 +463,12 @@ import { clamp, hash32, makeRng, type Rng } from './rng'
 import { situationalPassRate, getSituational, type SituationInput } from './situational'
 import { J9, centeredSub, coachMeanRating, getCoachSubs } from './coachSubs'
 import { CHEM, getJ37, skillValue, skillRel, skillCentre, olHandoffChem } from './chemistry'
+// E3 (FUTURES #54): the OL vs DL pass set decided on the field. Default OFF;
+// when on, `resolvePass` takes its pocket clock, its pressure edge, its sack
+// chance, its pressure credit and its `timeToPressureS` from this file instead
+// of `rushMatchups` (see the header of engine/emergentRush.ts). OFF is byte-
+// identical: nothing below is entered unless `EMERGENT_E3.on`.
+import { EMERGENT_E3, emergentPassSet } from './emergentRush'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -4406,8 +4412,25 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J37: each lineman's adjacent-pair chemistry — the pass-off on a twist/stunt
   // is decided by the specific pair (never a line average). Undefined when OFF.
   const olChem = getJ37() && ol.length >= 2 ? olHandoffChem(world, offId, ol) : undefined
+  // ── E3: the pass set on the field ─────────────────────────────────────────
+  // When the layer is on, each rusher's rep is a race against the blocker the
+  // engine assigns him (the assignment rules, the j13 slide, the J12 double/chip
+  // and spy call and the J37 pair chemistry are the same inputs), the pocket
+  // clock and the QB's own clock are real seconds, and the pressure credit /
+  // sack credit / timeToPressureS come off that field. OFF: `e3` is undefined and
+  // every line below is the untouched J8b path. E3 replaces the J8b rep model, so
+  // it lives under the same dev gate: `setJ8b(false)` (the pre-J8b comparison
+  // mode) keeps the base unit-average pressure/sack terms for BOTH modes.
+  const e3 = EMERGENT_E3.on && PROT_ON
+    ? emergentPassSet({
+      n, defId, offId, dl, lbs, cbs, ol, rb, te: teOff, fb, blitz,
+      fat: env?.fat, offMove: effOffMove, defMove: effDefMove,
+      dlUsage: usage && userDef ? usage.dl : undefined, q4: isQ4,
+      j13, j13Dev, handoffChem: olChem, passer, conceptDepth: concept.depth, j12: J12_ON,
+    })
+    : undefined
   const pb: RushResult | undefined = PROT_ON
-    ? rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, j13, j13Dev, olChem)
+    ? (e3 ? e3.rush : rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, j13, j13Dev, olChem))
     : undefined
   if (pb && J37_STAT.on && olChem) {
     const pb0 = rushMatchups(n, defId, dl, lbs, cbs, ol, rb, teOff, fb, blitz, env?.fat, effOffMove, effDefMove, usage && userDef ? usage.dl : undefined, isQ4, j13, j13Dev, undefined)
@@ -4423,7 +4446,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // on the throws (balances the passing game's natural edge over the run).
   const passLean = Math.max(0, planFor(offId, 'off')?.passBias ?? 0)
   const pressureEdge = (pb
-    ? (pb.edge - PB_CENTER.edge + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
+    ? ((e3 ? e3.edgeTerm : pb.edge - PB_CENTER.edge) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
       + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE)
     : (pressure - protection + (blitz ? 9 * (1 - olBlitzAware(ol)) : 0) + (concept.depth > 15 ? 4 : 0) - ocEff.offEdge * 0.5 + dcEff.defEdge * 0.5
       + (defPlan && defPlan.aggression >= 1.5 ? 3 : 0) + passLean * PASS_LEAN_PRESSURE - fatDiff * R15.fatPress)) * (env?.wx?.pressureMult ?? 1)
@@ -4451,7 +4474,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // sacks; a QB who reads the disguise gets the ball out. Linear and zero-mean.
   // J10b: the QB's own pocket response (a poised QB who steps up is sacked less,
   // one who holds more) multiplies in — centred, so the league sack rate holds.
-  const sackChance0 = clamp((R2.sackBase + pressureEdge * 0.0012) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus) * (pp ? pp.sackMult : 1) * j13Sack, 0.02, 0.13)
+  // E3: with the layer on the sack term is the FEET, not the edge — how many
+  // seconds the first man home beat the QB's own clock (centred by the measured
+  // league mean in EMERGENT_E3.sackCenter), so the man who won his rep is the
+  // man who gets the sack. OFF: the exact `pressureEdge × 0.0012` as before.
+  const sackFieldTerm = e3 ? e3.sackTerm : pressureEdge * 0.0012
+  const sackChance0 = clamp((R2.sackBase + sackFieldTerm) * (passShare) * (tier === 'FBS' ? 0.75 : 1) * protectMult * (call?.sackMult ?? 1) * (1 - qbSackEscape(qbA)) * (1 + disgAdj * J12.foolSack) * (1 + scoutSackBonus) * (pp ? pp.sackMult : 1) * j13Sack, 0.02, 0.13)
   // FUTURES #24: a trick holds the ball longer (the long mesh / the misdirection),
   // so a trick snap carries its own extra sack chance — a trick-only path that
   // never runs on an ordinary dropback.
@@ -4460,7 +4488,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // ── R7: per-dropback pressure decision (stats only) ─────────────────────────
   // Derived from the existing `pressureEdge` by a per-play hash, so no rng() draw
   // is spent and the play outcome (completion / sack / INT / yards) is untouched.
-  const pressured = h01(`${n}:${offId}:press`) < clamp(PRESSURE.base + (pressureEdge + disgAdj * J12.foolPress) * PRESSURE.slope, PRESSURE.lo, PRESSURE.hi)
+  // E3: with the layer on the pressure is the FIELD's verdict — the pocket clock
+  // (`tHome`) against the QB's own clock (`tThrow`): the men who actually got
+  // home decided it, not a hash on a blended edge. The hit/hurry split above is
+  // the same per-play hash either way (a stats classification).
+  const pressured = e3
+    ? e3.pressured
+    : h01(`${n}:${offId}:press`) < clamp(PRESSURE.base + (pressureEdge + disgAdj * J12.foolPress) * PRESSURE.slope, PRESSURE.lo, PRESSURE.hi)
   const pressureIsHit = h01(`${n}:${offId}:phit`) < PRESSURE.hitRate
   // One rusher per pressure: the DL weighted by max(PMV, FMV); on a blitz an LB
   // can steal the credit exactly as sack credit does (hash-gated). Never an rng.
