@@ -316,12 +316,30 @@ function closeOnCarrier(tk: Mover, carrier: Mover, endSec: number, notBefore = 0
   // (animflow r6c2 J7: and never before `notBefore` — a cover man must still stand the recorded
   //  separation at the catch; a min() against `tA - 0.1` used to rewind him through the catch on a
   //  short catch-and-run, dragging him onto the carrier's shoulder early)
-  const from = Math.max(notBefore, Math.min(tA - 0.1, Math.max(0.05, tA - clampN(d / (0.7 * tk.pace.top) + 0.3, 0.45, 2.5))))
-  followTo(tk, from, tA, (t) => {
+  const from0 = Math.max(notBefore, Math.min(tA - 0.1, Math.max(0.05, tA - clampN(d / (0.7 * tk.pace.top) + 0.3, 0.45, 2.5))))
+  // animshed: his last strides are drawn at his own pace now, so the lead has to cover what the
+  // carrier's own run opens up as well. Plan it against where he really ends up: if the chase still
+  // leaves him short, leave earlier and draw it again (a fixed point, like the rest of the planning
+  // here) - never a late blend that drags him onto the carrier faster than he can run.
+  const hands = (t: number) => {
     const cc = posAt(carrier.path, Math.min(t, endSec))
     return { x: cc.x + u.x * 0.62, y: cc.y + u.y * 0.62 }
-  }, { acc: 14, top: tk.pace.top * 1.15, w: 7 })
-  rideOn(tk, carrier, tk.t, endSec, u)
+  }
+  const gapAt = (t: number) => {
+    const a = posAt(tk.path, Math.min(t, tk.t))
+    const b = posAt(carrier.path, Math.min(t, carrier.t))
+    return Math.hypot(a.x - b.x, a.y - b.y)
+  }
+  let lead = tA - from0
+  for (let it = 0; it < 3; it++) {
+    const from = Math.max(notBefore, Math.min(tA - 0.1, Math.max(0.05, tA - lead)))
+    followTo(tk, from, tA, hands, { acc: 14, top: tk.pace.top * 1.15, w: 7 })
+    rideOn(tk, carrier, tk.t, endSec, u)
+    const gap = gapAt(endSec)
+    if (gap <= 0.9 || from <= notBefore + 1e-6) break
+    // still short: leave earlier by the time that gap costs at a modest closing speed
+    lead = Math.min(lead + clampN(gap / Math.max(2.5, 0.6 * tk.pace.top), 0.25, 1.5), Math.max(0.5, endSec - notBefore - 0.1))
+  }
 }
 
 /**
@@ -3251,6 +3269,13 @@ function followTo(mv: Mover, fromSec: number, toSec: number, target: (t: number)
  * animflow r8: hands on - from `t0` he rides the carrier a body's width off on side `u` (contact-
  * coupled: his momentum goes into the carrier, he never runs on past him), blended in from where he is
  * over a window long enough for the gap. Ends at `endSec`.
+ *
+ * animshed: the blend point is where he is *going*, not a drag on him. He closes on it at his own pace
+ * (top speed and acceleration, from `paceFor`/the ACC caps - the same law as every other chase here),
+ * so a ride the gap makes physically impossible leaves him a stride short at his own capped speed
+ * instead of yanking him across the field faster than he can run. (The old raw position blend dragged a
+ * doubled pass rusher - 8.6 yd/s cap - to 12+ yd/s riding a receiver to the sideline: the drawn
+ * "teleport" the broadcast check flagged.)
  */
 function rideOn(tk: Mover, carrier: Mover, t0: number, endSec: number, u: Pt): void {
   seek(tk, t0)
@@ -3259,31 +3284,44 @@ function rideOn(tk: Mover, carrier: Mover, t0: number, endSec: number, u: Pt): v
   const c0 = posAt(carrier.path, t0)
   const gap0 = Math.hypot(c0.x + u.x * 0.62 - from.x, c0.y + u.y * 0.62 - from.y)
   // (on him by the whistle, whatever is left of the gap)
-  // (no faster than ~7 yd/s on top of his run: what is left at the whistle he covers with a dive)
+  // animshed: the old law here was "~7 yd/s on top of his run - what is left at the whistle he covers
+  // with a dive", which is what drew him above his own pace; the ride is his own capped pace now, so
+  // what is left at the whistle is a stride he simply does not make up.
   const w = Math.max(gap0 / 7, Math.min(clampN(gap0 / 4, 0.25, 0.6), Math.max(0.22, endSec - t0)))
-  for (let t = t0 + 0.04; t < endSec + 1e-6; t += 0.04) {
-    const tt = Math.min(t, endSec)
-    const c = posAt(carrier.path, tt)
-    const g = 0.62 - 0.12 * clampN((tt - t0) / 0.5, 0, 1)
-    const e0 = clampN((tt - t0) / w, 0, 1)
+  // animshed: the blend point is where he is *going* (his own momentum at the start of the window, the
+  // carrier's shoulder by its end) - but he is never dragged onto it faster than he can run: one beat
+  // moves him at most his own top speed (`paceFor`'s cap for his role) along the line to it. A ride the
+  // gap makes impossible therefore leaves him a stride short, drawn at his capped pace, instead of
+  // yanking him across the field faster than he can run. (The raw blend drew a doubled pass rusher -
+  // 8.6 yd/s cap - at 12+ yd/s riding a receiver to the sideline: the broadcast "teleport".)
+  const dt = 0.04
+  let p = { x: from.x, y: from.y }
+  // animshed: the distance a beat may cover is `top * step` - the step he actually gets, not the
+  // nominal one. (A clamped last beat is a fraction of a beat long; dragging it a whole beat's
+  // distance drew the ride's own cap-breaking jump the probe's frame-to-frame delta flags.)
+  const beat = (t: number, step: number) => {
+    const c = posAt(carrier.path, t)
+    const g = 0.62 - 0.12 * clampN((t - t0) / 0.5, 0, 1)
+    const e0 = clampN((t - t0) / w, 0, 1)
     const e = e0 * e0 * (3 - 2 * e0)
-    const b = momentumAt(from, vIn, tt - t0)
-    tk.path.push({ t: tt, x: b.x + (c.x + u.x * g - b.x) * e, y: b.y + (c.y + u.y * g - b.y) * e })
+    const b = momentumAt(from, vIn, t - t0)
+    const q = { x: b.x + (c.x + u.x * g - b.x) * e, y: b.y + (c.y + u.y * g - b.y) * e }
+    const dx = q.x - p.x
+    const dy = q.y - p.y
+    const d = Math.hypot(dx, dy)
+    const s = Math.min(d, tk.pace.top * step)
+    if (d > 1e-9) p = { x: p.x + (dx / d) * s, y: p.y + (dy / d) * s }
+    return { t, x: p.x, y: p.y }
+  }
+  for (let t = t0; t < endSec - 1e-6; ) {
+    const step = Math.min(dt, endSec - t)
+    t += step
+    tk.path.push(beat(Math.min(t, endSec), step))
   }
   const last = tk.path[tk.path.length - 1]
-  if (last.t < endSec - 1e-6) {
-    // (the same blend at the whistle - never a jump onto the target in the last frame)
-    const c = posAt(carrier.path, endSec)
-    const g = 0.62 - 0.12 * clampN((endSec - t0) / 0.5, 0, 1)
-    const e0 = clampN((endSec - t0) / w, 0, 1)
-    const e = e0 * e0 * (3 - 2 * e0)
-    const b = momentumAt(from, vIn, endSec - t0)
-    tk.path.push({ t: endSec, x: b.x + (c.x + u.x * g - b.x) * e, y: b.y + (c.y + u.y * g - b.y) * e })
-  }
-  const l = tk.path[tk.path.length - 1]
-  tk.t = l.t
-  tk.x = l.x
-  tk.y = l.y
+  tk.t = last.t
+  tk.x = last.x
+  tk.y = last.y
   tk.lastStop = true
   tk.inHeading = undefined
 }
