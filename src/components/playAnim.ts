@@ -1075,9 +1075,24 @@ function startMovers(f: Formation, ctx: AnimContext): Record<string, Mover> {
   return out
 }
 
+/** animflow 6c: no teleport — cap a waypoint so a defender never exceeds ~12 yd/s. */
+function capSpeed(p: { t: number; x: number; y: number }[], maxT: number) {
+  const MAXV = 11.9 // yd/s
+  for (let i = 1; i < p.length; i++) {
+    const a = p[i - 1], b = p[i]
+    const dt = (b.t - a.t) * maxT
+    if (dt <= 1e-6) continue
+    const d = Math.hypot(b.x - a.x, b.y - a.y)
+    const vm = MAXV * dt
+    if (d > vm) {
+      const s = vm / d
+      p[i] = { t: b.t, x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s }
+    }
+  }
+}
+
 /** Convert second-based motion into the finished 0..1 timeline. */
-function finish(
-  f: Formation,
+function finish(  f: Formation,
   movers: Record<string, Mover>,
   rest: {
     ball: WP[]
@@ -1105,6 +1120,12 @@ function finish(
   const sheds = rec ? rec.shed.filter((sh) => sh.t0 < maxT).map((sh) => ({ ...sh, t0: frac(sh.t0), t1: frac(Math.min(sh.t1, maxT)) })) : []
   const actors: Actor[] = keys.map((k) => {
     const p = movers[k].path.map((w) => ({ t: frac(w.t), x: w.x, y: w.y }))
+    // animflow 6c (no teleports): a defensive lineman never covers more ground per
+    // frame than a real 12 yd/s burst. A handful of rush/pursuit paths spike just
+    // over the bar at a phase hand-off; pulling the offending waypoint back toward
+    // the previous one lags him a few cm instead of a jump. Offensive carriers are
+    // untouched (the fast-follow framing must see their true speed).
+    if (/^dl/.test(k)) capSpeed(p, maxT)
     compact(p)
     return { key: k, side: f[k].side, role: f[k].role, path: p }
   })
@@ -2356,7 +2377,10 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   const snapK = snapKindFor(play.concept)
   const f = formation(los, hasFb, snapK)
   const seed = play.n * 7 + play.startYard
-  const qbRun = !!ctx.carrierIsQB || /QB Draw|Scramble|Sneak/.test(play.concept)
+  const qbRun = !!ctx.carrierIsQB || !!play.optionKeep || /QB Draw|Scramble|Sneak/.test(play.concept)
+  // realism-qbrun: an option keep is drawn as a mesh (the back attacks the ball),
+  // then the QB pulls it and keeps; a sneak is a straight push behind C/G.
+  const optionKeep = qbRun && !!play.optionKeep
   // animflow r8 (J38): a WILDCAT is a direct snap to the back (he lines up in the gun spot, the
   // quarterback split out wide as a decoy); a JET SWEEP is a receiver in full-speed jet motion
   // across the formation at the snap, handed the ball as he passes the quarterback.
@@ -2443,7 +2467,14 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   // mesh: the handoff comes ~1.1-1.3 s after the snap, ~4 yd deep (R5).
   let handoffT = 0
   if (qbRun) {
-    m.rb.run([{ x: los - 1, y: MID_Y - side * 5 }], { stop: true })
+    if (optionKeep) {
+      // realism-qbrun: the read — the back attacks the ball to the mesh (the fake
+      // handoff), then carries out to the edge as the QB pulls it and runs.
+      m.rb.run([{ x: meshX, y: meshY }], { stop: false })
+      m.rb.run([{ x: los - 1, y: MID_Y - side * 5 }], { stop: false })
+    } else {
+      m.rb.run([{ x: los - 1, y: MID_Y - side * 5 }], { stop: true })
+    }
   } else if (wildcat) {
     // The snap comes straight to him; the split-out quarterback releases as a decoy.
     m.rb.hold(SNAP)

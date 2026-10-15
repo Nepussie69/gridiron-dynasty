@@ -60,6 +60,10 @@ import {
   trickConcept, trickEffect, trickExtraSack, trickOptions, trickPassOverride, trickRunGain, trickSituation, trickSurprise,
   type TrickEffect, type TrickKind, type TrickPassOut, type TrickSnap,
 } from './trickPlays'
+import {
+  edgeManOf, getQbRun, qbEdgeYardEffect, qbEffectiveCall, qbKeepsOnRead, qbRunKind, qbSneakGain,
+  type EdgeMan, type QbRunKind,
+} from './qbRun'
 
 /**
  * FUTURES #24: the ordinary call-matrix edge plus, on a trick snap ONLY, the
@@ -1152,6 +1156,13 @@ export interface Play {
   trickReadIds?: string[]
   /** J6: the QB escaped the pocket and ran (a rush attempt, not a pass attempt). */
   scramble?: boolean
+  // ── realism-qbrun: the QB-designed runs ─────────────────────────────────────
+  /** The QB kept on an option read (animation: the mesh, then the pull and keep). */
+  optionKeep?: boolean
+  /** A QB sneak — under centre, a straight push behind C/G, no handoff (animation). */
+  sneak?: boolean
+  /** The specific unblocked edge man the QB read on an option (animation/probe). */
+  optionEdgeId?: string
   /** R7: the defender credited with the pressure (sack, QB hit or hurry). */
   pressureId?: string
   /** R7: how the pressure is classified. A sack is always a pressure. */
@@ -2740,6 +2751,13 @@ export interface PlayOutcome {
   featuredPlayerId?: string
   /** J5: this snap used pre-snap motion (set when the play is pushed). */
   motion?: boolean
+  // ── realism-qbrun: the QB-designed runs ─────────────────────────────────────
+  /** The QB kept on an option read (animation: the mesh, then the pull and keep). */
+  optionKeep?: boolean
+  /** A QB sneak — under centre, a straight push behind C/G, no handoff (animation). */
+  sneak?: boolean
+  /** The specific unblocked edge man the QB read on an option (animation/probe). */
+  optionEdgeId?: string
   // ── FUTURES #24: trick plays ────────────────────────────────────────────────
   /** The trick call this snap ran (absent on every ordinary snap). */
   trick?: TrickKind
@@ -5419,8 +5437,48 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   else if (roll < (w1 + w2) / wTot && rbPool[1]) carrier = rbPool[1]
   else if (qbBase) carrier = qbBase
   else if (rbPool[1]) carrier = rbPool[1]
+  // ── realism-qbrun: the QB carries ONLY on QB concepts ───────────────────────
+  // A back's run is a back's run: this specific quarterback's own legs decide
+  // whether the offence called a QB concept over it (a sneak on short yardage, a
+  // draw, or an option he may still give on the read of the unblocked edge man).
+  // A QB concept already called (QB Draw / Zone Read / …) is honoured. Every
+  // other run concept never hands the ball to the QB. Hash-only, no rng draw, so
+  // the OFF path above (the legacy wq split) stays byte-identical.
+  let qbRun: QbRunKind | null = null
+  let optionEdge: EdgeMan | undefined
+  let optionEdgeId: string | undefined
+  // The key is (play n, club, opponent, down-distance, spot, quarter, clock) so a
+  // club's tendency is not frozen to the handful of situations a game happens to
+  // repeat (the same 1st-and-10 at the 25 recurs every game otherwise); the two
+  // clubs and the down decorrelate the small-probability draws.
+  const qbKey = `${n}:${offId}:${defId}:${env?.down ?? 0}:${distance}:${yard}:${env?.qtr ?? 0}:${env?.clock ?? 0}`
+  // A J38 featured play (wildcat direct snap, jet sweep, a star's reverse) is drawn
+  // to its own star — never re-concept it as a QB run (that would break the snap).
+  if (getQbRun() && qbBase && concept.type === 'run' && !concept.featured) {
+    const over = qbEffectiveCall(concept.name, qbBase, distance, qbKey)
+    if (over !== concept.name) concept = { ...concept, name: over }
+    qbRun = qbRunKind(concept.name)
+    if (qbRun === 'sneak' || qbRun === 'draw') {
+      carrier = qbBase
+    } else if (qbRun === 'option') {
+      // The unblocked edge man on this snap is a specific DE/LB (his own PUR,
+      // PRC and PRS), never a unit mean; the QB's own AWR/legs decide the read.
+      const edgePool = [...dl.filter((p) => p.pos === 'DE'), ...lbs]
+      const edge = hashPick(edgePool.length ? edgePool : [...dl, ...lbs], (p) => {
+        return Math.max(1, eff(p, 'PUR') + eff(p, 'PRC') + eff(p, 'PRS'))
+      }, hash32(`${n}:${defId}:qedge`)) ?? edgePool[0]
+      if (edge) { optionEdge = edgeManOf(edge); optionEdgeId = edge.id }
+      const keep = optionEdge ? qbKeepsOnRead(qbBase, optionEdge, qbKey) : false
+      carrier = keep ? qbBase : (rbPool[0] ?? carrier)
+    } else if (carrier?.id === qbBase.id) {
+      // the old flat wq split handed a back's run to the QB; re-draw it between
+      // RB1 and RB2 (the same roll, two-way — never the QB).
+      const bt = w1 + w2 || 1
+      carrier = roll < w1 / bt ? rbPool[0] : (rbPool[1] ?? rbPool[0])
+    }
+  }
   // L12.10 B0: an occasional fullback dive on short yardage (deterministic; no rng).
-  if (fbBase && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fbBase
+  if (!qbRun && fbBase && distance <= 2 && hash32(`${n}:${offId}:fbdive`) % 100 < 5) carrier = fbBase
   // FUTURES #24 T1: a reverse hands the ball to a receiver, so the rep belongs to
   // the specific wideout (never a unit mean): the trick's own carrier override.
   if (carrierOverride) carrier = carrierOverride
@@ -5564,6 +5622,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   const spyQbRun = J12_ON && effDefMove === 'spyQB' && carrier?.pos === 'QB' ? J12.spyRun : 0
   const edge = (runBlock - 72) * 0.7 + (elusiveness - 72) * 0.6 - (runDef - 72) * 0.5 - (lbsDef - 72) * 0.3 + styleEdge + ocEff.offEdge * 2 - dcEff.defEdge * 2 + masteryOffset(carrier, means) * 0.112 + MASTERY_ANCHOR_CARRIER + clutch * 1.4 + boxLight + quickRunCost + runEdgeBonus - spyPenalty - spyQbRun + (J8A_ON ? interiorShortStrength(ol, gKey) : olShortStrength(ol, distance)) + (J8A2_ON ? fbKick(fb, poiDl ?? poiLb) : fbLeadBlock(fb)) + (userOffP === '21' ? secondBackLeadBlock(rb[1]) : 0) + (call?.edge ?? 0) * 1.6 + (pEdge ? pEdge.run : 0)
     + (isQ4 ? (J8A_ON || INDIV_UNITS_ON ? staRel([poiOl, carrier]) - staRel([poiDl, runClose.chaser]) : relAvg('STA', [qb, ...ol, carrier]) - relAvg('STA', [...dl, ...lbs, ...saf, ...cbs])) * 0.12 * E2_W : 0) + fatDiff * R15.fatRun
+
   const gains: string[] = []
   const runGain = sampleYards(rng, false, edge * 0.25 * (env?.wx?.runVarianceMult ?? 1), gains, yard, tier)
   // College front sevens miss more tackles; keep the curve but soften the negative tail.
@@ -5604,6 +5663,20 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (J36_ON && scoutGain) gain = clamp(gain + scoutGain, -10, 90)
   // R2: on a money down a runner lowers his shoulder to the marker.
   if (gain > 0 && env?.down === 3) gain += R2.moneyYards
+  // realism-qbrun: a QB sneak is its own rep — the specific quarterback's own
+  // push (STR/size/BCV) against the specific interior man at the point of attack
+  // from onFieldDef (his own BSH/TAK/STR), not a unit mean. A hash decides the
+  // conversion; the yard to go (plus a step past it) when he wins, a stop at the
+  // line or a short loss when the front beats him. No rng draw is added.
+  if (getQbRun() && qbRun === 'sneak' && carrier?.pos === 'QB') {
+    gain = qbSneakGain(carrier, poiDl ?? poiLb, distance, `${qbKey}:sneak`)
+  }
+  // realism-qbrun: on an option keep the man the QB read is UNBLOCKED — his own
+  // PRC/AWR discipline is what takes yards off the keep (a disciplined man who
+  // stays home strings it out; an undisciplined one who crashes gives some back).
+  if (getQbRun() && qbRun === 'option' && carrier?.pos === 'QB' && optionEdge) {
+    gain = clamp(gain + qbEdgeYardEffect(optionEdge), -10, 90)
+  }
   // L12 E2 / J8a: the long-run tail. OFF keeps the team DL/LB PUR+SPD mean cap;
   // J8a replaces it with the individual chase multiplier (carrier speed + head
   // start vs the nearest hash-picked pursuer); Jind applies the SAME individual
@@ -5756,6 +5829,11 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     ...(glStopId ? { glStopId } : {}),
     onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     ...scoutFields,
+    // realism-qbrun: what the animation needs — the option keep (mesh + pull) and
+    // its read man, and a sneak (under centre, no handoff).
+    ...(qbRun === 'option' && optionEdgeId ? { optionEdgeId } : {}),
+    ...(qbRun === 'option' && carrier?.pos === 'QB' ? { optionKeep: true } : {}),
+    ...(qbRun === 'sneak' ? { sneak: true } : {}),
     ...(INDIV_UNITS_ON ? { iuPursuerId: iuChaser?.id, iuLbId: poiLb?.id, iuPoaDlId: poiDl?.id, iuChaseF } : {}),
   }
 }
