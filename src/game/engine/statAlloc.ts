@@ -25,6 +25,7 @@ import { carrierMissRate, defenderMissRate } from './playsim'
 import { leagueMasteryMeans, masteryGroup, type MasteryMeans } from './playbook'
 import { POS_MEAN } from './ratingMeans'
 import { styleProfile } from './style'
+import { getTargetDist, targetSeasonWeight } from './targetDist'
 import { clubReturners } from './returns'
 
 const POS_SIDE: Record<string, 'OFF' | 'DEF' | 'ST'> = {
@@ -408,7 +409,16 @@ export function allocateTeamGame(
     const completions = Math.round(passYds / (isNFL ? 9.6 : 10.5))
     // R13: rank decay concentrates the target/yards share on the lead receivers
     // (NFL: WR1 ≈ 25–40% of team receiving) instead of splitting them evenly.
-    const shares = recvs.weights.map((w, i) => w * Math.pow(recDecay, i))
+    // JOB realism-targets: ON, the same shared role prior + individual quality the
+    // play-by-play target model uses decides the share, so a score-only season
+    // gives the same per-position target mix as a played one.
+    const shares = getTargetDist()
+      ? recvs.items.map((p, i) => {
+          let rank = 0
+          for (let j = 0; j < i; j++) if (recvs.items[j].pos === p.pos) rank++
+          return targetSeasonWeight(p, rank, 10)
+        })
+      : recvs.weights.map((w, i) => w * Math.pow(recDecay, i))
     const recSplit = split(rng, completions, shares)
     const yardSplit = split(rng, passYds, shares)
     const td = Math.max(0, Math.round((points / 7) * 0.48))

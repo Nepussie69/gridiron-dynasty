@@ -209,6 +209,16 @@ const ROUTE_RANK: Record<string, number> = {
   dig: 2, over: 2, in: 2, comeback: 2, corner: 2, speedOut: 2,
   go: 3, seam: 3, post: 3, wheel: 3, postCorner: 3, outUp: 3, sluggo: 3,
 }
+/** JOB realism-targets: a route's development class as a nominal target depth (yd).
+ *  Used by the target model to price the SPECIFIC route a candidate runs (a
+ *  checkdown is a 3-yard throw, a go is a 22-yard one) — the pre-existing model
+ *  only knew the concept depth, so it could not tell two candidates apart by the
+ *  route each was actually assigned. */
+export function routeDepthYd(route: string | undefined): number {
+  const r = route ? ROUTE_RANK[route] : undefined
+  if (r === undefined) return 8
+  return [3, 8, 14, 22][r] ?? 8
+}
 /** Concept-specific designed progressions (route labels in read order). */
 const CONCEPT_READS: Record<string, string[]> = {
   'Four Verts': ['seam', 'go', 'dig', 'check'],
