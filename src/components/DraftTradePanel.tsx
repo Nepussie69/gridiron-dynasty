@@ -9,6 +9,7 @@ import {
   draftAssetName,
   type DraftTradeOffer,
 } from '../game/engine/draftTrades'
+import { tradeDownOfferLimit } from '../game/engine/draftRoom'
 import type { World } from '../game/engine/generate'
 import type { TradeAsset } from '../game/engine/trade'
 import { playerById } from '../game/selectors'
@@ -49,7 +50,7 @@ export function DraftTradePanel({ className }: { className?: string }) {
 
   // The engine memoises both searches per world/stamp, so calling them every
   // render is cheap and always reflects the current slot.
-  const down = open && mine && canTrade && career ? buildDraftTradeDownOffers(world, career.teamId) : []
+  const down = open && mine && canTrade && career ? buildDraftTradeDownOffers(world, career.teamId, tradeDownOfferLimit(world, career)) : []
   const up = open && !mine && canTrade && (deciding || pen) && career ? buildDraftTradeUpTargets(world, career.teamId, 5) : []
 
   const clockOn = career?.draftClock === true

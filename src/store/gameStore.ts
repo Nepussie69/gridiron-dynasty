@@ -175,10 +175,11 @@ import {
   type FrenzyState,
 } from '../game/engine/faFrenzy'
 import { projectCap } from '../game/engine/capPlan'
-import { buildDraftTradeDownOffers, buildDraftTradeUpTargets, nextUserPickSlot } from '../game/engine/draftTrades'
+import { applyDraftTradeDown, buildDraftTradeDownOffers, buildDraftTradeUpTargets, draftAssetOwnedBy, announceDraftPicks, nextUserPickSlot, stampIncomingPlayers, syncDraftOrder } from '../game/engine/draftTrades'
 import {
   DEFAULT_PHILOSOPHY,
   PHILOSOPHY_STEPS,
+  tradeDownOfferLimit,
   withAxis,
   type DraftPhilosophy,
   type PhilosophyAxis,
@@ -4238,40 +4239,19 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('You are not on the clock.')
       return
     }
-    const offer = buildDraftTradeDownOffers(world, career.teamId, 8).find((o) => o.id === id)
+    const offer = buildDraftTradeDownOffers(world, career.teamId, tradeDownOfferLimit(world, career)).find((o) => o.id === id)
     if (!offer) {
       get().showToast('That offer is no longer on the table.')
       return
     }
-    if (
-      !offer.give.every((a) => draftAssetOwnedBy(world, a, career.teamId)) ||
-      !offer.get.every((a) => draftAssetOwnedBy(world, a, offer.partnerId))
-    ) {
-      get().showToast('That deal is no longer available — the board has moved.')
+    // FUTURES #27 DF2: the accept internals live in the engine so the room's own
+    // trade-down and this click can never drift apart.
+    const result = applyDraftTradeDown(world, career, offer)
+    if (!result.ok) {
+      get().showToast(result.reason ?? 'That deal is no longer available — the board has moved.')
       return
     }
-    const verdict = evaluateTrade(world, offer.partnerId, career.teamId, offer.give, offer.get, career.skills.negotiation)
-    if (!verdict.accepted) {
-      get().showToast(verdict.reason)
-      return
-    }
-    const rec = recordTrade(world, career, offer.partnerId, offer.give, offer.get)
-    executeTrade(world, career.teamId, offer.partnerId, offer.give, offer.get)
-    stampIncomingPlayers(world, career, offer.partnerId, offer.get)
-    // Re-point every slot to its pick's current owner, so the buyer is now on the
-    // clock at the pick you just sold — and any pick you got back lands with you.
-    syncDraftOrder(world)
-    const prospect = bestAvailableFor(world, offer.partnerId)
-    if (prospect) makePick(world, prospect, offer.partnerId)
-    else world.draftState.complete = true
-    // Run the board forward to your next selection.
-    simUntilUser(world, career)
-    logConvictionPicks(world, career)
-    logRedFlags(world, career)
-    announceDraftPicks(world, career)
-    resolveTradePicks(world, career)
-    const trades = [...(career.trades ?? []), rec].slice(-60)
-    set({ career: { ...career, trades }, tick: get().tick + 1 })
+    set({ career: { ...career }, tick: get().tick + 1 })
     get().showToast(`Draft-day deal with the ${world.byId[offer.partnerId].name} — you moved back.`)
     get().save()
   },
@@ -4981,61 +4961,6 @@ function openTradeDeadline(world: World, career: CareerState): CareerState {
   return {
     ...career,
     deadline: { season: world.season, week: world.week, offers, resolved: [], aiRan: aiOn, aiTrades },
-  }
-}
-
-/**
- * A live draft-day trade can move a pick that still has a slot ahead of it, so
- * re-point the slot's team from current pick ownership (comp picks included)
- * without rebuilding the whole order.
- */
-function syncDraftOrder(world: World): void {
-  const ids = world.draftPickIds
-  if (!ids?.length) return
-  for (let i = 0; i < ids.length && i < world.draftOrder.length; i++) {
-    const pk = world.draftPicks.find((p) => p.id === ids[i])
-    if (pk) world.draftOrder[i] = pk.ownerTeam
-  }
-}
-
-/** Does `teamId` still own this asset, and is a pick still live for trading? */
-function draftAssetOwnedBy(world: World, a: TradeAsset, teamId: string): boolean {
-  if (a.kind === 'player') return world.players.find((p) => p.id === a.id)?.teamId === teamId
-  const pk = world.draftPicks.find((p) => p.id === a.id)
-  return !!pk && pk.ownerTeam === teamId && isTradeablePick(world, pk)
-}
-
-/** Stamp players arriving via a trade as your acquisitions (origin + shadow note). */
-function stampIncomingPlayers(world: World, career: CareerState, partnerId: string, get2: TradeAsset[]): void {
-  for (const a of get2) {
-    if (a.kind !== 'player') continue
-    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
-    if (p) {
-      p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
-      if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
-    }
-  }
-}
-
-/** Ping the inbox whenever one of your guys comes off the board (#20). */
-function announceDraftPicks(world: World, career: CareerState) {
-  const board = new Set(career.userBoard ?? [])
-  const guys = new Set((career.ledger ?? []).map((e) => e.prospectId).filter((x): x is string => !!x))
-  for (const p of world.draft) {
-    if (!p.draftedBy) continue
-    if (!board.has(p.id) && !guys.has(p.id)) continue
-    const id = `draftping_${p.id}`
-    if (world.news.some((n) => n.id === id)) continue
-    world.news.unshift({
-      id,
-      week: world.week,
-      season: world.season,
-      category: 'Draft',
-      headline: `${p.name} drafted at #${p.draftPick ?? '?'}`,
-      body: `One of your guys is off the board — ${p.pos} from ${p.college} to the ${world.byId[p.draftedBy]?.abbr ?? p.draftedBy}. This is the payoff of the climb.`,
-      teamId: career.teamId,
-      read: false,
-    })
   }
 }
 

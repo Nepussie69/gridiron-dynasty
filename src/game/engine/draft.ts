@@ -9,6 +9,7 @@ import { departmentGrade } from './department'
 import { convictionPick } from './conviction'
 import { redFlagIds } from './redflag'
 import { roomNote, roomTilt, roomWinner } from './draftRoom'
+import { applyDraftTradeDown, roomTradeDown } from './draftTrades'
 import { makeCharacter } from './character'
 import { type World, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
@@ -438,6 +439,30 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0, 
     // FUTURES #27 DF1: on your club's picks the room's blended stance tilts the
     // board (red flag first, then the tilt, then a conviction call can still win).
     const tilt = career && teamId === career.teamId ? roomTilt(world, career) : undefined
+    // FUTURES #27 DF2: an Accumulate room moves off the clock itself when an NPC is
+    // running your pick. Deterministic (h01), read-only until it actually accepts,
+    // and it reuses the same accept internals a click uses. A coach who holds the
+    // trade pen keeps that call, so his room never trades for him.
+    if (career && teamId === career.teamId && !canDraft(career) && !coachHoldsTradePen(career) && gradeOf) {
+      const tradedRound = currentRound(world)
+      const move = roomTradeDown(world, career, gradeOf)
+      if (move) {
+        const applied = applyDraftTradeDown(world, career, move.offer, { runForward: false })
+        if (applied.ok) {
+          pushLedger(career, {
+            kind: 'advice',
+            name: `Trade down with ${applied.partnerAbbr}`,
+            pos: '—',
+            college: '—',
+            round: tradedRound,
+            note: move.note,
+            accepted: true,
+          })
+          steps++
+          continue
+        }
+      }
+    }
     let prospect = bestAvailableFor(world, teamId, advice, gradeOf, tilt)
     // G2: in advise mode the Director may pound the table for a conviction call.
     if (prospect && career && teamId === career.teamId && !canDraft(career)) {
