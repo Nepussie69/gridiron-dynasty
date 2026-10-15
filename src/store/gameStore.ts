@@ -16,6 +16,9 @@ import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, fi
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
+// FUTURES #26 P2: the coach-playcalling plan (who calls each situation, the call
+// sheet, the audibles rule). Types + normalise come from the P1 engine module.
+import { normalizePlayCalling, type PlayCallingPlan } from '../game/engine/playcalling'
 import { gameWeather, setWeather, getWeather, type GameWeather, type WeatherGame } from '../game/engine/weather'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills, userSeat } from '../game/engine/coaching'
 import {
@@ -670,8 +673,9 @@ interface GameStore {
   answerGameMoment: (choiceId: string) => Promise<void>
   /** T2M: call a timeout on the next dead ball (game day dock). */
   callTimeout: () => void
-  /** L12.6: how often a coached game asks for your call (applies from the next snap). */
-  setCallMode: (mode: 'key' | 'off' | 'def' | 'both', keepPlays?: number) => boolean
+  /** L12.6: how often a coached game asks for your call (applies from the next snap).
+   *  FUTURES #26: 'sheet' asks only in the situations the plan hands to you. */
+  setCallMode: (mode: 'key' | 'off' | 'def' | 'both' | 'sheet', keepPlays?: number) => boolean
   simGameDayToEnd: () => Promise<void>
   abandonGameDay: () => void
   statsDb: () => CareerDatabase
@@ -683,6 +687,9 @@ interface GameStore {
   setPlanTargets: (side: 'off' | 'def', ids: string[]) => void
   /** L10 G4: the user's 4th-down / 2-point / timeout call sheet. */
   setCallSheet: (sheet: CallSheet) => void
+  /** FUTURES #26: the coach-playcalling plan (situational callers, the sheet,
+   *  audibles). Normalised on write and on load; undefined = today's default. */
+  setPlayCalling: (plan: PlayCallingPlan | undefined) => void
   /** FUTURES #4: the user's special-teams kick + return strategies. */
   setSpecialTeams: (plan: SpecialTeamsPlan) => void
   /** L10 G10: the user's opening script (ordered concept names, max 8). */
@@ -2089,6 +2096,22 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     set({ career: { ...career, callSheet: sheet }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  setPlayCalling: (plan) => {
+    const career = get().career
+    if (!career) return
+    // FUTURES #26 P2: normalise whatever the Game Plan card hands us (junk sheet
+    // entries, unknown callers and audibles are dropped) and store it on the
+    // career. `undefined` clears it back to today's default (no plan at all).
+    // The live game keeps its own copy from kickoff, so a mid-game edit never
+    // rewrites the game in progress — the same rule as the plan/personnel.
+    const clean = normalizePlayCalling(plan)
+    const next = { ...career }
+    if (clean) next.playCalling = clean
+    else delete next.playCalling
+    set({ career: withFlag(next, 'gameplan'), tick: get().tick + 1 })
     get().save()
   },
 
@@ -4840,12 +4863,15 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const usage = career.usage
   const personnel = career.personnel
   const special = career.specialTeams
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special }
+  // FUTURES #26 P2: the situational call sheet and audibles rule travel with the
+  // live ctx (unset on a save that never opened the card: today's behaviour).
+  const calling = career.playCalling
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, calling }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, calling,
   }
 }
 
@@ -5462,6 +5488,14 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   // an unknown value from a hand-edited save.
   if (base.personnel) {
     base.personnel = { off: normalizeOffPersonnel(base.personnel.off), def: normalizeDefPackage(base.personnel.def) }
+  }
+  // FUTURES #26 P2: the coach-playcalling plan is optional on legacy saves (an old
+  // save simply keeps today's behaviour). A stored plan is re-normalised here, so
+  // a hand-edited or older shape can never reach the sim.
+  if (base.playCalling) {
+    const plan = normalizePlayCalling(base.playCalling)
+    if (plan) base.playCalling = plan
+    else delete base.playCalling
   }
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
