@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   buildWorld,
   captureDivisionFinish,
+  ensureGeneralManagers,
   fitToCap,
   indexPlayers,
   regenerateSchedule,
@@ -17,6 +18,9 @@ import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, 
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
 import { isTrickKind, TRICK } from '../game/engine/trickPlays'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
+// FUTURES #26 P2: the coach-playcalling plan (who calls each situation, the call
+// sheet, the audibles rule). Types + normalise come from the P1 engine module.
+import { normalizePlayCalling, type PlayCallingPlan } from '../game/engine/playcalling'
 import { gameWeather, setWeather, getWeather, type GameWeather, type WeatherGame } from '../game/engine/weather'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills, userSeat } from '../game/engine/coaching'
 import {
@@ -683,8 +687,9 @@ interface GameStore {
   answerGameMoment: (choiceId: string) => Promise<void>
   /** T2M: call a timeout on the next dead ball (game day dock). */
   callTimeout: () => void
-  /** L12.6: how often a coached game asks for your call (applies from the next snap). */
-  setCallMode: (mode: 'key' | 'off' | 'def' | 'both', keepPlays?: number) => boolean
+  /** L12.6: how often a coached game asks for your call (applies from the next snap).
+   *  FUTURES #26: 'sheet' asks only in the situations the plan hands to you. */
+  setCallMode: (mode: 'key' | 'off' | 'def' | 'both' | 'sheet', keepPlays?: number) => boolean
   /** FUTURES #7 (H2): the halftime-speech standing order for simmed games. */
   setHalftimeAuto: (mode: 'stay' | 'staff') => void
   simGameDayToEnd: () => Promise<void>
@@ -698,6 +703,9 @@ interface GameStore {
   setPlanTargets: (side: 'off' | 'def', ids: string[]) => void
   /** L10 G4: the user's 4th-down / 2-point / timeout call sheet. */
   setCallSheet: (sheet: CallSheet) => void
+  /** FUTURES #26: the coach-playcalling plan (situational callers, the sheet,
+   *  audibles). Normalised on write and on load; undefined = today's default. */
+  setPlayCalling: (plan: PlayCallingPlan | undefined) => void
   /** FUTURES #4: the user's special-teams kick + return strategies. */
   setSpecialTeams: (plan: SpecialTeamsPlan) => void
   /** FUTURES #24: install up to two trick plays on this week's game plan. */
@@ -1465,6 +1473,11 @@ export const useGame = create<GameStore>((set, get) => ({
         ambitions: [],
       }
       career = applyScenario(world, career, scenario)
+      // gmpersona: every NFL club has an AI General Manager — except the club
+      // whose GM seat this career holds (personnel L8), where the user is the GM.
+      // Deterministic from (teamId, season): no rng draw, so the world and sim
+      // stay byte-identical.
+      ensureGeneralManagers(world, userGmTeamId(career))
       career.seasonQuestion = makeSeasonQuestion(world, career)
       career.devBaseline = snapshotDevBaseline(world, career)
       // L11.5 Q14: the opening inbox was written for Buffalo; re-point it at this club.
@@ -2151,6 +2164,22 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  setPlayCalling: (plan) => {
+    const career = get().career
+    if (!career) return
+    // FUTURES #26 P2: normalise whatever the Game Plan card hands us (junk sheet
+    // entries, unknown callers and audibles are dropped) and store it on the
+    // career. `undefined` clears it back to today's default (no plan at all).
+    // The live game keeps its own copy from kickoff, so a mid-game edit never
+    // rewrites the game in progress — the same rule as the plan/personnel.
+    const clean = normalizePlayCalling(plan)
+    const next = { ...career }
+    if (clean) next.playCalling = clean
+    else delete next.playCalling
+    set({ career: withFlag(next, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
   setSpecialTeams: (plan) => {
     const career = get().career
     if (!career) return
@@ -2390,6 +2419,10 @@ export const useGame = create<GameStore>((set, get) => ({
     seasonCareer = staffTick.career
     const staffPoach = rollPoachOffers(world, seasonCareer)
     seasonCareer = staffPoach.career
+    // gmpersona: keep the AI GM on every club across the rollover (he keeps the
+    // id he was hired with, so his tenure runs on), and clear the seat on a club
+    // the user's own career now runs as GM. Deterministic — no rng draw.
+    ensureGeneralManagers(world, userGmTeamId(seasonCareer))
     for (const off of staffTick.expired) {
       pushCareerNews(world, seasonCareer, {
         category: 'Career',
@@ -4511,6 +4544,12 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = staff.findIndex((m) => m.id === staffId)
     if (idx < 0) return
     const m = staff[idx]
+    // gmpersona: the GM's chair is the owner's to fill, not yours — you work for
+    // him (or, at the GM rung, you ARE him, and there is no AI GM to fire).
+    if (m.role === 'General Manager') {
+      get().showToast(`${m.name} answers to the owner, not to you.`)
+      return
+    }
     // FUTURES #28 (C2) §7: a mid-contract departure costs 50% of the remaining years,
     // paid out over those seasons as dead staff money against the budget.
     const buyout = m.contractYears > 0 ? staffBuyout(m) : 0
@@ -4920,6 +4959,9 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const usage = career.usage
   const personnel = career.personnel
   const special = career.specialTeams
+  // FUTURES #26 P2: the situational call sheet and audibles rule travel with the
+  // live ctx (unset on a save that never opened the card: today's behaviour).
+  const calling = career.playCalling
   // FUTURES #24: tricks are an offense-side tool, like the script.
   const tricks = hasOff ? career.tricks : undefined
   const ocTricks = hasOff ? career.ocTricks : undefined
@@ -4934,12 +4976,12 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
     recent: recentSpeeches(lr, 3),
     auto: career.halftimeAuto,
   }
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech }
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech, calling }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech, calling,
   }
 }
 
@@ -5623,6 +5665,14 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   if (base.personnel) {
     base.personnel = { off: normalizeOffPersonnel(base.personnel.off), def: normalizeDefPackage(base.personnel.def) }
   }
+  // FUTURES #26 P2: the coach-playcalling plan is optional on legacy saves (an old
+  // save simply keeps today's behaviour). A stored plan is re-normalised here, so
+  // a hand-edited or older shape can never reach the sim.
+  if (base.playCalling) {
+    const plan = normalizePlayCalling(base.playCalling)
+    if (plan) base.playCalling = plan
+    else delete base.playCalling
+  }
   if (rep && typeof rep === 'object' && 'evaluation' in (rep as object)) {
     // Already migrated; just ensure skills exist.
     const sheet = base.callSheet ?? DEFAULT_CALL_SHEET
@@ -5646,6 +5696,17 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   }
 }
 
+/**
+ * gmpersona: the club whose GM seat the USER holds, or null when an AI GM fills
+ * every seat. Personnel L8 is the GM rung (draftRoom.userSeatKey): there the user
+ * IS the General Manager, so his own club gets no AI GM. Below that rung (and on
+ * the whole coach path) the club's GM is the AI man he works for.
+ */
+export function userGmTeamId(c: CareerState | null | undefined): string | null {
+  if (!c) return null
+  return c.path === 'personnel' && c.level >= 8 ? c.teamId : null
+}
+
 /** Backlog 415: load-migration hook. Bring a saved career up to the trimmed
  * ladder and, when the trim moved it off a removed rung, log one inbox note so
  * the user knows why the job changed. Deterministic — no rng. Exported so the
@@ -5653,6 +5714,11 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
 export function migrateLoadedCareer(w: World, c: CareerState, rescaleOvrValues = false): CareerState {
   const wasLevel = c.level
   const career: CareerState = { ...reconcileCareerTeam(w, migrateCareer(c, rescaleOvrValues)), injuryCalls: undefined }
+  // gmpersona: a save written before clubs had a General Manager gets one AI GM
+  // per NFL club on load — except the user's own GM seat, which stays empty
+  // because the user is the GM. Deterministic from (teamId, season): no rng draw,
+  // and idempotent, so every later load lands on the same men.
+  ensureGeneralManagers(w, userGmTeamId(career))
   if (career.level !== wasLevel) {
     pushCareerNews(w, career, {
       category: 'Career',

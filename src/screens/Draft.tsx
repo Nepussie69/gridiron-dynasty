@@ -1,4 +1,4 @@
-import { CalendarClock, FastForward, LayoutGrid, List, SlidersHorizontal, Timer, Trophy, Users } from 'lucide-react'
+import { CalendarClock, FastForward, Handshake, LayoutGrid, List, SlidersHorizontal, Timer, Trophy, Users } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { DraftProspect, Position } from '../game/types'
 import {
@@ -16,7 +16,8 @@ import { readProspect, readRookieRanges } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { DraftRoom } from '../components/DraftRoom'
-import { DraftTradePanel } from '../components/DraftTradePanel'
+import { DraftTradePanel, PickClock } from '../components/DraftTradePanel'
+import { useDraftTradeCalls } from '../components/draftTradeCalls'
 import { DataTable, type Column } from '../components/DataTable'
 import { FutureClasses } from './draft/FutureClasses'
 import {
@@ -31,6 +32,7 @@ import {
   KpiTile,
   PageHeader,
   RatingTile,
+  RangeBubble,
   RookieRangeBadges,
   SectionTitle,
   SegmentedControl,
@@ -42,6 +44,8 @@ import {
 import { usePhone } from '../ui/hooks'
 
 /** Canonical position order for the board filter (matches Roster / Free Agency). */
+/** Row 460: sort key for a rookie read's [lo, hi] range (its midpoint). */
+const rangeMid = (r: [number, number]) => (r[0] + r[1]) / 2
 const BOARD_POSITIONS: Position[] = ['QB', 'RB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'LB', 'CB', 'S', 'K', 'P']
 
 /** A neutral chip (board rank, remaining count — never a status colour). */
@@ -63,7 +67,12 @@ export function Draft() {
   const finishDraft = useGame((s) => s.finishDraft)
   const phone = usePhone()
   const [tab, setTab] = useState<'this' | 'next' | 'two'>('this')
-  const [boardView, setBoardView] = useState<'list' | 'cards' | 'room'>('list')
+  const [boardView, setBoardView] = useState<'list' | 'cards' | 'room' | 'trades'>('list')
+  // Row 459: draft-day trades are their own view; its label counts the calls, and the
+  // pick clock runs in the header chip so it keeps counting on every view.
+  const tradeCalls = useDraftTradeCalls()
+  const clockOn = career?.draftClock === true
+  const expireClock = useGame((s) => s.draftClockExpired)
   const [posFilter, setPosFilter] = useState<Position | 'ALL'>('ALL')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [finishOpen, setFinishOpen] = useState(false)
@@ -101,6 +110,14 @@ export function Draft() {
   const capital = myPicks.reduce((s, p) => s + draftPickValue(p.draftPick ?? 250), 0)
 
   const readOf = (p: DraftProspect) => readProspect(career, p)
+  // Row 460: one rookie-range read per prospect per render (the Now and Ceiling
+  // columns both sort on it).
+  const rangeCache = new Map<string, ReturnType<typeof readRookieRanges>>()
+  const rangesOf = (p: DraftProspect) => {
+    let r = rangeCache.get(p.id)
+    if (!r) rangeCache.set(p.id, (r = readRookieRanges(career, p, league.draft)))
+    return r
+  }
 
   // ── Prospect Board columns (shared table; card rows on phone) ──
   const columns: Column<DraftProspect>[] = [
@@ -135,19 +152,32 @@ export function Draft() {
       sortValue: (p) => p.pos,
       render: (p) => <span className="font-cond text-small font-700 uppercase text-ink-2">{p.pos}</span>,
     },
+    // Row 460: Now and Ceiling are separate columns so each sorts up or down on its
+    // own (midpoint of your read's range; out-of-region prospects sort last).
     {
-      key: 'range',
-      label: 'Now · Ceiling',
-      headerTitle: 'Your rookie read on the NFL scale — tightens as you scout him. Separate from the college grade.',
+      key: 'now',
+      label: 'Now',
+      headerTitle: 'Where he opens as a rookie — your read on the NFL scale, tightens as you scout him. Separate from the college grade.',
       card: 'meta',
-      sortValue: (p) => readOf(p).center,
+      sortValue: (p) => (readOf(p).visible ? rangeMid(rangesOf(p).now) : -1),
       render: (p) => {
-        const read = readOf(p)
-        if (!read.visible) {
+        if (!readOf(p).visible) {
           return <span className="whitespace-nowrap rounded-[var(--r-xs)] bg-surface-3 px-1.5 py-1 font-cond text-small font-700 uppercase text-muted">OUT of region</span>
         }
-        const rr = readRookieRanges(career, p, league.draft)
-        return <RookieRangeBadges now={rr.now} ceiling={rr.ceiling} compact />
+        const rr = rangesOf(p)
+        return <RangeBubble kind="NOW" lo={rr.now[0]} hi={rr.now[1]} compact />
+      },
+    },
+    {
+      key: 'ceil',
+      label: 'Ceiling',
+      headerTitle: 'How high he can climb — your read on the NFL scale. Ceilings are harder to call, so the range is wider.',
+      card: 'meta',
+      sortValue: (p) => (readOf(p).visible ? rangeMid(rangesOf(p).ceiling) : -1),
+      render: (p) => {
+        if (!readOf(p).visible) return null
+        const rr = rangesOf(p)
+        return <RangeBubble kind="CEIL" lo={rr.ceiling[0]} hi={rr.ceiling[1]} compact />
       },
     },
     {
@@ -231,6 +261,7 @@ export function Draft() {
                   { id: 'list', label: 'List', icon: <List size={14} aria-hidden /> },
                   { id: 'cards', label: 'Cards', icon: <LayoutGrid size={14} aria-hidden /> },
                   { id: 'room', label: 'Room', icon: <Users size={14} aria-hidden />, title: 'Who has a say in this room, and who holds the pen' },
+                  { id: 'trades', label: tradeCalls ? `Trades · ${tradeCalls}` : 'Trades', icon: <Handshake size={14} aria-hidden />, title: 'Draft-day trades: calls for your pick, and moving up' },
                 ]}
               />
             )}
@@ -242,6 +273,7 @@ export function Draft() {
                 <span className="font-cond text-small font-700 uppercase">
                   {mine ? 'You are on the clock' : `Round ${currentRound(league)} · Pick ${overallPick(league)}`}
                 </span>
+                {mine && deciding && clockOn && <PickClock key={league.draftState.pickIndex} on onExpire={expireClock} />}
               </div>
             ) : (
               <Badge tone="win"><Trophy size={12} /> Draft complete</Badge>
@@ -422,9 +454,11 @@ export function Draft() {
           </div>
         </div>
 
-        {/* Main: the Prospect Board first on phone, then the trade desk, then the log. */}
+        {/* Main: the Prospect Board (or the Room / Trades view) first on phone, then the log. */}
         <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
-          {boardView === 'room' ? (
+          {boardView === 'trades' ? (
+            <DraftTradePanel className="order-1 lg:order-2" />
+          ) : boardView === 'room' ? (
             <DraftRoom className="order-1 lg:order-2" />
           ) : (
           <Card pad={false} className="order-1 overflow-hidden lg:order-2">
@@ -465,8 +499,6 @@ export function Draft() {
             </div>
           </Card>
           )}
-
-          <DraftTradePanel className="order-2 lg:order-1" />
 
           <Card pad={false} className="order-3">
             <div className="border-b border-line px-4 py-2">

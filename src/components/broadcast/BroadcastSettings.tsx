@@ -7,7 +7,7 @@ import { SegmentedControl } from '../../ui/Controls'
 import { cn } from '../../lib/cn'
 import { autoQualityHint, useLiveView, type Fallback } from './liveView'
 import { REPLAY_REASON_IDS, type ReplayReasonId } from './replay'
-import { deviceKey, setCameraAngle, setGameView, setQbCone, setQualitySetting, setReplayMode, setReplayTypes, useViewSettings } from './viewSettings'
+import { deviceKey, setCameraAngle, setDrawings, setGameView, setQbCone, setQualitySetting, setReplayMode, setReplayTypes, useViewSettings } from './viewSettings'
 
 const FALLBACK_NOTE: Record<Exclude<Fallback, null>, string> = {
   'no-canvas': 'This device has no 2D canvas — using the top-down view.',
@@ -129,6 +129,30 @@ export function BroadcastSettings({ row }: { row: string }) {
           </div>
         </div>
       )}
+
+      <div className={row}>
+        <div className="min-w-0">
+          <span className="label block">Drawings</span>
+          <span className="text-small text-muted">
+            {s.drawings === 'every'
+              ? 'Routes, the ball arc and the tackle marks on every play'
+              : s.drawings === 'replays'
+                ? 'Drawings only while a play replays in 2.5D'
+                : 'No drawings on the field'}
+          </span>
+        </div>
+        <SegmentedControl
+          label="Drawings"
+          size="sm"
+          value={s.drawings}
+          onChange={setDrawings}
+          options={[
+            { id: 'every', label: 'Every play' },
+            { id: 'replays', label: 'Replays only' },
+            { id: 'off', label: 'Off' },
+          ]}
+        />
+      </div>
 
       <div className={row}>
         <div className="min-w-0">

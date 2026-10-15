@@ -79,9 +79,14 @@ import {
   type StaffBudget,
 } from '../game/engine/staffMarket'
 import { ACCESS_META, type AccessLevel } from '../game/engine/access'
-import { roomSeats, type RoomSeat } from '../game/engine/draftRoom'
+import {
+  PHILOSOPHY_STEP_HINT,
+  PHILOSOPHY_STEPS,
+  roomSeats,
+  type RoomSeat,
+} from '../game/engine/draftRoom'
 import type { Reputation } from '../game/engine/career'
-import type { World } from '../game/engine/generate'
+import { gmCreatedSeason, gmTemperamentWords, type World } from '../game/engine/generate'
 import {
   boostText,
   buyoutPlan,
@@ -237,6 +242,7 @@ const ROLE_TAG: Record<string, string> = {
   'LB Coach': 'LB',
   Scout: 'SC',
   'Director of Player Personnel': 'DPP',
+  'General Manager': 'GM',
   Analytics: 'AN',
 }
 
@@ -461,6 +467,20 @@ export function Staff() {
   }
 
   const menuFor = (m: StaffMember): MenuItem[] => {
+    // gmpersona: the General Manager is the owner's man, not yours. Inspect only —
+    // no "find a better GM", no focus change, no firing. (At the GM rung the user
+    // sits in that chair himself, so there is no AI GM to show here.)
+    if (m.role === 'General Manager') {
+      return [
+        {
+          id: 'readout',
+          label: 'View full readout',
+          description: 'Effects, contract, league rank',
+          icon: <UserRound size={16} />,
+          onSelect: () => setSelectedId(m.id),
+        },
+      ]
+    }
     const liveFor = mySchemeFor(m.role)
     const items: MenuItem[] = [
       {
@@ -1217,6 +1237,10 @@ function OrgChart({
   onFrontOpen: (v: boolean) => void
 }) {
   const hc = holderOf('Head Coach')
+  // gmpersona: the man in the GM chair. On the personnel path below the GM rung
+  // he is above you (the HC works with you); on the coach path he is your boss.
+  const gm = holderOf('General Manager')
+  const personnelBelowGm = ctx.career.path === 'personnel' && ctx.career.level < 8
   const frontFilled = FRONT_SEATS.filter((r) => holderOf(r))
   const frontVacant = FRONT_SEATS.filter((r) => !holderOf(r))
   const isCoord = (role: string) => role === 'Offensive Coordinator' || role === 'Defensive Coordinator'
@@ -1272,7 +1296,7 @@ function OrgChart({
       <SectionTitle spacing="tight">Coaching tree</SectionTitle>
       <TierLegend className="mb-3" />
 
-      {hc ? <HeadCoachSlab m={hc} ctx={ctx} /> : vacantSeat('Head Coach')}
+      {hc ? <HeadCoachSlab m={hc} ctx={ctx} withYou={personnelBelowGm} /> : vacantSeat('Head Coach')}
 
       <div className="grid gap-3 lg:grid-cols-3">
         <UnitColumn
@@ -1314,6 +1338,7 @@ function OrgChart({
       </div>
 
       <Card pad={false}>
+        {gm && <GmSlab m={gm} ctx={ctx} boss={!(ctx.career.path === 'personnel' && ctx.career.level >= 8)} />}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
           <h3 className="font-cond text-row font-700 uppercase tracking-[0.02em] text-ink">Front office &amp; scouting</h3>
           <span className="label">{frontFilled.length} filled</span>
@@ -1347,12 +1372,14 @@ function OrgChart({
   )
 }
 
-function HeadCoachSlab({ m, ctx }: { m: StaffMember; ctx: Ctx }) {
+function HeadCoachSlab({ m, ctx, withYou = false }: { m: StaffMember; ctx: Ctx; withYou?: boolean }) {
   return (
     <Card tier="feature">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <div className="min-w-0 flex-1 basis-[260px]">
-          <div className="label">Head Coach · leads every unit</div>
+          {/* gmpersona: on the personnel ladder the head coach is not you — he is
+              the man who coaches the team you build. */}
+          <div className="label">{withYou ? 'Head Coach · you work with him' : 'Head Coach · leads every unit'}</div>
           <h3 className="mt-1 font-display text-[26px] font-800 italic uppercase leading-none text-ink sm:text-[30px]">
             <NameButton m={m} onClick={() => ctx.inspect(m)} />
           </h3>
@@ -1369,6 +1396,58 @@ function HeadCoachSlab({ m, ctx }: { m: StaffMember; ctx: Ctx }) {
         <OverflowMenu items={ctx.menuFor(m)} label={`Actions for ${m.name}`} />
       </div>
     </Card>
+  )
+}
+
+/**
+ * gmpersona: the club's General Manager — the man you work for (coach path) or
+ * the man above the personnel ladder. Same row anatomy as the other staff: name,
+ * rating tile, contract, tenure, tags, plus the two lines that matter to you —
+ * his draft-room stance and his gmAsk temperament in plain words. Inspect only:
+ * the owner fills this chair, not you.
+ */
+function GmSlab({ m, ctx, boss }: { m: StaffMember; ctx: Ctx; boss: boolean }) {
+  const words = gmTemperamentWords(m)
+  const tenure = Math.max(1, ctx.world.season - gmCreatedSeason(m) + 1)
+  const seat = ctx.stanceFor(m)
+  const hint = (axis: 'board' | 'tradeDown') => {
+    const step = seat?.vector[axis]
+    const i = step ? (PHILOSOPHY_STEPS[axis] as readonly string[]).indexOf(step) : -1
+    return i < 0 ? null : PHILOSOPHY_STEP_HINT[axis][i]
+  }
+  return (
+    <div className="border-b border-line px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="min-w-0 flex-1 basis-[260px]">
+          <div className="label">General Manager · {boss ? 'your boss' : 'works for you'}</div>
+          <h3 className="mt-1 font-display text-[22px] font-800 italic uppercase leading-none text-ink sm:text-[26px]">
+            <NameButton m={m} onClick={() => ctx.inspect(m)} />
+          </h3>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <RoleTag>GM</RoleTag>
+            <SchemeFor m={m} ctx={ctx} />
+            <MemberEffect m={m} ctx={ctx} />
+            <StaffTags m={m} ctx={ctx} />
+            <span className="whitespace-nowrap text-small text-muted tnum" title="Seasons in the chair — his id carries the year he was hired">
+              {tenure} yr{tenure === 1 ? '' : 's'} in the chair
+            </span>
+          </div>
+          <SeatStance m={m} ctx={ctx} className="mt-1.5" />
+          <p className="mt-2 text-small leading-snug text-ink-2">
+            <b className="font-600 text-ink">Works with you:</b> {words.patience}, {words.aggression}, {words.cap}.
+            {hint('board') && <> On the board: {hint('board')!.toLowerCase()}</>}
+            {hint('tradeDown') && <> In trade talks: {hint('tradeDown')!.toLowerCase()}</>}
+          </p>
+          <p className="mt-1 text-label leading-snug text-muted">
+            He answers to the owner: you cannot hire or fire him from this screen. His rating and temperament are his own — they
+            decide how much rope your extensions get and how the draft room uses his pen.
+          </p>
+        </div>
+        <RatingTile value={m.rating} size="lg" tierWord delta label="Staff rating" />
+        <Contract m={m} stacked />
+        <OverflowMenu items={ctx.menuFor(m)} label={`Actions for ${m.name}`} />
+      </div>
+    </div>
   )
 }
 
