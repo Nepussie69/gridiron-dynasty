@@ -24,6 +24,7 @@ import { RouteDiagram } from './RouteDiagram'
 import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
+import { PLAY_TYPE_TABS, playTypeTabForId, type PlayTypeTab } from './playTypes'
 import { effRating } from './animRatings'
 import { TeamHoverCard } from './TeamHoverCard'
 import { PlayerHoverCard } from './PlayerHoverCard'
@@ -47,6 +48,9 @@ const CENTER_Y = 26.65
 const W = 120
 const H = 53.3
 const FORMATION_ORDER = FORMATIONS.map((f) => f.name)
+/** The offense picker's grouping: plays by type (default) or by formation. */
+type CallGroupMode = 'type' | 'formation'
+const CALL_GROUP_KEY = 'gd.callPickerGroup'
 
 function hexRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '')
@@ -2067,6 +2071,22 @@ function QuickCallBar({ quick, onAnswer }: { quick: (lean: 'run' | 'pass') => st
 
 function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: string) => void }) {
   const plan = useGame((s) => s.career?.playCalling)
+  // The grouping switch (UI only, remembered per viewer): by type by default.
+  const [mode, setMode] = useState<CallGroupMode>(() => {
+    try {
+      return localStorage.getItem(CALL_GROUP_KEY) === 'formation' ? 'formation' : 'type'
+    } catch {
+      return 'type'
+    }
+  })
+  const pickMode = (m: CallGroupMode) => {
+    setMode(m)
+    try {
+      localStorage.setItem(CALL_GROUP_KEY, m)
+    } catch {
+      // No storage (private mode): the switch just doesn't stick.
+    }
+  }
   const groups = useMemo(() => {
     const m = new Map<string, Moment['options']>()
     for (const o of moment.options) {
@@ -2077,6 +2097,24 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
     }
     return [...m.entries()].sort((a, b) => FORMATION_ORDER.indexOf(a[0]) - FORMATION_ORDER.indexOf(b[0]))
   }, [moment.options])
+  // By type: the seven type tabs (empty ones hidden) plus, for options that are
+  // not playbook plays — the installed tricks and the real spike — a tab of
+  // their own, so they never fall into a type they don't have.
+  const typeGroups = useMemo(() => {
+    const m = new Map<PlayTypeTab, Moment['options']>()
+    const other: Moment['options'] = []
+    for (const o of moment.options) {
+      const t = playTypeTabForId(o.id)
+      if (!t) {
+        other.push(o)
+        continue
+      }
+      const arr = m.get(t) ?? []
+      arr.push(o)
+      m.set(t, arr)
+    }
+    return { plays: m, other, tabs: PLAY_TYPE_TABS.filter((t) => (m.get(t.id)?.length ?? 0) > 0).map((t) => ({ id: t.id as string, label: t.label })) }
+  }, [moment.options])
   // FUTURES #26 P3b: this bucket's plays on the user's own sheet come first, as
   // their own tab. No sheet for the bucket (or no plan) = today's picker exactly.
   const sheet = useMemo(() => {
@@ -2084,21 +2122,35 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
     return { bucket, plays: ids.filter((id) => moment.options.some((o) => o.id === id)) }
   }, [plan, moment])
   const defaultFormation = playbookPlay(moment.defaultId)?.formation ?? groups[0]?.[0] ?? ''
+  const defaultType = playTypeTabForId(moment.defaultId) ?? (typeGroups.other.length ? 'other' : typeGroups.tabs[0]?.id ?? '')
   const [tab, setTab] = useState('')
   // The detailed book is a compact, collapsible tray so the field stays visible;
   // RUN / PASS above remain the always-visible quick calls.
   const [open, setOpen] = useState(true)
   const tabs = useMemo(
-    () => [...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []), ...groups.map(([f]) => ({ id: f, label: f }))],
-    [sheet.plays.length, groups],
+    () =>
+      mode === 'type'
+        ? [
+            ...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []),
+            ...typeGroups.tabs,
+            ...(typeGroups.other.length ? [{ id: 'other', label: 'Trick' }] : []),
+          ]
+        : [...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []), ...groups.map(([f]) => ({ id: f, label: f }))],
+    [mode, sheet.plays.length, groups, typeGroups],
   )
-  const active = tabs.some((t) => t.id === tab) ? tab : sheet.plays.length ? 'sheet' : defaultFormation
+  const fallback = sheet.plays.length ? 'sheet' : mode === 'type' ? defaultType : defaultFormation
+  const active = tabs.some((t) => t.id === tab) ? tab : fallback
+  const activeLabel = tabs.find((t) => t.id === active)?.label ?? active
   const plays = active === 'sheet'
     ? sheet.plays.map((id) => moment.options.find((o) => o.id === id)).filter((o): o is Moment['options'][number] => !!o)
-    : groups.find(([f]) => f === active)?.[1] ?? []
+    : mode === 'type'
+      ? active === 'other'
+        ? typeGroups.other
+        : typeGroups.plays.get(active as PlayTypeTab) ?? []
+      : groups.find(([f]) => f === active)?.[1] ?? []
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -2109,8 +2161,25 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
           Playbook
           <span className="text-muted">{plays.length}</span>
         </button>
+        <div className="inline-flex shrink-0 rounded-md bg-surface-2 p-0.5" role="group" aria-label="Group plays by">
+          {([{ id: 'type', label: 'By type' }, { id: 'formation', label: 'By formation' }] as const).map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => pickMode(g.id)}
+              aria-pressed={mode === g.id}
+              title={g.id === 'type' ? 'Group plays by what the play does' : 'Group plays by formation'}
+              className={cn(
+                'rounded px-1.5 py-0.5 font-cond text-label font-700 uppercase tracking-wide transition',
+                mode === g.id ? 'bg-slab text-on-slab' : 'text-ink-2 hover:text-ink',
+              )}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
         <span className="truncate text-label text-muted">
-          {open ? (active === 'sheet' ? `Your sheet for ${BUCKET_LABEL[sheet.bucket]} — tap a play to call it` : 'Tap a play to call it — scroll for more') : `${active === 'sheet' ? 'Sheet' : active} · tap to browse the book`}
+          {open ? (active === 'sheet' ? `Your sheet for ${BUCKET_LABEL[sheet.bucket]} — tap a play to call it` : 'Tap a play to call it — scroll for more') : `${activeLabel} · tap to browse the book`}
         </span>
       </div>
       {open && (
@@ -2133,6 +2202,12 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
           <div className="flex gap-1.5 overflow-x-auto pb-1">
             {plays.map((o) => {
               const pb = playbookPlay(o.id)
+              // By type: the card's own formation is the small sub-label.
+              const sub = active === 'sheet'
+                ? 'On your sheet'
+                : mode === 'type'
+                  ? pb?.formation ?? 'Trick'
+                  : o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''
               return (
                 <button
                   key={o.id}
@@ -2145,9 +2220,7 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
                 >
                   <RouteDiagram name={o.id} className="h-8 w-full rounded" />
                   <span className="truncate font-cond text-label font-700 uppercase leading-tight text-ink">{o.label}</span>
-                  <span className="truncate font-cond text-label uppercase leading-none text-muted">
-                    {active === 'sheet' ? 'On your sheet' : o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''}
-                  </span>
+                  <span className="truncate font-cond text-label uppercase leading-none text-muted">{sub}</span>
                 </button>
               )
             })}

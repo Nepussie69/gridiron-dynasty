@@ -24,6 +24,7 @@ import { carrierMissRate, defenderMissRate } from './playsim'
 
 import { leagueMasteryMeans, masteryGroup, type MasteryMeans } from './playbook'
 import { POS_MEAN } from './ratingMeans'
+import { getQbRun, qbDesignShare } from './qbRun'
 import { styleProfile } from './style'
 import { clubReturners } from './returns'
 
@@ -357,17 +358,25 @@ export function allocateTeamGame(
   if (rbs.items.length) {
     const carries = Math.round(rushYds / (isNFL ? 4.35 : 4.5))
     const shares = rbs.weights.map((w, i) => (i === 0 ? w * rbConc : w))
-    // L12 S2 parity: score-only games must show the QB's rushing like play-by-play
-    // does. Mirror playsim's carry split (RB1 0.60 / RB2 0.27 / QB 0.13, raised for a
-    // scrambler) and use his own legs for yards per carry. Deterministic (style only,
-    // no rng draws), and the QB's share is carved out of the backs' so the team's
-    // rush attempts, yards and TDs are unchanged. If the QB does not exist he is
-    // simply skipped, keeping the old behaviour.
+    // realism-qbrun parity: score-only games must give each QB the same designed-
+    // carry rate his OWN legs (and size, for the sneak) earn in play-by-play —
+    // the one shared pure function `qbDesignShare`, never a team mean. The share
+    // is carved out of the backs' so the club's rush attempts, yards and TDs are
+    // unchanged; a QB who is not there is simply skipped, as before. With the
+    // layer OFF the original flat split runs, so a simmed season is unchanged.
     const qa = qb ? mkAttrs(qb) : undefined
-    const qbScramble = qb ? styleProfile(qb).scramble : 0
-    const wq = 0.13 + qbScramble * 0.12
-    const qbFrac = qb ? clamp(wq / (0.6 + 0.27 + wq), 0, 0.4) : 0
-    const qbCarries = qb ? Math.min(carries, Math.round(carries * qbFrac)) : 0
+    let qbCarries = 0
+    if (qb) {
+      if (getQbRun()) {
+        // the fractional expectation is spent deterministically (detCount), so a
+        // pocket QB's small share is not rounded away to zero
+        qbCarries = Math.min(carries, detCount(carries, qbDesignShare(qb), `${gameKey}:${teamId}:qbc`))
+      } else {
+        // OFF: the original flat RB1 0.60 / RB2 0.27 / QB 0.13 (+ scrambler) split
+        const wq = 0.13 + styleProfile(qb).scramble * 0.12
+        qbCarries = Math.min(carries, Math.round(carries * clamp(wq / (0.87 + wq), 0, 0.4)))
+      }
+    }
     let qbYds = 0
     if (qb && qa && qbCarries > 0) {
       // Same elusiveness playsim gives a QB run: SPD / AGI / BCV.

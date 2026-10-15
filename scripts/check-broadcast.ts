@@ -2425,6 +2425,51 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(bad.length === 0, `${bad.length} bad sheds: ${bad.slice(0, 4).join('; ')}`)
   })
 
+  // animshed: the same "no teleport" invariant as 6c, but on a WIDER sample (the 6c sample, run out to
+  // 16 games instead of 6). The single-game version misses a rare drawn jump (> 12 yd/s, ~1 in 3,000
+  // pass plays): the 7th game of this sample carries one on the old animation. Nothing here is loosened
+  // - the 0.05 s step, the 0.2 s start and the 12 yd/s bound are the 6c ones.
+  ok('animflow 6c (animshed): no pass rusher is ever drawn above 12 yd/s over a whole play (the 6c invariant on a 16-game sample - the rare drawn jump the 6-game sample misses)', () => {
+    store.useGame.getState().startCareer({ name: 'S', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    let plays = 0
+    let rushers = 0
+    let worst = 0
+    const bad: string[] = []
+    for (let g = 0; g < 16; g++) {
+      const home = nfl[(g * 5) % nfl.length].id
+      const away = nfl[(g * 5 + 2) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 29 + g * 131)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass') continue
+        const other = play.offId === home ? away : home
+        const actors = actorPlayers(world, play, other, null)
+        const anim = buildPlayAnim(play, { next: sim.plays[i + 1], actors })
+        const D = anim.duration / 1000
+        const A = new Map(anim.actors.map((a) => [a.key, a]))
+        plays++
+        for (const r of ['dl0', 'dl1', 'dl2', 'dl3']) {
+          const a = A.get(r)
+          if (!a || a.path.length < 2) continue
+          rushers++
+          let mx = 0
+          for (let s = 0.2; s < D - 0.05; s += 0.05) {
+            const p = posAt(a.path, s / D)
+            const q = posAt(a.path, (s + 0.05) / D)
+            mx = Math.max(mx, Math.hypot(q.x - p.x, q.y - p.y) / 0.05)
+          }
+          if (mx > worst) worst = mx
+          if (mx > 12) bad.push(`play ${play.n} ${play.concept} ${r}: ${mx.toFixed(1)} yd/s jump (teleport)`)
+        }
+      }
+    }
+    console.log(`      rusher speed 16 games: ${plays} pass plays, ${rushers} drawn rushers, worst ${worst.toFixed(2)} yd/s`)
+    assert.ok(plays >= 500 && rushers >= 1500, `coverage: ${plays} pass plays, ${rushers} drawn rushers`)
+    assert.ok(bad.length === 0, `${bad.length} rusher teleports (bound 12 yd/s): ${bad.slice(0, 4).join('; ')}`)
+  })
+
   ok('animflow 6c (297): a long run / catch-and-run ends with a defender on the carrier (credited tackler when he can get there), never the carrier stopping alone; a score is run through the goal line at speed', () => {
     store.useGame.getState().startCareer({ name: 'B', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
     const world = store.getWorld()
@@ -2897,6 +2942,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const styles: Record<string, number> = {}
     let gang = 0
     const bad: string[] = []
+    const farBad: string[] = []
     const FALLING = new Set(['tackleFall', 'dive', 'fall', 'down'])
     games6d(6, 47, (play, anim) => {
       const ev = anim.events ?? []
@@ -2916,12 +2962,12 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       const tq = Math.max(0, tE - 0.03 / D)
       if (!FALLING.has(poseAt6d(anim, tk, tq)) || !FALLING.has(poseAt6d(anim, car, tq)) || poseAt6d(anim, car, 1) !== 'down') { upright++; if (bad.length < 4) bad.push(`${play.n} ${play.concept} ${tk} ${poseAt6d(anim, tk, tq)} / ${car} ${poseAt6d(anim, car, tq)} at the whistle`) }
       // (a dive at the legs reaches ~2.5 yd)
-      if (gap(tE) > (style === 'dive' ? 2.5 : 1.5)) far++
+      if (gap(tE) > (style === 'dive' ? 2.5 : 1.5)) { far++; if (farBad.length < 4) farBad.push(`${play.n} ${play.type} ${play.result} tk ${tk} ${style} gap ${gap(tE).toFixed(1)} at ${tE.toFixed(2)}s of ${D.toFixed(2)}s press ${play.pressureId ?? '-'} beat ${play.beatenBlockerId ?? '-'}`) }
       if (anim.actors.some((a) => a.side === 'def' && a.key !== tk && poseAt6d(anim, a.key, tq) === 'tackleFall')) gang++
     })
     console.log(`      tackles ${n}: late ${late}, not going down together ${upright}, tackler > 1.5 yd ${far}; styles ${JSON.stringify(styles)}, gang ${gang}`)
     assert.ok(n >= 150, `coverage ${n}`)
-    assert.ok(upright === 0 && far === 0, `touch-and-freeze: ${upright} / ${far} of ${n}: ${bad.join('; ')}`)
+    assert.ok(upright === 0 && far === 0, `touch-and-freeze: ${upright} / ${far} of ${n}: ${[...bad, ...farBad].join('; ')}`)
     assert.ok(late <= n * 0.05, `tackler arrives at the whistle on ${late}/${n}: ${bad.join('; ')}`)
     assert.ok((styles.wrap ?? 0) > 0 && (styles.hit ?? 0) > 0 && (styles.arm ?? 0) > 0 && (styles.dive ?? 0) > 0 && gang > 0, `variants ${JSON.stringify(styles)} gang ${gang}`)
   })

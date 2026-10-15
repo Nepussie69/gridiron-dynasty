@@ -6079,12 +6079,14 @@ function runEndOfRegularSeason(
   const ownsContracts = career
     ? capabilities(career).can.has('negotiate') || capabilities(career).can.has('manageCap')
     : false
-  // FUTURES 12: AI clubs keep their best expiring star with a franchise or
-  // transition tag before the re-signing pass. Contract-only and sim-neutral:
-  // the tagged player would have been re-signed or lost anyway, and the tag
-  // value is a market number, so no game result changes.
-  runAITags(world, career?.teamId)
+  // fastars 478: negotiate first, tag second. A club extends the expiring men it
+  // can afford (making room by restructuring an existing deal when it must) and
+  // then tags the best one it could not extend — the real order, and why an
+  // elite player almost never reaches free agency. Contract-only and
+  // sim-neutral: the tagged player would have been re-signed or lost anyway, and
+  // the tag value is a market number, so no game result changes.
   runAIResign(world, ownsContracts && career ? career.teamId : undefined, statDb)
+  runAITags(world, career?.teamId)
   tickAllContracts(world)
 
   // FUTURES 12: a star entering the final year of a below-market deal may hold

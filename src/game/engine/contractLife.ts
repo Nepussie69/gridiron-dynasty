@@ -159,9 +159,22 @@ export function openHoldouts(roster: Player[], season: number): Player[] {
 }
 
 /**
- * AI clubs keep their best expiring star with a tag: the franchise tag when there
- * is room, the cheaper transition tag when the books are tighter. One tag per
- * club per season, `skipTeamId` kept for the user (who decides for himself).
+ * AI clubs keep their best expiring star with a tag: the franchise tag when
+ * there is room, the cheaper transition tag when the books are tighter. One tag
+ * per club per season, `skipTeamId` kept for the user (who decides for himself).
+ *
+ * fastars (backlog 478): this ran BEFORE the re-sign pass and refused to tag
+ * unless the club sat under 86% of the cap — almost no club ever does, so a
+ * real NFL tag essentially never happened. It now runs AFTER `runAIResign`
+ * (gameStore), so the only men still on the board are the ones the club could
+ * NOT extend, and it fires for them: that is what a tag is for, and it is why
+ * an elite player in the NFL almost never reaches free agency. One club, one
+ * man, its own cap — no league average.
+ *
+ * The bar is the NFL's: the tag keeps the club's own best player, and only when
+ * he is a genuine star (display 87+). The league tags 6–9 men a season (ESPN
+ * trackers: 6 in 2023, 9 in 2024), so tagging the best eligible body on every
+ * club — ~21 a season — would be three times too many.
  *
  * This never touches the sim — it only rewrites a contract, exactly like the AI
  * re-signing it would — and it never creates a holdout or an option decision.
@@ -172,15 +185,18 @@ export function runAITags(world: World, skipTeamId?: string): number {
     if (t.tier !== 'NFL' || t.id === skipTeamId) continue
     const roster = world.roster[t.id] ?? []
     if (tagUsed(roster, 'franchise', world.season) || tagUsed(roster, 'transition', world.season)) continue
+    // The club's own best player, and a real star (display 87+): the NFL tags its
+    // franchise man, not its best eligible body. One club, one man, its own cap.
+    const best = roster.reduce<Player | null>((a, b) => (b.ovr > (a?.ovr ?? -1) ? b : a), null)
     const cand = roster
-      .filter((p) => tagEligible(p) && unscaleOvr(p.ovr) >= 82)
+      .filter((p) => tagEligible(p) && p.ovr >= 87 && p.ovr >= (best?.ovr ?? 0))
       .sort((a, b) => b.ovr - a.ovr)[0]
     if (!cand) continue
     const used = roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
     const limit = capForSeason(world.season)
-    // Leave breathing room so a tag never forces a cap-compliant cut.
-    if (used > limit * 0.86) continue
-    const kind: 'franchise' | 'transition' = used > limit * 0.82 ? 'transition' : 'franchise'
+    // A tight club uses the cheaper transition number (the tag itself only adds
+    // a year at the end of the deal, so this year's cap hit is unchanged).
+    const kind: 'franchise' | 'transition' = used > limit * 0.9 ? 'transition' : 'franchise'
     const value = tagSalary(world.players, cand, kind)
     cand.contract = addGuaranteedYear(cand.contract, value, world.season)
     cand.tag = { season: world.season, kind }

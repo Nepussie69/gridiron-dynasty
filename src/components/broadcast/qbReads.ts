@@ -641,7 +641,17 @@ function adjustPath(path: WP[], plan: ReadPlan): WP[] {
   const pl = plan.place!
   const C = plan.catchT!
   const W = adjustSec(pl) / plan.D
-  const a = Math.max(0, C - W)
+  // realism-qbrun (check-broadcast J38 back-shoulder fade): when his own line is already coming BACK
+  // to the ball over the last beat (a fade's plant-and-turn), the drift onto the placed spot has to
+  // be complete BEFORE that beat. Ramped to the catch, the added forward drift cancelled the
+  // turn-back and the fade was drawn caught running away from the ball ("no turn back to the ball").
+  // His own back-step then carries him onto the placed spot; the placed spot, the catch time, the
+  // coverage's matching drift (the same function, the same offsets) and the run after the catch are
+  // all untouched.
+  const GAP = 0.45 // s - the beat his own line owns before the catch
+  const ownBack = posAt(path, C).x < posAt(path, Math.max(0, C - GAP / plan.D)).x - 0.1
+  const win = Math.max(0.5, W * plan.D - GAP)
+  const a = Math.max(0, ownBack ? C - (GAP + win) / plan.D : C - W)
   // animflow r7a (animresid): after the catch he eases back onto his recorded line over the WHOLE
   // run to the whistle, not over a 0.45 s beat. Springing back right after the catch put a second
   // lateral sign change inside every shifted catch-and-run (an out-and-back bump in the carry
@@ -653,7 +663,9 @@ function adjustPath(path: WP[], plan: ReadPlan): WP[] {
   for (let i = 0; i <= n; i++) {
     const t = a + ((b - a) * i) / n
     const p = posAt(path, t)
-    const u = t <= C ? sm((t - a) / Math.max(1e-9, C - a)) : Math.max(0, 1 - (t - C) / Math.max(1e-9, b - C))
+    const u = t <= C
+      ? sm((t - a) / Math.max(1e-9, ownBack ? (C - GAP / plan.D) - a : C - a))
+      : Math.max(0, 1 - (t - C) / Math.max(1e-9, b - C))
     out.push({ t, x: p.x + pl.sx * u, y: p.y + pl.sy * u })
   }
   for (const w of path) if (w.t > b + 1e-9) out.push({ ...w })

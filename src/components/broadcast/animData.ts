@@ -134,6 +134,13 @@ export type BroadcastAnim = PlayAnim & AnimPresentation
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 const clampN = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
 const RUN_SPEED = 0.6
+/**
+ * realism-qbrun (check-broadcast r8 (b) touch-and-freeze): how far the sim's credited tackler may be
+ * from the carrier AT THE WHISTLE and still be the man the drawing sends. Beyond it the man who is
+ * actually on the carrier makes the drawn tackle (the check allows a dive to reach 2.5 yd, so a man
+ * inside this reach is still drawn as the tackler). The recorded event is untouched either way.
+ */
+const DRAWN_TACKLER_REACH = 2.2
 
 /** Position along a keyframed path (local copy of playAnim.posAt). */
 function posAt(path: WP[] | undefined, t: number): Pt {
@@ -597,8 +604,19 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
       const k = e?.keys[0]
       return k && k !== carrierKey && keySet[k] && sides[k] === 'def' ? k : null
     })()
-    const tk = evTk ?? keyForId(play.tackleIds?.[0]) ?? keyForId(play.sackId) ??
-      nearestOf(keys.filter((k) => sides[k] === 'def'), posAt(paths[carrierKey], tackleT), tackleT)
+    const evTkPref = evTk ?? keyForId(play.tackleIds?.[0]) ?? keyForId(play.sackId)
+    // realism-qbrun (check-broadcast r8 (b)): the drawn tackler is the man who is really there. The
+    // sim's credited man is drawn making the tackle whenever he arrives by the whistle; when his own
+    // pursuit leaves him out of reach (a cover man held at his recorded separation to a very late
+    // catch, a safety 15 yd off a short run - the sim has not re-credited the play, but the drawing
+    // must not show a dive at nobody) the man ON the carrier makes it, exactly as the long-play /
+    // r6c2 rules already do. The recorded event keeps the sim's credited man.
+    const cSpot = posAt(paths[carrierKey], tackleT)
+    const gapAtT = (k: string): number => { const p = posAt(paths[k], tackleT); return Math.hypot(p.x - cSpot.x, p.y - cSpot.y) }
+    const nearK = nearestOf(keys.filter((k) => sides[k] === 'def' && k !== carrierKey), cSpot, tackleT)
+    const tk = evTkPref && (gapAtT(evTkPref) <= DRAWN_TACKLER_REACH || !nearK || gapAtT(evTkPref) <= gapAtT(nearK))
+      ? evTkPref
+      : (nearK ?? evTkPref)
     if (tk && tk !== carrierKey) {
       // animflow r6a: how he brings him down follows the angle and speed of the
       // hit (BDB 2021 tackles after a catch: 54% from behind, 34% on an angle,
