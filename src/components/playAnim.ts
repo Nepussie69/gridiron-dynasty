@@ -312,7 +312,10 @@ function closeOnCarrier(tk: Mover, carrier: Mover, endSec: number, notBefore = 0
   // blend that yanks a man running the other way round in a frame.
   // (early enough to get there at his own speed: a man well off the play starts his chase sooner)
   // (never while he is still on a block: his shed is drawn from the recorded engagement)
-  const from = Math.min(tA - 0.1, Math.max(0.05, notBefore, tA - clampN(d / (0.7 * tk.pace.top) + 0.3, 0.45, 2.5)))
+  // (animflow r6c2 J7: and never before `notBefore` — a cover man must still stand the recorded
+  //  separation at the catch; a min() against `tA - 0.1` used to rewind him through the catch on a
+  //  short catch-and-run, dragging him onto the carrier's shoulder early)
+  const from = Math.max(notBefore, Math.min(tA - 0.1, Math.max(0.05, tA - clampN(d / (0.7 * tk.pace.top) + 0.3, 0.45, 2.5))))
   followTo(tk, from, tA, (t) => {
     const cc = posAt(carrier.path, Math.min(t, endSec))
     return { x: cc.x + u.x * 0.62, y: cc.y + u.y * 0.62 }
@@ -826,7 +829,7 @@ class Mover {
     }
   }
   /** Move along a polyline (the first point is the *next* waypoint). */
-  run(pts: Pt[], opts: { v0?: number; stop?: boolean; vEnd?: number; cut?: boolean; pivot?: boolean } = {}): number {
+  run(pts: Pt[], opts: { v0?: number; stop?: boolean; vEnd?: number; cut?: boolean; pivot?: boolean; smooth?: boolean } = {}): number {
     this.lastStop = !!opts.stop
     if (!pts.length) return this.t
     let v0 = Math.max(0, opts.v0 ?? 0)
@@ -846,7 +849,10 @@ class Mover {
     // player decelerates in his current heading, then re-accelerates. Without
     // it a reversal would traverse the corner at full speed (a speed spike).
     // `cut`: he already braked into this turn (vEnd) and plants on the spot.
-    if (v0 > 1 && this.path.length >= 2 && !opts.cut) {
+    // `smooth`: the line already leaves along his heading (a catch-and-run's own
+    // bend): no plant to draw, and braking along the old heading would drop him
+    // beside the line and make him come back to it — a weave.
+    if (v0 > 1 && this.path.length >= 2 && !opts.cut && !opts.smooth) {
       let hx = 0
       let hy = 0
       if (inH) {
@@ -2849,7 +2855,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   // animflow r5: with real acceleration caps the credited man is often a beat
   // late; on a run he still makes it (hitAndRide meets the pile where it is).
   // (a forced out-of-bounds end needs a man who can really get there: the credited one gets no extra slack)
-  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2, oobRun ? TACKLE_SLACK_PASS : TACKLE_SLACK)
+  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2, oobRun ? TACKLE_SLACK_OOB : slow > 0.75 ? CRED_SLACK_RUN : TACKLE_SLACK)
   // A touchdown is chased, never forced: the closest man just runs with him.
   // animflow r6c: a credited man who shed inside the tackle phase closes from his rip.
   let hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
@@ -3789,8 +3795,16 @@ function natTo(mv: Mover, pt: Pt, fromSec: number): number {
 /** The tackler who can make the contact in time: the credited man when he can, else the quickest. */
 /** How late (s) the sim's credited tackler may be and still be drawn making the tackle. */
 const TACKLE_SLACK = 1.0
-/** A catch-and-run gives the credited man less slack: every beat he is late the carrier is slowed or bowed wide to wait for him, and that reads as sideways running / a crawl. */
-const TACKLE_SLACK_PASS = 0.6
+/** A catch-and-run gives the credited man less slack than a run: every beat he is late the carrier is slowed or held for him, and that reads as standing still. */
+const TACKLE_SLACK_PASS = 1.6
+/** animresid (354/373): a forced out-of-bounds end needs a man who can really get there - the credited man gets no extra slack. */
+const TACKLE_SLACK_OOB = 0.6
+/** animresid (297): a broken run's credited man gets the benefit of the doubt — his pursuit leg (and,
+ *  when even that cannot get him there, a slower re-run of the carry) draws him arriving from where
+ *  he stands, and he is only passed over when neither can (worst case the man who can makes the hit).
+ *  Measured: without it the sim's credited man (often a lineman still shedding) sat ~10 yd from the
+ *  play in the drawn animation and the nearest free man was drawn making the tackle. */
+const CRED_SLACK_RUN = 1.8
 function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number, slack = TACKLE_SLACK): string {
   const cand = keys.filter((k) => m[k]).map((k) => ({ k, nat: natTo(m[k], c, fromSec) })).sort((a, b) => a.nat - b.nat)
   if (!cand.length) return keys[0]
@@ -4206,7 +4220,11 @@ function resolveCarry(opts: {
     const reach = Math.min(1.1, total * 0.2, hsp * 0.15)
     line = quadPts(cPos, { x: clampX(cPos.x + (hv.x / hsp) * reach), y: clampY(cPos.y + (hv.y / hsp) * reach) }, spot, 14)
   } else line = Math.abs(bend) > 0.2 ? bowPts(cPos, spot, bend) : [spot]
-  const { pre, post, c } = splitPolyline(cPos, line, Math.max(0, polyLen(cPos, line) - ac))
+  const { pre: pre0, post: post0, c: c0 } = splitPolyline(cPos, line, Math.max(0, polyLen(cPos, line) - ac))
+  void post0
+  let pre = pre0
+  let post = post0
+  let c = c0
   const preNat = pre.length ? timedLine([cPos, ...pre], carrier.pace, { v0: cV0, stop: false }).slice(-1)[0]?.t ?? 0 : 0
   // animflow r8: the credited man is the tackler only when he can get there in the time the carrier
   // can give him (his slowest picking-his-way pace over the run to the contact + a beat) - a man
@@ -4230,23 +4248,29 @@ function resolveCarry(opts: {
     while (k > kMin && natK(k) < need) k -= 0.03
     carrier.pace = { top: saved.top * k, acc: saved.acc }
     const v0k = Math.min(cV0, carrier.pace.top)
-    // animflow r7a: still early at a cautious pace -> the same line widened to one
-    // side (bounded; never a loop back or a second bow that S-bends).
-    carrier.run(natK(k) >= need - 0.05 ? pre : widenByTime(cPos, pre, carrier.pace, v0k, need, hv), { v0: v0k, stop: false, pivot: true })
+    if (natK(k) >= need - 0.05) {
+      carrier.run(pre, { v0: v0k, stop: false, smooth: true })
+    } else {
+      // animflow r7a (animresid): still early at a cautious pace. He does NOT bow out and back to
+      // spend the time — a bow leaves his line, comes back and leaves again, which IS the second
+      // lateral reversal (the check's "weave"). He runs the line into the contact and stands his
+      // ground there until the man arrives (the hold below): the carry stays north-south.
+      carrier.run(pre, { v0: v0k, stop: false, smooth: true })
+    }
     carrier.pace = saved
   } else if (need > preNat + 0.05 && pre.length) {
     // Nobody could get there yet: he runs a wider line (never a loop) to give
     // the tackler time to arrive.
     carrier.run(routeByTime(cPos, c, carrier.pace, cV0, need, 0), { v0: cV0, stop: false })
   } else if (pre.length) {
-    carrier.run(pre, { v0: cV0, stop: false, pivot: !!opts.northSouth })
+    carrier.run(pre, { v0: cV0, stop: false, smooth: !!opts.northSouth })
   }
   // animflow r8: nobody could be there yet even so (an open man tackled where he took the ball): he
   // holds the ball at the contact until the man arrives - the last strides (a lunge, a dive) cover
   // the rest - so a tackle is never the tackler diving at nobody. Capped; the spot is untouched.
   if (opts.northSouth && carrier.t > fromSec) {
     const short = fromSec + need - 0.7 - carrier.t
-    if (short > 0.05) carrier.hold(Math.min(short, 1.0))
+    if (short > 0.05) carrier.hold(Math.min(short, 1.9))
   }
   const contactT = carrier.t
   pileDrive(carrier, post, carrySpeed(carrier))
