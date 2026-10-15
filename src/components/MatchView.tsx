@@ -1583,7 +1583,7 @@ function gameDayFieldPosForPlay(world: World, p: PlayEvent): string {
 
 /** L11.5 Q3: a collapsible in-game plan editor, limited to the side(s) you coach. */
 /** L12.6: how often a coached game stops for your call. */
-function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' | 'def' | 'both' | 'hc'; mode?: 'off' | 'def' | 'both'; keepPlays?: number; onFallback?: () => void }) {
+function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' | 'def' | 'both' | 'hc'; mode?: 'off' | 'def' | 'both' | 'sheet'; keepPlays?: number; onFallback?: () => void }) {
   const setCallMode = useGame((s) => s.setCallMode)
   const showToast = useGame((s) => s.showToast)
   const gameDayAdvance = useGame((s) => s.gameDayAdvance)

@@ -401,9 +401,9 @@ export interface GameDay {
   personnel: PersonnelSet
   /** L11.5 Q3: every mid-game plan switch, shown in the post-game film card. */
   changes: PlanChange[]
-  /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. */
-  callStart?: 'off' | 'def' | 'both'
-  callSwitches?: { at: number; mode: 'off' | 'def' | 'both' | undefined }[]
+  /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. FUTURES #26 P2 carries 'sheet' through here. */
+  callStart?: 'off' | 'def' | 'both' | 'sheet'
+  callSwitches?: { at: number; mode: 'off' | 'def' | 'both' | 'sheet' | undefined }[]
 }
 
 let world: World = buildWorld(20261004)

@@ -795,8 +795,10 @@ export interface CareerState {
     week: number
     season: number
   }
-  /** L12.6: coached games — call every snap on offense, defense or both (unset = key moments only). */
-  callMode?: 'off' | 'def' | 'both'
+  /** L12.6: coached games — call every snap on offense, defense or both (unset = key moments only). FUTURES #26: 'sheet' stops only in the situations you kept (`playCalling`). */
+  callMode?: 'off' | 'def' | 'both' | 'sheet'
+  /** FUTURES #26: who calls each situation, the call sheet, and the audibles rule. */
+  playCalling?: import('./engine/playcalling').PlayCallingPlan
   /** L12 W2: the keys to the game picked for a week. */
   keys?: { week: number; season: number; ids: string[] }
   /** L12 W2: the season's key-hit ledger, capped at ±3 leadership. */
