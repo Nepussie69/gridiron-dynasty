@@ -2001,7 +2001,7 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
   const jerseyNumbers = useMemo(() => teamJerseys(world, teamId), [world, teamId])
   const fp = { gmName, myTeamId, byId, jerseyNumbers }
   return (
-    <div className="rounded-lg bg-surface-2/60 p-2">
+    <div className="min-w-0 rounded-lg bg-surface-2/60 p-2">
       <div className="mb-2">
         <TeamHoverCard team={team}>
           {onTeamClick ? (
@@ -2080,6 +2080,8 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
 }
 
 interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player>; jerseyNumbers: Map<string, number> }
+/** rem width of each box-score stat column class (Tailwind w-N = N/4 rem). */
+const BOX_COL_REM: Record<string, number> = { 'w-8': 2, 'w-10': 2.5, 'w-11': 2.75 }
 interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string; w?: string; title?: string }
 function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx; cap?: number; order?: (r: import('../game/engine/stats').PlayerBoxScore) => number }) {
   // Lead with the volume stat: yards for offense, tackles for defense.
@@ -2091,13 +2093,24 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
   // The %-columns (PRS%, SNP%) are the widest headers; a 32px column left them touching their
   // right-aligned neighbour ("PRS%SNP%", "TDSNP%"), so they get the wide width too.
   const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct' || k === 'snapPct'
+  const colClass = (c: BoxCol) => c.w ?? (wide(c.k) ? 'w-11' : 'w-8')
+  const shown = sorted.slice(0, cap).map((b) => {
+    const p = fp.byId.get(b.playerId)
+    return { b, p, jersey: fp.jerseyNumbers.get(b.playerId), tag: fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null }
+  })
+  // Backlog 448: the full name stays on one line next to the jersey — never cut
+  // ("Germ…", row 400) and never wrapped under it (row 448). The table is at least
+  // as wide as the stat columns plus the longest name; a narrower panel scrolls it.
+  const statRem = cols.reduce((s, c) => s + (BOX_COL_REM[colClass(c)] ?? 2), 0) + 1.75
+  const nameCh = Math.max(8, ...shown.map(({ b, tag }) => b.name.length + (tag ? tag.length + 2 : 0))) + 1
   return (
     <div className="mb-3">
       <div className="label mb-0.5">{title}</div>
-      <table className="w-full table-fixed text-label tnum">
+      <div className="overflow-x-auto">
+      <table className="w-full table-fixed text-label tnum" style={{ minWidth: `calc(${statRem}rem + ${nameCh}ch)` }}>
         <colgroup>
           <col />
-          {cols.map((c) => <col key={c.k} className={c.w ?? (wide(c.k) ? 'w-11' : 'w-8')} />)}
+          {cols.map((c) => <col key={c.k} className={colClass(c)} />)}
         </colgroup>
         <thead>
           <tr className="text-faint">
@@ -2106,13 +2119,10 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
           </tr>
         </thead>
         <tbody>
-          {sorted.slice(0, cap).map((b) => {
-            const p = fp.byId.get(b.playerId)
-            const jersey = fp.jerseyNumbers.get(b.playerId)
-            const tag = fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null
+          {shown.map(({ b, p, jersey, tag }) => {
             return (
               <tr key={b.playerId} className="text-ink-2">
-                <td className="truncate pr-1 align-top lg:overflow-visible lg:whitespace-normal" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
+                <td className="whitespace-nowrap pr-1 align-top" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
                   {jersey != null && <span className="mr-1 inline-block min-w-6 text-muted">#{jersey}</span>}
                   {p ? (
                     <PlayerHoverCard player={p} info={false}>
@@ -2137,6 +2147,7 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
