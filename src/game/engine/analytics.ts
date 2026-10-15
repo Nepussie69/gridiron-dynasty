@@ -57,14 +57,21 @@ export const ANALYTICS_LEVEL_LABEL: Record<AnalyticsLevel, string> = {
   elite: 'Elite',
 }
 
-function analyticsRatingFromStaff(staff: StaffMember[]): { rating: number; fromFrontOffice: boolean } {
+function analyticsRatingFromStaff(staff: StaffMember[]): {
+  rating: number
+  fromFrontOffice: boolean
+  /** The front-office man who provides it (a DPP/GM focused on analytics), if any. */
+  source: StaffMember | null
+} {
   let best = 0
   let front = false
+  let source: StaffMember | null = null
   for (const m of staff) {
     if (m.role === ANALYTICS_ROLE) {
       if (m.rating > best) {
         best = m.rating
         front = false
+        source = m
       }
     } else if (
       (m.role === 'Director of Player Personnel' || m.role === 'General Manager') &&
@@ -74,10 +81,11 @@ function analyticsRatingFromStaff(staff: StaffMember[]): { rating: number; fromF
       if (v > best) {
         best = v
         front = true
+        source = m
       }
     }
   }
-  return { rating: best, fromFrontOffice: front }
+  return { rating: best, fromFrontOffice: front, source }
 }
 
 /** Effective analytics quality for a club (0 when nobody covers it). */
@@ -86,9 +94,11 @@ export function analyticsRating(world: World, teamId: string): number {
 }
 
 export function analyticsState(world: World, teamId: string): AnalyticsState {
-  const { rating, fromFrontOffice } = analyticsRatingFromStaff(world.staff[teamId] ?? [])
+  const { rating, fromFrontOffice, source } = analyticsRatingFromStaff(world.staff[teamId] ?? [])
   const analyst = (world.staff[teamId] ?? []).find((s) => s.role === ANALYTICS_ROLE)
-  return { rating, level: analyticsLevel(rating), name: analyst?.name ?? null, fromFrontOffice }
+  // Name the man behind the number: the analyst, or the front-office executive
+  // (DPP/GM) whose analytics focus carries the club. Real name, not a blank.
+  return { rating, level: analyticsLevel(rating), name: analyst?.name ?? (fromFrontOffice ? source?.name ?? null : null), fromFrontOffice }
 }
 
 // ── Sharper win probability ──────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   buildWorld,
   captureDivisionFinish,
+  ensureGeneralManagers,
   fitToCap,
   indexPlayers,
   regenerateSchedule,
@@ -1472,6 +1473,11 @@ export const useGame = create<GameStore>((set, get) => ({
         ambitions: [],
       }
       career = applyScenario(world, career, scenario)
+      // gmpersona: every NFL club has an AI General Manager — except the club
+      // whose GM seat this career holds (personnel L8), where the user is the GM.
+      // Deterministic from (teamId, season): no rng draw, so the world and sim
+      // stay byte-identical.
+      ensureGeneralManagers(world, userGmTeamId(career))
       career.seasonQuestion = makeSeasonQuestion(world, career)
       career.devBaseline = snapshotDevBaseline(world, career)
       // L11.5 Q14: the opening inbox was written for Buffalo; re-point it at this club.
@@ -2413,6 +2419,10 @@ export const useGame = create<GameStore>((set, get) => ({
     seasonCareer = staffTick.career
     const staffPoach = rollPoachOffers(world, seasonCareer)
     seasonCareer = staffPoach.career
+    // gmpersona: keep the AI GM on every club across the rollover (he keeps the
+    // id he was hired with, so his tenure runs on), and clear the seat on a club
+    // the user's own career now runs as GM. Deterministic — no rng draw.
+    ensureGeneralManagers(world, userGmTeamId(seasonCareer))
     for (const off of staffTick.expired) {
       pushCareerNews(world, seasonCareer, {
         category: 'Career',
@@ -4534,6 +4544,12 @@ export const useGame = create<GameStore>((set, get) => ({
     const idx = staff.findIndex((m) => m.id === staffId)
     if (idx < 0) return
     const m = staff[idx]
+    // gmpersona: the GM's chair is the owner's to fill, not yours — you work for
+    // him (or, at the GM rung, you ARE him, and there is no AI GM to fire).
+    if (m.role === 'General Manager') {
+      get().showToast(`${m.name} answers to the owner, not to you.`)
+      return
+    }
     // FUTURES #28 (C2) §7: a mid-contract departure costs 50% of the remaining years,
     // paid out over those seasons as dead staff money against the budget.
     const buyout = m.contractYears > 0 ? staffBuyout(m) : 0
@@ -5680,6 +5696,17 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
   }
 }
 
+/**
+ * gmpersona: the club whose GM seat the USER holds, or null when an AI GM fills
+ * every seat. Personnel L8 is the GM rung (draftRoom.userSeatKey): there the user
+ * IS the General Manager, so his own club gets no AI GM. Below that rung (and on
+ * the whole coach path) the club's GM is the AI man he works for.
+ */
+export function userGmTeamId(c: CareerState | null | undefined): string | null {
+  if (!c) return null
+  return c.path === 'personnel' && c.level >= 8 ? c.teamId : null
+}
+
 /** Backlog 415: load-migration hook. Bring a saved career up to the trimmed
  * ladder and, when the trim moved it off a removed rung, log one inbox note so
  * the user knows why the job changed. Deterministic — no rng. Exported so the
@@ -5687,6 +5714,11 @@ function migrateCareer(c: CareerState, rescaleOvrValues = false): CareerState {
 export function migrateLoadedCareer(w: World, c: CareerState, rescaleOvrValues = false): CareerState {
   const wasLevel = c.level
   const career: CareerState = { ...reconcileCareerTeam(w, migrateCareer(c, rescaleOvrValues)), injuryCalls: undefined }
+  // gmpersona: a save written before clubs had a General Manager gets one AI GM
+  // per NFL club on load — except the user's own GM seat, which stays empty
+  // because the user is the GM. Deterministic from (teamId, season): no rng draw,
+  // and idempotent, so every later load lands on the same men.
+  ensureGeneralManagers(w, userGmTeamId(career))
   if (career.level !== wasLevel) {
     pushCareerNews(w, career, {
       category: 'Career',

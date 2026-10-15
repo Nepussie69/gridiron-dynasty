@@ -272,6 +272,18 @@ export function tickStaffContracts(world: World, career: CareerState): ContractT
   const offers = [...(career.staffOffers ?? [])]
   const expired: StaffOffer[] = []
   for (const m of staff) {
+    // gmpersona: the General Manager's deal is the owner's business. You cannot
+    // fire or re-sign him from the staff screen, so his contract rolls over in
+    // place instead of landing in your inbox as a resign offer.
+    if (m.role === 'General Manager') {
+      if (m.contractYears > 0) m.contractYears -= 1
+      if (m.contractYears <= 0) {
+        const h = hash32(`gmrenew|${m.id}|${world.season}`, 83)
+        m.contractYears = 2 + (h % 4)
+        m.notes = `Signed through ${world.season + 2 + (h % 3)}`
+      }
+      continue
+    }
     if (m.contractYears > 0) m.contractYears -= 1
     if (m.contractYears > 0) continue
     if (offers.some((o) => o.kind === 'resign' && o.memberId === m.id && o.season === world.season)) continue

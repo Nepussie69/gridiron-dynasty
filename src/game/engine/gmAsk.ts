@@ -13,6 +13,7 @@
 
 import type { CareerState, Player, Position } from '../types'
 import type { World } from './generate'
+import { generalManager, gmTemperament } from './generate'
 import { capabilities } from './capabilities'
 import { summarizeCap } from './cap'
 import { buildExtension, marketAsk, type ExtensionOffer } from './negotiation'
@@ -55,8 +56,12 @@ export function gmOffer(p: Player, season: number): ExtensionOffer {
 }
 
 /**
- * The GM's deterministic verdict. No rng: the same career, player and cap always
- * produce the same answer.
+ * The GM's deterministic verdict. No rng: the same career, player, cap AND GM
+ * always produce the same answer. The man in the chair is real — his own
+ * patience, trade aggression and cap discipline (generate.ts `gmTemperament`,
+ * from his own id + rating) decide how much rope the coach gets and how strict
+ * he is with the cap, so a patient, cap-disciplined GM and a bold, impatient one
+ * answer the same ask differently.
  */
 export function gmExtendDecision(world: World, career: CareerState, p: Player): GmAskResult {
   const season = world.season
@@ -65,25 +70,36 @@ export function gmExtendDecision(world: World, career: CareerState, p: Player): 
   const base = { years: offer.years, aav: offer.aav, total }
   // L12.15 S2: decisions read the old (rank) scale so the same players qualify.
   const raw = unscaleOvr(p.ovr)
+  // The man, and the words the UI/inbox use for him.
+  const gm = generalManager(world, career.teamId)
+  const t = gmTemperament(gm)
+  const who = gm ? `GM ${gm.name.split(' ').slice(-1)[0]}` : 'The GM'
+  const patient = t.patience >= 68
+  const rash = t.patience <= 42
 
-  // Value: a player who isn't a core piece isn't getting new money.
-  if (raw < 68) {
+  // Value: a player who isn't a core piece isn't getting new money. A patient
+  // GM stretches the definition of a core piece; an impatient one does not.
+  const valueFloor = 68 - (patient ? 3 : 0) + (rash ? 3 : 0)
+  if (raw < valueFloor) {
     return { ...base, outcome: 'declined', reason: 'value', message: `${p.name} isn't a core piece at ${p.ovr} OVR.` }
   }
   // Age: the GM won't commit long money to the end of a career. A proven star
   // can still get paid into his early thirties; anyone else waits a year.
   if (p.age >= 33) {
-    return { ...base, outcome: 'declined', reason: 'age', message: `At ${p.age}, the GM won't commit new money.` }
+    return { ...base, outcome: 'declined', reason: 'age', message: `At ${p.age}, ${who} won't commit new money.` }
   }
   if (p.age >= 30 && raw < 88) {
-    return { ...base, outcome: 'notNow', reason: 'age', message: "The GM wants to see this season first — we'll revisit." }
+    return { ...base, outcome: 'notNow', reason: 'age', message: `${who} wants to see this season first — we'll revisit.` }
   }
-  // Cap: the deal has to fit once the old hit comes off the books.
+  // Cap: the deal has to fit once the old hit comes off the books. How much room
+  // he insists on is his own cap discipline: strict men want a cushion, loose
+  // ones will stretch into the red for a good player.
   const next = buildExtension(p, season, offer)
   const cap = summarizeCap(world.roster[career.teamId] ?? [], world.deadMoney[career.teamId] ?? 0, season)
   const roomAfter = cap.space + p.contract.capHit - next.capHit
-  if (roomAfter < 0) {
-    return { ...base, outcome: 'notNow', reason: 'cap', message: "It doesn't fit under the cap this year." }
+  const cushion = Math.round((t.cap - 55) * 250_000)
+  if (roomAfter < cushion) {
+    return { ...base, outcome: 'notNow', reason: 'cap', message: `It doesn't fit under the cap this year.` }
   }
   // Owner mandate: a rebuild protects the young core and hoards cap; a win-now
   // owner is happy to pay for proven veterans.
@@ -91,15 +107,20 @@ export function gmExtendDecision(world: World, career: CareerState, p: Player): 
   const rebuild = /draft|build|young|three-year/.test(mandate)
   const winNow = /playoff|championship|title|win now|make a change/.test(mandate)
   if (rebuild && p.age >= 27 && raw < 90) {
-    return { ...base, outcome: 'notNow', reason: 'revisit', message: "The owner wants to build through the draft — we'll revisit." }
+    return { ...base, outcome: 'notNow', reason: 'revisit', message: `The owner wants to build through the draft — we'll revisit.` }
   }
   // Standing: leadership reputation and job security buy the coach the benefit
-  // of the doubt. A weak-room coach has to bring a star to get a yes.
+  // of the doubt. A weak-room coach has to bring a star to get a yes. Patience
+  // is HIS own number — a patient GM backs his coach, a rash one wants proof.
   const standing = career.reputation.leadership * 0.6 + career.jobSecurity * 0.4
   const threshold = rebuild ? 58 : winNow ? 42 : 50
-  const need = raw >= 88 ? threshold - 12 : raw >= 82 ? threshold - 6 : threshold
+  let need = raw >= 88 ? threshold - 12 : raw >= 82 ? threshold - 6 : threshold
+  need += (60 - t.patience) * 0.8
+  // A bold trader pays up for a genuine star; a cautious one lets him walk.
+  if (raw >= 86 && t.aggression >= 70) need -= 8
+  else if (raw >= 86 && t.aggression <= 45) need += 4
   if (standing < need) {
-    return { ...base, outcome: 'notNow', reason: 'revisit', message: "The GM isn't sold yet — we'll revisit after the season." }
+    return { ...base, outcome: 'notNow', reason: 'revisit', message: `${who} isn't sold yet — we'll revisit after the season.` }
   }
-  return { ...base, outcome: 'extends', reason: 'agreed', message: 'The GM got it done at market.' }
+  return { ...base, outcome: 'extends', reason: 'agreed', message: `${who} got it done at market.` }
 }
