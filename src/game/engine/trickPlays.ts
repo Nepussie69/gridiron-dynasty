@@ -535,13 +535,15 @@ export interface TrickPassOut {
  */
 export function trickPassOverride(t: TrickSnap, passAir: number, arm: number, targetSpdRel: number): TrickPassOut {
   const a = clamp(arm, 0, 1)
+  // The defence's read (0.5 = league average): an alert pair CLOSES the window,
+  // so openness takes (1 − rf), never rf.
   const rf = readFactor(t.readValue)
   if (t.kind === 'hbpass') {
     // The back's own arm: a passer's arm (≥90 on the real scale) completes a lot
     // more than a lineman-armed back (≤55), and throws far fewer picks. The arm
     // term is steep so the two ends separate ≥20 completion points and ≥3 INT
     // points even though the real-data backs cluster in 20–55.
-    const open = clamp(0.5 * t.surprise + 0.5 * rf, 0, 1)
+    const open = clamp(0.5 * t.surprise + 0.5 * (1 - rf), 0, 1)
     const compProb = clamp(0.26 + 0.80 * a + 0.26 * open, 0.06, 0.98)
     const intProb = clamp(0 - 0.008 * t.surprise + 0.075 * (1 - a) + 0.012 * (1 - open), 0.004, 0.30)
     return { compProb, intProb, gainAdd: 0, gainMult: 1 }
@@ -550,7 +552,7 @@ export function trickPassOverride(t: TrickSnap, passAir: number, arm: number, ta
     // The deep shot: a wide-open window when the front bites, contested when the
     // secondary reads the pitch back. A caught ball is air + separation, so the
     // YPA follows the window (10–12) instead of the shared ~11-yd completion.
-    const open = clamp(0.45 * t.surprise + 0.55 * rf, 0, 1)
+    const open = clamp(0.45 * t.surprise + 0.55 * (1 - rf), 0, 1)
     const air = Math.max(passAir, TRICK.fleaAirFloor)
     const compProb = clamp(0.20 + 0.76 * open + (a - 0.5) * 0.08, 0.06, 0.92)
     const intProb = clamp(0.092 - 0.075 * t.surprise - 0.09 * (open - 0.5), 0.006, 0.30)
@@ -559,7 +561,7 @@ export function trickPassOverride(t: TrickSnap, passAir: number, arm: number, ta
   }
   // Fake spike: the defence is set for the clock-killing spike, so a quick throw
   // into a relaxed look is a little easier; a read one is not.
-  const open = clamp(0.5 * t.surprise + 0.5 * rf, 0, 1)
+  const open = clamp(0.5 * t.surprise + 0.5 * (1 - rf), 0, 1)
   const compProb = clamp(0.30 + 0.46 * open + (a - 0.5) * 0.08, 0.10, 0.86)
   const intProb = clamp(0.055 - 0.045 * t.surprise - 0.05 * (open - 0.5), 0.004, 0.20)
   return { compProb, intProb, gainAdd: 0, gainMult: 1 }
@@ -573,7 +575,7 @@ export function trickPassOverride(t: TrickSnap, passAir: number, arm: number, ta
  */
 export function trickRunGain(t: TrickSnap, elusiveness: number, n: number, offId: string): number {
   const rf = readFactor(t.readValue)
-  const open = clamp(0.55 * t.surprise + 0.45 * rf, 0, 1)
+  const open = clamp(0.55 * t.surprise + 0.45 * (1 - rf), 0, 1)
   const legs = elusiveness - 72
   // The man's own legs decide how often the pursuit strings him out (a burner
   // rarely loses ground; a slow receiver often does) — a ≥10-pt loss-rate gap
