@@ -76,6 +76,7 @@ import {
   runInSeasonFreeAgency,
   marketPrice,
   ROSTER_FLOOR,
+  fillNflRosters,
   runAIResign,
   runAITrades,
   enforceCapCompliance,
@@ -2330,6 +2331,9 @@ export const useGame = create<GameStore>((set, get) => ({
     regenerateSchedule(world)
     refreshProspectClass(world)
     enforceCapCompliance(world)
+    // rosterfloor: cap compliance can still trim a club toward the floor; top the
+    // AI clubs back up to 53 before the season opens.
+    fillNflRosters(world, career.teamId)
     // Z1b: adopt every roster/practice-squad/IR/free-agent player into `players`.
     indexPlayers(world)
     // If a firing was never resolved, take the default road back (#17).
@@ -5783,6 +5787,11 @@ function completeOffseasonStages(world: World, career: CareerState | null) {
   // The draft + UDFAs can push rosters over 53; the FA trim ran before them, so
   // cut back to a legal 53 here (same trimmer the FA market uses).
   trimNflRosters(world)
+  // rosterfloor: the trims and the draft's uneven class can leave a club short of
+  // 53 (the March market only ever fills positions to FA_NEEDS = 51). Top every
+  // AI club back up to the NFL's 53 with the best best-fit bodies its own cap
+  // allows, so the offseason closes on a legal, full roster.
+  fillNflRosters(world, career?.teamId)
 }
 
 function runEndOfRegularSeason(
