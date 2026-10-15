@@ -23,6 +23,7 @@ import {
   type DefCall,
   type OffClass,
 } from './decisions'
+import { speechFilmLine } from './halftimeSpeech'
 
 export interface FilmGrade {
   /** 0–100. */
@@ -288,6 +289,15 @@ export function gradeGame(world: World, sim: GameSim, userTeamId: string): FilmG
         const delta = br > sr ? 2 : -2
         bonus += delta
         lines.push(`QB switch: the backup ${br > sr ? 'outplayed' : 'struggled against'} the starter (${fmtDelta(delta)})`)
+      }
+    } else if (d.kind === 'speech') {
+      // FUTURES #7: a speech that landed and won the second half earns a plus;
+      // one that backfired costs a minus. A flat speech or stay-the-course is
+      // worth no line.
+      const fl = speechFilmLine(sim.speech?.[userTeamId], plays, sim.homeId, userTeamId)
+      if (fl) {
+        bonus += fl.delta
+        lines.push(fl.line)
       }
     }
   }

@@ -175,10 +175,11 @@ import {
   type FrenzyState,
 } from '../game/engine/faFrenzy'
 import { projectCap } from '../game/engine/capPlan'
-import { buildDraftTradeDownOffers, buildDraftTradeUpTargets, nextUserPickSlot } from '../game/engine/draftTrades'
+import { applyDraftTradeDown, buildDraftTradeDownOffers, buildDraftTradeUpTargets, draftAssetOwnedBy, announceDraftPicks, nextUserPickSlot, stampIncomingPlayers, syncDraftOrder } from '../game/engine/draftTrades'
 import {
   DEFAULT_PHILOSOPHY,
   PHILOSOPHY_STEPS,
+  tradeDownOfferLimit,
   withAxis,
   type DraftPhilosophy,
   type PhilosophyAxis,
@@ -404,7 +405,26 @@ export interface GameDay {
   /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. FUTURES #26 P2 carries 'sheet' through here. */
   callStart?: 'off' | 'def' | 'both' | 'sheet'
   callSwitches?: { at: number; mode: 'off' | 'def' | 'both' | 'sheet' | undefined }[]
+  /** Backlog 436: the seed this game kicked off with (week seed + fresh dice), so a rebuild replays it exactly. */
+  seed?: number
 }
+
+/**
+ * Backlog 436 (user 2026-10-15: "Fresh dice each kickoff"): every kickoff of the
+ * user's game, and every fast sim of it, rolls a fresh salt on top of the week
+ * seed, so a reloaded game plays out differently. The salt lives on the live
+ * game and the schedule entry, never in the career, so a reload rolls again.
+ * Headless runs (calibration, equivalence, smokes, probes) have no `window` and
+ * keep salt 0 — byte-identical to the fixed week seed.
+ */
+let freshDice = typeof window !== 'undefined'
+export function setFreshDice(on: boolean): void {
+  freshDice = on
+}
+function rollDice(): number {
+  return freshDice ? 1 + Math.floor(Math.random() * 1_000_000_000) : 0
+}
+const weekSeed = (week: number) => world.seed + week * 7919 + 101
 
 let world: World = buildWorld(20261004)
 let statDb: CareerDatabase = newDatabase()
@@ -1578,7 +1598,10 @@ export const useGame = create<GameStore>((set, get) => ({
       if (!opts?.userSim) activatePlayHurt(world, career)
       // G3: a coached game hands us its finished result; fast sim answers every
       // moment with the user's standing orders.
-      sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, world.seed + week * 7919 + 101, userCtx(career), weatherForGame(userGame))
+      // Backlog 436: a fast-simmed game rolls fresh dice too (a coached one set
+      // `diceSalt` at kickoff).
+      if (!opts?.userSim) userGame.diceSalt = rollDice() || undefined
+      sim = opts?.userSim ?? simulatePlayByPlay(world, userGame.homeId, userGame.awayId, weekSeed(week) + (userGame.diceSalt ?? 0), userCtx(career), weatherForGame(userGame))
       finalizeGame(world, userGame, sim.homeScore, sim.awayScore)
       // Record career stats for both teams' players (college or pro).
       const level = world.byId[userGame.homeId].tier === 'NFL' ? 'NFL' : 'CFB'
@@ -1860,7 +1883,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast("Only your team's games have full play-by-play.")
       return
     }
-    const sim = simulatePlayByPlay(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, undefined, weatherForGame(game))
+    const sim = simulatePlayByPlay(world, game.homeId, game.awayId, weekSeed(game.week) + (game.diceSalt ?? 0), undefined, weatherForGame(game))
     sim.box = boxScore(world, sim)
     sim.film = game.film
     sim.keys = game.keys
@@ -1887,7 +1910,7 @@ export const useGame = create<GameStore>((set, get) => ({
         // L15: keep the injured-availability state live across the rebuild (a
         // no-op for a player whose injury was already moved to `hurtSaved`).
         activatePlayHurt(world, career)
-        const rebuilt = createGame(world, game.homeId, game.awayId, world.seed + game.week * 7919 + 101, { ...oldCtx, callAll: gd.callStart }, old.weather)
+        const rebuilt = createGame(world, game.homeId, game.awayId, gd.seed ?? weekSeed(game.week), { ...oldCtx, callAll: gd.callStart }, old.weather)
         let ok = true
         let guard = 4000
         while (ok && rebuilt.plays.length < keepPlays && !rebuilt.done && guard-- > 0) {
@@ -1942,11 +1965,15 @@ export const useGame = create<GameStore>((set, get) => ({
     // activates; the fast path does it in `advanceWeek`).
     activatePlayHurt(world, career)
     // L12.6: "call every play" only applies to a coached game, never to fast sim.
-    const state = createGame(world, game.homeId, game.awayId, world.seed + week * 7919 + 101, { ...ctx, callAll: career.callMode }, weatherForGame(game))
+    // Backlog 436: fresh dice every kickoff (0 headless), kept on the schedule
+    // entry so the play-by-play re-sim matches.
+    game.diceSalt = rollDice() || undefined
+    const seed = weekSeed(week) + (game.diceSalt ?? 0)
+    const state = createGame(world, game.homeId, game.awayId, seed, { ...ctx, callAll: career.callMode }, weatherForGame(game))
     // L11.5 Q2: run out the first drive so the user sees the game start.
     const moment = runUntil(world, state, 'drive')
     set({
-      gameDay: { gameId: game.id, state, moment, plan, personnel: career.personnel ?? {}, changes: [], callStart: career.callMode, callSwitches: [] },
+      gameDay: { gameId: game.id, state, moment, plan, personnel: career.personnel ?? {}, changes: [], callStart: career.callMode, callSwitches: [], seed },
       match: finishGame(state),
       matchSeq: get().matchSeq + 1,
       tick: get().tick + 1,
@@ -4238,40 +4265,19 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('You are not on the clock.')
       return
     }
-    const offer = buildDraftTradeDownOffers(world, career.teamId, 8).find((o) => o.id === id)
+    const offer = buildDraftTradeDownOffers(world, career.teamId, tradeDownOfferLimit(world, career)).find((o) => o.id === id)
     if (!offer) {
       get().showToast('That offer is no longer on the table.')
       return
     }
-    if (
-      !offer.give.every((a) => draftAssetOwnedBy(world, a, career.teamId)) ||
-      !offer.get.every((a) => draftAssetOwnedBy(world, a, offer.partnerId))
-    ) {
-      get().showToast('That deal is no longer available — the board has moved.')
+    // FUTURES #27 DF2: the accept internals live in the engine so the room's own
+    // trade-down and this click can never drift apart.
+    const result = applyDraftTradeDown(world, career, offer)
+    if (!result.ok) {
+      get().showToast(result.reason ?? 'That deal is no longer available — the board has moved.')
       return
     }
-    const verdict = evaluateTrade(world, offer.partnerId, career.teamId, offer.give, offer.get, career.skills.negotiation)
-    if (!verdict.accepted) {
-      get().showToast(verdict.reason)
-      return
-    }
-    const rec = recordTrade(world, career, offer.partnerId, offer.give, offer.get)
-    executeTrade(world, career.teamId, offer.partnerId, offer.give, offer.get)
-    stampIncomingPlayers(world, career, offer.partnerId, offer.get)
-    // Re-point every slot to its pick's current owner, so the buyer is now on the
-    // clock at the pick you just sold — and any pick you got back lands with you.
-    syncDraftOrder(world)
-    const prospect = bestAvailableFor(world, offer.partnerId)
-    if (prospect) makePick(world, prospect, offer.partnerId)
-    else world.draftState.complete = true
-    // Run the board forward to your next selection.
-    simUntilUser(world, career)
-    logConvictionPicks(world, career)
-    logRedFlags(world, career)
-    announceDraftPicks(world, career)
-    resolveTradePicks(world, career)
-    const trades = [...(career.trades ?? []), rec].slice(-60)
-    set({ career: { ...career, trades }, tick: get().tick + 1 })
+    set({ career: { ...career }, tick: get().tick + 1 })
     get().showToast(`Draft-day deal with the ${world.byId[offer.partnerId].name} — you moved back.`)
     get().save()
   },
@@ -4981,61 +4987,6 @@ function openTradeDeadline(world: World, career: CareerState): CareerState {
   return {
     ...career,
     deadline: { season: world.season, week: world.week, offers, resolved: [], aiRan: aiOn, aiTrades },
-  }
-}
-
-/**
- * A live draft-day trade can move a pick that still has a slot ahead of it, so
- * re-point the slot's team from current pick ownership (comp picks included)
- * without rebuilding the whole order.
- */
-function syncDraftOrder(world: World): void {
-  const ids = world.draftPickIds
-  if (!ids?.length) return
-  for (let i = 0; i < ids.length && i < world.draftOrder.length; i++) {
-    const pk = world.draftPicks.find((p) => p.id === ids[i])
-    if (pk) world.draftOrder[i] = pk.ownerTeam
-  }
-}
-
-/** Does `teamId` still own this asset, and is a pick still live for trading? */
-function draftAssetOwnedBy(world: World, a: TradeAsset, teamId: string): boolean {
-  if (a.kind === 'player') return world.players.find((p) => p.id === a.id)?.teamId === teamId
-  const pk = world.draftPicks.find((p) => p.id === a.id)
-  return !!pk && pk.ownerTeam === teamId && isTradeablePick(world, pk)
-}
-
-/** Stamp players arriving via a trade as your acquisitions (origin + shadow note). */
-function stampIncomingPlayers(world: World, career: CareerState, partnerId: string, get2: TradeAsset[]): void {
-  for (const a of get2) {
-    if (a.kind !== 'player') continue
-    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === a.id)
-    if (p) {
-      p.origin = { kind: 'trade', season: world.season, by: career.gmName, fromTeamId: partnerId }
-      if (isOnShadowBoard(career, p.id)) p.origin.note = '(from your shadow board)'
-    }
-  }
-}
-
-/** Ping the inbox whenever one of your guys comes off the board (#20). */
-function announceDraftPicks(world: World, career: CareerState) {
-  const board = new Set(career.userBoard ?? [])
-  const guys = new Set((career.ledger ?? []).map((e) => e.prospectId).filter((x): x is string => !!x))
-  for (const p of world.draft) {
-    if (!p.draftedBy) continue
-    if (!board.has(p.id) && !guys.has(p.id)) continue
-    const id = `draftping_${p.id}`
-    if (world.news.some((n) => n.id === id)) continue
-    world.news.unshift({
-      id,
-      week: world.week,
-      season: world.season,
-      category: 'Draft',
-      headline: `${p.name} drafted at #${p.draftPick ?? '?'}`,
-      body: `One of your guys is off the board — ${p.pos} from ${p.college} to the ${world.byId[p.draftedBy]?.abbr ?? p.draftedBy}. This is the payoff of the climb.`,
-      teamId: career.teamId,
-      read: false,
-    })
   }
 }
 

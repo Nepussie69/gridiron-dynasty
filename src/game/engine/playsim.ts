@@ -49,11 +49,15 @@ import {
   readOrder, routeForCandidate, qbReach, readBias, checkdownBias, visionThrow, eyeSkill,
   isCheckRoute, visionOn, VISION as VISION_CFG, type VisionThrow,
 } from './vision'
+import { wrRead, wrReadsOn, WRREAD as WRREAD_CFG, WRR_STAT, type WrRead } from './wrReads'
 import {
   throwOn, passStyle, chooseThrowType, throwPlan, airTimeFor, pocketPlan, readAvoidBias,
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
 } from './throw'
 import { FEATURED_CONCEPT, electFeatured, featuredPassEdge, featuredRunEdge, featuredIntMult, featuredOn, type FeaturedPlay } from './featured'
+// FUTURES #7 (H1): the halftime speech card and its second-half edge. Pure, no
+// rng — the verdict is a hash and the edge is the sum of individual responses.
+import { buildSpeechOptions, speechOutcome, speechSituation, withSpeech, type SpeechCtx, type SpeechOutcome, type SpeechId } from './halftimeSpeech'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -279,6 +283,12 @@ export function getJ36(): boolean {
 // re-expressed and no target weight moves, so its rng() stream and every resolved
 // play are byte-identical to the pre-J10a engine.
 export { setVision, getVision } from './vision'
+// J52: dev-only toggle for the receiver coverage-read layer (the setJ13 pattern).
+// The flag and every helper live in `wrReads.ts`; re-exported here so the probe
+// and the OFF calibration copy share one switch. Default ON; with it OFF no read
+// is computed, no separation/INT term moves and no Play field is added, so every
+// resolved play is byte-identical to the pre-J52 engine.
+export { setWrReads, getWrReads } from './wrReads'
 // J10b: dev-only toggle for the QB throw-power / throw-type / pocket-presence
 // layer (the setStamina pattern). The flag and every helper live in `throw.ts`;
 // re-exported here so the probe and the OFF calibration copy share one switch.
@@ -1036,6 +1046,16 @@ export interface Play {
   ballOffsetYd?: number
   /** J10a: the defender who jumped the stared-down route (INT / break-up). */
   eyeJumpId?: string
+  // ── J52: the receiver's own coverage read (animation) ──────────────────────
+  /** J52: the conversion the target receiver's read won ('sit' vs zone, 'hot' vs
+   *  blitz, 'fade' vs press, 'keepRunning' vs man). */
+  wrConverted?: 'sit' | 'keepRunning' | 'fade' | 'hot'
+  /** J52: the receiver and the QB were not on the same page (wrong route/depth). */
+  wrMisread?: boolean
+  /** J52: the receiver's own read rating vs the league's receivers (probe). */
+  wrRead?: number
+  /** J52: the wrong depth the misread drew (yards; animation). */
+  wrDepthYd?: number
   // ── J10b: throw power, throw type & pocket presence (animation) ─────────────
   /** J10b: the ball's estimated flight time (s) from release to arrival. */
   airTimeS?: number
@@ -1229,6 +1249,8 @@ export interface GameSim {
   fatigue?: Record<string, number>
   /** animflow r6b: the game's weather (read-only, for the broadcast's rain / snow / wind). */
   weather?: GameWeather
+  /** FUTURES #7: the decided halftime speech per club (film / post-game aftermath). */
+  speech?: Record<string, SpeechOutcome>
 }
 
 /** L11.5 Q3: one mid-game change to the user's live plan. */
@@ -2712,6 +2734,16 @@ export interface PlayOutcome {
   ballOffsetYd?: number
   /** J10a: the defender who jumped the stared-down route (INT / break-up). */
   eyeJumpId?: string
+  // ── J52: the receiver's own coverage read (animation) ──────────────────────
+  /** J52: the conversion the target receiver's read won ('sit' vs zone, 'hot' vs
+   *  blitz, 'fade' vs press, 'keepRunning' vs man). */
+  wrConverted?: 'sit' | 'keepRunning' | 'fade' | 'hot'
+  /** J52: the receiver and the QB were not on the same page (wrong route/depth). */
+  wrMisread?: boolean
+  /** J52: the receiver's own read rating vs the league's receivers (probe). */
+  wrRead?: number
+  /** J52: the wrong depth the misread drew (yards; animation). */
+  wrDepthYd?: number
   // ── J10b: throw power, throw type & pocket presence (animation) ─────────────
   /** J10b: the ball's estimated flight time (s) from release to arrival. */
   airTimeS?: number
@@ -3105,6 +3137,8 @@ interface SimEnv {
   /** FUTURES #6: bounded, centered weather effects for this offence & quarter.
    *  Undefined (or all-neutral) when no weather was supplied or weather is off. */
   wx?: WxEffects
+  /** FUTURES #7: the decided halftime speech per club (Q3+ edge), if any. */
+  speech?: Record<string, SpeechOutcome>
 }
 
 /**
@@ -4146,8 +4180,8 @@ function proximityWeight(p: Player, coverId: string | undefined): number {
 export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect): PlayOutcome {
-  const ocEff = ocEffect(world, offId)
-  const dcEff = ocEffect(world, defId)
+  const ocEff = withSpeech(ocEffect(world, offId), env, offId)
+  const dcEff = withSpeech(ocEffect(world, defId), env, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
   // AI-vs-AI snaps never see them.
   const userTeamId = env?.userTeamId
@@ -4668,6 +4702,45 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Play field is added, so the base sim is untouched.
   const coverA = coverPlayer ? mkAttrs(coverPlayer) : undefined
   const covPos = coverPlayer?.pos
+  // ── J52 (FUTURES #52): the receiver's own post-snap coverage read ───────────
+  // The target reads the coverage he is running against — man / zone / press, the
+  // blitz, the safety rotation — with his own AWR + route rating + experience and
+  // his J37 chemistry with THIS quarterback. A clean read that agrees with the
+  // QB's page converts the route (sit vs zone, keep running vs man, fade vs
+  // press, hot vs blitz); anything else is a misread (wrong route/depth, a
+  // tighter window, a bigger pick chance). One deterministic call, no rng draw
+  // added or removed; undefined when the layer is off, so the OFF path is
+  // byte-identical (no term, no Play field). See `wrReads.ts`.
+  const wrr: WrRead | undefined = wrReadsOn() && target
+    ? wrRead({
+        world, n, offId, defId, wr: target, qb, route: vRoute, depth: concept.depth,
+        // The coverage the defence actually played on this snap.
+        man: dStyle.manCoverage >= 0.5,
+        press: dStyle.manCoverage >= 0.5 && concept.depth <= 19 && !!coverA &&
+          rmean(covPos, 'PRS', coverA.PRS ?? 70) > 0,
+        blitz,
+        twoHigh: hasFix(env, defId, 'twoDeep') || (saf.length >= 2 && !helpS),
+        // The J12 disguise hid the look, and whether it sold the QB a false one
+        // (the passer is then still reading the wrong shell after the snap).
+        disguised, qbFooled,
+        // The covering defender's own disguise skill (his PRC/AWR, centred).
+        dbSkill: coverA && covPos ? eyeSkill(covPos, coverA.PRC, coverA.AWR) : 0,
+        chemRel,
+      })
+    : undefined
+  // J52: the read the animation needs (undefined when off, so the OFF Play record
+  // is unchanged). `wrConverted` is the conversion; a misread is flagged and
+  // carries the wrong depth he ran.
+  const wrFields: Pick<PlayOutcome, 'wrConverted' | 'wrMisread' | 'wrRead' | 'wrDepthYd'> = wrr
+    ? {
+        ...(wrr.convert ? { wrConverted: wrr.convert } : { wrMisread: true }),
+        wrRead: +wrr.skill.toFixed(1),
+        ...(wrr.depthErrYd ? { wrDepthYd: wrr.depthErrYd } : {}),
+      }
+    : {}
+  // J52: the misread's wrong depth rides on `wrDepthYd` only. `passDepth` stays
+  // the sim's own air yards: playAnim places the catch from it, so shifting it
+  // without the yards would draw a catch past the tackle spot.
   const manW = dStyle.manCoverage
   let muSep = 0
   let coverRel = 0
@@ -4794,6 +4867,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     (pEdge ? pEdge.pass : 0) +
     // L12.13 M3: a receiver's mastery of the system shows in his separation.
     (target && (target.pos === 'WR' || target.pos === 'TE') ? clamp(masteryOffset(target, means) * 0.06, -3, 3) : 0) +
+    // J52: the coverage read. A converted route (sit vs zone, keep running vs
+    // man, fade vs press, hot vs blitz) is separation at the catch point; a
+    // misread leaves him at the wrong depth/route. Centred on the league's
+    // measured mean read quality, so the league level holds and only the
+    // individual spread moves.
+    (wrr ? (wrr.q - WRREAD_CFG.sepCentre) * WRREAD_CFG.sepW : 0) +
     // J7: the covering defender, mismatches and coverage busts.
     muSepNet * MU.sepToRating
   // The covering defender's own cover ability (J8c). The *level* is a league
@@ -4996,8 +5075,23 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // BOTH the fresh pairs and the high pick rates), so the INT leg is centred on its own
   // `CHEM.intShift` — measured with J37_STAT so the league's mean pick rate holds.
   const intPre = R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1)
-  const intProb = clamp(pairChem !== undefined ? intPre * (1 - (chemRel - skillCen * CHEM.intShiftFrac) * CHEM.intW) : intPre, 0.005, 0.06)
+  // J52: a busted read throws into a closing window — the pick chance rises; a
+  // converted route throws to a receiver in phase with his QB, so it falls a
+  // little. One relative multiplier, centred on the league's measured mean read
+  // quality (the J37 `intShiftFrac` role), so the league pick rate holds while
+  // elite and poor readers separate. 1 when the layer is off.
+  const intWr = wrr ? clamp(1 + (WRREAD_CFG.intCentre - wrr.q) * WRREAD_CFG.intW, WRREAD_CFG.intLo, WRREAD_CFG.intHi) : 1
+  const intPair = pairChem !== undefined ? intPre * (1 - (chemRel - skillCen * CHEM.intShiftFrac) * CHEM.intW) : intPre
+  const intProb = clamp(intPair * intWr, 0.005, 0.06)
   if (J37_STAT.on && pairChem !== undefined) J37_STAT.dInt += intProb - clamp(intPre, 0.005, 0.06)
+  if (WRR_STAT.on && wrr) {
+    WRR_STAT.n++
+    WRR_STAT.sumQ += wrr.q
+    WRR_STAT.sumSkill += wrr.skill
+    WRR_STAT.dSep += (wrr.q - WRREAD_CFG.sepCentre) * WRREAD_CFG.sepW
+    WRR_STAT.dInt += intProb - clamp(intPair, 0.005, 0.06)
+    if (wrr.convert) WRR_STAT.conv++
+  }
 
   if (rng() < intProb) {
     // L12 S3/E2: the coverage defender takes the pick most often, otherwise the
@@ -5030,7 +5124,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       result: (pickSix ? 'Interception returned for a TOUCHDOWN!' : 'Interception!') + tipText,
       turnover: true, blitz,
       ...(DEPTH_AWARE_ON ? { passDepth: passAir, passConceptDepth: concept.depth } : {}),
-      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields,
+      timeUsed: 22 + Math.floor(rng() * 12), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), qbId: qb?.id, intId, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields,
       targetId: target?.id, defTD: pickSix, returnerId: pickSix ? intId : undefined,
       scorerId: pickSix ? intId : undefined,
       tippedInt: tipped || undefined, tipId, muffedCatch: tipMuff || undefined,
@@ -5158,13 +5252,13 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
-  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
+  const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: qb?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
   // unchanged. Better hands (CTH) drop fewer.
@@ -5189,8 +5283,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
 }
 
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), j13?: J13Effect): PlayOutcome {
-  const ocEff = ocEffect(world, offId)
-  const dcEff = ocEffect(world, defId)
+  const ocEff = withSpeech(ocEffect(world, offId), env, offId)
+  const dcEff = withSpeech(ocEffect(world, defId), env, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only.
   const userTeamId = env?.userTeamId
   const userOff = !!userTeamId && userTeamId === offId
@@ -5981,7 +6075,7 @@ function fmtClock(sec: number) {
 }
 
 // ── Resumable game state (L10 G1) ─────────────────────────────────────────────
-export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'audible' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff' | 'challenge'
+export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'audible' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff' | 'challenge' | 'speech'
 /** Which side a moment belongs to (Design rule 5). 'hc' = head-coach only. */
 export type MomentSide = 'off' | 'def' | 'both' | 'hc'
 /** G7 two-minute offensive mode for the current possession. */
@@ -6047,6 +6141,8 @@ export interface GameCtx {
   special?: SpecialTeamsPlan
   /** FUTURES #26: who calls each situation, the user's call sheet and audibles rule. */
   calling?: PlayCallingPlan
+  /** FUTURES #7: the user's halftime-speech context (leadership, captains, history). */
+  speech?: SpeechCtx
 }
 export interface GameState {
   rng: Rng
@@ -6155,6 +6251,11 @@ export interface GameState {
    * after the user answers never redraws from the rng (design hook 2).
    */
   callLooks?: Record<string, { def?: DefCall; cls?: OffClass; concept?: string }>
+  // ── FUTURES #7: halftime speech ────────────────────────────────────────────
+  /** The decided speech per club (only the user's club ever speaks). */
+  speech?: Record<string, SpeechOutcome>
+  /** The speech card has been resolved this halftime. */
+  speechDone?: boolean
 }
 
 const MAX_PLAYS = 210
@@ -6194,15 +6295,16 @@ function pushPlay(s: GameState, p: Omit<Play, 'n' | 'qtr' | 'clock' | 'offId' | 
 
 // ── Decision points (L10 G2) ──────────────────────────────────────────────────
 const MOMENT_CAPS: Record<MomentKind, number> = {
-  fourth: 3, two: 2, call: 2, defCall: 2, audible: 3, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2, challenge: 3,
+  fourth: 3, two: 2, call: 2, defCall: 2, audible: 3, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2, challenge: 3, speech: 1,
 }
 /** Cap on the big moments. Play calls (call/defCall) have their own caps and do
  *  not count here, so they can never crowd out halftime or a late 2-point try. */
 const TOTAL_MOMENT_CAP = 8
 const isPlayCall = (k: MomentKind) => k === 'call' || k === 'defCall' || k === 'audible'
-/** Moments exempt from the total cap: play calls and (FUTURES #5) red flags, so a
- *  challenge can never crowd out halftime or a late 2-point try. */
-const capExempt = (k: MomentKind) => isPlayCall(k) || k === 'challenge'
+/** Moments exempt from the total cap: play calls, (FUTURES #5) red flags and
+ *  (FUTURES #7) the halftime speech, so a speech can never crowd out halftime or
+ *  a late 2-point try. */
+const capExempt = (k: MomentKind) => isPlayCall(k) || k === 'challenge' || k === 'speech'
 
 interface DecisionSpec {
   kind: MomentKind
@@ -6524,13 +6626,34 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
     }
     s.qbChangeChecked = true
   }
+  // FUTURES #7: the HC's halftime speech, after the X&O and QB cards. Only the
+  // user's club speaks; a stay-the-course answer stores nothing, so the default
+  // game is untouched. The verdict is a hash and the edge is the sum of the
+  // players' own responses — no rng() draw is added.
+  if (s.ctx && !s.speechDone) {
+    const userTeam = s.ctx.userTeamId
+    const margin = userTeam === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+    const benchedQbId = s.qbOverride[userTeam] ? depthGroup(world, userTeam, ['QB'], 2)[0]?.id : undefined
+    const card = buildSpeechOptions(world, s.plays, userTeam, s.ctx.speech, { margin, benchedQbId })
+    const choice = decide(s, {
+      kind: 'speech', side: 'hc', teamId: userTeam, qtr: 2, clock: '0:00', down: null, distance: null, yard: s.yard,
+      title: 'Halftime speech', options: card.options, defaultId: card.defaultId, staffRead: card.staffRead, ask: true, margin,
+    })
+    if (choice === null) return 'moment'
+    if (choice !== 'stayCourse') {
+      const sit = speechSituation(world, s.plays, userTeam, margin)
+      const key = `${s.homeId}:${s.awayId}:${userTeam}:${s.plays.length}:${world.seed}:${world.week}`
+      ;(s.speech ??= {})[userTeam] = speechOutcome(world, userTeam, choice as SpeechId, s.ctx.speech, key, { sit, starId: card.starId })
+    }
+    s.speechDone = true
+  }
   return stepHalftime(world, s)
 }
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId) }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId), speech: s.speech }
 }
 
 /** FUTURES #6: the centred weather effects for one offence (undefined = neutral). */
@@ -6816,6 +6939,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     logged: {},
     halfAdjustDone: false,
     qbChangeChecked: false,
+    speechDone: false,
     twoMinDrives: 0,
     mastery: means,
     mental: { [homeId]: teamMental(homeId), [awayId]: teamMental(awayId) },
@@ -7801,6 +7925,7 @@ export function finishGame(s: GameState): GameSim {
     specialists: s.specialists,
     fatigue: s.fat,
     weather: s.weather,
+    speech: s.speech,
   }
 }
 

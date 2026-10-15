@@ -651,3 +651,106 @@ export function roomNote(winner: RoomArgument | null): string {
   if (winner.isUser) return 'Your call won the room.'
   return `The ${winner.short}'s call won the room.`
 }
+
+// ── Trade-down volume (DF2) ──────────────────────────────────────────────────
+//
+// The trade-down axis is the room's appetite to move off the clock: Stand pat
+// listens to a couple of calls, Open works the phones, Accumulate both shows the
+// most offers AND will actually take one when the board does not fall away. The
+// seats behind that appetite are specific people with their own authority, so a
+// Cap-minded GM and a Need-minded coordinator do not average into a shrug.
+
+/** How many trade-down offers the room shows 2 / 4 / 6 per trade-down step. */
+export const TRADE_DOWN_OFFER_LIMIT: Record<DraftPhilosophy['tradeDown'], number> = {
+  'Stand pat': 2,
+  Open: 4,
+  Accumulate: 6,
+}
+
+/** Deterministic uniform in [0,1) from a string key (a hash, never a world draw). */
+function h01(key: string): number {
+  return (hash32(key, 2053) >>> 0) / 4294967296
+}
+
+/**
+ * The room's trade-down volume for the pick on the clock. Below the pen the blend
+ * is the weighted mean of the seats; with the philosophy unset this is today's
+ * 4-offer default, so nothing moves for an old save.
+ */
+export function tradeDownOfferLimit(world: World, career: CareerState | null | undefined): number {
+  if (!career || !draftPhilosophyActive(world, career)) return TRADE_DOWN_OFFER_LIMIT[DEFAULT_PHILOSOPHY.tradeDown]
+  return TRADE_DOWN_OFFER_LIMIT[blendedVector(world, career).tradeDown]
+}
+
+/** How hard one seat's step pushes toward actually taking a deal: only Accumulate bites. */
+export function tradeDownWeight(step: PhilosophyStep): number {
+  return step === 'Accumulate' ? 1 : 0
+}
+
+/** Is the room hoarding picks this draft? (Active philosophy + an Accumulate blend.) */
+export function roomAccumulating(world: World, career: CareerState | null | undefined): boolean {
+  if (!career || !draftPhilosophyActive(world, career)) return false
+  return blendedVector(world, career).tradeDown === 'Accumulate'
+}
+
+/** The share of the room's authority that wants to move back (0 with the philosophy unset). */
+export function blendedTradeWeight(world: World, career: CareerState | null | undefined): number {
+  if (!career || !draftPhilosophyActive(world, career)) return 0
+  const seats = roomSeats(world, career)
+  const total = seats.reduce((s, x) => s + x.weight, 0)
+  if (total <= 0) return 0
+  return seats.reduce((s, x) => s + tradeDownWeight(x.vector.tradeDown) * x.weight, 0) / total
+}
+
+/** The highest-authority voice arguing for the move back, for the ledger line. */
+export function tradeDownAdvocate(world: World, career: CareerState): RoomSeat | null {
+  return (
+    roomSeats(world, career)
+      .filter((s) => tradeDownWeight(s.vector.tradeDown) > 0)
+      .sort((a, b) => b.weight - a.weight || SEAT_ORDER.indexOf(a.key) - SEAT_ORDER.indexOf(b.key))[0] ?? null
+  )
+}
+
+/**
+ * Does the room take this qualifying deal? Deterministic: the authority behind
+ * Accumulate sets the odds and `h01(seed, season, pickIndex)` makes the roll. No
+ * world-RNG draw is added, so a reload is the same draft.
+ */
+export function roomTakesTradeDown(world: World, career: CareerState): boolean {
+  const weight = blendedTradeWeight(world, career)
+  if (weight <= 0) return false
+  return h01(`dt:${world.seed}:${world.season}:${world.draftState.pickIndex}`) < weight
+}
+
+/** One line naming whose call moved the room off the clock, for the ledger. */
+export function roomTradeNote(advocate: RoomSeat | null, partnerAbbr: string, returnText: string): string {
+  const tail = `${partnerAbbr} sent ${returnText} for our pick.`
+  if (!advocate) return `The room moved off the clock — ${tail}`
+  if (advocate.isUser) return `Your call: we moved off the clock — ${tail}`
+  return `The ${advocate.short}'s call: we moved off the clock — ${tail}`
+}
+
+/**
+ * The room's own board, best first — scored exactly as `bestAvailableFor` scores
+ * it under the tilt (grade + the flat 6 need bonus + the position premium + the
+ * blended philosophy delta). Null when no philosophy is live this draft. Used by
+ * the trade-down check to see what the board looks like three slots back.
+ */
+export function roomBoardScores(
+  world: World,
+  career: CareerState,
+  gradeOf: (p: DraftProspect) => number,
+  opts: BlendOptions = {},
+): { p: DraftProspect; score: number }[] | null {
+  const tilt = roomTilt(world, career, opts)
+  if (!tilt) return null
+  const ctx = tiltContext(world, career.teamId)
+  return world.draft
+    .filter((p) => !p.draftedBy)
+    .map((p) => {
+      const need = (ctx.needs[p.pos] ?? 0) > 0 ? BOARD_NEED_BONUS.Balanced : 0
+      const premium = POS_PREMIUM.has(p.pos) ? 2 : 0
+      return { p, score: gradeOf(p) + need + premium + tilt(p) }
+    })
+    .sort((a, b) => b.score - a.score || (a.p.id < b.p.id ? -1 : 1))
+}
