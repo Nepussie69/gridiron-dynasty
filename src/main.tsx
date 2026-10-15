@@ -7,6 +7,7 @@ import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay, matchupProbe, setMatchups } from './game/engine/playsim'
 import { animProbe } from './game/engine/animProbe'
 import { weatherProbe } from './game/engine/weather'
+import { speechProbe } from './game/engine/speechProbe'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -104,4 +105,5 @@ if (import.meta.env.DEV) {
   w.__weatherProbe = (opts?: { seasons?: number; weeks?: number }) => weatherProbe(getWorld(), opts)
   w.__matchupProbe = (opts?: { games?: number; seeds?: number[] }) => matchupProbe(getWorld(), opts)
   w.__setMatchups = (on: boolean) => setMatchups(on)
+  w.__speechProbe = (opts?: { n?: number; games?: number; seeds?: number[] }) => speechProbe(getWorld(), opts)
 }

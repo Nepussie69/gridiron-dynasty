@@ -39,6 +39,9 @@ import {
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
 } from './throw'
 import { FEATURED_CONCEPT, electFeatured, featuredPassEdge, featuredRunEdge, featuredIntMult, featuredOn, type FeaturedPlay } from './featured'
+// FUTURES #7 (H1): the halftime speech card and its second-half edge. Pure, no
+// rng — the verdict is a hash and the edge is the sum of individual responses.
+import { buildSpeechOptions, speechOutcome, speechSituation, withSpeech, type SpeechCtx, type SpeechOutcome, type SpeechId } from './halftimeSpeech'
 
 // The user's own coaching skill, set once per game by the store when they hold a
 // coaching role. Kept module-level so every play resolution sees it without
@@ -1214,6 +1217,8 @@ export interface GameSim {
   fatigue?: Record<string, number>
   /** animflow r6b: the game's weather (read-only, for the broadcast's rain / snow / wind). */
   weather?: GameWeather
+  /** FUTURES #7: the decided halftime speech per club (film / post-game aftermath). */
+  speech?: Record<string, SpeechOutcome>
 }
 
 /** L11.5 Q3: one mid-game change to the user's live plan. */
@@ -3090,6 +3095,8 @@ interface SimEnv {
   /** FUTURES #6: bounded, centered weather effects for this offence & quarter.
    *  Undefined (or all-neutral) when no weather was supplied or weather is off. */
   wx?: WxEffects
+  /** FUTURES #7: the decided halftime speech per club (Q3+ edge), if any. */
+  speech?: Record<string, SpeechOutcome>
 }
 
 /**
@@ -4053,8 +4060,8 @@ function proximityWeight(p: Player, coverId: string | undefined): number {
 export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
 function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect): PlayOutcome {
-  const ocEff = ocEffect(world, offId)
-  const dcEff = ocEffect(world, defId)
+  const ocEff = withSpeech(ocEffect(world, offId), env, offId)
+  const dcEff = withSpeech(ocEffect(world, defId), env, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
   // AI-vs-AI snaps never see them.
   const userTeamId = env?.userTeamId
@@ -5096,8 +5103,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
 }
 
 function resolveRun(world: World, rng: Rng, offId: string, defId: string, concept: Concept, distance: number, yard: number, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: CallEffect, n = 0, means: MasteryMeans = leagueMasteryMeans(world), j13?: J13Effect): PlayOutcome {
-  const ocEff = ocEffect(world, offId)
-  const dcEff = ocEffect(world, defId)
+  const ocEff = withSpeech(ocEffect(world, offId), env, offId)
+  const dcEff = withSpeech(ocEffect(world, defId), env, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only.
   const userTeamId = env?.userTeamId
   const userOff = !!userTeamId && userTeamId === offId
@@ -5888,7 +5895,7 @@ function fmtClock(sec: number) {
 }
 
 // ── Resumable game state (L10 G1) ─────────────────────────────────────────────
-export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff' | 'challenge'
+export type MomentKind = 'fourth' | 'two' | 'call' | 'defCall' | 'halftime' | 'twoMinute' | 'clock' | 'qbChange' | 'kickoff' | 'challenge' | 'speech'
 /** Which side a moment belongs to (Design rule 5). 'hc' = head-coach only. */
 export type MomentSide = 'off' | 'def' | 'both' | 'hc'
 /** G7 two-minute offensive mode for the current possession. */
@@ -5948,6 +5955,8 @@ export interface GameCtx {
   callAll?: 'off' | 'def' | 'both'
   /** FUTURES #4: the user's special-teams plan (kicks + return strategies). */
   special?: SpecialTeamsPlan
+  /** FUTURES #7: the user's halftime-speech context (leadership, captains, history). */
+  speech?: SpeechCtx
 }
 export interface GameState {
   rng: Rng
@@ -6051,6 +6060,11 @@ export interface GameState {
   challenges?: Record<string, ChallengeState>
   /** J38: featured plays called so far this game, per key (diminishing returns). */
   featuredCount?: Record<string, number>
+  // ── FUTURES #7: halftime speech ────────────────────────────────────────────
+  /** The decided speech per club (only the user's club ever speaks). */
+  speech?: Record<string, SpeechOutcome>
+  /** The speech card has been resolved this halftime. */
+  speechDone?: boolean
 }
 
 const MAX_PLAYS = 210
@@ -6090,15 +6104,16 @@ function pushPlay(s: GameState, p: Omit<Play, 'n' | 'qtr' | 'clock' | 'offId' | 
 
 // ── Decision points (L10 G2) ──────────────────────────────────────────────────
 const MOMENT_CAPS: Record<MomentKind, number> = {
-  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2, challenge: 3,
+  fourth: 3, two: 2, call: 2, defCall: 2, twoMinute: 2, clock: 1, halftime: 1, qbChange: 1, kickoff: 2, challenge: 3, speech: 1,
 }
 /** Cap on the big moments. Play calls (call/defCall) have their own caps and do
  *  not count here, so they can never crowd out halftime or a late 2-point try. */
 const TOTAL_MOMENT_CAP = 8
 const isPlayCall = (k: MomentKind) => k === 'call' || k === 'defCall'
-/** Moments exempt from the total cap: play calls and (FUTURES #5) red flags, so a
- *  challenge can never crowd out halftime or a late 2-point try. */
-const capExempt = (k: MomentKind) => isPlayCall(k) || k === 'challenge'
+/** Moments exempt from the total cap: play calls, (FUTURES #5) red flags and
+ *  (FUTURES #7) the halftime speech, so a speech can never crowd out halftime or
+ *  a late 2-point try. */
+const capExempt = (k: MomentKind) => isPlayCall(k) || k === 'challenge' || k === 'speech'
 
 interface DecisionSpec {
   kind: MomentKind
@@ -6420,13 +6435,34 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
     }
     s.qbChangeChecked = true
   }
+  // FUTURES #7: the HC's halftime speech, after the X&O and QB cards. Only the
+  // user's club speaks; a stay-the-course answer stores nothing, so the default
+  // game is untouched. The verdict is a hash and the edge is the sum of the
+  // players' own responses — no rng() draw is added.
+  if (s.ctx && !s.speechDone) {
+    const userTeam = s.ctx.userTeamId
+    const margin = userTeam === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+    const benchedQbId = s.qbOverride[userTeam] ? depthGroup(world, userTeam, ['QB'], 2)[0]?.id : undefined
+    const card = buildSpeechOptions(world, s.plays, userTeam, s.ctx.speech, { margin, benchedQbId })
+    const choice = decide(s, {
+      kind: 'speech', side: 'hc', teamId: userTeam, qtr: 2, clock: '0:00', down: null, distance: null, yard: s.yard,
+      title: 'Halftime speech', options: card.options, defaultId: card.defaultId, staffRead: card.staffRead, ask: true, margin,
+    })
+    if (choice === null) return 'moment'
+    if (choice !== 'stayCourse') {
+      const sit = speechSituation(world, s.plays, userTeam, margin)
+      const key = `${s.homeId}:${s.awayId}:${userTeam}:${s.plays.length}:${world.seed}:${world.week}`
+      ;(s.speech ??= {})[userTeam] = speechOutcome(world, userTeam, choice as SpeechId, s.ctx.speech, key, { sit, starId: card.starId })
+    }
+    s.speechDone = true
+  }
   return stepHalftime(world, s)
 }
 
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId) }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId), speech: s.speech }
 }
 
 /** FUTURES #6: the centred weather effects for one offence (undefined = neutral). */
@@ -6680,6 +6716,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     logged: {},
     halfAdjustDone: false,
     qbChangeChecked: false,
+    speechDone: false,
     twoMinDrives: 0,
     mastery: means,
     mental: { [homeId]: teamMental(homeId), [awayId]: teamMental(awayId) },
@@ -7615,6 +7652,7 @@ export function finishGame(s: GameState): GameSim {
     specialists: s.specialists,
     fatigue: s.fat,
     weather: s.weather,
+    speech: s.speech,
   }
 }
 
