@@ -14,6 +14,7 @@ import { MAX_TRAVEL_COVERAGE, coverageOf } from '../game/engine/scoutTravel'
 import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { CombineCard } from '../components/CombineCard'
+import { DraftPhilosophyCard } from '../components/DraftPhilosophyCard'
 import { ScoutTravelCard } from '../components/ScoutTravelCard'
 import { DataTable, type Column } from '../components/DataTable'
 import { RowQuickActions, type QuickAction } from '../components/RowQuickActions'
@@ -462,6 +463,7 @@ export function Scouting() {
         }
       >
         <div className="flex flex-col gap-4">
+          <DraftPhilosophyCard className="order-2 lg:order-4" />
           <Card pad={false} className="order-1 overflow-hidden lg:order-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
               <SectionTitle spacing="none">Class Board</SectionTitle>

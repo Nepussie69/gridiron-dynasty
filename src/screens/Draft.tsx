@@ -1,4 +1,4 @@
-import { CalendarClock, FastForward, LayoutGrid, List, SlidersHorizontal, Timer, Trophy } from 'lucide-react'
+import { CalendarClock, FastForward, LayoutGrid, List, SlidersHorizontal, Timer, Trophy, Users } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { DraftProspect, Position } from '../game/types'
 import {
@@ -15,6 +15,7 @@ import { accessFor } from '../game/engine/access'
 import { readProspect, readRookieRanges } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
+import { DraftRoom } from '../components/DraftRoom'
 import { DraftTradePanel } from '../components/DraftTradePanel'
 import { DataTable, type Column } from '../components/DataTable'
 import { FutureClasses } from './draft/FutureClasses'
@@ -62,7 +63,7 @@ export function Draft() {
   const finishDraft = useGame((s) => s.finishDraft)
   const phone = usePhone()
   const [tab, setTab] = useState<'this' | 'next' | 'two'>('this')
-  const [boardView, setBoardView] = useState<'list' | 'cards'>('list')
+  const [boardView, setBoardView] = useState<'list' | 'cards' | 'room'>('list')
   const [posFilter, setPosFilter] = useState<Position | 'ALL'>('ALL')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [finishOpen, setFinishOpen] = useState(false)
@@ -229,6 +230,7 @@ export function Draft() {
                 options={[
                   { id: 'list', label: 'List', icon: <List size={14} aria-hidden /> },
                   { id: 'cards', label: 'Cards', icon: <LayoutGrid size={14} aria-hidden /> },
+                  { id: 'room', label: 'Room', icon: <Users size={14} aria-hidden />, title: 'Who has a say in this room, and who holds the pen' },
                 ]}
               />
             )}
@@ -422,6 +424,9 @@ export function Draft() {
 
         {/* Main: the Prospect Board first on phone, then the trade desk, then the log. */}
         <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
+          {boardView === 'room' ? (
+            <DraftRoom className="order-1 lg:order-2" />
+          ) : (
           <Card pad={false} className="order-1 overflow-hidden lg:order-2">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
               <SectionTitle spacing="none">Prospect Board</SectionTitle>
@@ -459,6 +464,7 @@ export function Draft() {
               />
             </div>
           </Card>
+          )}
 
           <DraftTradePanel className="order-2 lg:order-1" />
 
