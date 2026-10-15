@@ -3440,7 +3440,8 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
 }
 
 // Read visuals (backlog 303-309; J10a fields; qbReads.ts): (1) the QB's head / shoulders and the
-// cone go through his designed reads in order and land on the engine's target (readNo); (2) a
+// cone go through his designed reads in order; the cone settles on the engine's target (readNo)
+// only at the release (livetele3 - it holds on the read he is on until then); (2) a
 // checkdown works the downfield reads first, then the eyes come off to the back / TE underneath;
 // (3) an eye-jump defender faces the QB, breaks before the throw and is at the ball for the pick /
 // break-up; (4) the ball arrives ballOffsetYd (3-D) from the receiver's ideal spot with the matching
@@ -3460,7 +3461,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const byId = new Map(world.players.map((p) => [p.id, p]))
     const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
     const deg = (a: number) => (Math.abs(((a + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * 180) / Math.PI
-    const c = { plans: 0, tgtOk: 0, seqOk: 0, seqN: 0, faceOk: 0, faceN: 0, coneOk: 0, coneN: 0, dwellShort: 0, dwells: 0,
+    const c = { plans: 0, tgtOk: 0, seqOk: 0, seqN: 0, faceOk: 0, faceN: 0, coneOk: 0, coneN: 0, holdOk: 0, holdN: 0, relOk: 0, relN: 0, preSnap: 0, dwellShort: 0, dwells: 0,
       chk: 0, chkDown: 0, chkBack: 0, swings: [] as number[], backSet: 0, backN: 0,
       eye: 0, eyePlanned: 0, eyeEarly: 0, eyeReads: 0, eyeInc: 0, eyeIncNear: 0, eyeIncSwat: 0, eyeInt: 0, eyeIntDrawn: 0, eyeVmax: 0,
       place: 0, placeExact: 0, placePose: 0, placeCls: {} as Record<string, number>, holdMoved: 0,
@@ -3487,6 +3488,11 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
         const qbSpd = (t: number) => { const a = at('qb', t - 0.05 / D); const b = at('qb', t + 0.05 / D); return Math.hypot(b.x - a.x, b.y - a.y) / 0.1 }
         const f = anim.flights[0]
         c.plans++
+        // livetele3: no cone / circle item exists before the snap.
+        for (let k = 0; k <= 4; k++) {
+          const cs = qbConeAt(play, anim, (plan.snapT * k) / 5)
+          if (cs.cone || cs.ring) c.preSnap++
+        }
         // 1. progression
         if (!sack) {
           if (actors.get(plan.target!)?.id === play.targetId && plan.seq[plan.seq.length - 1] === plan.target) c.tgtOk++
@@ -3500,7 +3506,8 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
           }
         }
         const lockT = f ? f.t0 - (THROW_TIMING[anim.throwStyle ?? 'normal'].wind + 0.45) / D : plan.endT - 0.25 / D
-        for (const l of plan.looks) {
+        for (let li = 0; li < plan.looks.length; li++) {
+          const l = plan.looks[li]
           const dw = (l.t1 - l.t0) * D
           c.dwells++
           if (dw < 0.15) c.dwellShort++
@@ -3514,12 +3521,29 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
             c.faceN++
             if (deg(AD.facingAt(anim, 'qb', m) - Math.atan2(r.y - q.y, r.x - q.x)) <= 20) c.faceOk++
           }
-          if (dw >= 2 * QR.TURN_SEC + 0.05) {
+          if (l.role === 'read' && dw >= 2 * QR.TURN_SEC + 0.05) {
             const t = l.t0 + (QR.TURN_SEC + 0.03) / D
             const cone = qbConeAt(play, anim, t).cone
             const q = at('qb', t)
             const r = look(t)
             if (cone) { c.coneN++; if (deg(cone.yaw - Math.atan2(r.y - q.y, r.x - q.x)) <= 3) c.coneOk++ }
+          } else if (l.role !== 'read') {
+            // livetele3: the turn onto the target COMPLETES at the release. Just before
+            // it the cone still holds on the read he was on (never the target early);
+            // at the release it is on the target.
+            const tHold = Math.min(plan.endT, plan.endT - (QR.TURN_SEC + 0.05) / D)
+            if (tHold > l.t0 + 1e-9) {
+              const prev = li > 0 ? plan.looks[li - 1] : null
+              const cone = qbConeAt(play, anim, tHold).cone
+              const q = at('qb', tHold)
+              const r = prev && prev.role === 'read' ? at(prev.key, tHold) : QR.restPoint(plan, anim, tHold, q)
+              c.holdN++
+              if (cone && deg(cone.yaw - Math.atan2(r.y - q.y, r.x - q.x)) <= 3) c.holdOk++
+            }
+            const coneR = qbConeAt(play, anim, plan.endT).cone
+            const qR = at('qb', plan.endT)
+            c.relN++
+            if (coneR && deg(coneR.yaw - Math.atan2(plan.aimY - qR.y, plan.aimX - qR.x)) <= 3) c.relOk++
           }
         }
         // 2. checkdown
@@ -3606,6 +3630,11 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(pct(c.seqOk, c.seqN) >= 0.98, `reads shown before the target = readNo - 1 on ${c.seqOk}/${c.seqN}`)
     assert.ok(pct(c.faceOk, c.faceN) >= 0.97, `QB head/shoulders on the read ${c.faceOk}/${c.faceN}`)
     assert.ok(pct(c.coneOk, c.coneN) >= 0.98, `cone on the read after the turn ${c.coneOk}/${c.coneN}`)
+    // livetele3: nothing of the cone / circle is drawn before the snap.
+    assert.ok(c.preSnap === 0, `cone / circle drawn before the snap on ${c.preSnap} samples`)
+    // livetele3: the cone never settles on the target before the release.
+    assert.ok(c.holdN > 0 && c.holdOk === c.holdN, `cone holds off the target before the release ${c.holdOk}/${c.holdN}`)
+    assert.ok(c.relN > 0 && c.relOk === c.relN, `cone on the target at the release ${c.relOk}/${c.relN}`)
     assert.ok(pct(c.dwellShort, c.dwells) <= 0.05, `reads shorter than 0.15 s: ${c.dwellShort}/${c.dwells}`)
     assert.ok(!dwellBy.hi.length || !dwellBy.lo.length || med(dwellBy.hi) < med(dwellBy.lo), `a quick reader moves faster: dwell hi ${med(dwellBy.hi)} vs lo ${med(dwellBy.lo)}`)
     // 2
@@ -3626,7 +3655,202 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     assert.ok(c.coneEnd === c.cone && c.radEnd === c.cone - c.sacks, `cone at release == coneDeg ${c.coneEnd}/${c.cone}, circle == placeRadiusYd ${c.radEnd}`)
     assert.ok(c.pressNarrow === c.press && c.mono === c.cone, `pressured snaps narrow >= 6 deg ${c.pressNarrow}/${c.press}; never widens ${c.mono}/${c.cone}`)
     assert.ok(pct(c.pressGrow, c.press - c.sacks) >= 0.9 && c.sackCone === c.sacks, `circle grows under pressure ${c.pressGrow}/${c.press - c.sacks}; sack cone ${c.sackCone}/${c.sacks}`)
-    console.log(`      reads: ${c.plans} plans, face ${c.faceOk}/${c.faceN}, cone ${c.coneOk}/${c.coneN}; checkdown ${c.chk} swing med ${med(c.swings).toFixed(0)} deg; eye jump ${c.eye} (inc ${c.eyeIncNear}/${c.eyeInc}, int ${c.eyeIntDrawn}/${c.eyeInt}); placement ${c.placeExact}/${c.place} ${JSON.stringify(c.placeCls)}; pressured ${c.pressNarrow}/${c.press}`)
+    console.log(`      reads: ${c.plans} plans, face ${c.faceOk}/${c.faceN}, cone ${c.coneOk}/${c.coneN}, settle ${c.holdOk}/${c.holdN}, release ${c.relOk}/${c.relN}; checkdown ${c.chk} swing med ${med(c.swings).toFixed(0)} deg; eye jump ${c.eye} (inc ${c.eyeIncNear}/${c.eyeInc}, int ${c.eyeIntDrawn}/${c.eyeInt}); placement ${c.placeExact}/${c.place} ${JSON.stringify(c.placeCls)}; pressured ${c.pressNarrow}/${c.press}`)
+  })
+}
+
+// ── livetele3: every route live; the target only highlighted at the release ──
+{
+  const RP = await import('../src/components/broadcast/replay.ts')
+  type TeleItems = ReturnType<typeof RP.liveTelestrations>
+  type RouteTraces = ReturnType<typeof RP.liveRouteTraces>
+  const { qbConeAt } = await import('../src/components/broadcast/visionCone.ts')
+  const store = await import('../src/store/gameStore.ts')
+  const { simulatePlayByPlay } = await import('../src/game/engine/playsim.ts')
+  const { buildPlayAnim, posAt, targetKey } = await import('../src/components/playAnim.ts')
+  const { actorPlayers } = await import('../src/components/jersey.ts')
+  ok('livetele3: no cone/circle before the snap; the live cone matches each read; every route runner draws a plain live trace while the target is highlighted only at the release', () => {
+    store.useGame.getState().startCareer({ name: 'R3', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    const byId = new Map(world.players.map((p) => [p.id, p]))
+    const deg = (a: number) => (Math.abs(((a + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * 180) / Math.PI
+    const TERMINAL = new Set(['tackle', 'sack', 'outOfBounds', 'down', 'score', 'incomplete', 'safety', 'kickGood', 'kickMiss', 'touchback', 'fairCatch'])
+    const ELIG = /^(wr\d|te|rb|fb)$/
+    const pathLen = (p: { x: number; y: number }[] | undefined, a: number, b: number) => {
+      if (!p) return 0
+      let len = 0
+      let prev = r6PosAt(p, a)
+      for (let t = a + 0.02; t < b; t += 0.02) {
+        const q = r6PosAt(p, t)
+        len += Math.hypot(q.x - prev.x, q.y - prev.y)
+        prev = q
+      }
+      const q = r6PosAt(p, b)
+      return len + Math.hypot(q.x - prev.x, q.y - prev.y)
+    }
+    let plays = 0
+    let runs = 0
+    let runsOk = 0
+    let blocks = 0
+    let blocksOk = 0
+    let tgtElig = 0
+    let tgtTrace = 0
+    let hlN = 0
+    let hlOk = 0
+    let preSnapN = 0
+    let preSnapOk = 0
+    let aimN = 0
+    let aimOk = 0
+    const bad: string[] = []
+    const perfCases: { anim: BroadcastAnim; items: TeleItems; traces: RouteTraces; cx: number }[] = []
+    for (let g = 0; g < 20; g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 3) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 7703 + g * 6151)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' || play.spike || play.kneel) continue
+        const other = play.offId === home ? away : home
+        const tPos = play.targetId ? byId.get(play.targetId)?.pos : undefined
+        const tKey = play.targetId ? targetKey(play, { targetPos: tPos }) : null
+        const actors = actorPlayers(world, play, other, tKey)
+        let anim: BroadcastAnim
+        try {
+          anim = buildPlayAnim(play, { next: sim.plays[i + 1], targetPos: tPos, actors }) as BroadcastAnim
+        } catch {
+          continue
+        }
+        const plan = (anim as BroadcastAnim & { reads?: import('../src/components/broadcast/qbReads.ts').ReadPlan | null }).reads
+        if (!plan) continue
+        const events = anim.events ?? []
+        const snap = events.find((e) => e.kind === 'snap')
+        if (!snap) continue
+        plays++
+        const snapT = snap.t
+        let whistle = -1
+        for (const e of events) if (TERMINAL.has(e.kind)) whistle = Math.max(whistle, e.t)
+        const t1 = whistle < 0 ? 1 : Math.min(1, whistle)
+        const qp = anim.actors.find((a) => a.key === 'qb')!.path
+        // (1) no cone / circle item exists before the snap.
+        preSnapN++
+        let pre = false
+        for (let k = 0; k <= 4; k++) {
+          const cs = qbConeAt(play, anim, (snapT * k) / 5)
+          if (cs.cone || cs.ring) pre = true
+        }
+        if (!pre) preSnapOk++
+        // (2) the live cone matches the progression read at each read time.
+        for (const l of plan.looks) {
+          if (l.role !== 'read' || (l.t1 - l.t0) * plan.D < 2 * 0.16 + 0.05) continue
+          const t = l.t0 + (0.16 + 0.03) / plan.D
+          const cone = qbConeAt(play, anim, t).cone
+          const q = posAt(qp, t)
+          const r = posAt(anim.actors.find((a) => a.key === l.key)!.path, t)
+          aimN++
+          if (cone && deg(cone.yaw - Math.atan2(r.y - q.y, r.x - q.x)) <= 3) aimOk++
+        }
+        // (3) every route runner draws a plain trace; a pure blocker draws none.
+        const traces = RP.liveRouteTraces(play, anim, { setting: 'every' })
+        const tk = new Set(traces.map((x) => x.key))
+        for (const a of anim.actors) {
+          if (a.side !== 'off' || !ELIG.test(a.key)) continue
+          const len = pathLen(a.path, snapT, t1)
+          if (len >= 4) {
+            runs++
+            if (tk.has(a.key)) runsOk++
+            else bad.push(`${play.n}: runner ${a.key} (${len.toFixed(1)} yd) has no live route`)
+          }
+          if (len < 3.5) {
+            blocks++
+            if (!tk.has(a.key)) blocksOk++
+            else bad.push(`${play.n}: blocker ${a.key} (${len.toFixed(1)} yd) drew a route`)
+          }
+        }
+        for (const s of ['replays', 'off'] as const) assert.equal(RP.liveRouteTraces(play, anim, { setting: s }).length, 0, `${play.n}: traces under ${s}`)
+        assert.equal(RP.liveRouteTraces(play, anim, { setting: 'every', playback: 'fast' }).length, 0, `${play.n}: traces on fast`)
+        for (const tr of traces) assert.ok(tr.t0 === snapT && tr.t1 <= t1 + 1e-9, `${play.n}: trace window ${tr.t0}..${tr.t1}`)
+        // (4) the eventual target's route is never highlighted before the throw.
+        const items = RP.liveTelestrations(play, anim, { setting: 'every' })
+        if (perfCases.length < 40 && items.length && traces.length) {
+          perfCases.push({ anim, items, traces, cx: (anim.ball[0].x + anim.ball[anim.ball.length - 1].x) / 2 })
+        }
+        const throwEv = events.find((e) => e.kind === 'throw')
+        const route = items.find((it) => it.kind === 'route' && it.ink === 'pen')
+        if (route && throwEv && route.keys[0]) {
+          hlN++
+          const thr = throwEv.t
+          if (route.showSec >= thr - 1e-9) hlOk++
+          let early = 0
+          for (let t = 0; t < thr - 1e-6; t += 0.02) if (RP.teleState(route, t).alpha > 1e-9) early++
+          if (early) bad.push(`${play.n}: target route (${route.keys[0]}) highlights before the throw (${early} samples)`)
+          if (ELIG.test(route.keys[0])) {
+            tgtElig++
+            if (tk.has(route.keys[0])) tgtTrace++
+            else bad.push(`${play.n}: target ${route.keys[0]} has no plain trace before the throw`)
+          }
+        }
+      }
+    }
+    assert.ok(plays >= 200 && runs >= 300, `coverage: ${plays} pass plays, ${runs} runners`)
+    assert.ok(blocks >= 2, `coverage: only ${blocks} pure blockers`)
+    assert.ok(bad.length === 0, `${bad.length} bad: ${bad.slice(0, 6).join('; ')}`)
+    assert.equal(preSnapOk, preSnapN, `no cone/circle before the snap ${preSnapOk}/${preSnapN}`)
+    assert.ok(aimN > 100 && aimOk === aimN, `cone on the read ${aimOk}/${aimN}`)
+    assert.equal(runsOk, runs, `route runners with a live trace ${runsOk}/${runs}`)
+    assert.equal(blocksOk, blocks, `pure blockers without a route ${blocksOk}/${blocks}`)
+    assert.ok(hlN > 100 && hlOk === hlN, `target route not highlighted before the throw ${hlOk}/${hlN}`)
+    assert.ok(tgtElig > 100 && tgtTrace === tgtElig, `the target draws a plain trace before the throw ${tgtTrace}/${tgtElig}`)
+    // Perf (livetele3): the plain traces' added cost, measured the way the view
+    // reports it (tele.stats.ms -> teleMs), on a stub canvas. Warm up, then p95.
+    const perfCtx = teleRecorder(1280, 720)
+    const runLive = (withTraces: boolean): number[] => {
+      const ms: number[] = []
+      for (const c of perfCases) {
+        const layer = new TelestratorLayer()
+        layer.setLive(c.items, c.anim, {}, withTraces ? c.traces : undefined)
+        layer.mode = 'full'
+        const pose = orbitPose({ focusX: c.cx, focusY: 24, back: 34, height: 22, yaw: 0, fovDeg: 43 })
+        const camera = makeCamera(pose, { width: 1280, height: 720 })
+        const frame = { ...frameFor(1, c.cx), camera: pose }
+        for (let t = 0; t <= 1.0001; t += 1 / 30) {
+          layer.setLiveTime(t)
+          layer.hook(perfCtx.ctx, camera, frame, { dpr: 1, width: 1280, height: 720 })
+          ms.push(layer.stats.ms)
+        }
+      }
+      return ms
+    }
+    runLive(true)
+    const offMs = runLive(false)
+    const onMs = runLive(true)
+    const p95Of = (a: number[]) => {
+      const s = [...a].sort((x, y) => x - y)
+      return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))]
+    }
+    const addedP95 = p95Of(onMs) - p95Of(offMs)
+    assert.ok(perfCases.length >= 20, `perf coverage: ${perfCases.length} plays`)
+    assert.ok(addedP95 <= 1.5, `plain route traces add ${addedP95.toFixed(3)} ms p95 (teleMs)`)
+    // The layer actually paints the traces: one stroke each, and never a label.
+    {
+      const c = perfCases[0]
+      const render = (withTraces: boolean) => {
+        const layer = new TelestratorLayer()
+        layer.setLive(c.items, c.anim, {}, withTraces ? c.traces : undefined)
+        layer.mode = 'full'
+        const pose = orbitPose({ focusX: c.cx, focusY: 24, back: 34, height: 22, yaw: 0, fovDeg: 43 })
+        const camera = makeCamera(pose, { width: 1280, height: 720 })
+        const frame = { ...frameFor(1, c.cx), camera: pose }
+        layer.setLiveTime(1)
+        layer.hook(perfCtx.ctx, camera, frame, { dpr: 1, width: 1280, height: 720 })
+        return layer.stats
+      }
+      const on = render(true)
+      const off = render(false)
+      assert.ok(on.strokes >= off.strokes + c.traces.length, `traces painted: ${on.strokes} vs ${off.strokes} (+${c.traces.length})`)
+      assert.equal(on.labels, off.labels, 'plain traces add no label')
+    }
+    console.log(`      livetele3: ${plays} pass plays; traces ${runsOk}/${runs} runners, ${blocksOk}/${blocks} blockers; target highlight at the throw ${hlOk}/${hlN}; cone on reads ${aimOk}/${aimN}; no cone before snap ${preSnapOk}/${preSnapN}; teleMs p95 off ${p95Of(offMs).toFixed(3)} / on ${p95Of(onMs).toFixed(3)} ms (added ${addedP95.toFixed(3)}, ${onMs.length} frames)`)
   })
 }
 

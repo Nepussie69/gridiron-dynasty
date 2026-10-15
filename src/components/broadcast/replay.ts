@@ -727,12 +727,77 @@ export function liveTelestrations(play: Play, anim: BroadcastAnim, opts: LiveTel
   if (!plan.tele.length) return []
   const drawOn = opts.reducedMotion ? 0 : DRAW_ON
   const hideSec = 1 + LIVE_TAIL
-  return plan.tele.map((it) => {
+  const items = plan.tele.map((it) => {
     const track = it.kind !== 'separation' && it.kind !== 'doubleTeam' && it.kind !== 'pocket'
     const showSec = track ? it.t0 : it.at
     const labelSec = track ? it.t1 : Math.min(it.at + drawOn, hideSec)
     return { ...it, showSec, hideSec: Math.max(showSec + 0.05, hideSec), labelSec, drawOn }
   })
+  // livetele3 (user 2026-10-15): the eventual target's route must not be drawn in
+  // the highlight style before he decides. It is highlighted only AT the release;
+  // until then it is drawn as a plain trace (liveRouteTraces) like every other
+  // route, so the drawing never names the target before the throw event.
+  const throwEv = play.type === 'pass' ? events.find((e) => e.kind === 'throw') : undefined
+  if (throwEv) {
+    const thr = clamp(throwEv.t, 0, 1)
+    for (const it of items) if (it.kind === 'route' && it.ink === 'pen' && it.t0 <= thr) it.showSec = Math.max(it.showSec, thr)
+  }
+  return items
+}
+
+/** The fewest yards a receiver must travel from the snap to count as running a route. */
+const ROUTE_MIN_YD = 3.5
+
+export interface LiveRouteTrace {
+  key: string
+  /** Anim-time window (0..1 of the play): the snap to the whistle. */
+  t0: number
+  t1: number
+}
+
+/** Path length (yd) of `key` between anim times a and b (sampled; 0 when he has no path). */
+function pathLen(anim: BroadcastAnim, key: string, a: number, b: number): number {
+  const p = actorPath(anim, key)
+  if (!p || b <= a) return 0
+  let len = 0
+  let prev = posAt(p, a)
+  for (let t = a + 0.02; t < b; t += 0.02) {
+    const q = posAt(p, t)
+    len += Math.hypot(q.x - prev.x, q.y - prev.y)
+    prev = q
+  }
+  const q = posAt(p, b)
+  return len + Math.hypot(q.x - prev.x, q.y - prev.y)
+}
+
+/**
+ * The plain route traces of a live play (livetele3; user 2026-10-15): every
+ * eligible receiver who runs a route is drawn running it — thin, team-neutral
+ * pen, low alpha — in anim time, snap to whistle. A blocking back / tight end
+ * (he never leaves the pocket) draws no route; nothing draws after the ball is
+ * dead. The eventual target is included: his plain trace is what shows until the
+ * item set highlights him at the release, so no drawing names the target before
+ * the throw. Empty under 'Replays only' / 'Off' and for fast playback (sim to
+ * end), exactly like the live item set. Pure and deterministic.
+ */
+export function liveRouteTraces(play: Play, anim: BroadcastAnim, opts: LiveTeleOptions = {}): LiveRouteTrace[] {
+  if ((opts.setting ?? 'every') !== 'every') return []
+  if ((opts.playback ?? 'live') === 'fast') return []
+  const events = opts.events ?? anim.events ?? []
+  if (play.type !== 'pass' || play.spike || play.kneel) return []
+  const snap = events.find((e) => e.kind === 'snap')
+  if (!snap) return []
+  const snapT = clamp(snap.t, 0, 1)
+  let whistle = -1
+  for (const e of events) if (TERMINAL.has(e.kind)) whistle = Math.max(whistle, e.t)
+  const t1 = clamp(whistle < 0 ? 1 : whistle, 0, 1)
+  if (t1 <= snapT) return []
+  const out: LiveRouteTrace[] = []
+  for (const a of anim.actors) {
+    if (a.side !== 'off' || !/^(wr\d|te|rb|fb)$/.test(a.key)) continue
+    if (pathLen(anim, a.key, snapT, t1) >= ROUTE_MIN_YD) out.push({ key: a.key, t0: snapT, t1 })
+  }
+  return out
 }
 
 // ── B8: Game Day's replay rules (pure; MatchView + liveView play the result) ──
