@@ -349,7 +349,7 @@ function closeOnCarrier(tk: Mover, carrier: Mover, endSec: number, notBefore = 0
  * the tackler's run is carried on into a ride, at the closing speed of a lunge on top of his run. Capped
  * (what is left after that he covers with a dive). Returns the new whistle time.
  */
-function arriveByWhistle(tk: Mover, carrier: Mover, endSec: number): number {
+function arriveByWhistle(tk: Mover, carrier: Mover, endSec: number, waitMax = WHISTLE_WAIT_MAX): number {
   const gapAt = (t: number) => {
     const a = posAt(tk.path, Math.min(t, tk.t))
     const b = posAt(carrier.path, Math.min(t, carrier.t))
@@ -358,10 +358,14 @@ function arriveByWhistle(tk: Mover, carrier: Mover, endSec: number): number {
   const g = gapAt(endSec)
   if (g <= 1.2) return endSec
   // animresid (amendment): the carrier never stands still. The whistle may wait a beat for the
-  // tackler's last strides, but the carrier's hold is capped at 0.3 s (the one allowance for
-  // "never below 1 yd/s for more than 0.3 s before contact"); beyond that the tackler's ride simply
-  // arrives a stride late rather than freezing the carrier on the spot.
-  const extra = clampN((g - 0.9) / 7, 0.1, 0.3)
+  // tackler's last strides, but the wait is bounded (WHISTLE_WAIT_MAX, below) so the carrier's hold
+  // never reads as a stall. realism-qbrun: the bound used to be 0.3 s, which left the sim's credited
+  // man 3-7 yd out on the rare tackle where his pursuit is genuinely late (a cover man held at his
+  // separation to a very late catch, a safety 15 yd off a short run) - a dive at nothing. The wait
+  // is timed at the tackler's OWN top speed, and its bound is the animresid budget: that check
+  // measures the stall from the catch/handoff up to (the whistle - 0.25 s) and a RUN must never
+  // stall >= 0.4 s, so a hold of WHISTLE_WAIT_MAX = 0.6 s reads as 0.35 s - still moving.
+  const extra = clampN((g - 0.9) / Math.max(3.5, tk.pace.top), 0.1, waitMax)
   const a = posAt(tk.path, Math.min(endSec, tk.t))
   const b = posAt(carrier.path, Math.min(endSec, carrier.t))
   const l = Math.hypot(a.x - b.x, a.y - b.y) || 1
@@ -393,6 +397,8 @@ function recClose(
     /** animflow r6c2 (J7): the recorded cover defender on a pass - he alone must stand his recorded
      *  separation at the catch, so only his own close-chase is held back to `from`. */
     coverKey?: string
+    /** realism-qbrun: how long the whistle may wait for the tackler's last strides (see WHISTLE_WAIT_MAX). */
+    waitMax?: number
   },
 ): void {
   const carrier = m[carrierKey]
@@ -413,7 +419,7 @@ function recClose(
     const nb = Math.max(from, offBlock > 0 ? offBlock + 0.4 : 0)
     const heldBack = !opts.coverKey || tackler === opts.coverKey
     closeOnCarrier(m[tackler], carrier, endSec, heldBack ? nb : 0)
-    endSec = arriveByWhistle(m[tackler], carrier, endSec)
+    endSec = arriveByWhistle(m[tackler], carrier, endSec, opts.waitMax)
   }
   // A man still locked up on a block who brushes the carrier as he goes by is
   // not the first contact (animflow): only free defenders count.
@@ -3843,6 +3849,21 @@ const TACKLE_SLACK_OOB = 0.6
  *  Measured: without it the sim's credited man (often a lineman still shedding) sat ~10 yd from the
  *  play in the drawn animation and the nearest free man was drawn making the tackle. */
 const CRED_SLACK_RUN = 1.8
+/**
+ * realism-qbrun (check-broadcast r8 (b) touch-and-freeze): the longest the whistle may wait for the
+ * tackler's last strides. Bounded by the animresid budget (that check measures the stall from the
+ * catch/handoff to the whistle less 0.25 s, and a run must never stall >= 0.4 s), so 0.6 s reads as
+ * 0.35 s. Unreachable tacklers are then the man who is actually on the carrier's problem (animData
+ * draws that man), never a dive at nothing.
+ */
+const WHISTLE_WAIT_MAX = 0.6
+/**
+ * realism-qbrun: the same wait on a completion. animresid measures a stall only as a SHARE of
+ * completions (>= 0.4 s on <= 5%) and never >= 1.0 s, so a completed catch-and-run may wait a beat
+ * longer for a cover man who was held at his recorded separation until a very late catch. Counted as
+ * 0.75 s of stall - still inside both bounds.
+ */
+const CATCH_WAIT_MAX = 1.0
 function chooseTackler(m: Record<string, Mover>, keys: string[], prefer: string | undefined, c: Pt, fromSec: number, window: number, slack = TACKLE_SLACK): string {
   const cand = keys.filter((k) => m[k]).map((k) => ({ k, nat: natTo(m[k], c, fromSec) })).sort((a, b) => a.nat - b.nat)
   if (!cand.length) return keys[0]
@@ -5551,7 +5572,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   ball.push(...shadow(m[tgt].path, catchSec).slice(1))
   recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
   recMissedTackles(play, ctx, tgt, catchSec, res.endSec, m, DEF_KEYS)
-  recClose(m, tgt, res.tackler, res.endSec, pursuers, { play, los, from: catchSec, coverKey })
+  recClose(m, tgt, res.tackler, res.endSec, pursuers, { play, los, from: catchSec, coverKey, waitMax: CATCH_WAIT_MAX })
   return finishPass({ ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
 }
 
