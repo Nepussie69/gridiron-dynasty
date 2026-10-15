@@ -9,13 +9,8 @@ import { FIRST, LAST, SPECIALTIES } from './names'
 import { FRONT_SPECIALTIES, frontOfficeProfile, generateAnalyticsPool } from './hiring'
 import { freshDraftWindow } from './picks'
 import { makeCharacter } from './character'
-<<<<<<< HEAD
-import { makeScoutBias } from './scoutBias'
-import { hash32, makeRng, rchance, rint, rpick, clamp, type Rng } from './rng'
-=======
 import { makeScoutBias, prospectStock } from './scoutBias'
-import { hash32, makeRng, rchance, rint, rpick, type Rng } from './rng'
->>>>>>> wt-draftreal
+import { hash32, makeRng, rchance, rint, rpick, clamp, type Rng } from './rng'
 import { rescaleOvr, rescaleQuantile, unscaleOvr } from './ovrScale'
 import { getIndividual, FAST_ROLES, FAST_BLEND, FAST_NORM } from './individual'
 import { playerAttrs } from '../data/ratings'
