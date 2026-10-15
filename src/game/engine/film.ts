@@ -23,6 +23,8 @@ import {
   type DefCall,
   type OffClass,
 } from './decisions'
+import { TRICKS } from './trickPlays'
+import { speechFilmLine } from './halftimeSpeech'
 
 export interface FilmGrade {
   /** 0–100. */
@@ -289,7 +291,25 @@ export function gradeGame(world: World, sim: GameSim, userTeamId: string): FilmG
         bonus += delta
         lines.push(`QB switch: the backup ${br > sr ? 'outplayed' : 'struggled against'} the starter (${fmtDelta(delta)})`)
       }
+    } else if (d.kind === 'speech') {
+      // FUTURES #7: a speech that landed and won the second half earns a plus;
+      // one that backfired costs a minus. A flat speech or stay-the-course is
+      // worth no line.
+      const fl = speechFilmLine(sim.speech?.[userTeamId], plays, sim.homeId, userTeamId)
+      if (fl) {
+        bonus += fl.delta
+        lines.push(fl.line)
+      }
     }
+  }
+
+  // FUTURES #24: one line per trick the club ran — a call is "won" when it
+  // gained real yards and did not give the ball away. Display only: tricks do
+  // not move the grade (they are already folded into the call matrix outcomes).
+  for (const p of plays.filter((x) => x.trick)) {
+    const meta = TRICKS[p.trick!]
+    const won = !p.turnover && p.yards >= (p.type === 'pass' ? 6 : 4)
+    lines.push(`Trick: ${meta.label} — ${won ? 'won' : 'lost'} (${fmtDelta(won ? 2 : -2)}${p.yards ? `, ${p.yards} yd` : ''})`)
   }
 
   const grade = Math.round(Math.max(0, Math.min(100, 95 + sum * 10 + bonus)))

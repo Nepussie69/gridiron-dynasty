@@ -13,6 +13,8 @@
 // reads the same assignments to draw any play (L12.10 B4).
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { TrickKind } from '../engine/trickPlays'
+
 export type Personnel = '00' | '10' | '11' | '12' | '13' | '21' | '22' | 'GL'
 export type OffPos = 'QB' | 'RB' | 'FB' | 'TE' | 'WR1' | 'WR2' | 'WR3' | 'OL'
 export type Job = 'route' | 'run' | 'run-block' | 'pass-block' | 'play-action' | 'punt'
@@ -36,6 +38,8 @@ export interface PlaybookPlay {
   yac: number
   description: string
   assignments: Assignment[]
+  /** FUTURES #24: set on a `TRICK_PLAYS` entry — which trick call this play runs. */
+  trick?: TrickKind
 }
 
 export interface Formation {
@@ -162,6 +166,46 @@ export const PLAYBOOK: PlaybookPlay[] = [
   { name: 'Jumbo PA', formation: 'Heavy Jumbo', personnel: '13', type: 'pass', depth: 6, yac: 0.7, description: 'Play-action out of the jumbo front: boot to a tight end', assignments: [BLK('OL'), BLK('QB', 'play-action'), R('WR1', 'comeback'), R('TE', 'drag'), R('TE', 'stick'), R('RB', 'check')] },
 ]
 
+// ── FUTURES #24: trick plays ────────────────────────────────────────────────
+// A separate list on purpose: `PLAYBOOK` and the scheme menus drive the AI
+// concept pick, so a trick in either would move the calibration. `playbookPlay`
+// / `conceptFromPlaybook` / `treeFor` look these up too, but `SCHEME_MENUS`
+// never does, and `playbookSize()` still counts `PLAYBOOK` alone.
+export const TRICK_PLAYS: PlaybookPlay[] = [
+  {
+    name: 'Flea Flicker', formation: 'I-Form Pro', personnel: '21', type: 'pass', depth: 24, yac: 0.3,
+    description: 'Handoff, pitch back to the QB, deep shot off the run fake',
+    trick: 'flea',
+    assignments: [BLK('OL'), BLK('QB', 'play-action'), R('WR1', 'post'), R('WR2', 'go'), R('WR3', 'seam'), R('TE', 'seam'), R('RB', 'runFake'), BLK('FB', 'run-block')],
+  },
+  {
+    name: 'Reverse', formation: 'Gun Trips', personnel: '11', type: 'run', depth: 5, yac: 0,
+    description: 'Hand to the back, then to a receiver going the other way',
+    trick: 'reverse',
+    assignments: [BLK('QB', 'play-action'), RB_('RB', 'left'), { pos: 'WR3', job: 'run', gap: 'right' }, R('WR1', 'stalk'), R('WR2', 'stalk'), BLK('OL', 'run-block'), BLK('TE', 'run-block')],
+  },
+  {
+    name: 'HB Pass', formation: 'Singleback Doubles', personnel: '11', type: 'pass', depth: 11, yac: 0.5,
+    description: 'Toss to the back off the run look — he throws it',
+    trick: 'hbpass',
+    assignments: [BLK('OL'), R('WR1', 'post'), R('WR2', 'out'), R('WR3', 'dig'), R('TE', 'seam'), BLK('RB', 'play-action')],
+  },
+  {
+    name: 'Fake Spike', formation: 'Gun Doubles', personnel: '11', type: 'pass', depth: 9, yac: 0.6,
+    description: 'Sell the clock-killing spike, then hit the quick fade',
+    trick: 'fakespike',
+    assignments: [BLK('OL'), BLK('QB'), R('WR1', 'fade'), R('WR2', 'slant'), R('WR3', 'quickOut'), R('TE', 'stick'), R('RB', 'flat')],
+  },
+  {
+    // The real spike: no route tree matters (nobody runs), but the animation
+    // needs a legal formation, and the play log needs a concept the box score
+    // can name. Counted as an incomplete pass attempt (NFL convention).
+    name: 'Spike', formation: 'Gun Doubles', personnel: '11', type: 'pass', depth: 0, yac: 0,
+    description: 'Kill the clock: the QB spikes the ball',
+    assignments: [BLK('OL'), BLK('QB'), R('WR1', 'go'), R('WR2', 'go'), R('WR3', 'hitch'), R('TE', 'stick'), R('RB', 'check')],
+  },
+]
+
 /** Concept shape used by the sim. */
 export interface SimConcept {
   name: string
@@ -174,13 +218,15 @@ export interface SimConcept {
 }
 
 const byName = new Map(PLAYBOOK.map((p) => [p.name, p]))
+/** FUTURES #24: tricks resolve like any other play for the UI and the animation. */
+const anyByName = new Map([...PLAYBOOK, ...TRICK_PLAYS].map((p) => [p.name, p]))
 export function playbookPlay(name: string): PlaybookPlay | undefined {
-  return byName.get(name)
+  return anyByName.get(name)
 }
 
 /** Default formation for a concept (the first play in the book with that name). */
 export function formationForConcept(name: string): string {
-  return byName.get(name)?.formation ?? 'Gun Trips'
+  return anyByName.get(name)?.formation ?? 'Gun Trips'
 }
 
 const sim = (name: string): SimConcept => {
@@ -191,7 +237,8 @@ const sim = (name: string): SimConcept => {
 
 /** Any playbook play as a sim concept (L12.10 B6: a user-picked play). */
 export function conceptFromPlaybook(name: string): SimConcept | undefined {
-  return byName.has(name) ? sim(name) : undefined
+  const p = anyByName.get(name)
+  return p ? { name: p.name, type: p.type, depth: p.depth, yac: p.yac, description: p.description, personnel: p.personnel } : undefined
 }
 
 /**

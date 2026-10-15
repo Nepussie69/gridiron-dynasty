@@ -686,6 +686,24 @@ ok('graphics: callouts only inside their windows, at most 2 at once, one per anc
   }
 })
 
+ok('graphics: a missed / blocked field goal reads NO GOOD, never GOOD or TURNOVER (backlog 452)', () => {
+  const base = GPLAY as unknown as Record<string, unknown>
+  const ev = (kinds: AnimEventKind[]) => kinds.map((kind, i) => ({ t: 0.1 + i * 0.1, kind, keys: ['k'], spot: { x: 50, y: 20 } }))
+  const A = (kinds: AnimEventKind[]): BroadcastAnim => ({ ...GA, events: [{ t: 0.03, kind: 'snap', keys: ['qb'], spot: { x: 35, y: 26 } }, ...ev(kinds)] })
+  const toast = (o: Record<string, unknown>, kinds: AnimEventKind[]) => buildGraphicsTimeline({ ...GIN(), play: { ...base, yards: 0, ...o } as unknown as Play, anim: A(kinds) }).toast
+  const miss = toast({ type: 'fg', result: '55-yd FG is no good', turnover: true }, ['kick', 'kickMiss'])
+  assert.equal(miss.big, 'NO')
+  assert.equal(miss.badge?.label, 'NO GOOD')
+  assert.equal(miss.side, 'off')
+  const noEv = toast({ type: 'fg', result: '55-yd FG is no good', turnover: true }, ['kick'])
+  assert.equal(noEv.big, 'NO', 'the result text alone must not read as made')
+  assert.equal(toast({ type: 'fg', result: '48-yd FG is BLOCKED!', turnover: true }, ['kick']).big, 'NO')
+  assert.equal(toast({ type: 'pat', result: 'Extra point MISSED' }, ['kick', 'kickMiss']).badge?.label, 'NO GOOD')
+  const made = toast({ type: 'fg', result: '49-yd FG is good' }, ['kick', 'kickGood'])
+  assert.equal(made.big, 'GOOD')
+  assert.equal(made.badge?.label, 'GOOD')
+})
+
 ok('graphics: reduced motion has no wipes; sim-to-end shows the chip only; off shows nothing', () => {
   const tl = buildGraphicsTimeline(GIN())
   for (const s of secsOf(tl)) {

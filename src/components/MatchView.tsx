@@ -1583,7 +1583,7 @@ function gameDayFieldPosForPlay(world: World, p: PlayEvent): string {
 
 /** L11.5 Q3: a collapsible in-game plan editor, limited to the side(s) you coach. */
 /** L12.6: how often a coached game stops for your call. */
-function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' | 'def' | 'both' | 'hc'; mode?: 'off' | 'def' | 'both'; keepPlays?: number; onFallback?: () => void }) {
+function CallModePicker({ scope, mode, keepPlays, onFallback }: { scope?: 'off' | 'def' | 'both' | 'hc'; mode?: 'off' | 'def' | 'both' | 'sheet'; keepPlays?: number; onFallback?: () => void }) {
   const setCallMode = useGame((s) => s.setCallMode)
   const showToast = useGame((s) => s.showToast)
   const gameDayAdvance = useGame((s) => s.gameDayAdvance)
@@ -2001,7 +2001,7 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
   const jerseyNumbers = useMemo(() => teamJerseys(world, teamId), [world, teamId])
   const fp = { gmName, myTeamId, byId, jerseyNumbers }
   return (
-    <div className="rounded-lg bg-surface-2/60 p-2">
+    <div className="min-w-0 rounded-lg bg-surface-2/60 p-2">
       <div className="mb-2">
         <TeamHoverCard team={team}>
           {onTeamClick ? (
@@ -2080,6 +2080,16 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
 }
 
 interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player>; jerseyNumbers: Map<string, number> }
+/** Row 453: the box score's short origin tag ("Traded for by you" → "Traded"); the
+ *  full wording stays on the hover title. */
+function boxTag(tag: string): string {
+  if (/^drafted/i.test(tag)) return tag.replace(/^drafted by you/i, 'Drafted')
+  if (/udfa/i.test(tag)) return 'UDFA'
+  if (/former/i.test(tag)) return 'Former'
+  return tag.split(' ')[0]
+}
+/** rem width of each box-score stat column class (Tailwind w-N = N/4 rem). */
+const BOX_COL_REM: Record<string, number> = { 'w-8': 2, 'w-10': 2.5, 'w-11': 2.75 }
 interface BoxCol { k: string; l: string; fmt?: (r: GameStatLine) => string; w?: string; title?: string }
 function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; rows: import('../game/engine/stats').PlayerBoxScore[]; cols: BoxCol[]; fp: FingerprintCtx; cap?: number; order?: (r: import('../game/engine/stats').PlayerBoxScore) => number }) {
   // Lead with the volume stat: yards for offense, tackles for defense.
@@ -2091,13 +2101,26 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
   // The %-columns (PRS%, SNP%) are the widest headers; a 32px column left them touching their
   // right-aligned neighbour ("PRS%SNP%", "TDSNP%"), so they get the wide width too.
   const wide = (k: string) => k === 'passComp' || k === 'passerRating' || k === 'pressurePct' || k === 'snapPct'
+  const colClass = (c: BoxCol) => c.w ?? (wide(c.k) ? 'w-11' : 'w-8')
+  const shown = sorted.slice(0, cap).map((b) => {
+    const p = fp.byId.get(b.playerId)
+    return { b, p, jersey: fp.jerseyNumbers.get(b.playerId), tag: fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null }
+  })
+  // Backlog 448: the full name stays on one line next to the jersey — never cut
+  // ("Germ…", row 400) and never wrapped under it (row 448). The table is at least
+  // as wide as the stat columns plus the longest name; a narrower panel scrolls it.
+  const statRem = cols.reduce((s, c) => s + (BOX_COL_REM[colClass(c)] ?? 2), 0) + 1.75
+  // Row 453: the "Traded for by you" tag must not push the stats out of view — only
+  // the name sets the width; the (short) tag fills spare room and clips first.
+  const nameCh = Math.max(8, ...shown.map(({ b }) => b.name.length)) + 1
   return (
     <div className="mb-3">
       <div className="label mb-0.5">{title}</div>
-      <table className="w-full table-fixed text-label tnum">
+      <div className="overflow-x-auto">
+      <table className="w-full table-fixed text-label tnum" style={{ minWidth: `calc(${statRem}rem + ${nameCh}ch)` }}>
         <colgroup>
           <col />
-          {cols.map((c) => <col key={c.k} className={c.w ?? (wide(c.k) ? 'w-11' : 'w-8')} />)}
+          {cols.map((c) => <col key={c.k} className={colClass(c)} />)}
         </colgroup>
         <thead>
           <tr className="text-faint">
@@ -2106,26 +2129,27 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
           </tr>
         </thead>
         <tbody>
-          {sorted.slice(0, cap).map((b) => {
-            const p = fp.byId.get(b.playerId)
-            const jersey = fp.jerseyNumbers.get(b.playerId)
-            const tag = fp.gmName ? originTag(p?.origin, fp.gmName, p?.teamId, fp.myTeamId) : null
+          {shown.map(({ b, p, jersey, tag }) => {
             return (
               <tr key={b.playerId} className="text-ink-2">
-                <td className="truncate pr-1 align-top lg:overflow-visible lg:whitespace-normal" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
-                  {jersey != null && <span className="mr-1 inline-block min-w-6 text-muted">#{jersey}</span>}
-                  {p ? (
-                    <PlayerHoverCard player={p} info={false}>
-                      <span>{b.name}</span>
-                    </PlayerHoverCard>
-                  ) : (
-                    b.name
-                  )}
-                  {tag && (
-                    <span className="ml-1 rounded bg-[var(--team-soft)] px-1 py-px font-cond text-label font-700 uppercase tracking-wide text-[var(--team)]">
-                      {tag}
+                <td className="overflow-hidden pr-1 align-top" title={jersey == null ? b.name : `#${jersey} ${b.name}`}>
+                  <div className="flex min-w-0 items-baseline whitespace-nowrap">
+                    {jersey != null && <span className="mr-1 inline-block min-w-6 shrink-0 text-muted">#{jersey}</span>}
+                    <span className="shrink-0">
+                      {p ? (
+                        <PlayerHoverCard player={p} info={false}>
+                          <span>{b.name}</span>
+                        </PlayerHoverCard>
+                      ) : (
+                        b.name
+                      )}
                     </span>
-                  )}
+                    {tag && (
+                      <span title={tag} className="ml-1 min-w-0 truncate rounded bg-[var(--team-soft)] px-1 py-px font-cond text-label font-700 uppercase tracking-wide text-[var(--team)]">
+                        {boxTag(tag)}
+                      </span>
+                    )}
+                  </div>
                 </td>
                 {cols.map((c) => (
                   <td key={c.k} className="whitespace-nowrap pl-1 text-right align-top">
@@ -2137,6 +2161,7 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
