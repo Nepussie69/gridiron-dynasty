@@ -2174,6 +2174,288 @@ function chaseCaughtExtra(c: Chase, u: number): number {
   return Math.max(1, Math.round(J8A.catchBase + J8A.catchTail * u * u + J8A.catchEdge * c.edge))
 }
 
+// ── SPG: open-field SPEED (SpeedGap) ─────────────────────────────────────────
+// Before SPG the fastest man on the field played like an average one: speed
+// entered the open-field payoff only through J8a's long-run tail — a clamped
+// multiplier on gains that had ALREADY passed 20 yards — and the archetype-driven
+// YAC style bonus. Measured on main (probe, 1200 games): WR SPD 95+ 11.9
+// yd/catch vs SPD 85-89 12.6; Tyreek Hill (SPD 98/ACC 98) 11.96 yd/catch and
+// 15.0% of catches 20+, i.e. exactly the league average.
+//
+// SPG makes the specific carrier's own SPD/ACC (and his AGI/BCV/JKM elusiveness on
+// a short catch-and-run: slants, crossers, screens, checkdowns) against the
+// specific pursuer's own SPD/PUR/AWR decide the WHOLE after-catch / after-the-line
+// segment, not just the clamped long tail:
+//   * `openFieldShift` — the ground the carrier wins or loses in the open field,
+//     applied to every positive gain (dither-rounded, so no rounding bias);
+//   * `openFieldRace` — from `raceMin` yards the carrier is into the open field
+//     and either breaks away (a fast man on a crosser turns 6 into 15+) or is
+//     dragged down from behind (a slow man's 25 becomes 19).
+// Both are centred on the league's own measured mean edge (`edgeCenter`) so the
+// mean player is untouched and the league's yardage / breakaway rates hold by
+// CENTRING — never by shrinking the individual effect (the trims `centerYdP` /
+// `centerBreakP` are a uniform hash, so they move the league level and leave the
+// per-player ordering exactly as it is). The mph math lives in pure functions
+// (carrierOpenMph / pursuerMph / openFieldMph / openFieldShift / openFieldRace) so
+// FUTURES #54 (E1) can call the same ones from its live pursuit field.
+let SPEEDGAP_ON = false // orchestrator 2026-10-16: OFF until the joint emergent calibration (league bands: points +0.48, 3rd down -0.88 pooled)
+/** SPG: the open-field speed layer (default ON). OFF is byte-identical to main. */
+export function setSpeedGap(on: boolean) { SPEEDGAP_ON = on }
+/** SPG: read the toggle so a probe can restore it exactly. */
+export function getSpeedGap(): boolean { return SPEEDGAP_ON }
+
+export const SPG = {
+  /** Yards of open-field ground won per mph of edge over the man chasing him.
+   *  Applied to the whole after-catch / after-the-line segment (every positive
+   *  gain), so an 8-point SPD gap (~2.1 mph) is worth ~2.4 yd on every touch.
+   *  Deliberately the full NFL rating->mph span: the individual spread is the
+   *  point of the job, and the league mean is held by `edgeCenter`, not by
+   *  shrinking this. */
+  ydPerMph: 1.15,
+  /** The league-mean edge (mph) over the plays this term touches, measured per
+   *  side with SPG_STAT (3 seeds x 500 games, `E[edge]`). Each side is centred
+   *  separately (the pass and the run have different carrier/chaser mixes, and the
+   *  chaser pick is biased toward the faster defender), so the shift is written on
+   *  `edge − edgeCenter[side]` and the league's passing and rushing yards per play
+   *  both hold (E[shift] = 0 on each side). */
+  edgeCenter: { pass: -0.592, run: -0.512 } as Record<'pass' | 'run', number>,
+  /** SPG: the league's own pursuer speed level (mph) the chasing man is measured
+   *  against — ABSOLUTE, so the defender's own speed decides whether he gets there
+   *  (a slow LB concedes what a fast safety cuts off). Measured over the plays the
+   *  layer touches with SPG_STAT (3 seeds x 500 games); the carrier keeps his
+   *  position's base above, and the league mean is held by `edgeCenter`. */
+  pursuerBaseMph: 16.6,
+  /** A short catch-and-run: at or under this air depth (or with this much YAC
+   *  appetite) the carrier's own change of direction and elusiveness add mph. */
+  shortDepth: 8,
+  shortYac: 0.85,
+  /** Short-area burst, mph per point of the man's own (position-centred) AGI /
+   *  BCV / JKM — a screen back or a slot man beating the first man to the corner. */
+  evadeAgi: 0.030,
+  evadeBcv: 0.020,
+  evadeJkm: 0.015,
+  /** The shift only applies from here up: a gain under `shiftMin` was decided at
+   *  the line (a stuff / a 1-2 yard plunge), not in the open field, so the layer
+   *  leaves it alone — that is what keeps the money-down / short-yardage chain
+   *  (and so the league's first downs and points) on its bands. */
+  shiftMin: 3,
+  /** The race: from `raceMin` yards the carrier is through the second level.
+   *  `racePerMph` is the per-mph chance of winning it and `raceMax` the cap; the
+   *  race is judged against `raceCenter`, the league's own middle matchup on that
+   *  side (measured with SPG_STAT: the rating spread is left-skewed, so the median
+   *  matchup sits a little above the mean). Centring on the middle matchup balances
+   *  the escapes against the run-downs, so the league's breakaway rate holds by
+   *  construction (the two are two sides of one hash) and the mean player is
+   *  untouched. */
+  raceMin: 4,
+  raceCenter: { pass: -0.592, run: -0.512 } as Record<'pass' | 'run', number>,
+  racePerMph: { pass: 0.052, run: 0.055 } as Record<'pass' | 'run', number>,
+  raceMax: 0.6,
+  /** SPG: the line-to-gain guard. The layer may shorten a gain, but it may never
+   *  take away a first down the OFF gain already made: if the pre-layer gain
+   *  reached the sticks and the layer's downside (negative shift / run-down /
+   *  level trim) pulled the result short, the result is restored to the marker.
+   *  That is the whole first-down fix (orchestrator direction 2026-10-15): the
+   *  guard sits ONLY at the marker — never as a floor on every down, and never a
+   *  "downside band" that drops the negative half on short gains. Measured on
+   *  2 seeds x 250 paired games (logs/speedgap-tune3.out), the layer's net
+   *  conversions move +0.26 pts with this guard on and the layer centred; the
+   *  downside-band variant (negative half only past 10 yd / the sticks) over-adds
+   *  (+0.80 pts, 3rd-down conversion +1.0) and the unguarded layer under-adds
+   *  (-0.49 pts). The individual spread is identical in all three. */
+  guardMarker: 1,
+  /** Yards won by the breakaway and lost when run down — the same base, so the two
+   *  sides of the race carry the same mean; `escMax` / `downMax` bound one play. */
+  escBase: 7,
+  escPerMph: 5.5,
+  escMax: 24,
+  downBase: 7,
+  downPerMph: 5.5,
+  downMax: 20,
+  /** League centring (measured, per side): the mean yardage the layer still adds
+   *  once the shift, the race and the marker guard have run, written as an
+   *  expectation and spent through the same dither as the shift (`dither`, so 0.2
+   *  = a fifth of a yard on average). A hash-uniform level trim, so it moves the
+   *  league mean and never the per-player ordering; it is re-measured with
+   *  SPG_STAT (`shiftPass` / `shiftRun`) on the plays the layer touches.
+   *  `centerBreakP`: the share of 20+ gains capped to 19 — the escape's extra
+   *  breakaways paid back at the same level, so the league's explosive rate (and
+   *  with it points and the TD bands) is held too. */
+  centerYdP: { pass: 0.16, run: 0.08 } as Record<'pass' | 'run', number>,
+  centerBreakP: { pass: 0, run: 0.3 } as Record<'pass' | 'run', number>,
+}
+
+/** SPG: measurement counters (off by default; a probe turns them on). */
+export const SPG_STAT = {
+  on: false,
+  n: 0,
+  sumEdge: 0,
+  sumShift: 0,
+  esc: 0,
+  down: 0,
+  posN: {} as Record<string, number>,
+  posEdge: {} as Record<string, number>,
+  perKeyN: {} as Record<string, number>,
+  perKeyShift: {} as Record<string, number>,
+  nRun: 0,
+  sumRunShift: 0,
+  sumRunEdge: 0,
+  sumRunEsc: 0,
+  sumRunDown: 0,
+  nPass: 0,
+  sumPassShift: 0,
+  sumPassEdge: 0,
+  sumPassEsc: 0,
+  sumPassDown: 0,
+  /** SPG: the FINAL shift by kind — the trim is the last level term, so the mean
+   *  of a cell (over the plays the layer touched) is exactly the adjustment
+   *  `centerYdP[kind]` still needs to make that cell mean-neutral. */
+  shiftPass: [0, 0] as [number, number],
+  shiftRun: [0, 0] as [number, number],
+}
+
+/** SPG: deterministic dither rounding — floor plus a hash-decided fraction, so the
+ *  expectation of the value is preserved exactly (integer rounding of a per-player
+ *  shift would bias the league mean). No rng() draw. */
+function dither(x: number, key: string): number {
+  const f = Math.floor(x)
+  const frac = x - f
+  return f + (frac > 0 && h01(key) < frac ? 1 : 0)
+}
+
+/** SPG: a receiver / back's own change of direction as mph of short-area burst
+ *  (position-centred AGI/BCV/JKM). Zero for a league-average player. */
+export function evadeMph(p: Player): number {
+  return rmean(p.pos, 'AGI', eff(p, 'AGI')) * SPG.evadeAgi
+    + rmean(p.pos, 'BCV', eff(p, 'BCV')) * SPG.evadeBcv
+    + rmean(p.pos, 'JKM', eff(p, 'JKM')) * SPG.evadeJkm
+}
+
+/** SPG: a position's tracking speed base (mph) — the level every player of that
+ *  position is measured against, so the layer reads the MAN's own ratings and not
+ *  the roster's (the whole league is neutral by construction: a league-average
+ *  player of any position sits at exactly 0, whoever is chasing him). */
+function posBaseMph(pos: string | undefined): number {
+  return (pos ? SPEED_MPH[pos] : undefined) ?? 16.0
+}
+
+/** SPG: the carrier's own open-field speed (mph) as a deviation from his
+ *  position's base — his SPD/ACC against the mean SPD/ACC of his own position,
+ *  plus, on a short catch-and-run, his own elusiveness. */
+export function carrierOpenMph(p: Player, short = false): number {
+  return carrierMph(p) - posBaseMph(p.pos) + (short ? evadeMph(p) : 0)
+}
+
+/** SPG: the open-field mph reference for the man CHASING (absolute, not his
+ *  position's mean): a 4.4 linebacker cannot run down a 4.3 receiver just because
+ *  he is quick "for a linebacker". This is the defender half of the user's
+ *  2026-10-15 amendment ("make sure this also includes defenders speed so it isnt
+ *  one sided"): the specific man's own SPD/PUR/AWR is measured against the league
+ *  pursuer level, so a fast safety cuts off what a slow LB concedes. The carrier
+ *  keeps his own position's base (`posBaseMph`), so a tight end is never compared
+ *  with a wideout; the league mean is held by `edgeCenter`, not by shrinking
+ *  either side's effect. */
+export function pursuerOpenMph(p: Player): number {
+  return pursuerMph(p) - SPG.pursuerBaseMph
+}
+
+/** SPG: the open-field edge (mph) of the carrier over the specific man chasing
+ *  him — the carrier's SPD/ACC (+ elusiveness when `short`) against the pursuer's
+ *  own SPD/PUR/AWR, each measured against his own position's mean. Positive = the
+ *  carrier outruns him. The position-base difference (a back is slower than a
+ *  corner) is deliberately NOT part of the edge: this is the individual matchup,
+ *  so the league mean holds without shrinking anyone's effect. */
+export function openFieldMph(carrier: Player | undefined, chaser: Player | undefined, short = false): number {
+  if (!carrier || !chaser) return 0
+  return carrierOpenMph(carrier, short) - pursuerOpenMph(chaser)
+}
+
+/** SPG: the yards the carrier wins (or loses) in the open field on this play —
+ *  the whole after-catch / after-the-line segment. Dither-rounded, so E[shift] is
+ *  the exact per-player expectation and `edgeCenter` centres it on the league. */
+export function openFieldShift(edge: number, centre: number, key: string): number {
+  return dither(SPG.ydPerMph * (edge - centre), `${key}:shift`)
+}
+
+/** SPG: the second-level race. Returns the (possibly extended or trimmed) gain:
+ *  a carrier with an edge over the chaser breaks away by `escBase + escPerMph·e`
+ *  yards (a fast man on a crosser turns 6 into 15+); a carrier who is slower than
+ *  the man chasing him is dragged down from behind by the same yardage — so the
+ *  two sides of one race carry the same mean (nothing happens to the mean player,
+ *  `e = 0`) and the league's yardage / breakaway level holds by construction.
+ *  Both are hash-decided (`h01`, no rng() draw). */
+export function openFieldRace(gain: number, edge: number, key: string, side: 'pass' | 'run' = 'pass'): { gain: number; esc: boolean; down: boolean } {
+  const e = edge - SPG.raceCenter[side]
+  const pEsc = clamp(SPG.racePerMph[side] * e, 0, SPG.raceMax)
+  const pDown = clamp(-SPG.racePerMph[side] * e, 0, SPG.raceMax)
+  if (gain >= SPG.raceMin && pEsc > 0 && h01(`${key}:esc`) < pEsc) {
+    const win = clamp(Math.round(SPG.escBase + SPG.escPerMph * e), 1, SPG.escMax)
+    return { gain: gain + win, esc: true, down: false }
+  }
+  const downOk = gain >= SPG.raceMin && pDown > 0 && h01(`${key}:down`) < pDown
+  if (downOk) {
+    const loss = clamp(Math.round(SPG.downBase + SPG.downPerMph * -e), 1, SPG.downMax)
+    return { gain: Math.max(1, gain - loss), esc: false, down: true }
+  }
+  return { gain, esc: false, down: false }
+}
+
+/** SPG: the whole-segment transform — the yardage shift on every positive gain,
+ *  then the race at the second level. One place, so the pass (after the catch) and
+ *  the run (after the line) apply exactly the same open-field math. */
+function speedGapGain(gain: number, edge: number, key: string, pos: string | undefined, kind: 'run' | 'pass', down = 0, dist = 0): number {
+  if (!SPEEDGAP_ON || gain < SPG.shiftMin || !Number.isFinite(edge)) return gain
+  const centre = SPG.edgeCenter[kind]
+  // The whole after-catch / after-the-line segment: the individual yardage shift
+  // (every positive gain) and then the second-level race. Symmetric — the same
+  // base (`escBase` / `downBase`) on both sides of the race, so a league-average
+  // matchup moves nothing.
+  const sh = openFieldShift(edge, centre, key)
+  let g = Math.max(1, gain + sh)
+  const r = openFieldRace(g, edge, key, kind)
+  g = r.gain
+  // League centring (measured constants, a uniform hash): pay back the residual
+  // mean the shift, the race and the marker guard leave, and the extra breakaways
+  // the escape adds. Both are level shifts on every player, so the individual
+  // spread is untouched.
+  if (SPG.centerBreakP[kind] > 0 && g >= 20 && h01(`${key}:cbr`) < SPG.centerBreakP[kind]) g = 19
+  if (SPG.centerYdP[kind] !== 0) {
+    const t = dither(SPG.centerYdP[kind], `${key}:cyd`)
+    if (t > 0) g = Math.max(1, g - t)
+    else if (t < 0) g += -t
+  }
+  // Line-to-gain guard: the open-field layer may shorten a gain, but it may never
+  // take away a first down the OFF gain already made — the guard sits ONLY at the
+  // marker (a level guard on the one play that matters), not on every down and not
+  // as a "downside band". The goal line is deliberately left to the calibrated
+  // draw, the J8a chase and the J3b goal-line rep, so a fast chaser can still run
+  // a breakaway down short of the house.
+  if (SPG.guardMarker > 0 && dist > 0 && g < dist && gain >= dist) g = dist
+  if (SPG_STAT.on) {
+    SPG_STAT.n++
+    SPG_STAT.sumEdge += edge
+    SPG_STAT.sumShift += g - gain
+    const c = kind === 'run' ? SPG_STAT.shiftRun : SPG_STAT.shiftPass
+    c[0]++; c[1] += g - gain
+    if (r.esc) SPG_STAT.esc++
+    if (r.down) SPG_STAT.down++
+    const pk = `${kind}${down >= 3 ? 3 : 1}`
+    SPG_STAT.perKeyN[pk] = (SPG_STAT.perKeyN[pk] ?? 0) + 1
+    SPG_STAT.perKeyShift[pk] = (SPG_STAT.perKeyShift[pk] ?? 0) + (g - gain)
+    const p = pos ?? '?'
+    SPG_STAT.posN[p] = (SPG_STAT.posN[p] ?? 0) + 1
+    SPG_STAT.posEdge[p] = (SPG_STAT.posEdge[p] ?? 0) + edge
+    if (kind === 'run') {
+      SPG_STAT.nRun++; SPG_STAT.sumRunShift += g - gain; SPG_STAT.sumRunEdge += edge
+      if (r.esc) SPG_STAT.sumRunEsc++; if (r.down) SPG_STAT.sumRunDown++
+    } else {
+      SPG_STAT.nPass++; SPG_STAT.sumPassShift += g - gain; SPG_STAT.sumPassEdge += edge
+      if (r.esc) SPG_STAT.sumPassEsc++; if (r.down) SPG_STAT.sumPassDown++
+    }
+  }
+  return g
+}
+
 /** J8a: the 1–3 pursuers for an open-field chase — hash-picked across the whole
  *  second/third level (LB/S/CB) by speed and pursuit. The chaser's position mix
  *  is set by geometry (posBonus/posDepth), not by picking CBs first. */
@@ -2823,6 +3105,15 @@ export interface PlayOutcome {
   iuDlStaId?: string
   /** Jind: the long-run chase multiplier applied on the J8a-off path (debug). */
   iuChaseF?: number
+  // ── SPG (speedgap): the open-field speed layer (animation) ──────────────────
+  /** SPG: the carrier's own open-field edge (mph) over the man chasing him —
+   *  carrier SPD/ACC (+ AGI/elusiveness on a short catch-and-run) minus the
+   *  pursuer's SPD/PUR/AWR. One decimal; only set while the layer is on. */
+  spgMph?: number
+  /** SPG: the defender chasing him on this play (the animation's pursuer). */
+  spgChaserId?: string
+  /** SPG: debug (SPG_STAT only) — the gain before the speed transform. */
+  spgPre?: number
   /** J8c: the covering defender who broke the pass up (bookkeeping/animation). */
   pbuId?: string
   // ── J7: matchups & busts ────────────────────────────────────────────────────
@@ -5386,6 +5677,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const gains: string[] = []
     const catchSkill = (tA.CTH ?? 70) * 0.5 + (tA.SPC ?? 70) * 0.2 + (tA.BTK ?? 70) * 0.3 + tStyle.contested * 8
     let gain = sampleYards(rng, true, talentEdge + (catchSkill - 72), gains, yard, tier)
+    // SPG: what the animation needs from the open-field speed layer (the crediting
+    // ids are already on the play via tackleIds / the chaser).
+    let spgField: (Pick<PlayOutcome, 'spgMph' | 'spgChaserId'> & { spgPre?: number }) | undefined
     // R2: the real distribution is sampled first, then a small league-wide
     // calibration trims the positive tail (the rating terms above are unchanged).
     if (gain > 0) gain = Math.round(gain * R2.passGainCal)
@@ -5436,6 +5730,30 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       const baseFinal = preReshapeGain + (env?.down === 3 ? R2.moneyYards : 0)
       if (dist > 0 && baseFinal < dist && gain >= dist) gain = dist - 1
       if (gain > 0 && yard + baseFinal < 100 && yard + gain >= 100) gain = Math.max(-4, 100 - yard - 1)
+    }
+    // SPG: open-field speed — the AFTER-THE-CATCH segment only. It sits AFTER the
+    // J3 air+YAC reshape on purpose: the reshape already fixed the air depth, so the
+    // specific man's own speed moves the yards after the catch (a fast receiver on a
+    // slant or crosser turns 6 into 15+, a slow one is dragged down) without moving
+    // the recorded `passDepth` the broadcast camera reads.
+    //   The deciding defender is the man who actually closes on him: J8a's nearest
+    // pursuer (hash-picked across LB/S/CB by geometry and speed) — the man the
+    // animation credits on a long gain. He is picked per play BEFORE the ball is
+    // caught, so his own speed is not a proxy for the gain that follows (the assigned
+    // cover man IS correlated with the route, since the CPU speed-matches coverage:
+    // measuring on him would compare a slow LB on a TE checkdown with a fast CB on a
+    // deep shot and call the confound "defender speed"). The cover man is the
+    // fallback when the chase has no chaser. Centred on the league's measured mean
+    // edge, so yards per catch hold by CENTRING (OFF / setSpeedGap(false) untouched).
+    if (SPEEDGAP_ON && J8A_ON && target && gain > 0) {
+      const spgMan = passClose.chaser ?? coverPlayer
+      if (spgMan) {
+        const shortCar = concept.depth <= SPG.shortDepth || concept.yac >= SPG.shortYac
+        const spgEdge = openFieldMph(target, spgMan, shortCar)
+        const pre = gain
+        gain = speedGapGain(gain, spgEdge, `${n}:${defId}:passspg`, target.pos, 'pass', env?.down ?? 0, dist)
+        spgField = { spgMph: Math.round(spgEdge * 10) / 10, spgChaserId: spgMan.id, ...(SPG_STAT.on ? { spgPre: pre } : {}) }
+      }
     }
     // L12 S3: a completion is stopped by one defender — the coverage defender most
     // often, support otherwise. No credit on a score. J6: a receiver forced out of
@@ -5509,6 +5827,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       timeUsed: 24 + Math.floor(tu * 16), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
+      ...spgField,
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
@@ -5889,6 +6208,22 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (gain > 20) gain = Math.round(gain * R2.explosiveCal)
   // R2: near the goal line the compressed front can stand a runner up short.
   if (yard + gain >= 100 && gain > 0) gain = Math.round(gain * (1 - R2.rzRunDamp))
+  // SPG: open-field speed. The same math the pass path uses after the catch now
+  // decides the run's whole after-the-line segment: the back's own SPD/ACC against
+  // the man chasing him (J8a's nearest pursuer — the same player the animation
+  // credits on a long gain) wins or loses ground on every positive carry, and from
+  // `raceMin` yards he either breaks away (a fast back turns 6 into 20+) or is
+  // dragged down from behind (a slow back's 25 becomes 19). Centred on the
+  // league's measured mean edge, so the league yards per carry hold; the J8a TD
+  // gate below then decides whether the breakaway finishes. OFF or no chaser
+  // leaves the gain untouched.
+  let spgRun: (Pick<PlayOutcome, 'spgMph' | 'spgChaserId'> & { spgPre?: number }) | undefined
+  if (SPEEDGAP_ON && J8A_ON && carrier && runClose.chaser && gain > 0) {
+    const spgEdge = openFieldMph(carrier, runClose.chaser, false)
+    const pre = gain
+    gain = speedGapGain(gain, spgEdge, `${n}:${defId}:runspg`, carrier.pos, 'run', env?.down ?? 0, distance)
+    spgRun = { spgMph: Math.round(spgEdge * 10) / 10, spgChaserId: runClose.chaser.id, ...(SPG_STAT.on ? { spgPre: pre } : {}) }
+  }
   // J8a: the open-field chase decides whether a long gain reaches the house. The
   // NFL chase-targets logit (edge = carrier mph − nearest pursuer mph, plus the
   // pursuer's head start, the pursuit angle, how many pursuers and the yards to
@@ -6016,6 +6351,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     ...(j13 ? { audible: j13.audible, hotRoute: j13.hotRoute, slide: j13.slide } : {}),
     ...(glPoaId ? { glPoaId } : {}),
     ...(glStopId ? { glStopId } : {}),
+    ...spgRun,
     onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     ...scoutFields,
     // realism-qbrun: what the animation needs — the option keep (mesh + pull) and
