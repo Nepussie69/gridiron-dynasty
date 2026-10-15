@@ -80,5 +80,5 @@ Coordinate with any open `playsim.ts` worker (passid2, v1, b2 worktrees): keep H
 |---|---|
 | Spec | ✅ 2026-10-11 |
 | H1 engine | ✅ merged 2026-10-15 (row 439) |
-| H2 store + room + owner | ⏳ |
+| H2 store + room + owner | ✅ merged 2026-10-15 (row 443) |
 | H3 UI | ⏳ |

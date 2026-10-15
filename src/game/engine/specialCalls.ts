@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { clamp } from './rng'
+import { trickIsAlert, trickRecordText } from './trickPlays'
 
 export type KickoffCall = 'deep' | 'squib' | 'onside' | 'surprise'
 export type ReturnStrategy = 'safe' | 'default' | 'aggressive'
@@ -50,6 +51,11 @@ export interface STTeamRecord {
   fake: number
   onside: number
   surprise: number
+  /**
+   * FUTURES #24 (T1): how many times this season the club has shown each trick
+   * play. Optional, so an old save (and every pre-T1 world) stays valid.
+   */
+  tricks?: Partial<Record<import('./trickPlays').TrickKind, number>>
 }
 export interface STMemory {
   season: number
@@ -77,8 +83,14 @@ export function stRecordText(rec: STTeamRecord | undefined): string {
   if (rec.fake > 0) parts.push(`${rec.fake} fake${rec.fake > 1 ? 's' : ''}`)
   if (rec.onside > 0) parts.push(`${rec.onside} onside${rec.onside > 1 ? 's' : ''}`)
   if (rec.surprise > 0) parts.push(`${rec.surprise} surprise onside${rec.surprise > 1 ? 's' : ''}`)
+  // FUTURES #24: the scouting sheet also names the tricks, after the kicks. The
+  // special-teams wording above is unchanged, so a club with no tricks reads
+  // exactly as it did before T1.
+  const tricks = trickRecordText(rec)
+  if (tricks) parts.push(tricks.replace(' this season', '').replace(' — alert', ''))
   if (!parts.length) return ''
-  return `${parts.join(' · ')} this season${isAlert(rec) ? ' — alert' : ''}`
+  const alert = isAlert(rec) || trickIsAlert(rec)
+  return `${parts.join(' · ')} this season${alert ? ' — alert' : ''}`
 }
 
 // ── Return / kick strategy effects ───────────────────────────────────────────

@@ -397,6 +397,10 @@ export function enforceCapCompliance(world: World) {
     )
     for (const p of order) {
       if (used() <= target) break
+      // rosterfloor: the per-position floors below sum to 36, so a pure cap
+      // cutdown can leave an AI club at 44 — under the league's 45 minimum.
+      // Cap compliance never beats the legal roster floor.
+      if (roster.length <= ROSTER_MIN) break
       if ((counts[p.pos] ?? 0) <= (FLOOR[p.pos] ?? 2)) continue
       const idx = roster.indexOf(p)
       if (idx < 0) continue
@@ -485,6 +489,11 @@ export function runAITrades(world: World, skipTeamId?: string | null) {
 export const ROSTER_FLOOR: Record<string, number> = {
   QB: 2, RB: 2, WR: 4, TE: 2, OT: 3, OG: 3, C: 1, DE: 3, DT: 3, LB: 4, CB: 4, S: 3, K: 1, P: 1,
 }
+
+/** The NFL's in-season roster limit — the size every AI club carries into week 1. */
+export const ROSTER_TARGET = 53
+/** The league's legal roster minimum (45–60 is the invariant every save must keep). */
+export const ROSTER_MIN = 45
 
 /**
  * Cut every NFL roster down to 53, lowest-rated surplus first. Without this,
@@ -690,6 +699,58 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
   indexPlayers(world)
 }
 
+/**
+ * rosterfloor: bring every AI club up to the NFL's 53 before week 1.
+ *
+ * The March market fills each *position* to FA_NEEDS — 51 bodies in total — so a
+ * club can end the offseason legal-but-thin, and any later cut (cap compliance,
+ * a waiver claim) pushes it under the 45 floor. This tops the *total* up with the
+ * best body the club's own cap allows, one player at a time, thinnest hole
+ * first: the same per-player logic `signBestFit` uses, never a league average.
+ * Deterministic — no rng draw, so the play sim is untouched.
+ */
+export function fillNflRosters(world: World, skipTeamId?: string | null) {
+  const capLimit = capForSeason(world.season)
+  let signed = 0
+  for (const t of world.teams) {
+    if (t.tier !== 'NFL' || t.id === skipTeamId) continue
+    const roster = world.roster[t.id] ?? []
+    const usedCap = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
+    while (roster.length < ROSTER_TARGET) {
+      const counts: Record<string, number> = {}
+      for (const p of roster) counts[p.pos] = (counts[p.pos] ?? 0) + 1
+      const deficit = (pos: string) => (FA_NEEDS[pos] ?? 0) - (counts[pos] ?? 0)
+      // Thinnest hole first (FA_NEEDS is the club's own need table); ties by pos.
+      const holes = [...new Set([...Object.keys(FA_NEEDS), ...Object.keys(counts)])].sort(
+        (a, b) => deficit(b) - deficit(a) || (a < b ? -1 : a > b ? 1 : 0),
+      )
+      let chosen: Player | null = null
+      for (const pos of holes) {
+        const bias = world.era?.positionBias?.[pos as Position] ?? 1
+        chosen =
+          world.freeAgents
+            .filter((p) => p.pos === pos)
+            .sort((a, b) => b.ovr - a.ovr || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+            .find((p) => usedCap() + marketPrice(p, world.season, bias) <= capLimit) ?? null
+        if (chosen) break
+      }
+      if (!chosen) break
+      const bias = world.era?.positionBias?.[chosen.pos] ?? 1
+      const annual = marketPrice(chosen, world.season, bias)
+      world.freeAgents = world.freeAgents.filter((p) => p.id !== chosen!.id)
+      chosen.teamId = t.id
+      chosen.faWeeks = 0
+      chosen.contract = { ...chosen.contract, annual, years: 2, base: [annual, annual], capHit: annual }
+      roster.push(chosen)
+      ledgerFreeAgent(world, t.id, 'gained', chosen.ovr)
+      signed++
+    }
+  }
+  // Adopt anything we just signed into `world.players`.
+  if (signed) indexPlayers(world)
+  return signed
+}
+
 /** Backlog 408 (2d): a released player keeps no contract; his dead money stays
  *  with the old club. */
 function voidContract(c: Contract): Contract {
@@ -786,10 +847,17 @@ function signBestFit(world: World, teamId: string, capLimit: number) {
  * Backlog 408 (2a): keep the street pool in its realistic in-season band. Above
  * the cap the oldest fringe bodies leave the league; below the floor fresh
  * street bodies are drawn from a separate hash stream (never the sim rng).
+ *
+ * The band describes the *in-season* street pool. In the offseason the list
+ * legitimately holds the whole unsigned class — every expiring contract lands
+ * here in one cohort — and the AI market needs those bodies to refill 32 clubs
+ * (rosterfloor: trimming here starved the market, so the clubs at the end of
+ * `runAIFreeAgency`'s order started a season under 45). The weekly in-season
+ * call still compacts the pool before week 1, so the band itself is unchanged.
  */
 function balanceStreetPool(world: World) {
   const fas = world.freeAgents
-  if (fas.length > STREET_MAX) {
+  if (world.phase === 'regular' && fas.length > STREET_MAX) {
     const excess = fas.length - STREET_MAX
     const drop = new Set(
       [...fas]

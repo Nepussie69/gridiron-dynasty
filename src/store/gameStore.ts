@@ -15,6 +15,7 @@ import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecove
 import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, getStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
+import { isTrickKind, TRICK } from '../game/engine/trickPlays'
 import { BALANCED_PLAN, PLAN_PRESETS, type GamePlan } from '../game/engine/gameplan'
 import { gameWeather, setWeather, getWeather, type GameWeather, type WeatherGame } from '../game/engine/weather'
 import { NO_USER_BONUS, coachEffect, userBonusFromSkills, userSeat } from '../game/engine/coaching'
@@ -75,6 +76,7 @@ import {
   runInSeasonFreeAgency,
   marketPrice,
   ROSTER_FLOOR,
+  fillNflRosters,
   runAIResign,
   runAITrades,
   enforceCapCompliance,
@@ -153,6 +155,9 @@ import {
   problemPlayers,
   problemScore,
   rankedLeaders,
+  recentSpeeches,
+  recordSpeech,
+  type SpeechRecord,
 } from '../game/engine/lockerRoom'
 import { evaluateTrade, executeTrade, findDeals, findPackagesFor, isTradeablePick, type TradeAsset } from '../game/engine/trade'
 import { recordTrade, resolveTradePicks } from '../game/engine/tradeTree'
@@ -199,7 +204,8 @@ import {
   mentorFor,
   ownerMandate,
 } from '../game/engine/people'
-import { ownerFiringLine, ownerName, ownerProfile } from '../game/engine/owner'
+import { ownerFiringLine, ownerName, ownerPersonality, ownerProfile } from '../game/engine/owner'
+import { speechAftermath, type SpeechId } from '../game/engine/halftimeSpeech'
 import { advanceCoachingTree, backfillAICoordinators, poachAssistant } from '../game/engine/coachingTree'
 // FUTURES #28 (C2): the staff-market engine hooks — market refresh, contract tick,
 // poach offers, budget gate, buyouts, interim promotion. Kept in one block so the
@@ -402,9 +408,9 @@ export interface GameDay {
   personnel: PersonnelSet
   /** L11.5 Q3: every mid-game plan switch, shown in the post-game film card. */
   changes: PlanChange[]
-  /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. */
-  callStart?: 'off' | 'def' | 'both'
-  callSwitches?: { at: number; mode: 'off' | 'def' | 'both' | undefined }[]
+  /** L12.6: call mode at kickoff and each mid-game switch (play count it applied from), so the game can be rebuilt exactly. FUTURES #26 P2 carries 'sheet' through here. */
+  callStart?: 'off' | 'def' | 'both' | 'sheet'
+  callSwitches?: { at: number; mode: 'off' | 'def' | 'both' | 'sheet' | undefined }[]
   /** Backlog 436: the seed this game kicked off with (week seed + fresh dice), so a rebuild replays it exactly. */
   seed?: number
 }
@@ -548,7 +554,9 @@ function updateUserBook(world: World, sim: GameSim, teamId: string) {
  */
 export function recordSpecialAttempts(world: World, sim: GameSim) {
   const attempts = sim.plays.filter((p) => p.stAttempt)
-  if (!attempts.length) return
+  // FUTURES #24 T1: the trick snaps go on the same sheet.
+  const tricks = sim.plays.filter((p) => p.trick)
+  if (!attempts.length && !tricks.length) return
   if (!world.stMemory || world.stMemory.season !== world.season) {
     world.stMemory = { season: world.season, teams: {} }
   }
@@ -558,6 +566,11 @@ export function recordSpecialAttempts(world: World, sim: GameSim) {
     if (a.kind === 'fake') rec.fake += 1
     else if (a.kind === 'onside') rec.onside += 1
     else rec.surprise += 1
+  }
+  for (const p of tricks) {
+    const rec = (world.stMemory.teams[p.offId] ??= emptySTRecord())
+    const t = (rec.tricks ??= {})
+    t[p.trick!] = (t[p.trick!] ?? 0) + 1
   }
 }
 // Teach the stats layer to stamp each season with the scheme played.
@@ -672,6 +685,8 @@ interface GameStore {
   callTimeout: () => void
   /** L12.6: how often a coached game asks for your call (applies from the next snap). */
   setCallMode: (mode: 'key' | 'off' | 'def' | 'both', keepPlays?: number) => boolean
+  /** FUTURES #7 (H2): the halftime-speech standing order for simmed games. */
+  setHalftimeAuto: (mode: 'stay' | 'staff') => void
   simGameDayToEnd: () => Promise<void>
   abandonGameDay: () => void
   statsDb: () => CareerDatabase
@@ -685,6 +700,10 @@ interface GameStore {
   setCallSheet: (sheet: CallSheet) => void
   /** FUTURES #4: the user's special-teams kick + return strategies. */
   setSpecialTeams: (plan: SpecialTeamsPlan) => void
+  /** FUTURES #24: install up to two trick plays on this week's game plan. */
+  setTrickPackage: (kinds: import('../game/engine/trickPlays').TrickKind[]) => void
+  /** FUTURES #24: let the staff call the tricks for you when the look is right. */
+  setOcTricks: (on: boolean) => void
   /** L10 G10: the user's opening script (ordered concept names, max 8). */
   setScript: (concepts: string[]) => void
   /** L10 G11: pre-game matchup assignments for your club. */
@@ -1258,7 +1277,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // Dropping a captain drops every pairing with him.
     const mentors = { ...state.mentors }
     if (has) for (const [r, m] of Object.entries(mentors)) if (m === playerId) delete mentors[r]
-    set({ career: { ...career, lockerRoom: { season: state.season, captains, mentors, effort: state.effort } } })
+    set({ career: { ...career, lockerRoom: { ...state, captains, mentors } } })
     bump(set, get)
     get().save()
   },
@@ -1283,7 +1302,7 @@ export const useGame = create<GameStore>((set, get) => ({
     const mentors = { ...state.mentors }
     if (mentorId) mentors[playerId] = mentorId
     else delete mentors[playerId]
-    set({ career: { ...career, lockerRoom: { season: state.season, captains: state.captains, mentors, effort: state.effort } } })
+    set({ career: { ...career, lockerRoom: { ...state, mentors } } })
     bump(set, get)
     get().save()
   },
@@ -1293,7 +1312,7 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!career) return
     const state = lockerRoomState(career, world.season)
     const next = !state.effort
-    set({ career: { ...career, lockerRoom: { season: state.season, captains: state.captains, mentors: state.mentors, effort: next } } })
+    set({ career: { ...career, lockerRoom: { ...state, effort: next } } })
     bump(set, get)
     get().save()
     get().showToast(
@@ -1332,7 +1351,7 @@ export const useGame = create<GameStore>((set, get) => ({
         load[best.id]++
       }
     }
-    set({ career: { ...career, lockerRoom: { season: state.season, captains, mentors, effort: state.effort } } })
+    set({ career: { ...career, lockerRoom: { ...state, captains, mentors } } })
     bump(set, get)
     get().save()
     get().showToast(
@@ -1590,6 +1609,13 @@ export const useGame = create<GameStore>((set, get) => ({
     let qbSwitchLine: string | null = null
     let rbInjuryLine: string | null = null
     let keysRepDelta = 0
+    // FUTURES #7 (H2): the halftime speech's aftermath (the men it reached, the
+    // record it leaves, the owner's read). Captured here, applied to nextCareer.
+    let speechLine: string | null = null
+    let speechRec: SpeechRecord | null = null
+    let speechSecurity = 0
+    let speechTone: 'win' | 'loss' | 'info' = 'info'
+    let ownerSpeechLine: string | null = null
     if (userGame) {
       // L15 (FUTURES #15): the fast path heals the club above (in `simWeek`), so a
       // chosen "play" call goes out now — the injury moves to `hurtSaved` and the
@@ -1669,6 +1695,17 @@ export const useGame = create<GameStore>((set, get) => ({
           }
         }
       }
+      // FUTURES #7 (H2): the halftime speech the user answered lands on the men
+      // it reached (each core player's own morale response), is recorded for the
+      // repetition penalty, and draws one bounded owner read from this game.
+      {
+        const sp = applySpeechAftermath(world, career, sim, week)
+        speechLine = sp.line
+        speechTone = sp.tone
+        speechRec = sp.record
+        speechSecurity = sp.security
+        ownerSpeechLine = sp.ownerLine
+      }
       // L15 (FUTURES #15): the played-hurt state lasts exactly one game. Put the
       // injuries back (rolling the aggravation) once the game is recorded — after
       // the user-game post-processing above, with the rest of the week's effects
@@ -1732,6 +1769,16 @@ export const useGame = create<GameStore>((set, get) => ({
     // L10 G6: remember a halftime QB switch in the season's story.
     if (qbSwitchLine) nextCareer = logMoment(nextCareer, { week, text: qbSwitchLine, tone: 'info' })
     if (rbInjuryLine) nextCareer = logMoment(nextCareer, { week, text: rbInjuryLine, tone: 'loss' })
+    // FUTURES #7 (H2): the halftime speech's story, this season's record (for the
+    // repetition penalty and the locker-room card) and the owner's one bounded
+    // read this game.
+    if (speechLine) nextCareer = logMoment(nextCareer, { week, text: speechLine, tone: speechTone })
+    if (ownerSpeechLine) nextCareer = logMoment(nextCareer, { week, text: ownerSpeechLine, tone: 'info' })
+    if (speechRec) {
+      const lr = lockerRoomState(nextCareer, world.season)
+      nextCareer = { ...nextCareer, lockerRoom: recordSpeech(lr, speechRec) }
+    }
+    if (speechSecurity) nextCareer = { ...nextCareer, jobSecurity: clamp(nextCareer.jobSecurity + speechSecurity, 0, 100) }
     // L11 W4: the waiver turn's result for the user's club (win -> a moment).
     for (const line of waiverMoments) nextCareer = logMoment(nextCareer, { week, text: line.text, tone: line.tone })
     // #20: log only the notable results — blowouts and thrillers — so the
@@ -1945,6 +1992,18 @@ export const useGame = create<GameStore>((set, get) => ({
     return applied
   },
 
+  setHalftimeAuto: (mode) => {
+    const career = get().career
+    if (!career) return
+    set({ career: { ...career, halftimeAuto: mode }, tick: get().tick + 1 })
+    get().save()
+    get().showToast(
+      mode === 'staff'
+        ? 'Halftime standing order: the staff reads the room and picks the speech.'
+        : 'Halftime standing order: stay the course.',
+    )
+  },
+
   startGameDay: () => {
     const career = get().career
     if (!career) return
@@ -2096,6 +2155,24 @@ export const useGame = create<GameStore>((set, get) => ({
     const career = get().career
     if (!career) return
     set({ career: withFlag({ ...career, specialTeams: normalizeSpecial(plan) }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  // FUTURES #24 T1: the tricks installed this week (at most `TRICK.maxPackage`),
+  // and the "let the OC call one" flag. Both are optional career fields, so an
+  // old save loads without them and an unset user plays the pre-feature sim.
+  setTrickPackage: (kinds) => {
+    const career = get().career
+    if (!career) return
+    const pkg = kinds.filter((k) => isTrickKind(k)).slice(0, TRICK.maxPackage)
+    set({ career: withFlag({ ...career, tricks: pkg.length ? pkg : undefined }, 'gameplan'), tick: get().tick + 1 })
+    get().save()
+  },
+
+  setOcTricks: (on) => {
+    const career = get().career
+    if (!career) return
+    set({ career: withFlag({ ...career, ocTricks: on || undefined }, 'gameplan'), tick: get().tick + 1 })
     get().save()
   },
 
@@ -2254,6 +2331,9 @@ export const useGame = create<GameStore>((set, get) => ({
     regenerateSchedule(world)
     refreshProspectClass(world)
     enforceCapCompliance(world)
+    // rosterfloor: cap compliance can still trim a club toward the floor; top the
+    // AI clubs back up to 53 before the season opens.
+    fillNflRosters(world, career.teamId)
     // Z1b: adopt every roster/practice-squad/IR/free-agent player into `players`.
     indexPlayers(world)
     // If a firing was never resolved, take the default road back (#17).
@@ -4840,13 +4920,93 @@ export function userCtx(career: CareerState | null): GameCtx | undefined {
   const usage = career.usage
   const personnel = career.personnel
   const special = career.specialTeams
-  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special }
+  // FUTURES #24: tricks are an offense-side tool, like the script.
+  const tricks = hasOff ? career.tricks : undefined
+  const ocTricks = hasOff ? career.ocTricks : undefined
+  // FUTURES #7 (H2): the halftime-speech context. The room comes from the
+  // locker room (season-scoped captains); the repetition list from this season's
+  // speech record; the standing order from `career.halftimeAuto`. Unset = stay
+  // the course, so a default career is byte-identical to the pre-speech sim.
+  const lr = lockerRoomState(career, career.season)
+  const speech = {
+    leadership: career.skills?.leadership,
+    captainIds: lr.captains,
+    recent: recentSpeeches(lr, 3),
+    auto: career.halftimeAuto,
+  }
+  if (scope === 'both') return { userTeamId: career.teamId, scope: 'hc', callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech }
   const focus = career.unitFocus ?? 'both'
   return {
     userTeamId: career.teamId,
     scope: focus === 'off' ? 'off' : focus === 'def' ? 'def' : 'both',
-    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special,
+    callSheet, script, scriptEdgeMult, oppRead, matchups, usage, personnel, special, tricks, ocTricks, speech,
   }
+}
+
+/**
+ * FUTURES #7 (H2): the aftermath of one user game's halftime speech. `speechAftermath`
+ * (H1) turns the verdict into each reached player's own morale delta; this applies
+ * them to the canonical roster objects (so the moves show in `avgMorale`), reads the
+ * owner (at most ±1 job security from this game) and packages the season's record
+ * entry. Exported so the store probe can drive the exact action `advanceWeek` runs.
+ * Pure of rng: the owner personality is a hash and every term comes from `sim`.
+ */
+export interface SpeechAftermathResult {
+  line: string | null
+  tone: 'win' | 'loss' | 'info'
+  record: SpeechRecord | null
+  security: number
+  ownerLine: string | null
+  morale: { id: string; delta: number }[]
+}
+
+export function applySpeechAftermath(world: World, career: CareerState, sim: GameSim, week: number): SpeechAftermathResult {
+  let line: string | null = null
+  let tone: 'win' | 'loss' | 'info' = 'info'
+  let record: SpeechRecord | null = null
+  let security = 0
+  let ownerLine: string | null = null
+  const morale: { id: string; delta: number }[] = []
+  const isHome = sim.homeId === career.teamId
+  const won = isHome ? sim.homeScore > sim.awayScore : sim.awayScore > sim.homeScore
+  const out = sim.speech?.[career.teamId]
+  if (out) {
+    const af = speechAftermath(world, out, won, sim.plays)
+    // Mutate in place: roster entries must stay the canonical world.players objects.
+    for (const d of af.deltas) {
+      const p = world.players.find((x) => x.id === d.id)
+      if (p) {
+        p.morale = clamp(p.morale + d.delta, 1, 100)
+        morale.push(d)
+      }
+    }
+    line = af.line
+    record = { week, id: out.id, result: out.result, starId: out.starId }
+    tone = out.result === 'landed' ? 'win' : out.result === 'backfired' ? 'loss' : 'info'
+  }
+  const personality = ownerPersonality(career.teamId)
+  const dec = (sim.decisions ?? []).find((d) => d.kind === 'speech')
+  const marginAtHalf = dec?.margin ?? 0
+  const choice = (dec?.choiceId ?? 'stayCourse') as SpeechId
+  if (personality === 'win-now') {
+    if (out?.result === 'backfired' && !won) {
+      security = -1
+      ownerLine = 'Owner (win-now): the halftime speech backfired and you lost — he noticed.'
+    }
+  } else if (personality === 'meddling') {
+    if (marginAtHalf < 0 && choice === 'stayCourse' && !won) {
+      security = -1
+      ownerLine = 'Owner (meddling): "Light a fire under them" — you stayed the course and lost.'
+    }
+  } else if (personality === 'patient') {
+    const menteeIds = Object.keys(career.lockerRoom?.mentors ?? {})
+    const playedIds = new Set((sim.box ?? []).filter((b) => b.teamId === career.teamId).map((b) => b.playerId))
+    const menteesPlayed = menteeIds.filter((id) => playedIds.has(id)).length
+    if (out?.result === 'landed' && menteesPlayed >= 2) {
+      ownerLine = `Owner (patient): ${menteesPlayed} of your mentees answered the halftime speech — the plan is working.`
+    }
+  }
+  return { line, tone, record, security, ownerLine, morale }
 }
 
 /**
@@ -5627,6 +5787,11 @@ function completeOffseasonStages(world: World, career: CareerState | null) {
   // The draft + UDFAs can push rosters over 53; the FA trim ran before them, so
   // cut back to a legal 53 here (same trimmer the FA market uses).
   trimNflRosters(world)
+  // rosterfloor: the trims and the draft's uneven class can leave a club short of
+  // 53 (the March market only ever fills positions to FA_NEEDS = 51). Top every
+  // AI club back up to the NFL's 53 with the best best-fit bodies its own cap
+  // allows, so the offseason closes on a legal, full roster.
+  fillNflRosters(world, career?.teamId)
 }
 
 function runEndOfRegularSeason(
