@@ -795,8 +795,10 @@ export interface CareerState {
     week: number
     season: number
   }
-  /** L12.6: coached games — call every snap on offense, defense or both (unset = key moments only). */
-  callMode?: 'off' | 'def' | 'both'
+  /** L12.6: coached games — call every snap on offense, defense or both (unset = key moments only). FUTURES #26: 'sheet' stops only in the situations you kept (`playCalling`). */
+  callMode?: 'off' | 'def' | 'both' | 'sheet'
+  /** FUTURES #26: who calls each situation, the call sheet, and the audibles rule. */
+  playCalling?: import('./engine/playcalling').PlayCallingPlan
   /**
    * FUTURES #7 (H2): the halftime-speech standing order for simmed games.
    * 'stay' (default) answers STAY THE COURSE; 'staff' lets the staff read the
