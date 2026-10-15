@@ -51,6 +51,9 @@ export interface Game {
   film?: { grade: number; letter: string; lines: string[]; userCalls?: number }
   /** L12 W2: the graded keys to the game (kept with the box, one season). */
   keys?: import('./keys').KeyGrade[]
+  /** Backlog 436: the fresh dice the user's game was played with (added to its
+   *  week seed), so the play-by-play re-sim matches. Absent = 0 (old saves). */
+  diceSalt?: number
 }
 
 export interface World {
