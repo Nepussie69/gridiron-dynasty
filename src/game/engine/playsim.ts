@@ -50,6 +50,8 @@ import {
   isCheckRoute, visionOn, VISION as VISION_CFG, type VisionThrow,
 } from './vision'
 import { wrRead, wrReadsOn, WRREAD as WRREAD_CFG, WRR_STAT, type WrRead } from './wrReads'
+// FUTURES #54 E2: route vs coverage, decided on the live field (OFF by default).
+import { emergentRoute, getEmergentE2, type E2Result } from './emergentRoute'
 import {
   throwOn, passStyle, chooseThrowType, throwPlan, airTimeFor, pocketPlan, readAvoidBias,
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
@@ -4863,18 +4865,37 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       if (miscall) MU_STAT.miscalls++
     }
   }
+  // FUTURES #54 E2: with the layer on, the separation and the completion window
+  // come from the REAL contest on the field — the receiver's route at his own
+  // pace vs the assigned cover man's own read/speed (and the help safety over the
+  // top) — not the rating blend above. It adds no rng draw (hash32/h01 only), and
+  // OFF leaves every value exactly as the pre-E2 sim had it.
+  const e2r: E2Result | undefined = MATCHUPS_ON && target && getEmergentE2()
+    ? emergentRoute({
+        target, cover: coverPlayer, help: helpS,
+        route: routeForCandidate(concept.name, target.pos, target.pos === 'WR' ? Math.max(0, wrs.indexOf(target)) : 0),
+        wrIdx: target.pos === 'WR' ? Math.max(0, wrs.indexOf(target)) : 0,
+        conceptDepth: concept.depth, passAir, yard, n, offId, defId,
+        manCoverage: dStyle.manCoverage, fat: env?.fat, bust, miscall,
+        j7Comp: compRaw,
+      })
+    : undefined
+  if (e2r) compRaw = MU_CENTER.comp + e2r.compDelta
   // Centred so the league mean is unchanged (the `WX_CENTER` pattern).
-  const muSepNet = MATCHUPS_ON && target ? muSep - MU_CENTER.sep : 0
+  let muSepNet = MATCHUPS_ON && target ? muSep - MU_CENTER.sep : 0
+  if (e2r && e2r.useMuNet) muSepNet = e2r.muNet
   const muOff = muSepNet * MU.yardsPerUnit
   const muBucket = concept.depth <= 2 ? 'screen' : concept.depth <= 9 ? 'short' : concept.depth <= 19 ? 'mid' : 'deep'
-  const sepYd = MATCHUPS_ON && target
-    ? +clamp(muBaseSep(concept.depth) + (muOff >= 0 ? muOff * MU.skewHi * (MU.spreadHi[muBucket] ?? 1) : muOff * MU.skewLo * (MU.spreadLo[muBucket] ?? 1)), MU.sepMin, MU.sepMax).toFixed(1)
-    : undefined
-  const coverTag: CoverTag | undefined = !(MATCHUPS_ON && target) ? undefined
-    : bust ? 'bust' : miscall ? 'miscall'
-      : (sepYd ?? 0) <= MU.blanket ? 'blanket'
-        : (sepYd ?? 0) <= MU.tight ? 'tight'
-          : (sepYd ?? 0) <= MU.open ? 'open' : 'wide'
+  const sepYd = e2r ? e2r.sepYd
+    : MATCHUPS_ON && target
+      ? +clamp(muBaseSep(concept.depth) + (muOff >= 0 ? muOff * MU.skewHi * (MU.spreadHi[muBucket] ?? 1) : muOff * MU.skewLo * (MU.spreadLo[muBucket] ?? 1)), MU.sepMin, MU.sepMax).toFixed(1)
+      : undefined
+  const coverTag: CoverTag | undefined = e2r ? e2r.coverTag
+    : !(MATCHUPS_ON && target) ? undefined
+      : bust ? 'bust' : miscall ? 'miscall'
+        : (sepYd ?? 0) <= MU.blanket ? 'blanket'
+          : (sepYd ?? 0) <= MU.tight ? 'tight'
+            : (sepYd ?? 0) <= MU.open ? 'open' : 'wide'
   const matchupFields: Pick<PlayOutcome, 'coverDefenderId' | 'separationYd' | 'coverTag' | 'muAirDepth'> =
     MATCHUPS_ON && target ? { coverDefenderId: coverId, separationYd: sepYd, coverTag, muAirDepth: concept.depth } : {}
   // J7: an elite covering defender takes the ball away more often (position-
@@ -5317,13 +5338,16 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const incomplete: PlayOutcome = { type: 'pass', concept: concept.name, yards: 0, result: 'Incomplete', turnover: false, blitz, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}), timeUsed: 20 + Math.floor(rng() * 14), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds }
   // R5: mark a genuine drop on a targeted incompletion. Deterministic hash off
   // the existing play number/offence; the result and every sim counter are
-  // unchanged. Better hands (CTH) drop fewer.
-  if (target && hash32(`${n}:${offId}:drop`) / 4294967296 < dropChance(target.pos, tA) * (env?.wx?.dropMult ?? 1)) incomplete.dropId = target.id
+  // unchanged. Better hands (CTH) drop fewer. E2: the drop attribution also reads
+  // how contested the catch point was on the field (the cover man in phase).
+  if (target && hash32(`${n}:${offId}:drop`) / 4294967296 < dropChance(target.pos, tA) * (env?.wx?.dropMult ?? 1) * (e2r ? 1 + e2r.contest : 1)) incomplete.dropId = target.id
   // J8c: a pass defended — the covering defender's own ball skills (JMP+PRC)
   // decide how often he gets a hand on an incompletion. Bookkeeping only (the
-  // animation shows the break-up); no outcome or counter moves.
+  // animation shows the break-up); no outcome or counter moves. E2: the field
+  // knows whether he actually arrived in phase — the closer he was at the catch,
+  // the likelier the break-up.
   if (COVERAGE_INDIV_ON && target && coverPlayer && !incomplete.dropId) {
-    const pbuP = clamp(J8C.pbuBase + ballSkills(coverPlayer) * J8C.pbuSlope, 0.01, 0.2)
+    const pbuP = clamp(J8C.pbuBase + ballSkills(coverPlayer) * J8C.pbuSlope + (e2r ? e2r.pbuAdd : 0), 0.01, 0.2)
     if (h01(`${n}:${defId}:pbu`) < pbuP) incomplete.pbuId = coverPlayer.id
   }
   // J10a: the defender who broke on a stared-down (off-cone) throw gets a hand on
