@@ -488,7 +488,6 @@ import { EMERGENT_E3, emergentPassSet } from './emergentRush'
 // `EMERGENT.on`, and the replaced rng() draws are still consumed at the same
 // point in the stream.
 import { EMERGENT, emergentRun } from './emergent'
-import type { LPt } from './liveField'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -3228,12 +3227,6 @@ export interface PlayOutcome {
   /** animflow r6b: fatigue at the snap per on-field man (see Play.fatOn). */
   fatOn?: number[]
   // ── FUTURES #54 E1b: the after-the-catch field (animation / probes only) ────
-  /** E1b: the receiver's recorded path on the after-the-catch segment (world
-   *  coordinates; omitted when the field is off, so old saves fall back to the
-   *  animation's own choreography). */
-  carryPath?: LPt[]
-  /** E1b: every pursuer's recorded path on the segment, keyed by player id. */
-  fieldPaths?: Record<string, LPt[]>
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
