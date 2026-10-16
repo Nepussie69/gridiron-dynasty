@@ -53,6 +53,11 @@ import { getTargetDist, TARGET_DIST, targetBase, targetQuality, routeRatingFor, 
 import { wrRead, wrReadsOn, WRREAD as WRREAD_CFG, WRR_STAT, type WrRead } from './wrReads'
 // FUTURES #54 E2: route vs coverage, decided on the live field (OFF by default).
 import { emergentRoute, getEmergentE2, type E2Result } from './emergentRoute'
+// FUTURES #54 E1b: the after-the-catch segment, decided on the pursuit field
+// (OFF by default; its own toggle, flipped by the joint calibration).
+import { emergentYac, getEmergentE1b, YAC_STAT, statOff } from './emergentYac'
+import type { LPt } from './liveField'
+export { setEmergentE1b, getEmergentE1b } from './emergentYac'
 import {
   throwOn, passStyle, chooseThrowType, throwPlan, airTimeFor, pocketPlan, readAvoidBias,
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
@@ -648,7 +653,6 @@ import { EMERGENT_E3, emergentPassSet } from './emergentRush'
 // `EMERGENT.on`, and the replaced rng() draws are still consumed at the same
 // point in the stream.
 import { EMERGENT, emergentRun } from './emergent'
-import type { LPt } from './liveField'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -3387,6 +3391,7 @@ export interface PlayOutcome {
   glStopId?: string
   /** animflow r6b: fatigue at the snap per on-field man (see Play.fatOn). */
   fatOn?: number[]
+  // ── FUTURES #54 E1b: the after-the-catch field (animation / probes only) ────
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -6021,6 +6026,22 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     let stopper = stopped
     let missedTackleIds: string[] | undefined
     let forcedMissedIds: string[] | undefined
+    let oobOut = oob
+    let carryPathOut: LPt[] | undefined
+    let fieldPathsOut: Record<string, LPt[]> | undefined
+    // FUTURES #54 E1b: with the field ON the after-the-catch segment is decided by
+    // the men on the play — the receiver's own pace against the coverage at the
+    // catch — instead of the CDF tail + passTackler/shrink/miss chain above. The
+    // block the OFF path ran has already consumed exactly the same rng draws in
+    // the same order, and the field itself draws nothing (hash32/h01 only), so
+    // toggling E1b never moves the seed stream. The measurement call below reads
+    // the OFF value from the same plays and changes nothing (YAC_STAT is probe-only).
+    // FUTURES #54 E1b: the OFF miss-bonus block runs exactly as it does with the
+    // field off, so the anchor below is the OFF chain's FINAL completion yardage
+    // (shrink and missed-tackle bonus included) and the OFF seed stream is
+    // untouched. When the field is ON its own pursuit (below) replaces the value;
+    // when it is OFF this is byte-identical to the original path. YAC_STAT is
+    // probe-only and changes nothing.
     if (stopped && gain > 0 && yard + gain < 100 &&
       hash32(`${n}:${defId}:passmt`) / 4294967296 < (tackleMissChance([...cbs, ...saf, ...lbs].find((p) => p.id === stopped), target, gain, true) + (vOn ? VISION_CFG.centerMiss : 0))) {
       missedTackleIds = [stopped]
@@ -6028,6 +6049,29 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       // A miss that reaches the end zone has no finishing tackle to credit.
       stopper = yard + gain < 100 ? finishTackler(`${n}:${defId}:passmt2`, stopped, [cbs, saf, lbs]) : undefined
       forcedMissedIds = target?.id ? [target.id] : undefined
+    }
+    if (YAC_STAT.on) statOff(passAir, gain, target?.pos, yard)
+    const e1b = getEmergentE1b() && target
+      ? emergentYac({
+          n, offId, defId, carrier: target,
+          carrierStyle: { yacBias: tStyle.yacBias, elusiveness: tStyle.elusiveness },
+          cover: coverPlayer, help: helpS, saf, lbs, cbs,
+          yard, passAir, anchor: gain, conceptDepth: concept.depth, conceptYac: concept.yac,
+          down, dist,
+          sepYd: sepYd ?? 3, coverTag, manCoverage: dStyle.manCoverage, fat: env?.fat,
+          carrierOpen: carrierOpenMph(target, concept.depth <= SPG.shortDepth || concept.yac >= SPG.shortYac),
+          pursuerOpen: (p) => pursuerOpenMph(p),
+          missChance: (def, relGain) => tackleMissChance(def, target, relGain, true),
+        })
+      : undefined
+    if (e1b) {
+      gain = clamp(passAir + e1b.yac, -8, 99)
+      stopper = e1b.tacklerId
+      missedTackleIds = e1b.missedTackleIds.length ? e1b.missedTackleIds : undefined
+      forcedMissedIds = e1b.forcedMissedIds.length ? e1b.forcedMissedIds : undefined
+      oobOut = e1b.outOfBounds
+      carryPathOut = e1b.carryPath
+      fieldPathsOut = e1b.fieldPaths
     }
     if (J8C_STAT.on && stopped) {
       const sp = [...cbs, ...saf, ...lbs].find((p) => p.id === stopped)
@@ -6065,17 +6109,19 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
             : big ? 'Explosive play!' : 'Complete'
     return maybeScramble(offId, n, passer, qbStyle, pressured, {
       type: 'pass', concept: concept.name, yards: gain, blitz, ...blitzFields,
-      result: oob ? `${baseResult} (out of bounds)` : baseResult,
+      result: oobOut ? `${baseResult} (out of bounds)` : baseResult,
       turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
-      outOfBounds: oob || undefined,
+      outOfBounds: oobOut || undefined,
       fumbleId: strip ? stopper : undefined, muffedCatch: muff || undefined,
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [!e1b && J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       ...spgField,
+      ...(carryPathOut ? { carryPath: carryPathOut } : {}),
+      ...(fieldPathsOut ? { fieldPaths: fieldPathsOut } : {}),
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }
