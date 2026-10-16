@@ -53,6 +53,11 @@ import { getTargetDist, TARGET_DIST, targetBase, targetQuality, routeRatingFor, 
 import { wrRead, wrReadsOn, WRREAD as WRREAD_CFG, WRR_STAT, type WrRead } from './wrReads'
 // FUTURES #54 E2: route vs coverage, decided on the live field (OFF by default).
 import { emergentRoute, getEmergentE2, type E2Result } from './emergentRoute'
+// FUTURES #54 E1b: the after-the-catch segment, decided on the pursuit field
+// (OFF by default; its own toggle, flipped by the joint calibration).
+import { emergentYac, getEmergentE1b, YAC_STAT, statOff } from './emergentYac'
+import type { LPt } from './liveField'
+export { setEmergentE1b, getEmergentE1b } from './emergentYac'
 import {
   throwOn, passStyle, chooseThrowType, throwPlan, airTimeFor, pocketPlan, readAvoidBias,
   isThrowaway, THROW as THROW_CFG, type ThrowType, type PocketPlan, type ThrowPlan,
@@ -327,6 +332,171 @@ export function setDepthAware(on: boolean) {
 export function getDepthAware(): boolean {
   return DEPTH_AWARE_ON
 }
+// ── aircoh: the throw's own route, and a completion as air + YAC ─────────────
+//
+// WHAT WAS WRONG (measured on main, 272 games): the throw's AIR (J3's per-snap
+// spread, picked from the CONCEPT) and the completion's YARDS (an independent
+// total-yards draw) were decoupled, so 41% of completions recorded FEWER yards
+// than the throw's air (nflverse 2021-25: 0.96%), and the per-position depth was
+// swapped (WR aDOT 6.5 vs NFL 10.6; TE 10.5 vs 6.5; RB 1.8 vs 0.2) because a
+// receiver's depth came from the concept, never from his OWN route.
+//
+// WHAT THIS DOES: the air is the TARGET's own route depth (`routeDepthYd` on the
+// route the target was assigned by the concept's playbook entry), and the
+// recorded gain is that air + a YAC drawn from the existing after-catch model
+// (the calibrated draw's deviation from its pooled mean, so style / speed /
+// coverage / tackler keep ordering the after-catch yards). YAC is >= 0 except the
+// NFL's ~1% slice (a catch at or behind the point of the throw). Every rng() draw
+// stays where it was and in the same order, so the streams align.
+//
+// Dev-only in the setStamina pattern, default ON; with `setAirCoh(false)` no line
+// below is read and the sim is byte-identical to unmodified main.
+let AIR_COH_ON = false // orchestrator 2026-10-17: OFF until the joint emergent calibration (physics met, league bands not alone)
+export function setAirCoh(on: boolean) {
+  AIR_COH_ON = on
+}
+/** aircoh: read the toggle so a probe/calibration copy can restore it. */
+export function getAirCoh(): boolean {
+  return AIR_COH_ON
+}
+
+/**
+ * aircoh: every constant this job adds, in one place. The league bands are held
+ * by `airMean` (the per-position / route-class attempt air, which fixes aDOT),
+ * `yacMean` (the per-position after-catch mean, which fixes YAC by position) and
+ * `pooledMean` (the centre of the calibrated draw the YAC rides on). `negShare`
+ * is the NFL's own negative-YAC slice, so a completion loses ground at ~1%, not
+ * at the 41% main produced. Nothing else in the sim is tuned.
+ */
+export const AIR_COH = {
+  /**
+   * Mean AIR (yd) of a throw to `pos` on a route whose designed break depth is
+   * `routeDepthYd` (3 = quick/check/screen, 8 = hitch/dig class, 14 = dig/curl
+   * class, 22 = go/seam/post class). nflverse aDOT 2021-25: WR 10.63, TE 6.55,
+   * RB 0.17 — the sim's TE/RB routes are shallower than the concept depth main
+   * used, which is the whole swap.
+   */
+  airMean: {
+    WR: { 3: 5.44, 8: 10.2, 14: 18.0, 22: 28.9 } as Record<number, number>,
+    TE: { 3: 2.47, 8: 4.94, 14: 9.77, 22: 16.8 } as Record<number, number>,
+    RB: { 3: 0.02, 8: 0.67, 14: 3.07, 22: 7.37 } as Record<number, number>,
+  } as Record<string, Record<number, number>>,
+  /** Air spread per position: a three-uniform bell (sd 0.5) × this. */
+  airSpread: { WR: 10.0, TE: 8.0, RB: 5.0 } as Record<string, number>,
+  /**
+   * Mean YAC (yd) per position on a completion (nflverse 2021-25: WR 4.32,
+   * TE 4.91, RB 7.84). Set a shade above the NFL target: the vcenter trim and the
+   * tackler shrink take the rest off.
+   */
+  yacMean: { WR: 2.83, TE: 4.38, RB: 7.9 } as Record<string, number>,
+  /** YAC spread per position: a three-uniform bell (sd 0.5) × this. */
+  yacSpread: { WR: 11.0, TE: 10.0, RB: 9.0 } as Record<string, number>,
+  /** Weight on the calibrated draw's deviation from `pooledMean` (preserves the
+   *  individual / style / coverage ordering of the after-catch yards). */
+  devW: 0.14,
+  devCap: 22,
+  /** The calibrated completion-gain draw's own centre + sd (measured, J3). */
+  pooledMean: 10.776,
+  /** Left/right skew of the YAC bell (0 = off). Positive stretches the positive
+   *  side, matching the NFL's right-skewed after-catch tail (WR mean 4.32, p50 2). */
+  skew: 0.25,
+  /** E|bell| of the three-uniform bell, so the skew keeps the mean at `yacMean`
+   *  (measured 0.388 over 4e5 draws of the exact key layout). */
+  bellAbs: 0.388,
+  /** The NFL's negative-YAC slice: the share of completions allowed to end
+   *  behind the catch point (nflverse completions with yards < air: 0.96%). */
+  negShare: 0.011,
+  /**
+   * aircoh: the throw's OWN depth decides how hard it is to complete. On main the
+   * completion probability keyed on the CONCEPT's nominal depth, and so the
+   * realised catch rate was flat across air while the NFL falls steeply (0.83 /
+   * 0.77 / 0.71 / 0.57 / 0.37). With the air taken from the target's route that
+   * flatness forces either a swapped aDOT or an over-productive passing game — a
+   * deep throw that completes as often as a screen records its full air plus the
+   * after-catch yards and blows the YPA / passing-yard bands. The existing depth
+   * term is therefore re-pointed at the actual air, in the SAME /900 units the
+   * concept term uses: main's own coefficient is kept as the base and the air
+   * slope is measured from the league mean air (`airRef`), so the slope adds
+   * depth selectivity WITHOUT moving the pooled completion rate — the mean of
+   * `max(0, air) - airRef` is ~0 by construction, so `compLift` stays a small
+   * final re-centre. At `compDepthW = 0` the two branches are identical. E2's own
+   * layer (emergentRoute) is untouched.
+   */
+  compDepthBase: 0.7,
+  airRef: 7.5,
+  compDepthW: 16.0,
+  compLift: 0.015,
+  /**
+   * The base completion clamp. Main's 0.42-0.74 caps a shallow throw well below
+   * the NFL's ~0.83 short catch rate, so the air slope cannot buy depth
+   * selectivity without dragging the pooled rate down. ON widens the ceiling and
+   * `compLift` re-centres the pooled rate on the league band, which is what pulls
+   * the completion AIR down toward the NFL's (NFL completions air 5.75 vs their
+   * own 7.82 aDOT; main's flat curve left the sim's at ~0.95 of its aDOT, so its
+   * completions gained ~1 yd too many and manufactured first downs).
+   */
+  compLo: 0.28,
+  compHi: 0.80,
+  /** Share of short-of-the-sticks completions that are stopped short of the marker
+   *  (the rest break the tackle past it). Applied on every down: without it the
+   *  corrected (never-short-of-the-catch-point) gains move the chains far more
+   *  often than main's 41%-sub-air bug did, and the drive-level bands (first downs,
+   *  punts) run hot. It never touches the league air or YAC. */
+  moneyStop: 0.65,
+  /** Cap on the recorded gain, and the deepest behind-the-line air allowed. */
+  gainMax: 85,
+  airMin: -5,
+}
+
+/** aircoh: a position key that folds the fullback into the back family. */
+function airCohPos(pos: string | undefined): string {
+  if (pos === 'RB' || pos === 'FB') return 'RB'
+  if (pos === 'TE') return 'TE'
+  return 'WR'
+}
+
+/**
+ * aircoh: the AIR yards of THIS throw, from the TARGET's own route depth. The
+ * mean is the target's position at the route's designed break depth; the spread
+ * is a three-uniform bell keyed on (play, offence, target) — a pure hash, so no
+ * rng() draw is added. The throw is capped at the goal line.
+ */
+export function airCohAir(pos: string | undefined, route: string | undefined, n: number, offId: string, targetId: string | undefined, yard: number): number {
+  const p = airCohPos(pos)
+  const cls = routeDepthYd(route)
+  const mean = AIR_COH.airMean[p]?.[cls] ?? AIR_COH.airMean.WR[8]
+  const key = `${n}:${offId}:${targetId ?? p}`
+  // The three hashes must not differ only in their last character (FNV-1a stays
+  // correlated that way: measured sd 0.855 instead of the 0.5 of three uniforms),
+  // so the varying index sits between two constant suffixes.
+  const bell = h01(`${key}:1:air`) + h01(`${key}:2:air`) + h01(`${key}:3:air`) - 1.5 // mean 0, sd 0.5
+  const air = mean + bell * AIR_COH.airSpread[p]
+  const cap = Math.max(AIR_COH.airMin, 100 - yard)
+  return Math.round(Math.max(AIR_COH.airMin, Math.min(air, cap)))
+}
+
+/**
+ * aircoh: the completion's yards as air + YAC. The YAC is the existing
+ * after-catch model's own signal — the calibrated draw `driver` measured against
+ * its pooled mean, which carries the receiver's style/speed, the chase and the
+ * coverage — shaped to the position's NFL YAC mean and spread. YAC is >= 0 here;
+ * the ~1% negative slice is applied by the coherence floor at the end of the
+ * completion branch, where the after-catch shrink can still bite.
+ */
+export function airCohGain(air: number, driver: number, pos: string | undefined, n: number, offId: string): number {
+  const p = airCohPos(pos)
+  const mean = AIR_COH.yacMean[p] ?? AIR_COH.yacMean.WR
+  const spread = AIR_COH.yacSpread[p] ?? AIR_COH.yacSpread.WR
+  const dev = Math.max(-AIR_COH.devCap, Math.min(AIR_COH.devCap, driver - AIR_COH.pooledMean))
+  const key = `${n}:${offId}:${p}`
+  const bell = h01(`${key}:1:yac`) + h01(`${key}:2:yac`) + h01(`${key}:3:yac`) - 1.5 // mean 0, sd 0.5
+  // Left-skew: stretch the positive side, compress the negative, then re-centre
+  // (skew × E|bell|) so the mean — and the NFL YAC target — is unchanged.
+  const sk = AIR_COH.skew
+  const shaped = (bell < 0 ? bell * (1 - sk) : bell * (1 + sk)) - sk * AIR_COH.bellAbs
+  const yac = Math.max(0, mean + dev * AIR_COH.devW + shaped * spread)
+  return Math.round(Math.max(AIR_COH.airMin, Math.min(air + yac, AIR_COH.gainMax)))
+}
 // J3b: dev-only toggle for the individual goal-line conversion and missed-tackle
 // model (the setStamina pattern). Default ON; the shipped sim always leaves it on.
 // With it OFF no J3b term is computed and no hash is consulted, so its rng() stream
@@ -483,7 +653,6 @@ import { EMERGENT_E3, emergentPassSet } from './emergentRush'
 // `EMERGENT.on`, and the replaced rng() draws are still consumed at the same
 // point in the stream.
 import { EMERGENT, emergentRun } from './emergent'
-import type { LPt } from './liveField'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -3222,6 +3391,7 @@ export interface PlayOutcome {
   glStopId?: string
   /** animflow r6b: fatigue at the snap per on-field man (see Play.fatOn). */
   fatOn?: number[]
+  // ── FUTURES #54 E1b: the after-the-catch field (animation / probes only) ────
 }
 
 // ── In-game plan ─────────────────────────────────────────────────────────────
@@ -5072,13 +5242,21 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // depth (byte-identical); ON = the deterministic route-type spread. Every
   // probability formula below keeps using concept.depth, so comp/INT/sack are
   // unchanged by construction.
-  let passAir = DEPTH_AWARE_ON ? airYardsFor(concept, target?.pos, n, offId, yard) : concept.depth
+  // aircoh: the air comes from the TARGET's own route depth (the route the
+  // concept's playbook entry assigned him), not the concept — a TE on a stick is
+  // a 3-yard throw whatever the concept depth, and a WR on a go is a deep one.
+  // The old J3 spread is kept for the OFF path only.
+  let passAir = AIR_COH_ON
+    ? airCohAir(target?.pos, vRoute ?? (target ? onRouteOf.get(target.id) : undefined), n, offId, target?.id, yard)
+    : DEPTH_AWARE_ON ? airYardsFor(concept, target?.pos, n, offId, yard) : concept.depth
   // J10a: a checkdown is an underneath outlet throw. Its air is taken from J3b's
   // depth-aware `passAir` (never the concept depth) and compressed into the outlet
   // band, so an RB outlet behind the line and a TE check on a deep concept both
   // land at ~2–4 yd. DEPTH_AWARE.depthMix is 0, so the emitted air drives the
   // animation and the probe only — no outcome moves here.
-  if (vOn && vCheckdown && DEPTH_AWARE_ON) {
+  // aircoh: the target's own route already carries the outlet depth (`airMean`),
+  // so the band compression is skipped and a back's check lands at the NFL ~0 aDOT.
+  if (vOn && vCheckdown && DEPTH_AWARE_ON && !AIR_COH_ON) {
     passAir = Math.round(VISION_CFG.chkAirLo + clamp(passAir, 0, 8) / 8 * (VISION_CFG.chkAirHi - VISION_CFG.chkAirLo))
   }
   // ── J10b: throw power, throw type, pocket presence (one call site) ──────────
@@ -5525,10 +5703,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // Centred (`offSpotYd` has a league mean of 0), so the league completion rate
   // does not move; a ball well off the spot is harder to catch.
   const vSpot = vThrow ? -vThrow.offSpotYd * VISION_CFG.spotW + VISION_CFG.centerComp : 0
+  // aircoh: the depth penalty is the THROW's own air, not the concept's nominal
+  // depth (see AIR_COH.compDepthW). A ball at or behind the line pays nothing.
+  const depthPen = AIR_COH_ON
+    ? concept.depth * AIR_COH.compDepthBase + (Math.max(0, passAir) - AIR_COH.airRef) * AIR_COH.compDepthW
+    : concept.depth * 0.7
   let compProb = clamp(
-    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - concept.depth * 0.7 - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(effDefMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0) + fatDiff * R15.fatComp + vSpot,
-    0.42,
-    0.74,
+    (R2.compBase + (qAccuracy + separation - coverage * 1.15 - depthPen - Math.max(0, pressureEdge) * 0.5 * (1 - qbPressureRelief(qbA))) / 900 - (tier === 'FBS' ? 0.02 : 0) + coachShift - rzDamp) * mod(effDefMove === 'spyQB' ? qbStyle.scramble * 0.5 : qbStyle.scramble, 0.04) * compMult + clutch * 0.012 + playActionComp - passLean * PASS_LEAN_COMP + (call?.edge ?? 0) * 0.012 + targetCatchProb(target, tA, concept.depth, tightCoverage) + (env?.down === 3 ? R2.moneyComp : 0) + fatDiff * R15.fatComp + vSpot + (AIR_COH_ON ? AIR_COH.compLift : 0),
+    AIR_COH_ON ? AIR_COH.compLo : 0.42,
+    AIR_COH_ON ? AIR_COH.compHi : 0.74,
   )
   // G6 quick game: short concepts complete a touch more. Max protect costs a
   // deep concept a target (slightly lower completion).
@@ -5745,27 +5928,52 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     if (yard + gain >= 100 && gain > 0) gain = Math.round(gain * (1 - R2.rzPassDamp))
     // L12 S1: checkdowns and tight-end throws are underneath targets — scale their
     // yards to NFL yards-per-target (RB ~5.5, TE ~7) instead of the route model's.
-    if ((target?.pos === 'RB' || target?.pos === 'FB') && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
-    else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
+    // aircoh: OFF only — with the air+YAC model each position's yards come from its
+    // own route's air plus the after-catch yards, so a total-yards scale would
+    // double-count (and would push a TE/RB catch back under its own air).
+    if (!AIR_COH_ON) {
+      if ((target?.pos === 'RB' || target?.pos === 'FB') && gain > 0) gain = Math.round(gain * TARGET_TUNE.rbYds)
+      else if (target?.pos === 'TE' && gain > 0) gain = Math.round(gain * TARGET_TUNE.teYds)
+    }
     gain = clamp(gain, -8, 85)
     // FUTURES #24 T1: the flea flicker's own deep-shot yardage — the air plus the
     // separation the window buys (the shared depthMix is 0, so a normal deep ball
     // gains ~11). Trick-only: `trickOv` is set on a trick snap alone.
-    if (trickOv && trickOv.gainAdd) gain = clamp(Math.round(gain * trickOv.gainMult) + trickOv.gainAdd, -8, 98)
+    if (!AIR_COH_ON && trickOv && trickOv.gainAdd) gain = clamp(Math.round(gain * trickOv.gainMult) + trickOv.gainAdd, -8, 98)
     // J3: reshape the completion as air + YAC so a deep concept completes deep
     // and a screen/checkdown gains near the line. The chain above already consumed
     // its rng draws, so ON/OFF streams stay aligned; only the value (and the
     // emitted passDepth) changes. `gain` (the calibrated draw) is reused as the
     // deterministic shape/quality driver — no new rng draw.
     const preReshapeGain = gain
-    if (DEPTH_AWARE_ON) gain = depthAwareGain(passAir, gain, n, offId, yard, down, dist)
+    if (AIR_COH_ON) {
+      // aircoh: the recorded gain IS air + YAC (the calibrated draw is only the
+      // after-catch driver), so a deep throw that completes records its air plus
+      // the yards it gained after the catch — never fewer yards than the throw.
+      gain = airCohGain(passAir, gain, target?.pos, n, offId)
+      if (trickOv && trickOv.gainAdd) gain = clamp(Math.round(gain * trickOv.gainMult) + trickOv.gainAdd, -8, 98)
+    } else if (DEPTH_AWARE_ON) gain = depthAwareGain(passAir, gain, n, offId, yard, down, dist)
     // R2: on a money down the route is worked back to the sticks.
     if (gain > 0 && env?.down === 3) gain += R2.moneyYards
+    // aircoh: the outcome caps the air+YAC model needs, both floored at the throw's
+    // own `passAir` (the catch point) so a completion still never records fewer
+    // yards than the throw — `dist-1 >= passAir` when `passAir < dist`, and
+    // `100-yard-1 >= passAir` when the air itself falls short of the goal line.
+    //  · A throw that lands short of the sticks is stopped short of them on the
+    //    `moneyStop` share of such plays; the rest break the tackle past the marker.
+    //    Without it a deep completion out-converts the calibrated league badly
+    //    (measured 45-49% 3rd down against main's 38.5%); with it alone, 34.5%.
+    //  · A throw that lands short of the goal line is never walked in by YAC alone.
+    if (AIR_COH_ON) {
+      if (down >= 3 && dist > 0 && passAir < dist && gain >= dist && h01(`${n}:${offId}:moneystop`) < AIR_COH.moneyStop) gain = dist - 1
+      if (gain > passAir && yard + passAir < 100 && yard + gain >= 100) gain = Math.max(passAir, 100 - yard - 1)
+    }
     // J3 outcome-preserving guard: the reshape may add yards, but it must not
     // manufacture a first down (any down) or a score in the red zone that the
     // calibrated draw would not have produced. With depthMix = 0 this is a no-op
     // (gain === preReshapeGain), so the OFF/neutral path is bit-exact.
-    if (DEPTH_AWARE_ON) {
+    // aircoh: OFF only — the air+YAC model is re-capped above (in air terms).
+    if (DEPTH_AWARE_ON && !AIR_COH_ON) {
       const baseFinal = preReshapeGain + (env?.down === 3 ? R2.moneyYards : 0)
       if (dist > 0 && baseFinal < dist && gain >= dist) gain = dist - 1
       if (gain > 0 && yard + baseFinal < 100 && yard + gain >= 100) gain = Math.max(-4, 100 - yard - 1)
@@ -5818,6 +6026,22 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     let stopper = stopped
     let missedTackleIds: string[] | undefined
     let forcedMissedIds: string[] | undefined
+    let oobOut = oob
+    let carryPathOut: LPt[] | undefined
+    let fieldPathsOut: Record<string, LPt[]> | undefined
+    // FUTURES #54 E1b: with the field ON the after-the-catch segment is decided by
+    // the men on the play — the receiver's own pace against the coverage at the
+    // catch — instead of the CDF tail + passTackler/shrink/miss chain above. The
+    // block the OFF path ran has already consumed exactly the same rng draws in
+    // the same order, and the field itself draws nothing (hash32/h01 only), so
+    // toggling E1b never moves the seed stream. The measurement call below reads
+    // the OFF value from the same plays and changes nothing (YAC_STAT is probe-only).
+    // FUTURES #54 E1b: the OFF miss-bonus block runs exactly as it does with the
+    // field off, so the anchor below is the OFF chain's FINAL completion yardage
+    // (shrink and missed-tackle bonus included) and the OFF seed stream is
+    // untouched. When the field is ON its own pursuit (below) replaces the value;
+    // when it is OFF this is byte-identical to the original path. YAC_STAT is
+    // probe-only and changes nothing.
     if (stopped && gain > 0 && yard + gain < 100 &&
       hash32(`${n}:${defId}:passmt`) / 4294967296 < (tackleMissChance([...cbs, ...saf, ...lbs].find((p) => p.id === stopped), target, gain, true) + (vOn ? VISION_CFG.centerMiss : 0))) {
       missedTackleIds = [stopped]
@@ -5826,12 +6050,41 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       stopper = yard + gain < 100 ? finishTackler(`${n}:${defId}:passmt2`, stopped, [cbs, saf, lbs]) : undefined
       forcedMissedIds = target?.id ? [target.id] : undefined
     }
+    if (YAC_STAT.on) statOff(passAir, gain, target?.pos, yard)
+    const e1b = getEmergentE1b() && target
+      ? emergentYac({
+          n, offId, defId, carrier: target,
+          carrierStyle: { yacBias: tStyle.yacBias, elusiveness: tStyle.elusiveness },
+          cover: coverPlayer, help: helpS, saf, lbs, cbs,
+          yard, passAir, anchor: gain, conceptDepth: concept.depth, conceptYac: concept.yac,
+          down, dist,
+          sepYd: sepYd ?? 3, coverTag, manCoverage: dStyle.manCoverage, fat: env?.fat,
+          carrierOpen: carrierOpenMph(target, concept.depth <= SPG.shortDepth || concept.yac >= SPG.shortYac),
+          pursuerOpen: (p) => pursuerOpenMph(p),
+          missChance: (def, relGain) => tackleMissChance(def, target, relGain, true),
+        })
+      : undefined
+    if (e1b) {
+      gain = clamp(passAir + e1b.yac, -8, 99)
+      stopper = e1b.tacklerId
+      missedTackleIds = e1b.missedTackleIds.length ? e1b.missedTackleIds : undefined
+      forcedMissedIds = e1b.forcedMissedIds.length ? e1b.forcedMissedIds : undefined
+      oobOut = e1b.outOfBounds
+      carryPathOut = e1b.carryPath
+      fieldPathsOut = e1b.fieldPaths
+    }
     if (J8C_STAT.on && stopped) {
       const sp = [...cbs, ...saf, ...lbs].find((p) => p.id === stopped)
       J8C_STAT.stopN++
       if (sp) J8C_STAT.stopRating += tackleRating(sp)
       if (missedTackleIds) J8C_STAT.stopMiss++
     }
+    // aircoh: the rare negative-YAC slice. The vcenter trim and the tackler shrink
+    // can push the after-catch yards below zero; a deterministic hash decides the
+    // plays that keep the loss (the NFL's ~1%), so a completion records fewer yards
+    // than the throw's air only there — never on 41% of catches as on main. No rng
+    // draw is added or removed (the hash is a pure function of the play).
+    if (AIR_COH_ON && gain < passAir && h01(`${n}:${offId}:negair`) >= AIR_COH.negShare) gain = passAir
     const big = gain >= 25
     // R16: the ball can still come loose on a clean stop — a big-hit strip, or the
     // receiver's own bobble (a muff). Either way a proximity hash decides who falls
@@ -5856,17 +6109,19 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
             : big ? 'Explosive play!' : 'Complete'
     return maybeScramble(offId, n, passer, qbStyle, pressured, {
       type: 'pass', concept: concept.name, yards: gain, blitz, ...blitzFields,
-      result: oob ? `${baseResult} (out of bounds)` : baseResult,
+      result: oobOut ? `${baseResult} (out of bounds)` : baseResult,
       turnover: lost, carrierId: target?.id, targetId: target?.id, passDepth: passAir, ...(DEPTH_AWARE_ON ? { passConceptDepth: concept.depth } : {}), bigPlay: !loose && big,
-      outOfBounds: oob || undefined,
+      outOfBounds: oobOut || undefined,
       fumbleId: strip ? stopper : undefined, muffedCatch: muff || undefined,
       fumbleCause: loose ? (strip ? 'carry' : 'muff') : undefined, fumbleRecoveredBy: recovery,
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
-      timeUsed: 24 + Math.floor(tu * 16), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      timeUsed: 24 + Math.floor(tu * 16), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [!e1b && J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       ...spgField,
+      ...(carryPathOut ? { carryPath: carryPathOut } : {}),
+      ...(fieldPathsOut ? { fieldPaths: fieldPathsOut } : {}),
       onFieldOff: onFieldOffIds, onFieldDef: onFieldDefIds,
     }, loose || yard + gain >= 100)
   }

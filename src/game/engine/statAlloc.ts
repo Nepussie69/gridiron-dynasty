@@ -338,6 +338,14 @@ export function allocateTeamGame(
   const rushYds = Math.round(baseRush * variance * (2 - schemePassBias) * pace)
 
   // ── Passing ──
+  // aircoh mirror: the played pass model now records each completion as the
+  // TARGET's own route air + YAC, re-centred so the league bands (completion %,
+  // YPA, pass YDS) sit where main had them — measured 3x20: comp % 64.4 vs main
+  // 65.0, YPA 7.27 vs 7.24, pass YDS 246 vs 253, i.e. yards/attempt and
+  // yards/completion are unchanged to within noise. The fast path's mirrored
+  // pass-shape constants below (YPA 7.1, comp 0.645, the completion divisor, the
+  // coverage yards-per-catch) therefore already track the played model and are
+  // left as they are — no constant moves, so a score-only season is unchanged.
   const qbs = group(world, teamId, ['QB'], 1, 'pass', scheme, means)
   const qb = qbs.items[0]
   if (qb) {
