@@ -25,6 +25,11 @@ import { carrierMissRate, defenderMissRate } from './playsim'
 import { leagueMasteryMeans, masteryGroup, type MasteryMeans } from './playbook'
 import { POS_MEAN } from './ratingMeans'
 import { getQbRun, qbDesignShare } from './qbRun'
+// E1 (FUTURES #54): when the run pursuit field is ON, the score-only allocator
+// uses its measured base rush yards / missed-tackle base so a season simmed
+// without play-by-play matches the play-by-play league (see engine/emergent.ts).
+// OFF (the default) reads the original constants — byte-identical.
+import { EMERGENT, getEmergentE1 } from './emergent'
 import { styleProfile } from './style'
 import { getTargetDist, targetSeasonWeight } from './targetDist'
 import { clubReturners } from './returns'
@@ -315,7 +320,7 @@ export function allocateTeamGame(
 
   const isNFL = world.byId[teamId]?.tier === 'NFL'
   const basePass = isNFL ? 220 : 235
-  const baseRush = isNFL ? 112 : 165
+  const baseRush = isNFL ? (getEmergentE1() ? EMERGENT.stRushBase : 112) : 165
   const pace = isNFL ? 1 : 1.08
   const schemePassBias = { 'Air Raid': 1.16, 'Pro Style': 0.95, Spread: 1.1, 'West Coast': 1.05, 'RPO Heavy': 0.9 }[scheme] ?? 1
 
@@ -500,7 +505,8 @@ export function allocateTeamGame(
     // rating helper the play-by-play uses. `MT_ALLOC_REF` is the model's
     // league-average defender rate, so an average defence lands at the base 8.
     const avgMtRate = defenders.reduce((s, p) => s + defenderMissRate(p), 0) / defenders.length
-    const mtTotal = clamp(Math.round(MT_ALLOC_BASE * (avgMtRate / MT_ALLOC_REF)), 5, 11)
+    const mtBase = getEmergentE1() && EMERGENT.stMtBase > 0 ? EMERGENT.stMtBase : MT_ALLOC_BASE
+    const mtTotal = clamp(Math.round(mtBase * (avgMtRate / MT_ALLOC_REF)), 5, 11)
     const mtWeight = defenders.map((p, i) => (tSplit[i] ?? 0) * clamp(defenderMissRate(p) / MT_ALLOC_REF, 0.45, 1.6))
     // Backlog 405(e): the man's own tackling rating still tilts his share, but the
     // tilt is measured against the model's league-average rate and clamped, so a
