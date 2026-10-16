@@ -486,7 +486,8 @@ function lookPoint(plan: ReadPlan, anim: PlayAnim, l: ReadLook, t: number): Pt {
   return p ? posAt(p, Math.min(t, plan.endT)) : { x: plan.aimX, y: plan.aimY }
 }
 
-function restPoint(plan: ReadPlan, anim: PlayAnim, t: number, q: Pt): Pt {
+/** Where the eyes rest before the first read: the deep safety he keys (else the deep middle). */
+export function restPoint(plan: ReadPlan, anim: PlayAnim, t: number, q: Pt): Pt {
   const p = pathOf(anim, plan.restKey)
   if (p) return posAt(p, Math.min(t, plan.endT))
   return { x: q.x + 15, y: MID_Y }
@@ -510,10 +511,19 @@ export function qbLook(plan: ReadPlan, anim: PlayAnim, t: number): { yaw: number
   if (!cur) return { yaw: yawTo(restP), key: plan.restKey, role: 'rest', dist: Math.hypot(restP.x - q.x, restP.y - q.y), ox: q.x, oy: q.y, locked: false }
   const p = lookPoint(plan, anim, cur.look, tc)
   const prevP = cur.i === 0 ? restP : lookPoint(plan, anim, plan.looks[cur.i - 1], tc)
-  const u = sm(((tc - cur.look.t0) * plan.D) / TURN_SEC)
+  // livetele3 (user 2026-10-15): the last (target / checkdown) look must not
+  // reveal the man he is throwing to before he decides. The turn onto the target
+  // is scheduled to COMPLETE at the release (plan.endT): until then the head /
+  // cone holds on the read it was on (the previous look, or the safety keyed
+  // before the first read). The read looks keep their designed timings exactly.
+  const final = cur.look.role !== 'read'
+  const turnFrom = final ? Math.max(cur.look.t0, plan.endT - TURN_SEC / plan.D) : cur.look.t0
+  const u = sm(((tc - turnFrom) * plan.D) / TURN_SEC)
   const y0 = yawTo(prevP)
   const yaw = y0 + wrapA(yawTo(p) - y0) * u
-  return { yaw, key: cur.look.key, role: cur.look.role, dist: Math.hypot(p.x - q.x, p.y - q.y), ox: q.x, oy: q.y, locked: cur.look.role !== 'read' && u >= 1 }
+  const dPrev = Math.hypot(prevP.x - q.x, prevP.y - q.y)
+  const dTgt = Math.hypot(p.x - q.x, p.y - q.y)
+  return { yaw, key: cur.look.key, role: cur.look.role, dist: dPrev + (dTgt - dPrev) * u, ox: q.x, oy: q.y, locked: final && u >= 1 }
 }
 
 /** Pressure closing (0..1) at t. */

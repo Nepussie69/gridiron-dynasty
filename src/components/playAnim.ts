@@ -4603,12 +4603,15 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // A back chips an edge or blitzer before releasing into his route — but a back
   // selling a run fake (play-action / RPO) has a fake to run, not a chip.
   const chipPlan = plan?.off === 'chipEdge' && !!bestRusher
+  const blitzPick = blitzKeysFor(play, ctx, seed)
   if ((play.blitz || chipPlan) && m.rb && tgt !== 'rb' && !stayIn.has('rb') && routeMap.rb !== 'runFake') {
-    const chipR = chipPlan ? bestRusher! : blitzKeys(seed).reduce((a, k) => (Math.abs(f[k].y - f.rb.y) < Math.abs(f[a].y - f.rb.y) ? k : a))
-    const dir = f.rb.y >= f[chipR].y ? 1 : -1
-    m.rb.run([{ x: clampX(los - 1.6), y: clampY(f[chipR].y + dir * 1.1) }], { stop: true })
-    m.rb.hold(0.1)
-    recEng('rb', chipR, 0.15, m.rb.t, 'chip')
+    const chipR = chipPlan ? bestRusher! : blitzPick.length ? blitzPick.reduce((a, k) => (Math.abs(f[k].y - f.rb.y) < Math.abs(f[a].y - f.rb.y) ? k : a)) : undefined
+    if (chipR) {
+      const dir = f.rb.y >= f[chipR].y ? 1 : -1
+      m.rb.run([{ x: clampX(los - 1.6), y: clampY(f[chipR].y + dir * 1.1) }], { stop: true })
+      m.rb.hold(0.1)
+      recEng('rb', chipR, 0.15, m.rb.t, 'chip')
+    }
   }
   let catchPt: Pt = { x: los, y: MID_Y }
   let catchSec = 0.4
@@ -5034,9 +5037,9 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // The front plus any blitzers rush; the line (and a back/tight end staying
   // in) slides and doubles the best rusher. The recorded pressure rusher beats
   // his block home; anyone the slide does not pick up comes free.
-  // animflow r6c2 (J7): the man the sim says covered the target is in coverage, not on the blitz.
-  const coverK0 = play.coverId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.coverId) : undefined
-  const blitzK = (play.blitz ? blitzKeys(seed) : []).filter((k) => k !== coverK0 || play.pressureId === play.coverId)
+  // animflow r6c2 (J7): the recorded cover man is never on the blitz — the pick
+  // (or the sim's own recorded blitzers) already excludes him on old saves.
+  const blitzK = blitzKeysFor(play, ctx, seed)
   const pressureKey = play.pressureId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.pressureId) : undefined
   // The recorded pressure rusher always rushes, even when the sim credited a
   // linebacker the slide never sent (backlog 152 follow-up).
@@ -5585,6 +5588,32 @@ function blitzKeys(seed: number): string[] {
   return ['lb1', hash(seed + 31) < 0.5 ? 'lb0' : 'lb2', ...(hash(seed + 37) < 0.3 ? ['s1'] : [])]
 }
 
+/**
+ * The men the defence sends as extra rushers, as dot keys (backlog 152).
+ *
+ * The sim records them on the play (`play.blitzIds`: the linebackers / DBs who
+ * actually rushed), so the animation draws exactly those men — from their own
+ * alignment, at their own pace — and the protection decides who is picked up
+ * and who comes free. A blitz call that sent nobody (a spy) records an EMPTY
+ * list: no phantom rusher is drawn. The sim's own record wins even when it also
+ * names one of them as the man in coverage on the target (the animation then
+ * hands that receiver to someone else rather than erase the rush).
+ *
+ * Old saves (no `blitzIds`) keep the old hash pick, minus the man the sim says
+ * covered the target — he is in coverage, not on the blitz (animflow r6c2, J7).
+ * A probe / test with no actor map falls back the same way.
+ */
+function blitzKeysFor(play: Play, ctx: AnimContext, seed: number): string[] {
+  if (!play.blitz) return []
+  const ids = play.blitzIds
+  if (ids) {
+    const ks = ids.map((id) => DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === id)).filter((k): k is string => !!k)
+    if (ks.length || !ids.length) return ks
+  }
+  const coverK = play.coverId ? DEF_KEYS.find((k) => ctx.actors?.get(k)?.id === play.coverId) : undefined
+  return blitzKeys(seed).filter((k) => k !== coverK || play.pressureId === play.coverId)
+}
+
 function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   recStart()
   const los = 10 + play.startYard
@@ -5609,7 +5638,7 @@ function buildSack(play: Play, ctx: AnimContext): PlayAnim {
   // sacker beats his block — or splits the double — home to the quarterback.
   // The credited sacker always rushes, even when the sim picked a linebacker the
   // blitz package never sent (backlog 152 follow-up).
-  const blitzK = play.blitz ? blitzKeys(seed) : []
+  const blitzK = blitzKeysFor(play, ctx, seed)
   const rushers = ['dl0', 'dl1', 'dl2', 'dl3', ...blitzK]
   if (!rushers.includes(rusherKey)) rushers.push(rusherKey)
   const qbEnd = { x: endX, y: MID_Y + dodge * 3 }
