@@ -473,6 +473,14 @@ import { CHEM, getJ37, skillValue, skillRel, skillCentre, olHandoffChem } from '
 // of `rushMatchups` (see the header of engine/emergentRush.ts). OFF is byte-
 // identical: nothing below is entered unless `EMERGENT_E3.on`.
 import { EMERGENT_E3, emergentPassSet } from './emergentRush'
+// E1 (FUTURES #54): the pursuit field for RUNS (see the header of
+// engine/emergent.ts). Default OFF; when on, `resolveRun` takes its yards, its
+// tackler, its missed-tackle list, its out-of-bounds flag and its scorer from the
+// men on the field. OFF is byte-identical: nothing below is entered unless
+// `EMERGENT.on`, and the replaced rng() draws are still consumed at the same
+// point in the stream.
+import { EMERGENT, emergentRun } from './emergent'
+import type { LPt } from './liveField'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -2862,6 +2870,11 @@ export interface PlayOutcome {
   olHandoffFail?: string
   /** T2M: a sideline carry/reception went out of bounds (stops the clock). */
   outOfBounds?: boolean
+  // ── E1 (FUTURES #54): the recorded field paths (animation; optional) ───────
+  /** E1: the carrier's recorded path off the pursuit field (old saves ignore it). */
+  carryPath?: LPt[]
+  /** E1: every man's recorded path off the pursuit field (animation; optional). */
+  fieldPaths?: Record<string, LPt[]>
   /** J6: a victory-formation kneeldown (a rush attempt for negative yards). */
   kneel?: boolean
   /** J6: the QB spiked the ball to stop the clock (a pass attempt, incomplete). */
@@ -3408,7 +3421,7 @@ export function carrierMissRate(carrier: Player | undefined): number {
 /** R5: chance the first defender misses. `missRate` plus an open-field term and, on
  *  passes, an open-field bump scaled by how tackle-prone the defender is, so an elite
  *  tackler still stays under 6% while the league lands near 12% of attempts. */
-function tackleMissChance(tackler: Player | undefined, carrier: Player | undefined, gain: number, passing: boolean): number {
+export function tackleMissChance(tackler: Player | undefined, carrier: Player | undefined, gain: number, passing: boolean): number {
   const openness = clamp(gain, 0, 30) * (passing ? R2.missGain * 0.85 : R2.missGain)
   const quality = passing ? clamp(defenderMissRate(tackler) / R2.missBase, 0, 2) : 0
   const bump = R2.missPassBump * quality
@@ -5775,6 +5788,31 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   if (call?.trick && call.trick.kind === 'reverse') {
     gain = trickRunGain(call.trick, elusiveness, n, offId)
   }
+  // ── E1: the pursuit field (RUN side) ───────────────────────────────────────
+  // The legacy block above has produced its full result (`gain`: the sampled CDF
+  // plus every per-man adjustment the sim makes — after-contact, the featured
+  // run, the lead block, the Jind penetration, the chase tail, the goal-line rep)
+  // and has consumed the SAME rng() draws in the SAME order; the field consumes
+  // none. That `gain` is the field's anchor (the yards this call intends) and the
+  // men on the play then decide it. `EMERGENT.on` false ⇒ `e1` undefined ⇒ the
+  // resolver never enters the field file (byte-identical OFF path).
+  const carrierC = carrier
+  const e1 = EMERGENT.on && carrierC
+    ? emergentRun({
+        n, defId, offId, yard, distance, down: env?.down ?? 0,
+        planned: gain,
+        carrier: carrierC,
+        ol, te, te2, fb,
+        wrs: offEleven.filter((p) => p.pos === 'WR'),
+        rbLead: rb[0]?.id === carrierC.id ? rb[1] : rb[0],
+        dl, lbs, saf, cbs,
+        fat: env?.fat,
+        biteIds, misdirection,
+        poaIdx: dl.length ? gapIndex(gKey, dl.length) : -1,
+        missChance: (def, openness) => tackleMissChance(def, carrierC, openness, false),
+        clockOn: CLOCK_ON,
+      })
+    : undefined
   const fumbleMult = cohesionMult(env?.cohesionMeanOff, env?.cohesionOff, 0.4)
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
   // squirts out. Threshold only, so no rng() draw is added or removed.
@@ -5786,7 +5824,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // T2M: an outside run in the two-minute drill can reach the sideline. The
   // runner steps out, so there is no defender to credit and the clock stops.
   const oobP = oobRate(env, concept, carrier?.pos)
-  const oob = oobP > 0 && !fumble && gain > -3 && yard + gain < 100 &&
+  let oob = oobP > 0 && !fumble && gain > -3 && yard + gain < 100 &&
     h01(`${n}:${offId}:oob`) < oobP
   // L12 S3: exactly one tackler, chosen by gain from a positional mix (no rng).
   // J6: while clock-realism is on, a runner forced out of bounds is still credited
@@ -5825,6 +5863,22 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // path) — nobody is credited with a tackle in the end zone. A fumble the
   // defence recovers keeps its forcing tackler.
   if (!lost && yard + gain >= 100) tackler = undefined
+  // ── E1: the field's verdict replaces the drawn one ────────────────────────
+  // The legacy block above still consumed its draws in the exact order (the only
+  // one inside is the fumble), so the stream is unchanged; when the field is on
+  // its yards / tackler / misses / OOB are the play.
+  if (e1) {
+    gain = e1.yards
+    oob = !!e1.outOfBounds
+    tackler = e1.tacklerId
+    missedTackleIds = e1.missedTackleIds
+    forcedMissedIds = e1.forcedMissedIds
+    // a fumble is decided by contact: its forcer is never charged a miss
+    if (fumble) { missedTackleIds = undefined; forcedMissedIds = undefined }
+    if (!lost && yard + gain >= 100) tackler = undefined
+    glPoaId = undefined
+    glStopId = undefined
+  }
   const isBig = gain >= 20
   const tackleIds = tackler ? [tackler] : []
   // R6: a lost fumble is returned for a touchdown ~7–8% of the time (hash, no rng).
@@ -5852,7 +5906,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     fumbleId: fumble ? tackler : undefined,
     goalLineFumble: fumble && yard >= R16.goalLineYard ? true : undefined,
     timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
-    defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : undefined,
+    defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : (e1 ? e1.scorerId : undefined),
+    // E1: the recorded field paths (animation; optional — old saves ignore them).
+    ...(e1 ? { carryPath: e1.carryPath, fieldPaths: e1.fieldPaths } : {}),
     // J8a2: what the animation needs — the defender whose read decided the run,
     // the defenders who bit on the misdirection, and the alley/gap filler.
     readKeyId: J8A2_ON ? readKey?.id : undefined,
