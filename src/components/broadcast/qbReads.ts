@@ -444,7 +444,11 @@ function jumpPlan(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan):
     P = { x: ball.x - by * 0.9 * s, y: ball.y + bx * 0.9 * s }
   } else {
     const a = plan.place ? { x: plan.place.ix + plan.place.dx, y: plan.place.iy + plan.place.dy } : ball
-    P = { x: a.x - bx * 0.55, y: a.y - by * 0.55 }
+    // A pass broken up is a hand ON the ball: he breaks to the ball itself (the
+    // r8 read check measures the break-up at the ball). Only an interception that
+    // is drawn short of the ball keeps the hands-ahead-of-it contact point.
+    const off = 0
+    P = { x: a.x - bx * off, y: a.y - by * off }
   }
   const vcap = J.startsWith('lb') ? 7.6 : J.startsWith('dl') ? 6.5 : 8.6
   let tB = Math.min(Math.max(tl.t0 * D + react, plan.snapT * D + 0.5), R - 0.12)
@@ -460,8 +464,13 @@ function jumpPlan(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan):
   const reached = d / T <= vcap * 0.92
   // The drawn interceptor is always at the ball (the pick); anyone else gets as close as he can.
   if (!reached && !pick) {
-    const k = (vcap * 0.92 * T) / d
-    P = { x: p0.x + (P.x - p0.x) * k, y: p0.y + (P.y - p0.y) * k }
+    // A break-up is a layout: he gets a hand to the ball even when the run there
+    // costs a little more than his own break speed, capped so the drawn stride
+    // still stays inside the animshed bound (11 yd/s). An interception he cannot
+    // reach is still drawn as close as he gets (the int branch keeps vcap).
+    const vOk = int ? vcap * 0.92 : Math.min(vcap, 8.0)
+    const k = (vOk * T) / d
+    if (k < 1) P = { x: p0.x + (P.x - p0.x) * k, y: p0.y + (P.y - p0.y) * k }
   }
   return { key: J, lookT: tl.t0, breakT: tB / D, arriveT: C, x: P.x, y: P.y, reached, pick }
 }

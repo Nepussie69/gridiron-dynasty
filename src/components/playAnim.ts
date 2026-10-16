@@ -33,6 +33,7 @@ import { carrierMove, effAttrs, effRating, fatigueMap, fatiguePace } from './ani
 import { attrOf, paceFor, type Pace } from '../game/engine/pace'
 import { planOf } from './jersey'
 import { applyReadPaths, eyeJumpPicker } from './broadcast/qbReads'
+import { E1C, E1C_STAT, carryOn, clockOf, drawRecorded, recClock, recCrossTick, recEndT, recExitSpeed, recFirstT, recFillsAll, recordedField, REC_DT, type RecField, type RecMan } from './animField'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
@@ -399,6 +400,17 @@ function recClose(
     coverKey?: string
     /** realism-qbrun: how long the whistle may wait for the tackler's last strides (see WHISTLE_WAIT_MAX). */
     waitMax?: number
+    /** E1c: the tackler was drawn from the field's own recording — he is already
+     *  on the carrier where the field had him, so the animation's close-chase is
+     *  NOT run (it would rewrite his recorded strides). Events still record. */
+    noClose?: boolean
+    /** E1c: the field's own out-of-bounds end (the recording's stop). The field
+     *  declares out of bounds by its own rule (a man strung out from the middle
+     *  with a defender on him), not at the sideline, so the animation's forced
+     *  step over the line is a drawing beat after the field's stop: the event
+     *  (the whistle) stays where the field ended the play, and the carry the
+     *  metrics measure is the recording. */
+    oobAt?: number
   },
 ): void {
   const carrier = m[carrierKey]
@@ -408,7 +420,7 @@ function recClose(
   // animflow r8: a tackle is never the carrier stopping alone, on any sim stream - when the
   // tackler's own chase leaves him short at the whistle, his last strides close the gap (a lunge
   // into the carrier from the side he came from). Results / spot / credited man unchanged.
-  if (!opts.td && !opts.outOfBounds && m[tackler] && tackler !== carrierKey) {
+  if (!opts.noClose && !opts.td && !opts.outOfBounds && m[tackler] && tackler !== carrierKey) {
     const offBlock = (REC?.eng ?? []).filter((e) => (e.a === tackler || e.b === tackler) && (e.kind === 'block' || e.kind === 'double' || e.kind === 'chip') && e.t0 < endSec).reduce((a, e) => Math.max(a, e.t1), 0)
     // (a man just off his block takes his first strides free - his rip / shed is seen - before the chase)
     // (and never before the carrier has the ball - the cover man stands the recorded separation at the catch)
@@ -434,7 +446,8 @@ function recClose(
     if (t != null) recEv(t, 'firstDown', [carrierKey], { x: tx, y: posAt(carrier.path, t).y })
   }
   if (opts.stepOut) {
-    recEv(endSec, 'outOfBounds', [carrierKey], endPos)
+    const t = Math.min(opts.oobAt ?? endSec, endSec)
+    recEv(t, 'outOfBounds', [carrierKey], posAt(carrier.path, t))
     return
   }
   recEng(tackler, carrierKey, Math.max(0, opts.pushFrom != null ? Math.min(opts.pushFrom - 0.05, endSec - 0.3) : endSec - 0.5), endSec + 0.05, 'tackle')
@@ -449,7 +462,8 @@ function recClose(
   } else if (opts.safety) {
     recEv(endSec, 'safety', [tackler, carrierKey], endPos)
   } else if (opts.outOfBounds) {
-    recEv(endSec, 'outOfBounds', [carrierKey], endPos)
+    const t = Math.min(opts.oobAt ?? endSec, endSec)
+    recEv(t, 'outOfBounds', [carrierKey], posAt(carrier.path, t))
   } else {
     recEv(endSec, 'tackle', [tackler, carrierKey], endPos)
   }
@@ -549,7 +563,7 @@ const stepIn = (p: Pt, v: Pt, dt: number): Pt => {
   return { x: clampN(x, Math.min(1, p.x), Math.max(FIELD_W - 1, p.x)), y: clampN(y, Math.min(1.2, p.y), Math.max(FIELD_H - 1.2, p.y)) }
 }
 /** The snap beat: the ball leaves the LOS for the QB. */
-const SNAP = 0.14
+export const SNAP = 0.14
 
 export interface Pt {
   x: number
@@ -2366,6 +2380,182 @@ function readTime(p: Player | undefined, base: number, seed: number): number {
   return clampN(base + (85 - prc) * 0.011 + hash(seed) * 0.15, base - 0.1, base + 0.75)
 }
 
+// ── E1c: the recorded field ───────────────────────────────────────────────────
+/**
+ * E1c (FUTURES #54, spec decision 4): when the emergent field resolved this play
+ * it recorded the path every man ran. The builder draws those paths — the
+ * carrier and the field's men exactly where and when the field had them — and
+ * keeps its own choreography for everything the field does not record (the
+ * pre-snap set, the mesh/handoff, the line, the pile, the celebration). Plays
+ * with no recording (E1 off, an old save, a kick, a pass with no after-catch
+ * segment) fall through to today's drawing, untouched.
+ */
+interface E1cPlan {
+  rec: RecField
+  /** The dot the recorded carrier is drawn as. */
+  carryKey: string
+  /** The recorded men, mapped to their dots. */
+  men: { key: string; man: RecMan }[]
+}
+
+/**
+ * The plan for this play, or null (no recording / not this phase). `t0` is the
+ * animation-clock time of the recording's own start (the snap for a run, the
+ * catch for a pass's after-catch segment): the field's tick 0.
+ */
+function e1cPlan(play: Play, ctx: AnimContext, t0: number): E1cPlan | null {
+  E1C_STAT.chaseKeys.length = 0
+  E1C_STAT.drewKeys.length = 0
+  E1C_STAT.lastDrawn = false
+  const rec = recordedField(play)
+  if (!rec) return null
+  // A loose ball is not a carry: the ball came out where the recording ends and
+  // the play is spotted where it was recovered (somewhere else). Today's
+  // choreography draws the loose ball and the recovery; the recording does not.
+  if (play.turnover) {
+    E1C_STAT.fallback++
+    return null
+  }
+  const carryKey = keyOf(ctx, rec.carryId, [...OFF_KEYS, 'fb'])
+  if (!carryKey || !ctx.actors?.get(carryKey)) {
+    E1C_STAT.fallback++
+    return null
+  }
+  // The field does not model pre-snap motion: a JET man is a receiver at full
+  // speed across the formation when the ball is snapped (r8 J38), and the
+  // recording starts at the snap, so drawing it would show him starting from a
+  // standstill. The jet keeps the animation's own motion (counted).
+  if (play.featured === 'jet' || play.concept === 'Jet Sweep') {
+    E1C_STAT.presnap++
+    return null
+  }
+  // The recorded stop and the sim's own recorded spot must agree: the sim's
+  // yards are the calibrated anchor blended toward the field's gain, so for a
+  // tackle they land within a couple of yards and the pile covers the rest. A
+  // fumble, or the tail fallback when nobody ran him down, can spot the ball
+  // away from where the field stopped — those keep today's choreography.
+  const stopX = rec.carry.pts[rec.carry.pts.length - 1].x
+  if (play.endYard < 100 && !play.outOfBounds && Math.abs(clampX(10 + play.endYard) - stopX) > E1C.maxFix) {
+    E1C_STAT.fallback++
+    return null
+  }
+  const tEnd = t0 + (rec.ticks - 1) * REC_DT
+  // E1c (emere1c): the recording must be drawable as the tackle the sim recorded.
+  // The field ends a play either with a man on the ball or by its own aim/hash
+  // rule, and an aim-stop's own geometry has every recorded man far away from the
+  // carrier's last spot. Today's choreography draws that stop as a tackle; a
+  // recording with nobody on the ball cannot (no man can get to that spot inside
+  // his own pace), so the play keeps the animation's own drawing.
+  const stop = rec.carry.pts[rec.carry.pts.length - 1]
+  if (!play.outOfBounds && play.endYard < 100 && !play.safety) {
+    let near = Infinity
+    for (const man of rec.men) {
+      const q = man.pts[man.pts.length - 1]
+      near = Math.min(near, Math.hypot(q.x - stop.x, q.y - stop.y))
+    }
+    if (near > E1C.aimStop) {
+      E1C_STAT.aimStop++
+      return null
+    }
+  }
+  // The field's out-of-bounds end is its own forced-out roll, not the chalk (see
+  // E1C.oobMargin): a stop at the numbers would be drawn as a ~19 yd shove to the
+  // sideline. Today's choreography draws an out-of-bounds run against the real
+  // line, so only a stop that really is at the sideline is drawn from the field.
+  if (play.outOfBounds && play.endYard < 100 && Math.min(stop.y, FIELD_H - stop.y) > E1C.oobMargin) {
+    E1C_STAT.aimStop++
+    return null
+  }
+  const men: { key: string; man: RecMan }[] = []
+  const seen = new Set<string>()
+  // animflow r6d (J8a-2): the READ the animation draws — a man who BIT takes his
+  // first steps the wrong way (away from the play), the READ KEY steps straight
+  // into the hole, the alley FILLER comes downhill at once instead of reading from
+  // depth — is the animation's own depiction of the fake. The field records
+  // bodies, not the fake: its bite is a first-step LATENCY, not a false step, and
+  // its filler reads from depth like the other safety, so the recordings of those
+  // men carry the positions but none of the read. The read the play names
+  // therefore keeps today's choreography (the J8a2 model), and the recording
+  // drives everyone the play does not name: the front, the pursuit, the man on
+  // the ball.
+  const readIds = new Set<string>(play.biteIds ?? [])
+  if (play.readKeyId) readIds.add(play.readKeyId)
+  if (play.fillId) readIds.add(play.fillId)
+  for (const man of rec.men) {
+    if (man.id === rec.carryId) continue
+    if (readIds.has(man.id)) {
+      E1C_STAT.readSkipped++
+      continue
+    }
+    const key = keyOf(ctx, man.id, DEF_KEYS)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    // A man whose recording stops well short of the play's end was on a block
+    // through the whistle: the live field draws that block (and his shed) far
+    // better than a recording with no pinned stretch in it.
+    if (tEnd - recEndT(man, rec.ticks, t0) > E1C.maxGap) {
+      E1C_STAT.menSkipped++
+      continue
+    }
+    men.push({ key, man })
+    E1C_STAT.men++
+  }
+  E1C_STAT.plays++
+  E1C_STAT.lastDrawn = true
+  return { rec, carryKey, men }
+}
+
+/** E1c: the tick at which the recorded carrier reaches the line, as anim time. */
+function recHoleT(rec: RecField, t0: number, los: number, clock?: (tick: number) => number): number {
+  const tick = recCrossTick(rec.carry, rec.ticks, los)
+  return tick < 0 ? t0 + 0.35 : clock ? clock(tick) : t0 + tick * REC_DT
+}
+
+/** E1c: the recorded man whose last recorded spot is closest to `pt`. */
+function closestRecorded(e1: E1cPlan, pt: Pt): string | undefined {
+  let best: string | undefined
+  let bd = Infinity
+  for (const x of e1.men) {
+    const q = x.man.pts[x.man.pts.length - 1]
+    const d = Math.hypot(q.x - pt.x, q.y - pt.y)
+    if (d < bd) { bd = d; best = x.key }
+  }
+  return best
+}
+
+/**
+ * E1c: a broken tackle is drawn where the field recorded it — the moment the
+ * carrier's recorded path and the man who missed him were closest. (The replaced
+ * `recMissedTackles` places it on the choreographed clock.)
+ */
+function recMissedTacklesE1(
+  play: Play,
+  ctx: AnimContext,
+  carrierKey: string,
+  m: Record<string, Mover>,
+  pool: string[],
+  from: number,
+  to: number,
+): void {
+  const ids = play.missedTackleIds ?? []
+  if (!ids.length || to <= from) return
+  ids.forEach((id, i) => {
+    const dk = keyOf(ctx, id, pool)
+    if (!dk || dk === carrierKey || !m[dk]) return
+    let t = clampN(from + (to - from) * (0.62 + i * 0.08), from, Math.max(from, to - 0.35))
+    let bd = Infinity
+    for (let s = from; s <= to + 1e-9; s += 0.05) {
+      const a = posAt(m[dk].path, s)
+      const c = posAt(m[carrierKey].path, s)
+      const d = Math.hypot(a.x - c.x, a.y - c.y)
+      if (d < bd) { bd = d; t = s }
+    }
+    t = clampN(t, from, Math.max(from, to - 0.35))
+    recEv(t, 'brokenTackle', [carrierKey, dk], posAt(m[carrierKey].path, t))
+    recEng(dk, carrierKey, Math.max(0, t - 0.18), t + 0.06, 'missedTackle')
+  })
+}
+
 function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   recStart()
   const los = 10 + play.startYard
@@ -2390,7 +2580,42 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   }
   const jetMeshX = snapK === 'under' ? f.qb.x - 0.6 : f.qb.x + 1.1
   if (jet) f.rb = { x: jetMeshX, y: clampY(MID_Y - side0 * 6.5), side: 'off', role: carRole }
+  // E1c: the field placed the carrier himself — his alignment is part of the
+  // recording (the x is the same backfield spot; the lane is the gap the field
+  // attacked), so the set, the mesh and the carry are drawn on his own line.
+  const e1 = e1cPlan(play, ctx, SNAP)
+  // E1c (emere1c): the play was resolved on the emergent field. Even when the
+  // module keeps today's choreography (the recording's stop sits off the sim's
+  // recorded spot), the field's own pursuit still has to end with a man on the
+  // ball — a field-resolved run whose credited man cannot reach the recorded
+  // stop gets the animation's own slower-press retry (see the tackle plan).
+  // With E1c OFF, or a play with no recording at all, nothing here changes.
+  const e1Field = E1C.on && !!recordedField(play)
+  // E1c: for a back / receiver the field's own start IS his backfield spot (the
+  // x is behind the line, the lane is the gap the play attacks), so the set, the
+  // mesh and the carry are drawn on his own line with no seam. The QUARTERBACK
+  // keeps the animation's own snap depth (the gun / under-centre set the r8 snap
+  // check pins) and eases onto the recording from there.
+  if (e1 && !qbRun) {
+    const c0 = e1.rec.carry.pts[0]
+    f[e1.carryKey] = { x: c0.x, y: c0.y, side: 'off', role: f[e1.carryKey]?.role ?? carRole }
+  }
   const m = startMovers(f, ctx)
+  // E1c: the animation's own clock for the recording (see animField.recClock):
+  // the recorded shape timed by the carrier's own stride. Every recorded man's
+  // samples are placed on this table, so the field's tick-by-tick geometry is
+  // preserved exactly however the clock stretches the play. Any gap between the
+  // animation's own spot and the recording's first sample is a bridge timed by
+  // his own pace — a real move, never a jump.
+  const recT = e1 ? recClock(e1.rec.carry.pts, m[e1.carryKey].pace, REC_DT, 0, SNAP) : []
+  if (e1) {
+    const c0 = e1.rec.carry.pts[0]
+    const a0 = f[e1.carryKey]
+    const d0 = Math.hypot(c0.x - a0.x, c0.y - a0.y)
+    const bt = d0 / Math.max(1, 0.85 * m[e1.carryKey].pace.top)
+    for (let k = 0; k < recT.length; k++) recT[k] += bt
+  }
+  const clk = (tick: number) => clockOf(recT, tick)
   recSnap(los)
   // animflow r8 ("still runs sideways"): a run the sim ends out of bounds is bounced to the edge BEHIND the
   // line (the lateral travel is spent there, like a stretch / toss) and goes up the sideline past it - it
@@ -2421,10 +2646,13 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   const drift = Math.max(0, gain) * (wide ? 0.32 : 0.24) * (0.4 + hash(seed + 2) * 0.6) + (Math.abs(play.yards) > 12 ? hash(seed + 9) * 4 : 0)
   // T2M: a run that went out of bounds finishes against the sideline, not in the
   // middle of the field. The end spot (x) is unchanged.
-  const endY = play.outOfBounds
+  const endY0 = play.outOfBounds
     ? (side < 0 ? 1.6 : FIELD_H - 1.6)
     : clampY(lane + driftDir * drift)
-  const carrier = qbRun ? 'qb' : 'rb'
+  // E1c: where the field's own stop was (the recorded path's last spot) is the
+  // spot the animation finishes on, so the tackle and the pile land there.
+  let endY = endY0
+  const carrier = e1 ? e1.carryKey : qbRun ? 'qb' : 'rb'
   const holeX = los - (play.yards < 0 ? 0.5 : -0.4)
   // Under centre the QB opens and gets back to the mesh ~3.5 yd deep (animflow r6c2).
   const meshX = snapK === 'under' ? (qbRun ? f.qb.x - 0.6 : los - 3.4) : qbRun ? f.qb.x - 1 : f.qb.x + 0.7
@@ -2458,10 +2686,79 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     }
   }
 
-  // ── the scripted backfield: mesh, handoff, the carry ──────────────────────
+  // ── E1c: the recorded field drives the carry (else the scripted backfield) ─
   // The back takes his open step and is already moving (~4-5 yd/s) through the
   // mesh: the handoff comes ~1.1-1.3 s after the snap, ~4 yd deep (R5).
+  const scoreRun = endX >= 110
+  const oobRun = !!play.outOfBounds && !fumble && !scoreRun
+  const clockOut = oobRun && clockStepOut(play)
   let handoffT = 0
+  let holeT: number
+  let holeSpeed: number
+  let contactT: number
+  // animflow r8 (J38): the snap - to the quarterback, or on a wildcat straight back to the runner.
+  const runSnap = (toSec: number): WP[] => (wildcat ? [{ t: 0, x: los, y: MID_Y }, { t: SNAP, ...posAt(m.rb.path, SNAP) }] : snapBall(m, los, toSec))
+  if (e1) {
+    // The field resolved this play, so the carrier runs the path the field
+    // recorded — his own pace, his own cuts — and the men around him the paths
+    // they ran. Only what the field never models is scripted: the set, the
+    // passer's mesh and fake (the handoff lands where the runner passes him),
+    // and the pile on the spot the sim recorded.
+    const mv = m[e1.carryKey]
+    if (wildcat) {
+      // the direct snap: the split-out quarterback releases as a decoy
+      m.qb.run([{ x: los + 0.6, y: f.qb.y }, { x: los + 4.5, y: clampY(f.qb.y - side * 1.5) }], { stop: true })
+    } else if (!qbRun) {
+      m.qb.run([{ x: meshX, y: meshY }], { stop: true })
+    }
+    mv.hold(SNAP)
+    // The animation's own clock for the recording (animField.recClock), computed
+    // once above: the recorded shape timed by the carrier's own stride, so the
+    // carry starts like a real one (no jump to full pace) and never outruns his
+    // pace. Every man rides this same clock, so the field's tick-by-tick geometry
+    // — who was on whom, where — is exactly what is drawn.
+    drawRecorded(mv, e1.rec.carry, e1.rec.ticks, SNAP, undefined, clk)
+    holeT = recHoleT(e1.rec, SNAP, los, clk)
+    holeSpeed = carrySpeed(mv)
+    if (qbRun || wildcat || jet) {
+      // the ball is his from the snap: a direct snap (wildcat), a jet motion man
+      // taking it as he passes, or the quarterback himself keeping it
+      handoffT = SNAP
+    } else {
+      // the handoff: the moment the recorded runner is closest to the passer
+      handoffT = SNAP
+      let best = Infinity
+      for (let k = 0; k < e1.rec.carry.pts.length; k++) {
+        const t = clk(k)
+        const q = posAt(m.qb.path, t)
+        const d = Math.hypot(q.x - e1.rec.carry.pts[k].x, q.y - e1.rec.carry.pts[k].y)
+        if (d < best) { best = d; handoffT = t }
+      }
+      m.qb.hold(Math.max(0, handoffT - m.qb.t))
+      m.qb.run([{ x: (snapK === 'under' ? meshX : f.qb.x) - 1.5, y: MID_Y - side * 4 }], { stop: false })
+    }
+    // The carry: the recorded tackle, then the pile to the sim's recorded spot
+    // (or over the sideline / through the goal line exactly as today).
+    contactT = mv.t
+    endY = e1.rec.carry.pts[e1.rec.carry.pts.length - 1].y
+    const vOut = recExitSpeed(e1.rec.carry)
+    if (scoreRun) {
+      mv.run([{ x: endX, y: endY }], { v0: vOut, stop: false, smooth: true })
+      runThroughGoal(mv, 110, 1)
+    } else if (oobRun) {
+      if (clockOut) angleOut(mv, endX)
+      else shoveOut(mv, endX)
+    } else {
+      pileDrive(mv, [{ x: endX, y: endY }], vOut)
+    }
+    // The ball is spotted on the recorded spot; the recording's own stop and the
+    // integer yard line agree within its rounding (a few cm). Land the drawn end
+    // exactly on the sim's spot so the end-spot probe is exact, never 6 mm off.
+    if (!scoreRun && !oobRun) {
+      const lk = mv.path[mv.path.length - 1]
+      if (lk && Math.abs(lk.x - endX) > 1e-9 && Math.abs(lk.x - endX) < E1C.maxFix) { lk.x = endX; mv.x = endX }
+    }
+  } else {
   if (qbRun) {
     if (optionKeep) {
       // realism-qbrun: the read — the back attacks the ball to the mesh (the fake
@@ -2514,8 +2811,6 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     m.qb.hold(handoffT - m.qb.t)
     m.qb.run([{ x: (snapK === 'under' ? meshX : f.qb.x) - 1.5, y: MID_Y - side * 4 }], { stop: false })
   }
-  // animflow r8 (J38): the snap - to the quarterback, or on a wildcat straight back to the runner.
-  const runSnap = (toSec: number): WP[] => (wildcat ? [{ t: 0, x: los, y: MID_Y }, { t: SNAP, ...posAt(m.rb.path, SNAP) }] : snapBall(m, los, toSec))
   // Press and cut: he presses the play side under control (vision, ~3/4 pace),
   // brakes into his one cut and comes out of it into the lane.
   // The carry pace: inside runs are run at a modest speed (NFL R6: inside peak
@@ -2566,17 +2861,13 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     const mv = m[carrier]
     mv.pace = { top: mv.pace.top * carryK, acc: Math.min(mv.pace.acc, accCap(mv)) }
   }
-  const holeT = m[carrier].t
-  const holeSpeed = carrySpeed(m[carrier])
+  holeT = m[carrier].t
+  holeSpeed = carrySpeed(m[carrier])
   // The carry: the curve to a yard or two short of the recorded stop, where the
   // tackler meets him, then the pile goes forward to exactly that spot. A
   // fumble is a loose ball at the recorded spot, so there the carrier runs the
   // full curve and truly reaches it before the ball comes out; a touchdown runs
   // through the goal line.
-  const scoreRun = endX >= 110
-  const oobRun = !!play.outOfBounds && !fumble && !scoreRun
-  const clockOut = oobRun && clockStepOut(play)
-  let contactT: number
   if (fumble || scoreRun) {
     m[carrier].run(curve.slice(1), { v0: holeSpeed, stop: !scoreRun, cut: true })
     contactT = m[carrier].t
@@ -2599,6 +2890,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     contactT = m[carrier].t
     pileDrive(m[carrier], post, carrySpeed(m[carrier]))
   }
+  } // end of the scripted (non-E1c) carry
   const endSec = m[carrier].t
   const popT = fumble ? Math.max(holeT + 0.1, endSec * 0.9) : endSec
   const liveTo = fumble ? popT : contactT
@@ -2839,6 +3131,39 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   const stillEngaged = new Set(DEF_KEYS.filter((k) => field.engaged(k) && k !== creditedKey))
   field.run(endSec + 0.6)
   field.closeAll(endSec + 0.6)
+  // E1c: the men the field recorded ARE what it simulated — draw them from the
+  // recording (the tackle, the misses and the out-of-bounds end are the field's
+  // own), and leave the live field's drawing for everything it did not record:
+  // a man held on a block, the line, the passer.
+  if (e1) {
+    for (const x of e1.men) {
+      const dmv = m[x.key]
+      if (!dmv) continue
+      E1C_STAT.drewKeys.push(x.key)
+      // A man the field had free from the snap stands where the field had him —
+      // its own front can line up differently from the animation's four-man
+      // table, and the animation's spot would be a teleport onto his recording.
+      // The same when the bridge from the animation's spot to his first recorded
+      // sample would need more than his own pace. Otherwise he keeps the
+      // animation's spot and eases onto his recording over the stretch he was
+      // blocked (at a blocked man's pace).
+      const p0 = x.man.pts[0]
+      const tFirst = recFirstT(x.man, e1.rec.ticks, SNAP, clk)
+      const need = tFirst > 0.05 ? Math.hypot(p0.x - f[x.key].x, p0.y - f[x.key].y) / tFirst : Infinity
+      if (recFillsAll(x.man, e1.rec.ticks) || need > dmv.pace.top * E1C.bridgeTol) {
+        dmv.reset(p0.x, p0.y)
+        if (need > dmv.pace.top * E1C.bridgeTol) E1C_STAT.bridge++
+      } else {
+        dmv.reset(f[x.key].x, f[x.key].y)
+      }
+      drawRecorded(dmv, x.man, e1.rec.ticks, SNAP, tFirst, clk)
+      // ...and he plays to the whistle: a man whose recording ends a beat before
+      // the play does (the pile drives the carrier past the field's last tick)
+      // carries on in his stride at his own pace — never a braking settle past
+      // the stop (the recording is the drawing; the animation only extends it).
+      carryOn(dmv, endSec, dmv.pace.top)
+    }
+  }
 
   if (fumble) {
     const spotX = changeSpot(play, ctx.next) ?? endX + 1
@@ -2876,21 +3201,53 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   // animflow r5: with real acceleration caps the credited man is often a beat
   // late; on a run he still makes it (hitAndRide meets the pile where it is).
   // (a forced out-of-bounds end needs a man who can really get there: the credited one gets no extra slack)
-  let tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2, oobRun ? TACKLE_SLACK_OOB : slow > 0.75 ? CRED_SLACK_RUN : TACKLE_SLACK)
+  let tackler: string
+  let hitFrom = tackleFrom
+  let tkFromRec = false
+  // E1c: the recorded man rode him (he was on him at the field's stop) — the
+  // animation's close-chase is then skipped (see recClose.noClose). A chased man
+  // was NOT on him: the close-chase still runs and brings him in by the whistle.
+  let tkRide = false
+  const recKeys = e1 ? new Set(e1.men.map((x) => x.key)) : null
+  if (e1) {
+    // E1c: the field named the man who made the play — draw him where the field
+    // had him. (A recorded tackler with no dot of his own, or one the field did
+    // not record at all, falls back to today's tackle plan.)
+    const want = keyOf(ctx, play.tackleIds?.[0], DEF_KEYS) ?? closestRecorded(e1, cPt)
+    // A man the field did NOT record was on a block when the play ended (the live
+    // field draws him): making him the tackler costs no recorded stride, so the
+    // recording stays exactly the field's. Only when no such man exists is a
+    // recorded man moved — and then he is counted (the check allows exactly him).
+    const free = tacklers.filter((k) => !recKeys!.has(k))
+    tackler = want && m[want] ? want : chooseTackler(m, free.length ? free : tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2, TACKLE_SLACK)
+    tkFromRec = recKeys!.has(tackler)
+  } else {
+  tackler = chooseTackler(m, tacklers, creditedKey, cPt, tackleFrom, contactT - tackleFrom + 1.2, oobRun ? TACKLE_SLACK_OOB : slow > 0.75 ? CRED_SLACK_RUN : TACKLE_SLACK)
   // A touchdown is chased, never forced: the closest man just runs with him.
   // animflow r6c: a credited man who shed inside the tackle phase closes from his rip.
-  let hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
-  if (!scoreRun && !clockOut && contactT - holeT > 0.6) {
-    // animflow r6c2 (297): on a longer run the tackler has to be able to get
-    // there. He leaves on his pursuit angle as early as he must (once off any
-    // block); when even that is too late the carrier is drawn picking his way
-    // a little slower (re-run, same result), so the credited man explains the
-    // spot instead of the carrier stopping on his own.
+  hitFrom = tackler === creditedKey && credShed != null && credShed + 0.15 > tackleFrom ? Math.min(contactT - 0.2, credShed + 0.15) : tackleFrom
+  }
+  // animflow r6c2 (297) / emere1c: the man on the ball has to be able to reach
+  // the spot. He leaves on his pursuit angle as early as he must (once off any
+  // block); when even that is too late the carrier is drawn picking his way a
+  // little slower (re-run, same result), so the credited man explains the spot
+  // instead of the carrier stopping on his own. A field-resolved run (its
+  // recorded stop came back from the emergent field) runs the same check even
+  // when the tackle phase is short: the field's stop has a man on the ball by
+  // construction, and a credited man who was held 10+ yd off it must still be
+  // drawn making the play. A recorded man (E1c) is never moved by it: his path
+  // IS the field's, and the animation has already drawn him where the field did.
+  const fieldRetry = e1Field && !oobRun && (!e1 || !tkFromRec)
+  if (!scoreRun && !clockOut && (contactT - holeT > 0.6 || fieldRetry)) {
     const busy = (k: string, t: number) => (REC?.eng ?? []).some((e) => (e.a === k || e.b === k) && (e.kind === 'block' || e.kind === 'double') && t >= e.t0 && t <= e.t1)
     const late = Math.min(contactT + 0.45, endSec - 0.15)
     const leave = (k: string, from: number): { s: number | null; best: number } => {
       let best = Infinity
-      for (let s0 = from; s0 >= Math.max(holeT * 0.6, from - 2.6) - 1e-6; s0 -= 0.2) {
+      // (the floor says he may not leave before the hole forms; a play whose
+      //  tackle phase opens already at that floor still measures once, so a man
+      //  who is plainly out of reach is known to be out of reach)
+      const floor = fieldRetry ? Math.min(from, holeT * 0.6) : Math.max(holeT * 0.6, from - 2.6)
+      for (let s0 = from; s0 >= floor - 1e-6; s0 -= 0.2) {
         if (busy(k, s0)) break
         const d = catchDist(m[k], m[carrier].path, s0, late)
         best = Math.min(best, d)
@@ -2900,12 +3257,14 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     }
     const mine = leave(tackler, hitFrom)
     if (mine.s != null) hitFrom = mine.s
-    else if (slow > 0.75 && mine.best < Infinity) return buildRun(play, ctx, slow - 0.14)
+    else if (!e1 && slow > 0.75 && mine.best < Infinity) return buildRun(play, ctx, slow - 0.14)
     else {
-      // Nobody credited can get there: the man who can makes the hit.
+      // Nobody credited can get there: the man who can makes the hit. (For a
+      // field-resolved play the field's own men keep their recording — only a man
+      // the field did not record may be moved.)
       let alt: { k: string; s: number; d: number } | null = null
       for (const k of tacklers) {
-        if (k === tackler || !m[k] || missKeys.includes(k)) continue
+        if (k === tackler || !m[k] || missKeys.includes(k) || (recKeys ? recKeys.has(k) : false)) continue
         const r = leave(k, tackleFrom)
         if (r.s != null && (!alt || r.best < alt.d)) alt = { k, s: r.s, d: r.best }
       }
@@ -2915,7 +3274,40 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       }
     }
   }
-  if (oobRun && !clockOut) {
+  if (e1 && tkFromRec) {
+    // E1c: the recorded man is already on him at the recorded contact — he rides
+    // him through the pile (or drives him over the line), at his own pace. When
+    // the recorded stop has nobody on him (the field ended the play on its
+    // scheme's aim and credited the nearest man), the animation's own chase
+    // brings the credited man in, exactly as it does today.
+    const c0 = posAt(m[carrier].path, contactT)
+    const q0 = posAt(m[tackler].path, Math.min(contactT, m[tackler].t))
+    const gap0 = Math.hypot(q0.x - c0.x, q0.y - c0.y)
+    if (tackler !== carrier && m[tackler] && !scoreRun && !clockOut && gap0 > E1C.contactGap) {
+      // not a tackle by contact: the credited man runs him down (pace-capped)
+      E1C_STAT.chased++
+      E1C_STAT.chaseKeys.push(tackler)
+      hitAndRide(m[tackler], m[carrier], Math.max(tackleFrom, contactT - 1.2), contactT, endSec, oobRun ? 3.2 : 2.2)
+      if (oobRun) ensurePush(m[tackler], m[carrier], contactT, endSec)
+    } else if (tackler !== carrier && m[tackler] && !scoreRun && !clockOut) {
+      const tk = m[tackler]
+      // the field's man takes the play over from its own stop: his recording is
+      // the approach; from here the pile does (the drawing is the animation's own)
+      E1C_STAT.chaseKeys.push(tackler)
+      tkRide = true
+      let ux = q0.x - c0.x
+      let uy = q0.y - c0.y
+      if (Math.hypot(ux, uy) < 0.3) {
+        const h = speedVec(m[carrier].path, contactT)
+        ux = h.x
+        uy = h.y
+      }
+      const ul = Math.hypot(ux, uy) || 1
+      const u = oobRun ? pushSide(m[carrier], tk, contactT) : { x: ux / ul, y: uy / ul }
+      rideOn(tk, m[carrier], contactT, endSec, u)
+      if (oobRun) ensurePush(tk, m[carrier], contactT, endSec)
+    }
+  } else if (oobRun && !clockOut) {
     // animflow r8: the forcer comes on his cut-off angle and drives him out from the inside shoulder.
     hitAndRide(m[tackler], m[carrier], hitFrom, contactT, endSec, 3.2, pushSide(m[carrier], m[tackler], contactT))
     ensurePush(m[tackler], m[carrier], contactT, endSec)
@@ -2951,7 +3343,8 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       }
     }
   }
-  recMissedTackles(play, ctx, carrier, holeT, res.endSec, m, DEF_KEYS)
+  if (e1) recMissedTacklesE1(play, ctx, carrier, m, DEF_KEYS, SNAP, contactT)
+  else recMissedTackles(play, ctx, carrier, holeT, res.endSec, m, DEF_KEYS)
   recClose(m, carrier, res.tackler, res.endSec, DEF_KEYS, {
     play,
     los,
@@ -2961,7 +3354,12 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     tdDir: 1,
     safety: !!play.safety,
     outOfBounds: !!play.outOfBounds,
-    ...(oobRun ? (clockOut ? { stepOut: true } : { pushFrom: contactT }) : {}),
+    ...(e1 && tkRide ? { noClose: true } : {}),
+    // (on a RECORDED run the out-of-bounds end is the field's own stop: the shove over
+    //  the line is a drawing beat after the whistle, so the event stays at the stop.
+    //  A play with no recording keeps the event where it is today - at the end of the
+    //  shove - so the shared OOB drawing and its metrics are untouched.)
+    ...(oobRun ? { ...(e1 ? { oobAt: contactT } : {}), ...(clockOut ? { stepOut: true } : { pushFrom: contactT }) } : {}),
   })
   const ball: WP[] = qbRun
     ? snapBall(m, los, res.endSec)
@@ -5425,6 +5823,105 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     : clampY(catchPt.y + clampN((MID_Y - catchPt.y) * (yac > 8 ? 0.3 : 0.1) + (hash(seed + 8) - 0.5) * 3, -(0.3 * yac + 0.4), 0.3 * yac + 0.4))
   const spot: Pt = { x: endX, y: endY }
 
+  // ── E1c: a pass whose after-catch segment the field recorded (E1b) ─────────
+  // Everything before the catch is the animation's own (the route, the drop, the
+  // throw, the line); the recording starts AT the catch and is the YAC segment
+  // (spec decision 4). From there the recording is the drawing — the run after
+  // the catch, the men who chased him, the tackle, the out-of-bounds end, the
+  // score — exactly as on a run. A pass with no recording (E1b off, an old save,
+  // an interception) keeps today's drawing, untouched.
+  {
+    const e1p = int || inc ? null : e1cPlan(play, ctx, catchSec)
+    if (e1p && e1p.carryKey === tgt) {
+      const mv = m[tgt]
+      const recT = recClock(e1p.rec.carry.pts, mv.pace, REC_DT, Math.min(catchV0, mv.pace.top), catchSec)
+      const clk = (tick: number) => clockOf(recT, tick)
+      drawRecorded(mv, e1p.rec.carry, e1p.rec.ticks, catchSec, catchSec, clk)
+      const contactT = mv.t
+      const vOut = recExitSpeed(e1p.rec.carry)
+      const recY = e1p.rec.carry.pts[e1p.rec.carry.pts.length - 1].y
+      let endSec: number
+      if (isTD) {
+        mv.run([{ x: Math.max(endX, mv.x + 1), y: recY }], { v0: vOut, stop: false, smooth: true })
+        runThroughGoal(mv, 110, 1)
+        endSec = mv.t
+      } else if (play.outOfBounds) {
+        endSec = clockStepOut(play) ? angleOut(mv, endX) : shoveOut(mv, endX)
+      } else {
+        pileDrive(mv, [{ x: endX, y: recY }], vOut)
+        endSec = mv.t
+      }
+      // land the drawn end exactly on the sim's spot (see buildRun)
+      if (!isTD && !play.outOfBounds) {
+        const lk = mv.path[mv.path.length - 1]
+        if (lk && Math.abs(lk.x - endX) > 1e-9 && Math.abs(lk.x - endX) < E1C.maxFix) { lk.x = endX; mv.x = endX }
+      }
+      for (const x of e1p.men) {
+        const dmv = m[x.key]
+        if (!dmv) continue
+        E1C_STAT.drewKeys.push(x.key)
+        const p0 = x.man.pts[0]
+        const tFirst = recFirstT(x.man, e1p.rec.ticks, catchSec, clk)
+        const need = tFirst > 0.05 ? Math.hypot(p0.x - dmv.x, p0.y - dmv.y) / tFirst : Infinity
+        if (recFillsAll(x.man, e1p.rec.ticks) || need > dmv.pace.top * E1C.bridgeTol) {
+          dmv.reset(p0.x, p0.y)
+          if (need > dmv.pace.top * E1C.bridgeTol) E1C_STAT.bridge++
+        }
+        drawRecorded(dmv, x.man, e1p.rec.ticks, catchSec, tFirst, clk)
+        carryOn(dmv, endSec, dmv.pace.top)
+      }
+      const recKeys = new Set(e1p.men.map((x) => x.key))
+      let tackler = keyOf(ctx, play.tackleIds?.[0], DEF_KEYS) ?? closestRecorded(e1p, catchPt)
+      let tkFromRec = !!tackler && recKeys.has(tackler)
+      if (!tackler || !m[tackler]) {
+        const free = pursuers.filter((k) => m[k] && !recKeys.has(k))
+        tackler = chooseTackler(m, free.length ? free : pursuers, creditKey, catchPt, catchSec, Math.max(0.6, endSec - catchSec), TACKLE_SLACK_PASS)
+        tkFromRec = recKeys.has(tackler)
+      }
+      const tkEff = tackler && tackler !== tgt && m[tackler] ? tackler : tgt
+      let tkRide = false
+      if (tkEff !== tgt && !isTD && !clockStepOut(play)) {
+        const c0 = posAt(mv.path, contactT)
+        const q0 = posAt(m[tkEff].path, Math.min(contactT, m[tkEff].t))
+        const gap0 = Math.hypot(q0.x - c0.x, q0.y - c0.y)
+        const oob = !!play.outOfBounds
+        if (tkFromRec && gap0 <= E1C.contactGap) {
+          let ux = q0.x - c0.x
+          let uy = q0.y - c0.y
+          if (Math.hypot(ux, uy) < 0.3) { const h = speedVec(mv.path, contactT); ux = h.x; uy = h.y }
+          const ul = Math.hypot(ux, uy) || 1
+          const u = oob ? pushSide(mv, m[tkEff], contactT) : { x: ux / ul, y: uy / ul }
+          rideOn(m[tkEff], mv, contactT, endSec, u)
+          if (oob) ensurePush(m[tkEff], mv, contactT, endSec)
+          tkRide = true
+        } else {
+          E1C_STAT.chased++
+          E1C_STAT.chaseKeys.push(tkEff)
+          hitAndRide(m[tkEff], mv, Math.max(catchSec, contactT - 1.2), contactT, endSec, oob ? 3.2 : 2.2)
+          if (oob) ensurePush(m[tkEff], mv, contactT, endSec)
+        }
+      }
+      capAll(m, ALL_KEYS(f), endSec)
+      ball.push(...shadow(mv.path, catchSec).slice(1))
+      recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
+      recMissedTacklesE1(play, ctx, tgt, m, DEF_KEYS, catchSec, contactT)
+      recClose(m, tgt, tkEff, endSec, pursuers, {
+        play,
+        los,
+        from: catchSec,
+        coverKey,
+        waitMax: CATCH_WAIT_MAX,
+        td: isTD,
+        tdX: 110,
+        tdDir: 1,
+        outOfBounds: !!play.outOfBounds && !isTD,
+        ...(play.outOfBounds && !isTD ? { oobAt: contactT } : {}),
+        ...(tkRide && !isTD && !play.outOfBounds ? { noClose: true } : {}),
+      })
+      return finishPass({ ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
+    }
+  }
+
   if (play.turnover) {
     // A catch fumble: the ball pops loose and the defense recovers. Possession
     // and direction stay coherent; no tackle is invented.
@@ -5485,7 +5982,12 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     const saved = m[tgt].pace
     let forcer: string | undefined
     let tQ = catchSec
-    for (let kk = 1; kk >= 0.4 - 1e-9; kk -= 0.06) {
+    // (the receiver is drawn picking his way slower until a defender can be there; the
+    //  floor is where the drawing stops slowing him - emere1c: the r8 forced-OOB rule
+    //  needs a man who can really arrive, and E1's own sim stream ends a catch-and-run
+    //  out of bounds whose nearest man needs more than 40% of his pace to get there,
+    //  so the pick-your-way floor is 25%: the animation's own device, no band moves)
+    for (let kk = 1; kk >= 0.25 - 1e-9; kk -= 0.06) {
       seek(m[tgt], catchSec)
       m[tgt].pace = { top: saved.top * kk, acc: saved.acc }
       // He turns upfield out of the catch (a tight turn off his catch heading) and runs at the push
@@ -5555,6 +6057,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     angleChase(m, pursuers, catchSec, m[tgt], chaseTo, seed)
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
+    if (backShoulder) fadeLookBack(m, tgt, catchSec, catchPt)
     recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
     const contact = isTD ? firstContact(m, pursuers, tgt, catchSec, endSec, 1.0) : null
     if (contact && contact.t < endSec - 0.02) recEv(contact.t, 'contact', [tgt, contact.key], posAt(m[tgt].path, contact.t))
@@ -5573,10 +6076,43 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   const res = resolveCarry({ m, carrierKey: tgt, spot, tacklerKeys: pursuers, prefer: creditKey, seed, northSouth: true })
   capAll(m, ALL_KEYS(f), res.endSec)
   ball.push(...shadow(m[tgt].path, catchSec).slice(1))
+  if (backShoulder) fadeLookBack(m, tgt, catchSec, catchPt)
   recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
   recMissedTackles(play, ctx, tgt, catchSec, res.endSec, m, DEF_KEYS)
   recClose(m, tgt, res.tackler, res.endSec, pursuers, { play, los, from: catchSec, coverKey, waitMax: CATCH_WAIT_MAX })
   return finishPass({ ball, holders: [...holders, { t: catchSec, key: tgt }], flights })
+}
+
+/**
+ * animflow r8 (J38) / emere1c: a back-shoulder fade's look back IS the last beat
+ * before the catch (see the plant-hover in the route builder). On a stream whose
+ * throw arrives while he is waiting at the plant, the drawn tail is spent standing
+ * and the film shows him catching the back-shoulder throw flat-footed — the r8
+ * (J38) featured check (he must come back to the ball). The plant, the spot and
+ * the moment are untouched: he sells the vertical a step further upfield and works
+ * back to exactly the same spot at the same time, at a walking pace.
+ */
+function fadeLookBack(m: Record<string, Mover>, key: string, catchSec: number, catchPt: Pt): void {
+  const mv = m[key]
+  if (!mv || mv.path.length < 2) return
+  const W = 0.33
+  const t0 = catchSec - W
+  if (t0 <= 0.35) return
+  // he already comes back to it (his own drawn turn) — leave it exactly as drawn
+  if (posAt(mv.path, t0).x - catchPt.x >= 0.3) return
+  const D0 = 0.45
+  const off = (t: number): number => {
+    if (t <= t0 - W) return 0
+    if (t < t0) return D0 * ((t - (t0 - W)) / W)
+    if (t <= catchSec) return D0 * (1 - (t - t0) / W)
+    return 0
+  }
+  for (const w of mv.path) {
+    if (w.t > t0 - W && w.t <= catchSec + 1e-6) w.x = clampX(w.x + off(w.t))
+  }
+  const q = posAt(mv.path, mv.t)
+  mv.x = q.x
+  mv.y = q.y
 }
 
 /**
