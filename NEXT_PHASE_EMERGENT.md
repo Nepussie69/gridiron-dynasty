@@ -271,4 +271,4 @@ far-man `farDt=0.25` step and a closed-form solve once the nearest free defender
 |---|---|---|
 | 2026-10-15 | research draft written (this file) | CURRENT MODEL + live-field audit done; E1/E2/E3 designed; no source touched |
 | 2026-10-15 | P0 groundwork (emerp0) | ✅ pure move: liveField.ts + pace.ts in engine; check-broadcast 85/85, eq 20/20, anim probe identical. Leftover P0.1: animProbe.ts imports components |
-| 2026-10-15 | user: prioritise emergent, run phases in parallel | E3 ✅ merged OFF (row 480); E2 (emere2) running; E3 queued in parallel in own files (emergentRoute.ts / emergentRush.ts), OFF default until a joint calibration; E1a after qbrun merge, E1b after speedgap merge; blitzrush / livetele3 / sideways held |
+| 2026-10-15 | user: prioritise emergent, run phases in parallel | E3 ✅ (row 480), E2 ✅ (482), E1a ✅ (488) all merged OFF; E1b + E1c running; E3 queued in parallel in own files (emergentRoute.ts / emergentRush.ts), OFF default until a joint calibration; E1a after qbrun merge, E1b after speedgap merge; blitzrush / livetele3 / sideways held |
