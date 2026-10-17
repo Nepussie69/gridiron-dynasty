@@ -15,6 +15,7 @@ import { boostPointsFor, groupDevMultiplier } from './staffMarket'
 import { mentorGrowthBonus } from './lockerRoom'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
 import { playerTradeValue } from './trade'
+import { R2AGING, agingProfile, agingGrowth, agingVetDelta, agingDecline, agingBustScale, agingRetireChance } from './r2aging'
 import type { CareerDatabase } from './statsDb'
 
 // ── Player development ───────────────────────────────────────────────────────
@@ -123,21 +124,40 @@ export function developPlayers(
     // reach their ceilings sooner or the opening star cohort ages out into a
     // multi-year trough. Faster maturation moves the (unchanged) ceiling supply
     // forward without raising the long-run level.
+    //
+    // r2aging: with the toggle ON, each player sits somewhere on his POSITION's
+    // curve (peak age, decline slope) shifted by his own work ethic, injury
+    // history and stable career-shape variance. Every `rng()` call below is the
+    // same call the original expression made, in the same order — only the
+    // arithmetic around each draw changes, so the seed stream is unchanged.
+    const aging = R2AGING.on ? agingProfile(p) : null
     if (p.age <= 24) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.22 + 0.42 * experience + rng() * 0.18) * dev * clubGrowth * mentorMult)), 40, 99)
+      const r = rng()
+      const frac = aging ? agingGrowth(aging, 24, experience, r) : 0.22 + 0.42 * experience + r * 0.18
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * frac * dev * clubGrowth * mentorMult)), 40, 99)
     } else if (p.age <= 26) {
-      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * (0.15 + 0.28 * experience + rng() * 0.12) * dev * clubGrowth * mentorMult)), 40, 99)
+      const r = rng()
+      const frac = aging ? agingGrowth(aging, 26, experience, r) : 0.15 + 0.28 * experience + r * 0.12
+      p.ovr = clamp(Math.min(p.pot, p.ovr + Math.round(growth * frac * dev * clubGrowth * mentorMult)), 40, 99)
     } else if (p.age <= 29) {
-      p.ovr = clamp(p.ovr + (rng() < 0.45 ? 1 : 0) - (rng() < 0.25 ? 1 : 0), 40, p.pot)
+      const r1 = rng()
+      const r2 = rng()
+      const delta = aging ? agingVetDelta(aging, r1, r2) : (r1 < 0.45 ? 1 : 0) - (r2 < 0.25 ? 1 : 0)
+      p.ovr = clamp(p.ovr + delta, 40, p.pot)
     } else {
-      // L12.15 S4: on the compressed new scale a single point costs a star far
-      // more, so the league's best age out more slowly — this preserves the rare
-      // top band while the (deliberately thin) rookie pipeline matures to replace
-      // the opening, mostly-28-to-33-star cohort.
-      const elite = p.ovr >= 90
-      const decline = p.age >= 34 ? (elite ? 2 : 3) : p.age >= 32 ? (elite ? 1 : 2) : 1
-      const rate = p.age <= 33 ? (p.ovr >= 93 ? 0.25 : elite ? 0.5 : 0.7) : elite ? 0.5 : 0.7
-      p.ovr = clamp(p.ovr - (rng() < rate ? decline : 0), 40, 99)
+      const r = rng()
+      if (aging) {
+        p.ovr = clamp(p.ovr - agingDecline(aging, p.ovr, r), 40, 99)
+      } else {
+        // L12.15 S4: on the compressed new scale a single point costs a star far
+        // more, so the league's best age out more slowly — this preserves the rare
+        // top band while the (deliberately thin) rookie pipeline matures to replace
+        // the opening, mostly-28-to-33-star cohort.
+        const elite = p.ovr >= 90
+        const decline = p.age >= 34 ? (elite ? 2 : 3) : p.age >= 32 ? (elite ? 1 : 2) : 1
+        const rate = p.age <= 33 ? (p.ovr >= 93 ? 0.25 : elite ? 0.5 : 0.7) : elite ? 0.5 : 0.7
+        p.ovr = clamp(p.ovr - (r < rate ? decline : 0), 40, 99)
+      }
     }
     if (p.age <= 26) p.lastGrowth = { season: world.season, from: ovrBefore, to: p.ovr, experience }
 
@@ -155,13 +175,15 @@ export function developPlayers(
 
     // Bust risk: a player who never got the motor can stall out. Generated
     // players only — we never invent off-field failure for real names.
-    if (p.character && p.generated && p.age <= 27 && rng() < bustRisk(p.character) * 0.12) {
+    // r2aging: with the toggle ON the risk is position/trait-aware (a real
+    // motor avoids most of it) but the draw is the same one as before.
+    if (p.character && p.generated && p.age <= 27 && rng() < bustRisk(p.character) * (aging ? agingBustScale(aging) : 0.12)) {
       p.ovr = clamp(p.ovr - 1, 40, 99)
     }
 
-    if (p.age >= 39 || (p.age >= 36 && unscaleOvr(p.ovr) < 62 && rng() < 0.4)) retired.push(p)
+    if (p.age >= 39 || (p.age >= 36 && unscaleOvr(p.ovr) < 62 && rng() < (aging ? agingRetireChance(aging) : 0.4))) retired.push(p)
     // Fringe unsigned veterans retire out of the league, keeping the FA pool sane.
-    else if (!p.teamId && (p.age >= 34 || (p.age >= 30 && unscaleOvr(p.ovr) < 72 && rng() < 0.4))) retired.push(p)
+    else if (!p.teamId && (p.age >= 34 || (p.age >= 30 && unscaleOvr(p.ovr) < 72 && rng() < (aging ? agingRetireChance(aging) : 0.4)))) retired.push(p)
   }
 
   if (retired.length) {
