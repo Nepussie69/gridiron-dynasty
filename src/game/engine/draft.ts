@@ -12,7 +12,8 @@ import { roomNote, roomTilt, roomWinner } from './draftRoom'
 import { applyDraftTradeDown, roomTradeDown } from './draftTrades'
 import { makeCharacter } from './character'
 import { isEvaluator, scoutReport } from './scoutBias'
-import { type World, classCeiling, indexPlayers } from './generate'
+import { athleticPercentileOf } from './measure'
+import { type World, classCeiling, generalManager, gmTemperament, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
 import { rescaleOvr, unscaleOvr } from './ovrScale'
 
@@ -151,6 +152,27 @@ export function adviceWeight(career: CareerState): number {
 }
 
 /**
+ * #47: how much a club's GM trusts raw athletic testing, in grade points. Every
+ * GM reads the numbers his own way — his appetite for athleticism comes off his
+ * own id and is sharpened or blunted by his own drafting eye (gmTemperament), so
+ * a poor evaluator leans harder on shared consensus while a sharp one backs his
+ * read of the stopwatch. Individual, deterministic, pure; a GM-less (user) club
+ * gets nothing.
+ */
+const MEASURE_TILT_PTS = 4
+const ZERO_TILT = () => 0
+export function gmMeasureTilt(world: World, teamId: string): (p: DraftProspect) => number {
+  const gm = generalManager(world, teamId)
+  if (!gm) return ZERO_TILT
+  const appetite = ((hash32(`gmtilt|${gm.id}`, 149) % 201) - 100) / 100 // −1…1, his own
+  const eye = (gmTemperament(gm).drafting - 62) / 33 // ≈ −0.8…1
+  const w = appetite * (0.85 + 0.5 * eye)
+  if (Math.abs(w) < 0.1) return ZERO_TILT
+  const k = (w * MEASURE_TILT_PTS) / 50
+  return (p) => k * (athleticPercentileOf(p) - 50)
+}
+
+/**
  * L12.17 DR3: a club's own board. Every NPC club draft off the reports its own
  * scouts filed (scoutBias), never a shared public list: no two clubs read a
  * prospect the same way, so one club's miss is another club's steal — and the
@@ -162,21 +184,26 @@ export function adviceWeight(career: CareerState): number {
  * his coordinators weigh in on fit (the room tilt), not on the stacked grade. A
  * club with neither falls back to any evaluator, then to the public consensus.
  *
+ * #47: the club's GM then tilts the stacked grade by his own read of the
+ * prospect's athletic testing (gmMeasureTilt) — the same true stopwatch every
+ * club sees, weighed differently.
+ *
  * Pure (hash-based) and memoised per call site: a draft makes ~200 picks against
  * the same class, so the closure caches each club's report per prospect.
  */
 export function clubBoardOf(world: World, teamId: string): (p: DraftProspect) => number {
+  const tilt = gmMeasureTilt(world, teamId)
   const staff = world.staff[teamId] ?? []
   const scouting = staff.filter((m) => m.role === 'Scout' || m.role === 'Director of Player Personnel')
   const evaluators = scouting.length ? scouting : staff.filter(isEvaluator)
-  if (!evaluators.length) return (p) => p.grade
+  if (!evaluators.length) return (p) => p.grade + tilt(p)
   const cache = new Map<string, number>()
   return (p) => {
     let v = cache.get(p.id)
     if (v == null) {
       let sum = 0
       for (const m of evaluators) sum += scoutReport(m, p)
-      v = Math.round(sum / evaluators.length)
+      v = Math.round(sum / evaluators.length + tilt(p))
       cache.set(p.id, v)
     }
     return v

@@ -15,6 +15,7 @@ import { MAX_SCOUT_POINTS, useGame, useWorld } from '../store/gameStore'
 import { overallRep } from '../game/engine/career'
 import { CombineCard } from '../components/CombineCard'
 import { DraftPhilosophyCard } from '../components/DraftPhilosophyCard'
+import { MeasurablesPanel } from '../components/Measurables'
 import { ScoutTravelCard } from '../components/ScoutTravelCard'
 import { DataTable, type Column } from '../components/DataTable'
 import { RowQuickActions, type QuickAction } from '../components/RowQuickActions'
@@ -613,6 +614,10 @@ function ProspectReport({ prospect }: { prospect: DraftProspect }) {
       )}
 
       {read.disagreement && <div className="rounded-[var(--r-md)] bg-warn-soft px-3 py-2 text-small text-warn">{read.disagreement}</div>}
+
+      <div className="rounded-[var(--r-md)] border border-line px-3 py-2.5">
+        <MeasurablesPanel prospect={prospect} />
+      </div>
 
       <div className="flex flex-wrap gap-1.5">
         {prospect.traits.map((t) => (
