@@ -5,6 +5,8 @@ import { forecastFor, gameWeather, getWeather, type GameWeather } from '../game/
 import { signed } from '../lib/format'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
 import { DEFAULT_ST, stRecordText, alertness } from '../game/engine/specialCalls'
+import { trickRecordText } from '../game/engine/trickPlays'
+import { trickRecordFor } from '../lib/trickUi'
 import { coachTendency, DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
 import { capabilities } from '../game/engine/capabilities'
 import { coordinatorAdvice } from '../game/engine/advice'
@@ -15,6 +17,7 @@ import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
 import { WrinkleCard } from '../components/WrinkleCard'
 import { InstallCard } from '../components/InstallCard'
+import { TrickPlaysCard } from '../components/TrickPlaysCard'
 import { KeysCard } from '../components/KeysCard'
 import { PracticeCard } from '../components/PracticeCard'
 import { PlayCallingCard } from '../components/PlayCallingCard'
@@ -324,6 +327,7 @@ export function GamePlanScreen() {
           <UsageCard disabled={readOnly} />
           <SpecialTeamsCard disabled={readOnly} />
           <HalftimeSpeechCard disabled={readOnly} />
+          <TrickPlaysCard disabled={readOnly} />
         </div>
       </section>
 
@@ -518,6 +522,8 @@ function StudyOpponentCard({ oppId }: { oppId?: string }) {
   const opp = league.byId[oppId]
   const read = career.oppRead && career.oppRead.week === league.week && career.oppRead.oppId === oppId ? career.oppRead : null
   const sharp = !!read?.sharp
+  // FUTURES #24: what the league has on their trick plays this season.
+  const oppTricks = trickRecordText(trickRecordFor(league, oppId))
   return (
     <Card>
       <div className="mb-3 flex items-center gap-2">
@@ -532,6 +538,11 @@ function StudyOpponentCard({ oppId }: { oppId?: string }) {
             ? `You have a fuzzy read on the ${opp.name}. Study again to sharpen it.`
             : `Study the ${opp.name} to learn their tendencies before kickoff.`}
       </p>
+      {oppTricks && (
+        <p className="mb-3 text-small text-muted">
+          Tricks: <strong className="text-ink-2">{oppTricks}</strong>.
+        </p>
+      )}
       <Button size="sm" variant={sharp ? 'secondary' : 'primary'} disabled={sharp} onClick={studyOpponent}>
         {read ? `Sharpen the read on the ${opp.abbr}` : `Study ${opp.name}`}
       </Button>
