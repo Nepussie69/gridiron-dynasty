@@ -12,6 +12,10 @@ git -C "$REPO" worktree add -q --detach "$WT" "$REV"
 ln -s "$REPO/node_modules" "$WT/node_modules"
 (cd "$WT" && PATH="$HOME/.local/node/bin:$PATH" npx vite build --base=/gridiron-dynasty/ --outDir "$OUT" >/dev/null)
 git -C "$REPO" worktree remove --force "$WT"
+# Keep the playtest beta (/beta/) that lives on gh-pages, if any.
+if git -C "$REPO" fetch -q https://github.com/Nepussie69/gridiron-dynasty.git gh-pages 2>/dev/null && git -C "$REPO" cat-file -e FETCH_HEAD:beta 2>/dev/null; then
+  git -C "$REPO" archive FETCH_HEAD beta | tar -x -C "$OUT"
+fi
 cd "$OUT" && touch .nojekyll && git init -q -b gh-pages && git add -A
 git -c user.name=Aaron -c user.email=aaron@local.dev commit -qm "Stable build $(git -C "$REPO" rev-parse --short "$REV") for GitHub Pages"
 git push -f https://github.com/Nepussie69/gridiron-dynasty.git gh-pages
