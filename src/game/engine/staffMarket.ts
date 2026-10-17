@@ -23,6 +23,7 @@ import { ownerPersonality } from './owner'
 import { ownerStaffBudgetBonus, ownerStaffFundOpen } from './ownerMeeting'
 import { coordinatorEdge } from './coaching'
 import { devGroupFor } from './devPlan'
+import { marketBudgetDelta } from './market'
 
 // ── The coach profile ────────────────────────────────────────────────────────
 /** A coach's market-anchored profile. Pure and stable per `id` (old saves included). */
@@ -154,6 +155,8 @@ export interface StaffBudget {
   headroom: number
   ownerFund: boolean
   personality: ReturnType<typeof ownerPersonality>
+  /** FUTURES #50: the club's market money folded into the budget (0 if none). */
+  market: number
 }
 
 /** Dead staff money for this season (buyouts from firings/replacements). */
@@ -171,9 +174,13 @@ export function staffDeadMoneyThisSeason(career: CareerState, season: number): n
 export function staffBudget(world: World, career: CareerState): StaffBudget {
   const prestige = world.byId[career.teamId]?.prestige ?? 75
   const ownerBonus = ownerStaffBudgetBonus(career, world.season)
+  // FUTURES #50: the club's market hands its football operation a share of its
+  // local revenue. Big markets out-spend small ones — the same money the
+  // Business view reports. Sim-neutral: only the user's club reads a budget.
+  const marketBonus = marketBudgetDelta(world, career.teamId)
   const personality = ownerPersonality(career.teamId)
   const mult = personality === 'cheap' ? 0.9 : personality === 'win-now' ? 1.1 : 1
-  const budget = Math.round((Math.round((18 + prestige * 0.3) * 1_000_000) + ownerBonus) * mult)
+  const budget = Math.round((Math.round((18 + prestige * 0.3) * 1_000_000) + ownerBonus + marketBonus) * mult)
   const payroll = (world.staff[career.teamId] ?? []).reduce((s, m) => s + m.annual, 0)
   const deadMoney = staffDeadMoneyThisSeason(career, world.season)
   return {
@@ -183,6 +190,7 @@ export function staffBudget(world: World, career: CareerState): StaffBudget {
     headroom: budget - payroll - deadMoney,
     ownerFund: ownerStaffFundOpen(career, world.season),
     personality,
+    market: marketBonus,
   }
 }
 

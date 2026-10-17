@@ -919,6 +919,12 @@ export interface CareerState {
   staffDeadMoney?: { season: number; amount: number }[]
   /** FUTURES #28: pending staff offers (re-sign / poach) awaiting your answer. */
   staffOffers?: import('./engine/staffMarket').StaffOffer[]
+  /**
+   * FUTURES #50: the ticket price you set for your club (dollars, bounded by
+   * engine/market.ts TICKET_MIN/MAX). Optional — an old save (or a club you
+   * never set one for) pays the market's own default price.
+   */
+  ticketPrice?: number
   /** The Wilderness after a firing (#17). */
   wilderness?: { path: string; untilSeason: number; blurb: string } | null
   /** College NIL collective budget (#15). */

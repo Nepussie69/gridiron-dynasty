@@ -18,6 +18,7 @@ import { SegmentedControl } from './Controls'
 //                   BroadcastScope (overlays opened on Game Day keep the dark scope)
 //   Access.tsx      GatedAction, AccessBanner
 //   People.tsx      Avatar, VacantSeat
+//   GmStyleTag (below)  a GM's style chip + one-line tendency (FUTURES #49)
 //   ScoreBlock.tsx  ScoreBlock, Scoreline
 //   hooks.ts        useMediaQuery, usePhone, useResolvedTheme, useModal,
 //                   useAccessLevel, gateMenuItem
@@ -395,6 +396,32 @@ export function Chip({ children, className }: { children: ReactNode; className?:
       )}
     >
       {children}
+    </span>
+  )
+}
+
+/**
+ * FUTURES #49: one club GM's style — his archetype chip plus his one-line
+ * tendency, in the engine's own words (`gmStyle` in game/engine/gmStyle.ts).
+ * Pure presentation: the same two lines on desktop and on a 375 px phone (the
+ * line wraps under the chip rather than truncating). `compact` drops the line
+ * where space is tight (a trade partner row).
+ */
+export function GmStyleTag({
+  tag,
+  line,
+  compact = false,
+  className,
+}: {
+  tag: string
+  line?: string
+  compact?: boolean
+  className?: string
+}) {
+  return (
+    <span className={cn('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1', className)}>
+      <Badge tone="info">{tag}</Badge>
+      {line && !compact && <span className="min-w-0 text-label leading-snug text-ink-2">{line}</span>}
     </span>
   )
 }

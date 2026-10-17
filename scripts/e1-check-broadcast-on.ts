@@ -14,6 +14,10 @@
 //     recorded stop;
 //   • no drawn man exceeds his own pace (`paceFor` + `fatiguePace`, the one speed
 //     model) by more than a hair;
+//   • the seam (e1cseam): the ball changes hands continuously — its fastest step
+//     outside a declared flight, and the step across the carrier's own take (the
+//     handoff / the catch), stay inside `E1C.tossV` (a handoff / toss / catch, never
+//     a teleport);
 //   • the sideways metrics (animflow r8 bands, reported for the plays actually
 //     drawn from the recording: how much of the carry is spent heading > 60 deg
 //     off downfield, and lateral travel per downfield yard).
@@ -109,6 +113,50 @@ const strip = (play: Play): Play => {
   return p as unknown as Play
 }
 const FRAME = 1 / 60
+/**
+ * e1cseam: the ball's own seam. The recording's first point/time need not be where
+ * and when the animation has the back (the field's lane, the drawn catch point), so
+ * the ball is drawn TRAVELLING from the passer's hands to the carrier's chest (a
+ * handoff / toss) and shadowing him from the catch — never changing hands in one
+ * frame. A pass in flight is legitimately fast; the seam test is therefore the
+ * ball's fastest step OUTSIDE a declared flight, and the step ACROSS the carrier's
+ * own take (the handoff / the catch), which must stay at a plausible exchange speed.
+ */
+const ballSeam = (
+  anim: { ball?: { t: number; x: number; y: number }[]; flights?: { t0: number; t1: number }[]; holders?: { t: number; key: string | null }[] },
+  D: number,
+  from = 0,
+) => {
+  const ball = anim.ball ?? []
+  const fl = (anim.flights ?? []).map((f) => [f.t0 * D, f.t1 * D] as [number, number])
+  const inFlight = (t: number) => fl.some(([a, b]) => t > a + 1e-9 && t < b - 1e-9)
+  const hs = anim.holders ?? []
+  const takeT = hs.length ? hs[hs.length - 1].t * D : null
+  const frames = Math.max(1, Math.round(D / FRAME))
+  let max = 0
+  let maxT = 0
+  let prev = pa.posAt(ball, 0)
+  for (let k = 1; k <= frames; k++) {
+    const t = (k / frames) * D
+    const q = pa.posAt(ball, k / frames)
+    const v = Math.hypot(q.x - prev.x, q.y - prev.y) / (D / frames)
+    prev = q
+    if (t - D / frames / 2 <= from) continue
+    if (inFlight(t - D / frames / 2)) continue
+    if (v > max) { max = v; maxT = t }
+  }
+  // the step across the carrier's own take (the handoff / the catch): the snap
+  // itself (a qb run's own take IS the snap) is not a change of hands.
+  let take = 0
+  if (takeT != null && takeT > from + 0.05) {
+    const a = pa.posAt(ball, Math.max(0, (takeT - 0.03) / D))
+    const b = pa.posAt(ball, Math.min(1, (takeT + 0.03) / D))
+    take = Math.hypot(b.x - a.x, b.y - a.y) / 0.06
+  }
+  return { max, maxT, take, takeT }
+}
+/** The fastest exchange the seam may ever draw (the ball's own relay speed). */
+const SEAM_ALLOW = af.E1C.tossV * 1.06 + 0.15
 const fmt = (x: number, n = 2) => x.toFixed(n)
 const q0x = (r: { carry: { pts: { x: number }[] } }) => r.carry.pts[0].x
 const q0y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[0].y
@@ -188,6 +236,13 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
   let paceAllWho = ''
   let endBad = 0
   let endN = 0
+  let seamN = 0
+  let seamBad = 0
+  let seamMax = 0
+  let seamWho = ''
+  let seamTakeBad = 0
+  let seamTakeMax = 0
+  let seamTakeWho = ''
   let side = { n: 0, tSide: 0, tAll: 0, lat: 0, down: 0 }
   let sideOob = { n: 0, tSide: 0, tAll: 0, lat: 0, down: 0 }
   let sideIn = { n: 0, tSide: 0, tAll: 0, lat: 0, down: 0 }
@@ -357,6 +412,23 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
           }
         }
       }
+      // (e) the seam: the ball changes hands continuously — a step above the
+      // exchange speed at the carrier's take is the teleport the fix removed. The
+      // outside-flight step is held to what the animation's own drawing does there
+      // (the pre-existing ball-placement jump), but never beyond the exchange
+      // speed at the take itself.
+      const seam = ballSeam(anim, D, pa.SNAP)
+      af.setEmergentE1c(false)
+      let offAnim: { ball?: { t: number; x: number; y: number }[]; flights?: { t0: number; t1: number }[]; holders?: { t: number; key: string | null }[]; duration?: number } | null = null
+      try { offAnim = pa.buildPlayAnim(play, ctx) as never } catch { offAnim = null }
+      af.setEmergentE1c(true)
+      const seamOff = offAnim ? ballSeam(offAnim, (offAnim.duration ?? 0) / 1000, pa.SNAP) : null
+      const seamAllow = Math.max(SEAM_ALLOW, (seamOff?.max ?? 0) * 1.06 + 0.15)
+      seamN++
+      if (seam.max > seamMax) { seamMax = seam.max; seamWho = `${play.n} ${play.concept} @${fmt(seam.maxT)}` }
+      if (seam.max > seamAllow) { seamBad++; if (seamBad <= 3) console.log(`      ! seam play ${play.n} ${play.concept}: a ball step of ${fmt(seam.max)} yd/s outside a flight at ${fmt(seam.maxT)} (the animation's own ${fmt(seamOff?.max ?? 0)})`) }
+      if (seam.take > seamTakeMax) { seamTakeMax = seam.take; seamTakeWho = `${play.n} ${play.concept}` }
+      if (seam.take > SEAM_ALLOW) { seamTakeBad++; if (seamTakeBad <= 3) console.log(`      ! seam play ${play.n} ${play.concept}: the ball crosses the carrier's take at ${fmt(seam.take)} yd/s`) }
       // (d) sideways: the recorded carrier runs upfield (animflow r8's own bands)
       const los = 10 + play.startYard
       const tEnd = (anim.events ?? []).find((e) => ['tackle', 'outOfBounds', 'score', 'down'].includes(e.kind) && e.t >= t0 / D)?.t ?? 1
@@ -402,6 +474,10 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
   let pEndBad = 0
   let pChanged = 0
   let pKept = 0
+  let pSeamN = 0
+  let pSeamBad = 0
+  let pSeamMax = 0
+  let pSeamWho = ''
 
   // (3) a PASS whose after-catch segment the field recorded (E1b's own shape).
   // E1b is built in parallel, so no runtime pass carries a recording yet: this
@@ -456,8 +532,19 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
       if (dev.miss || dev.max > 0.5) pDevBad++
       const endX = Math.min(119, Math.max(1, 10 + pass.endYard))
       if (Math.abs(ca.path[ca.path.length - 1].x - endX) > 0.05) pEndBad++
+      // the pass-YAC seam: the catch is where the ball hands off from the flight
+      // to the shadow — measured with the declared flight excluded, and held to
+      // what the animation's own drawing does there (the pre-existing ball
+      // placement jump), never beyond the exchange speed at the catch.
+      const seam = ballSeam(anim, D, pa.SNAP)
+      const offA = JSON.parse(off) as { ball?: { t: number; x: number; y: number }[]; flights?: { t0: number; t1: number }[]; holders?: { t: number; key: string | null }[]; duration?: number }
+      const seamOff = ballSeam(offA, (offA.duration ?? 0) / 1000, pa.SNAP)
+      pSeamN++
+      if (seam.max > pSeamMax) { pSeamMax = seam.max; pSeamWho = `${pass.n} ${pass.concept} @${fmt(seam.maxT)}` }
+      if (seam.max > Math.max(SEAM_ALLOW, seamOff.max * 1.06 + 0.15)) { pSeamBad++; if (pSeamBad <= 3) console.log(`      ! pass seam ${pass.n} ${pass.concept}: a ball step of ${fmt(seam.max)} yd/s outside a flight at ${fmt(seam.maxT)} (the animation's own ${fmt(seamOff.max)})`) }
     }
     console.log(`E1c ON: pass after-catch segment (synthetic, E1b's shape): ${pN} passes, ${pSamples} recorded samples, worst ${fmt(pDevMax, 3)} yd off the recording, ${pDevBad} over 0.5 yd, ${pEndBad} end spots off; the toggle changes the drawing on ${pChanged}/${pN} (${pKept} segments refused by the module — no man on the ball at the field's stop)`)
+    console.log(`E1c ON: pass seam (e1cseam): ${pSeamN} drawn passes, worst ball step outside a declared flight ${fmt(pSeamMax)} yd/s (${pSeamWho}); allowance max(${fmt(SEAM_ALLOW)} yd/s, the animation's own step there) yd/s`)
   }
 
   const band = (x: { n: number; tSide: number; tAll: number; lat: number; down: number }) =>
@@ -469,6 +556,7 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
   console.log(`E1c ON: recorded men ${menN}: worst ${fmt(menDevMax, 3)} yd off the recording at their sample times, ${menBad} over 0.5 yd, ${menSkipped} left to the live field, ${menLive} the module left to the live field, ${menChased} taken over by the tackle (the field's own man at its own stop); ${stats.readSkipped} read-named men (the read key / biters) kept the animation's own J8a2 read`)
   console.log(`E1c ON: recorded tackler drawn on the carrier ${tkOk}/${tkN} (worst gap ${fmt(tkGapMax)} yd; ${tkNoDot} with no dot, ${tkChased} chased), end spot exact ${endN - endBad}/${endN}`)
   console.log(`E1c ON: drawn-from-recording men over the pace reference: ${paceBad} frames (worst ${fmt(paceMax)} yd/s ${paceMaxWho}); every mover over ${fmt(1.06)}x cap: ${paceAllBad} (worst ${fmt(paceAllMax)} yd/s ${paceAllWho}); men drawn ${stats.men}, skipped ${stats.menSkipped}`)
+  console.log(`E1c ON: the seam (e1cseam): ${seamN} drawn plays, worst ball step outside a declared flight ${fmt(seamMax)} yd/s (${seamWho}), worst step across the carrier's take ${fmt(seamTakeMax)} yd/s (${seamTakeWho}); allowance ${fmt(SEAM_ALLOW)} yd/s`)
   console.log(`E1c ON: sideways (heading > 60 deg off downfield) ${band(side)}; in bounds ${band(sideIn)}; out of bounds ${band(sideOob)} (animflow r8 bands: runs <= 20%, in bounds <= 6%, oob lat/down <= 2.0)`)
   if (oobWorst.length) {
     for (const w of oobWorst.sort((a, b) => b.lat / Math.max(0.1, b.down) - a.lat / Math.max(0.1, a.down)).slice(0, 5)) {
@@ -482,6 +570,9 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
   if (tkOk / Math.max(1, tkN) < 0.9) throw new Error(`E1c: the recorded tackler is on the carrier in only ${tkOk}/${tkN}`)
   if (endBad) throw new Error(`E1c: ${endBad}/${endN} drawn end spots are off the recorded spot`)
   if (paceBad) throw new Error(`E1c: ${paceBad} drawn-from-recording frames exceed a man's own pace cap`)
+  if (seamN < 40) throw new Error(`E1c seam coverage: only ${seamN} drawn plays checked`)
+  if (seamBad) throw new Error(`E1c seam: ${seamBad} plays draw the ball faster than an exchange outside a declared flight (worst ${fmt(seamMax)} yd/s ${seamWho})`)
+  if (seamTakeBad) throw new Error(`E1c seam: ${seamTakeBad} plays change hands at ${fmt(seamTakeMax)} yd/s over the ${fmt(SEAM_ALLOW)} yd/s exchange allowance`)
   if (sideOob.n >= 5 && sideOob.lat / Math.max(1, sideOob.down) > 2.0) {
     throw new Error(`E1c: out-of-bounds runs travel ${fmt(sideOob.lat / Math.max(1, sideOob.down))} yd sideways per downfield yard`)
   }
@@ -495,6 +586,7 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
   if (pChanged !== pN) throw new Error(`E1c pass: the drawing did not change on ${pN - pChanged}/${pN} recorded passes`)
   if (pDevBad) throw new Error(`E1c pass: ${pDevBad} passes draw the carrier off the recorded after-catch segment by > 0.5 yd (worst ${fmt(pDevMax, 3)})`)
   if (pEndBad) throw new Error(`E1c pass: ${pEndBad} drawn end spots are off the recorded spot`)
+  if (pSeamBad) throw new Error(`E1c pass seam: ${pSeamBad} drawn passes move the ball faster than an exchange outside a declared flight (worst ${fmt(pSeamMax)} yd/s ${pSeamWho})`)
 }
 
 await import('./check-broadcast.ts')

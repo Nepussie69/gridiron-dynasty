@@ -13,9 +13,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { CareerState, DraftPick, DraftProspect, Player, TradeRecord } from '../types'
-import type { World } from './generate'
+import { generalManager, type World } from './generate'
 import { bestAvailableFor, draftOpen, makePick, simUntilUser } from './draft'
 import { hash32 } from './rng'
+import { gmStyle } from './gmStyle'
 import { logConvictionPicks } from './conviction'
 import { logRedFlags } from './redflag'
 import { isOnShadowBoard } from './shadow'
@@ -368,7 +369,7 @@ export function applyDraftTradeDown(
   executeTrade(world, career.teamId, offer.partnerId, offer.give, offer.get)
   stampIncomingPlayers(world, career, offer.partnerId, offer.get)
   syncDraftOrder(world)
-  const prospect = bestAvailableFor(world, offer.partnerId)
+  const prospect = bestAvailableFor(world, offer.partnerId, undefined, undefined, undefined, gmStyle(generalManager(world, offer.partnerId)))
   if (prospect) makePick(world, prospect, offer.partnerId)
   else world.draftState.complete = true
   career.trades = [...(career.trades ?? []), rec].slice(-60)

@@ -25,6 +25,8 @@ import { isHeadCoachCareer } from '../game/engine/access'
 import { NFL_TEAMS } from '../game/data/nflTeams'
 import type { Player, Position } from '../game/types'
 import type { World } from '../game/engine/generate'
+import { generalManager } from '../game/engine/generate'
+import { gmStyle } from '../game/engine/gmStyle'
 import { useGame, useWorld } from '../store/gameStore'
 import { ShadowBoardCard, ShadowStar } from '../components/ShadowBoardCard'
 import { DeadlinePanel } from '../components/DeadlinePanel'
@@ -32,7 +34,7 @@ import { GmAskButton } from '../components/GmAskButton'
 import { TradeControlToggle } from '../components/TradeControlToggle'
 import { HoverCard } from '../components/HoverCard'
 import { PlayerHoverCard } from '../components/PlayerHoverCard'
-import { Badge, Button, Card, ConfirmSheet, FilterChip, IconButton, OvrBadge, PageHeader, SectionTitle, Tabs, TeamCrest } from '../ui/kit'
+import { Badge, Button, Card, ConfirmSheet, FilterChip, GmStyleTag, IconButton, OvrBadge, PageHeader, SectionTitle, Tabs, TeamCrest } from '../ui/kit'
 import { usePhone } from '../ui/hooks'
 
 interface Asset {
@@ -208,6 +210,16 @@ export function Trades() {
                 </option>
               ))}
             </select>
+            {(() => {
+              const gm = generalManager(league, partnerId)
+              const style = gmStyle(gm)
+              return (
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="label">Partner GM</span>
+                  <GmStyleTag tag={style.tag} line={style.line} />
+                </div>
+              )
+            })()}
           </div>
         }
       />

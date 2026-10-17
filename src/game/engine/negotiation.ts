@@ -11,9 +11,12 @@
 
 import type { Contract, Player } from '../types'
 import { capScale, marketAAV, recomputeCapHit } from './cap'
-import { hash32 } from './rng'
 import { negotiationAskMultiplier } from './skills'
 import { unscaleOvr } from './ovrScale'
+// REALISM2 #12: the player's own priorities (money/winning/loyalty/role/market).
+// `styleOf` is the one implementation of the agent personality; this module's
+// `agentStyle` delegates to it so the two can never drift apart.
+import { styleOf } from './personality'
 
 export type AgentStyle = 'hardball' | 'market' | 'loyal'
 
@@ -26,7 +29,7 @@ const STYLE_MULT: Record<AgentStyle, number> = {
 
 /** The agent's personality, fixed per player. */
 export function agentStyle(playerId: string): AgentStyle {
-  return (['hardball', 'market', 'loyal'] as const)[hash32(playerId, 131) % 3]
+  return styleOf(playerId)
 }
 
 /**
@@ -35,8 +38,17 @@ export function agentStyle(playerId: string): AgentStyle {
  * Negotiation skill shaves up to 3% off the ask (never more expensive).
  * L12.9 K2: a winning-culture discount (`discountPct`) also comes off the ask.
  */
-export function marketAsk(p: Player, season: number, negotiateSkill?: number, discountPct = 0): number {
-  const mult = (negotiateSkill == null ? 1 : negotiationAskMultiplier(negotiateSkill)) * (1 - discountPct / 100)
+export function marketAsk(
+  p: Player,
+  season: number,
+  negotiateSkill?: number,
+  discountPct = 0,
+  personalityFactor = 1,
+): number {
+  const mult =
+    (negotiateSkill == null ? 1 : negotiationAskMultiplier(negotiateSkill)) *
+    (1 - discountPct / 100) *
+    personalityFactor
   const ask = marketAAV(p.ovr, p.pos, p.age) * capScale(season) * STYLE_MULT[agentStyle(p.id)] * mult
   return Math.round(ask / 1e5) * 1e5
 }
@@ -62,9 +74,10 @@ export function judgeOffer(
   offer: ExtensionOffer,
   negotiateSkill?: number,
   discountPct = 0,
+  personalityFactor = 1,
 ): { accepted: boolean; pctOfAsk: number; needed: number; message: string } {
   const style = agentStyle(p.id)
-  const ask = marketAsk(p, season, negotiateSkill, discountPct)
+  const ask = marketAsk(p, season, negotiateSkill, discountPct, personalityFactor)
   const pctOfAsk = ask > 0 ? (offer.aav / ask) * 100 : 100
   const needed = acceptanceLine(p, style)
   // Guarantees count toward acceptance; a 4+ year ask on a veteran costs a little.
