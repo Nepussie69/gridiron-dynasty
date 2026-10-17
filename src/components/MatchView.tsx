@@ -25,6 +25,7 @@ import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { PLAY_TYPE_TABS, playTypeTabForId, type PlayTypeTab } from './playTypes'
+import { isTrickOption, surpriseTone, trickCallOptions, trickCallStaffLine, trickDiagramName, trickRecordFor, trickSurprisePct } from '../lib/trickUi'
 import { effRating } from './animRatings'
 import { TeamHoverCard } from './TeamHoverCard'
 import { PlayerHoverCard } from './PlayerHoverCard'
@@ -147,6 +148,12 @@ const TOAST_TONE: Record<ToastTone, string> = {
 
 /** The TV play-result toast, built only from the recorded PlayEvent fields. */
 function playToast(play: PlayEvent, next?: PlayEvent): { text: string; tone: ToastTone } | null {
+  const base = baseToast(play, next)
+  // FUTURES #24: a trick snap is flagged on the toast so the call reads as one.
+  return play.trick && base ? { text: `TRICK · ${base.text}`, tone: base.tone } : base
+}
+
+function baseToast(play: PlayEvent, next?: PlayEvent): { text: string; tone: ToastTone } | null {
   if (play.type === 'run' || play.type === 'pass') {
     if (play.result === 'TOUCHDOWN!') return { text: 'TOUCHDOWN', tone: 'gold' }
     if (play.type === 'pass' && play.result.startsWith('Sack')) return { text: `SACK −${Math.abs(play.yards)}`, tone: 'bad' }
@@ -1621,6 +1628,7 @@ function PlayLog({ plays, idx, world, onJump, downText, decisions, userTeamId }:
                       <span title={who.title} className="mr-1 font-cond text-label font-700 uppercase tracking-wide text-muted">{who.label}</span>
                     )}
                     <span className="font-600 text-ink">{p.concept}</span> — {p.result}
+                    {p.trick && <Badge tone="gold" className="ml-1">Trick</Badge>}
                     {defLabel && defWho && (
                       <span title={defWho.title} className="text-muted"> · {defWho.label} {defLabel}</span>
                     )}
@@ -2069,8 +2077,49 @@ function QuickCallBar({ quick, onAnswer }: { quick: (lean: 'run' | 'pass') => st
   )
 }
 
+/**
+ * FUTURES #24: one card in the game-day Tricks tab — the installed trick (or
+ * Spike / Fake spike), its surprise meter and the staff's read of the look.
+ */
+function TrickCallCard({
+  option,
+  rec,
+  onAnswer,
+}: {
+  option: Moment['options'][number]
+  rec: Parameters<typeof trickCallStaffLine>[1]
+  onAnswer: (id: string) => void
+}) {
+  const pct = trickSurprisePct(option.hint)
+  const diagram = trickDiagramName(option)
+  return (
+    <button
+      type="button"
+      onClick={() => onAnswer(option.id)}
+      title={`${option.label} — ${option.hint}`}
+      className="flex items-start gap-2 rounded-lg border border-line-strong bg-surface-2 p-2 text-left transition hover:bg-surface-3"
+    >
+      {diagram && <RouteDiagram name={diagram} className="h-9 w-14 shrink-0 rounded" />}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="truncate font-cond text-label font-700 uppercase tracking-wide text-ink">{option.label}</span>
+          {pct == null ? (
+            <Badge tone="neutral" className="ml-auto">Clock</Badge>
+          ) : (
+            <Badge tone={surpriseTone(pct)} className="ml-auto">{pct}% surprise</Badge>
+          )}
+        </span>
+        <span className="mt-0.5 block text-label leading-snug text-muted">{trickCallStaffLine(option, rec)}</span>
+      </span>
+    </button>
+  )
+}
+
 function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: string) => void }) {
   const plan = useGame((s) => s.career?.playCalling)
+  const world = useWorld()
+  const myTeamId = useGame((s) => s.career?.teamId)
+  const rec = myTeamId ? trickRecordFor(world, myTeamId) : undefined
   // The grouping switch (UI only, remembered per viewer): by type by default.
   const [mode, setMode] = useState<CallGroupMode>(() => {
     try {
@@ -2090,6 +2139,8 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
   const groups = useMemo(() => {
     const m = new Map<string, Moment['options']>()
     for (const o of moment.options) {
+      // FUTURES #24: tricks and the spike keep their own tab, never a formation.
+      if (isTrickOption(o.id)) continue
       const f = playbookPlay(o.id)?.formation ?? 'Other'
       const arr = m.get(f) ?? []
       arr.push(o)
@@ -2097,13 +2148,14 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
     }
     return [...m.entries()].sort((a, b) => FORMATION_ORDER.indexOf(a[0]) - FORMATION_ORDER.indexOf(b[0]))
   }, [moment.options])
-  // By type: the seven type tabs (empty ones hidden) plus, for options that are
-  // not playbook plays — the installed tricks and the real spike — a tab of
-  // their own, so they never fall into a type they don't have.
+  // By type: the seven type tabs (empty ones hidden). The installed tricks, the
+  // real spike and the fake spike never fall into a type they don't have — they
+  // get the Tricks tab at the end.
   const typeGroups = useMemo(() => {
     const m = new Map<PlayTypeTab, Moment['options']>()
     const other: Moment['options'] = []
     for (const o of moment.options) {
+      if (isTrickOption(o.id)) continue
       const t = playTypeTabForId(o.id)
       if (!t) {
         other.push(o)
@@ -2115,6 +2167,8 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
     }
     return { plays: m, other, tabs: PLAY_TYPE_TABS.filter((t) => (m.get(t.id)?.length ?? 0) > 0).map((t) => ({ id: t.id as string, label: t.label })) }
   }, [moment.options])
+  // FUTURES #24: only the installed tricks plus Spike / Fake spike when eligible.
+  const tricks = useMemo(() => trickCallOptions(moment), [moment])
   // FUTURES #26 P3b: this bucket's plays on the user's own sheet come first, as
   // their own tab. No sheet for the bucket (or no plan) = today's picker exactly.
   const sheet = useMemo(() => {
@@ -2133,21 +2187,29 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
         ? [
             ...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []),
             ...typeGroups.tabs,
-            ...(typeGroups.other.length ? [{ id: 'other', label: 'Trick' }] : []),
+            ...(typeGroups.other.length ? [{ id: 'other', label: 'Other' }] : []),
+            // FUTURES #24: the Tricks tab sits after the type tabs (and Sheet).
+            ...(tricks.length ? [{ id: 'tricks', label: 'Tricks' }] : []),
           ]
-        : [...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []), ...groups.map(([f]) => ({ id: f, label: f }))],
-    [mode, sheet.plays.length, groups, typeGroups],
+        : [
+            ...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []),
+            ...groups.map(([f]) => ({ id: f, label: f })),
+            ...(tricks.length ? [{ id: 'tricks', label: 'Tricks' }] : []),
+          ],
+    [mode, sheet.plays.length, groups, typeGroups, tricks.length],
   )
   const fallback = sheet.plays.length ? 'sheet' : mode === 'type' ? defaultType : defaultFormation
   const active = tabs.some((t) => t.id === tab) ? tab : fallback
   const activeLabel = tabs.find((t) => t.id === active)?.label ?? active
   const plays = active === 'sheet'
     ? sheet.plays.map((id) => moment.options.find((o) => o.id === id)).filter((o): o is Moment['options'][number] => !!o)
-    : mode === 'type'
-      ? active === 'other'
-        ? typeGroups.other
-        : typeGroups.plays.get(active as PlayTypeTab) ?? []
-      : groups.find(([f]) => f === active)?.[1] ?? []
+    : active === 'tricks'
+      ? tricks
+      : mode === 'type'
+        ? active === 'other'
+          ? typeGroups.other
+          : typeGroups.plays.get(active as PlayTypeTab) ?? []
+        : groups.find(([f]) => f === active)?.[1] ?? []
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -2179,7 +2241,13 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
           ))}
         </div>
         <span className="truncate text-label text-muted">
-          {open ? (active === 'sheet' ? `Your sheet for ${BUCKET_LABEL[sheet.bucket]} — tap a play to call it` : 'Tap a play to call it — scroll for more') : `${activeLabel} · tap to browse the book`}
+          {open
+            ? active === 'sheet'
+              ? `Your sheet for ${BUCKET_LABEL[sheet.bucket]} — tap a play to call it`
+              : active === 'tricks'
+                ? 'Surprise is how much they are not expecting it — tap a trick to call it'
+                : 'Tap a play to call it — scroll for more'
+            : `${activeLabel} · tap to browse the book`}
         </span>
       </div>
       {open && (
@@ -2199,32 +2267,40 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
               </button>
             ))}
           </div>
-          <div className="flex gap-1.5 overflow-x-auto pb-1">
-            {plays.map((o) => {
-              const pb = playbookPlay(o.id)
-              // By type: the card's own formation is the small sub-label.
-              const sub = active === 'sheet'
-                ? 'On your sheet'
-                : mode === 'type'
-                  ? pb?.formation ?? 'Trick'
-                  : o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''
-              return (
-                <button
-                  key={o.id}
-                  onClick={() => onAnswer(o.id)}
-                  title={`${o.label} — ${o.hint}`}
-                  className={cn(
-                    'flex w-[78px] shrink-0 flex-col gap-0.5 rounded-lg border p-1 text-left transition',
-                    o.id === moment.defaultId ? 'border-gold/70 bg-surface-3' : 'border-line-strong bg-surface-2 hover:bg-surface-3',
-                  )}
-                >
-                  <RouteDiagram name={o.id} className="h-8 w-full rounded" />
-                  <span className="truncate font-cond text-label font-700 uppercase leading-tight text-ink">{o.label}</span>
-                  <span className="truncate font-cond text-label uppercase leading-none text-muted">{sub}</span>
-                </button>
-              )
-            })}
-          </div>
+          {active === 'tricks' ? (
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {plays.map((o) => (
+                <TrickCallCard key={o.id} option={o} rec={rec} onAnswer={onAnswer} />
+              ))}
+            </div>
+          ) : (
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {plays.map((o) => {
+                const pb = playbookPlay(o.id)
+                // By type: the card's own formation is the small sub-label.
+                const sub = active === 'sheet'
+                  ? 'On your sheet'
+                  : mode === 'type'
+                    ? pb?.formation ?? 'Trick'
+                    : o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => onAnswer(o.id)}
+                    title={`${o.label} — ${o.hint}`}
+                    className={cn(
+                      'flex w-[78px] shrink-0 flex-col gap-0.5 rounded-lg border p-1 text-left transition',
+                      o.id === moment.defaultId ? 'border-gold/70 bg-surface-3' : 'border-line-strong bg-surface-2 hover:bg-surface-3',
+                    )}
+                  >
+                    <RouteDiagram name={o.id} className="h-8 w-full rounded" />
+                    <span className="truncate font-cond text-label font-700 uppercase leading-tight text-ink">{o.label}</span>
+                    <span className="truncate font-cond text-label uppercase leading-none text-muted">{sub}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
