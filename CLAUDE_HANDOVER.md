@@ -1,21 +1,22 @@
-# Claude handover — Gridiron Dynasty (2026-10-17 ~17:15 AEDT, chat 13)
+# Claude handover — Gridiron Dynasty (2026-10-17 ~19:40 AEDT, end of chat 13)
 
-Read AGENTS.md first. One orchestrator chat at a time. Status = ranked table with ETAs (✅ 🔄 ⏳ ⏸️). Log every user request/landing in PLAYTEST_BACKLOG.md (last row **497**). "push" = ok for that one push (`git push origin main` + `zsh scripts/publish-pages.sh $(git rev-parse HEAD)`; publish-pages now KEEPS `/beta/`; verify by comparing `origin/gh-pages:index.html` bundle with the live one). User said (17:05) "keep progressing, when I come back we will commit" → merge locally, do NOT push.
+Read AGENTS.md first. One orchestrator chat at a time. Status = ranked table with ETAs (✅ 🔄 ⏳ ⏸️), "table green tick" = that table. Log every user request/landing in PLAYTEST_BACKLOG.md (last row **508**). "push" = ok for that one push. Normal push: `git push origin main` + `zsh scripts/publish-pages.sh $(git rev-parse HEAD)` (keeps /beta/). Beta refresh = build main HEAD + `git -C ~/gridiron-work/wt/emerjoint diff HEAD -- src scripts` applied (3-way) + E1C.on=true (src/components/animField.ts ~80) into `beta/`, build main into the root FIRST then beta into OUT/beta (no `rm -rf $VAR`), force-push gh-pages (see row 506). Verify both index bundles vs origin/gh-pages.
 
 ## Goal
-NFL-realistic play where every effect comes from the individual players on the play; emergent plays (FUTURES #54) = every contest decided on the live field; the FUTURES list; playtest fixes.
+NFL-realistic play decided by the individual players on the field (emergent plays, FUTURES #54) + FUTURES list + playtest fixes. User plays the BETA now.
 
 ## State
-- **Live (root) = af3cfed.** **Beta** = https://nepussie69.github.io/gridiron-dynasty/beta/ = snapshot of wt/emerjoint at ~15:50 with every emergent layer ON + E1C.on (row 493). User plays the beta.
-- **Main** is ahead of live: 496 futt2 (trick plays UI), 497 futh3 (halftime UI), backlog rows. All gates green (build, lint 4, check-broadcast 88, sim == dice-base-sim20.out).
-- **Emergent on main, all OFF:** E1a emergent.ts (EMERGENT.on), E1b emergentYac.ts, E1c components/animField.ts (E1C.on), E2 emergentRoute.ts, E3 emergentRush.ts, targets (targetDist.ts), aircoh (playsim AIR_COH_ON), speedgap (SPEEDGAP_ON, stays OFF: double counts with E1).
-- **Running DeepSeek:**
-  - **emerjoint** (prompts/emerjoint.txt): E1d fast-path mirror + joint calibration, defaults flipped ON in its tree. Last sweep: points 22.5 OK but run-heavy (rush att ~29, rush yds 123–130, rush TD ~1.1, pass att 32.4, pass yds ~224, sacks 2.04 on 5150). Broadcast ON fails 1 play "lb0 no shed move recorded"; XP% 88.6 under joint (investigate). **When merging: also set E1C.on = true** (animField.ts line ~80); SIM changes by design → gate on 3-seed band table + eq 20/20 + check-broadcast + scripts/e1-check-broadcast-on.ts; then re-run elite-vs-poor probes (incl. speed/Hill).
-  - **e1cseam** (prompts/e1cseam.txt): beta handoff "teleport" — seam between scripted handoff and recorded path; last scan 2 seam frames + 9 plays with a mover over his pace cap (safeties on runs). Animation only.
-- **Infra:** `~/gridiron-work/autocont.sh name=prompt …` relaunches a job whose wrapper is gone and verify not `^FINAL` (max 3; restart the daemon to reset counts), waits for opencode.ai, writes `DEEPSEEK-DOWN <job>` on quota/model-unavailable errors → launch ONE Claude Opus Agent with `prompts/emerjoint-claude.txt`-style brief (user approved; cap 5h window ~70%). Monitor `tail -F logs/autocont.log | grep -E "FINAL|gave up|DEEPSEEK-DOWN"`. Session cron 39e4413d at :13/:43 does checks+merges (dies with the session). caffeinate 12 h started ~14:40 + keep-awake.sh.
-
-## Realism 2 queue
-`~/gridiron-work/logs/queue-r2.sh` (running) launches NEXT_PHASE_REALISM2.md jobs: r2aging now, r2personality after a main commit message starting `futgmstyle:`, the 10 sim jobs (max 2 at once) after a main commit starting `emerjoint:` — so merge commits MUST start with `<job>: `. Each launch also starts its own autocont.sh.
+- **Live = 54e2cf4** (root) and **beta** = 54e2cf4 + emerjoint tuning with every emergent layer ON (row 506). Main == live (+ backlog commits).
+- **Emergent on main (all OFF by default):** E1a emergent.ts, E1b emergentYac.ts, E1c animField.ts (E1C.on), E2 emergentRoute.ts, E3 emergentRush.ts, targets, aircoh; speedgap stays OFF (double counts).
+- **Running DeepSeek** (each has its own `autocont.sh` daemon; `logs/autocont.log` shows FINAL / relaunch / gave up / DEEPSEEK-DOWN):
+  - **emerjoint** — joint calibration (prompts/emerjoint.txt). Last seen: points OK, too run-heavy (rush att ~29, pass att ~32.4). When FINAL: gate on 3-seed band table + eq 20/20 + check-broadcast + scripts/e1-check-broadcast-on.ts; set E1C.on=true; merge commit message MUST start `emerjoint:` (queue-r2 waits for it); re-run elite-vs-poor + Hill speed probe.
+  - **e1goal** (row 507) — carriers stopped short of the goal / hook-back near the pylon; logic only in emergent.ts/emergentYac.ts/animField.ts.
+  - **statcredit** (row 508) — beta box score: 32 pressures for one DT, 18 tackles; credit rules, outcome-neutral.
+  - (e1goal and statcredit touch emergent files that emerjoint tunes: merge emerjoint first or resolve as UNION — keep emerjoint's knob values.)
+- **Queue** `~/gridiron-work/logs/queue-r2.sh` (running): NEXT_PHASE_REALISM2.md sim jobs (r2penalties, r2fumbles, r2aicalls, r2returns, r2rotation, r2placement, r2presnap, r2kickers, r2injury, r2clock) start after a main commit starting `emerjoint:`, max 2 at a time. r2aging + r2personality already merged.
+- **Merged today (all live):** futp3a/futp3b playcalling, callcats, animshed, fastars, draftreal, qbrun, livetele3, blitzrush, futt2 tricks UI, futh3 halftime UI, e1cseam, futgmstyle, futmarket, futcombine, r2personality, r2aging.
+- **Infra:** Claude Opus fallback approved when DEEPSEEK-DOWN (brief prompts/emerjoint-claude.txt; cap 5h window ~70%; check get_usage). caffeinate started ~14:40 for 12 h + keep-awake.sh. Old chat's cron was cancelled at handover — the new chat should re-create a :13/:43 check (see this file's merge rule) and a Monitor on autocont.log.
+- **Open / parked:** XP% 88.6 under joint (check); broadcast-ON "lb0 no shed move recorded"; receiver rotation is r2rotation; browser check of new cards (PlayCallingCard, TrickPlaysCard, speech card, Business card, Combine view); livetele2 parked; second-computer setup waits on user (Mac same network? GitHub or File Sharing?).
 
 ## Merge rule (after a conflict was committed to main on 10-15)
 `set -o pipefail`; commit in wt; `git merge main` in wt; stop if `git diff --name-only --diff-filter=U` or `^<<<<<<<` — resolve as UNION; build; lint 4; gate20 SIM-IDENTICAL (UI/anim/OFF jobs; refresh logs/dice-base-sim20.out when main's sim legitimately changes); check-broadcast PASS; then merge into main. `git reset --hard` is blocked by auto mode → fix forward.
