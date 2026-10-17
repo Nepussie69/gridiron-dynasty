@@ -12,9 +12,10 @@ import { roomNote, roomTilt, roomWinner } from './draftRoom'
 import { applyDraftTradeDown, roomTradeDown } from './draftTrades'
 import { makeCharacter } from './character'
 import { isEvaluator, scoutReport } from './scoutBias'
-import { type World, classCeiling, indexPlayers } from './generate'
+import { type World, classCeiling, generalManager, indexPlayers } from './generate'
 import { clamp, hash32, makeRng } from './rng'
 import { rescaleOvr, unscaleOvr } from './ovrScale'
+import { gmBoardTilt, gmStyle, type GmStyle } from './gmStyle'
 
 export const DRAFT_ROUNDS = 7
 export const DRAFT_TEAMS = 32
@@ -190,10 +191,16 @@ export function bestAvailableFor(
   advice?: BoardAdvice,
   gradeOf?: (p: DraftProspect) => number,
   tilt?: (p: DraftProspect) => number,
+  gm?: GmStyle | null,
 ): DraftProspect | null {
   const available = world.draft.filter((p) => !p.draftedBy)
   if (!available.length) return null
   const needs = teamNeeds(world.roster[teamId] ?? [])
+  // FUTURES #49: the club's GM puts his own name on the board — need vs best
+  // player, premium positions, character risk, measurables. His own numbers
+  // (gmStyle.ts), never a league average. Absent (a seat the user holds) the
+  // score is byte-identical to before.
+  const gmTilt = gm ? gmBoardTilt(gm, needs) : null
   const scored = available.map((p) => {
     // L12.17 DR3c: the need reach was +6 (a full round) over a ~4-point top-32
     // talent spread, so clubs routinely passed a true top-32 man for a need body.
@@ -209,7 +216,8 @@ export function bestAvailableFor(
     // FUTURES #27 DF1: the draft room's blended tilt. Absent (the default) the
     // score is byte-identical to before.
     const roomBonus = tilt ? tilt(p) : 0
-    return { p, score: (gradeOf ? gradeOf(p) : p.grade) + needBonus + posPremium + adviceBonus + roomBonus }
+    const gmBonus = gmTilt ? gmTilt(p) : 0
+    return { p, score: (gradeOf ? gradeOf(p) : p.grade) + needBonus + posPremium + adviceBonus + roomBonus + gmBonus }
   })
   scored.sort((a, b) => b.score - a.score)
   return scored[0].p
@@ -510,7 +518,14 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0, 
         }
       }
     }
-    let prospect = bestAvailableFor(world, teamId, advice, gradeOf, tilt)
+    let prospect = bestAvailableFor(
+      world,
+      teamId,
+      advice,
+      gradeOf,
+      tilt,
+      career && teamId === career.teamId ? null : gmStyle(generalManager(world, teamId)),
+    )
     // G2: in advise mode the Director may pound the table for a conviction call.
     if (prospect && career && teamId === career.teamId && !canDraft(career)) {
       const roll = makeRng(world.seed + world.season * 97 + world.draftState.pickIndex)()
@@ -583,7 +598,7 @@ export function simulateRestOfDraft(world: World, career: CareerState | null) {
     // FUTURES #27 DF1: an auto/clock pick uses your own vector at 0.7 plus the
     // room's at 0.3 — you still hear the building before the card goes in.
     const tilt = mine ? roomTilt(world, career, { auto: true }) : undefined
-    const prospect = bestAvailableFor(world, teamId, undefined, gradeOf, tilt)
+    const prospect = bestAvailableFor(world, teamId, undefined, gradeOf, tilt, mine ? null : gmStyle(generalManager(world, teamId)))
     if (!prospect) {
       world.draftState.complete = true
       break

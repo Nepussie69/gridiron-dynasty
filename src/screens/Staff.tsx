@@ -28,6 +28,7 @@ import {
   Effect,
   FilterChip,
   GatedAction,
+  GmStyleTag,
   Inspector,
   KpiStrip,
   KpiTile,
@@ -87,6 +88,7 @@ import {
 } from '../game/engine/draftRoom'
 import type { Reputation } from '../game/engine/career'
 import { gmCreatedSeason, gmTemperamentWords, type World } from '../game/engine/generate'
+import { gmStyle } from '../game/engine/gmStyle'
 import {
   boostText,
   buyoutPlan,
@@ -1408,6 +1410,7 @@ function HeadCoachSlab({ m, ctx, withYou = false }: { m: StaffMember; ctx: Ctx; 
  */
 function GmSlab({ m, ctx, boss }: { m: StaffMember; ctx: Ctx; boss: boolean }) {
   const words = gmTemperamentWords(m)
+  const style = gmStyle(m)
   const tenure = Math.max(1, ctx.world.season - gmCreatedSeason(m) + 1)
   const seat = ctx.stanceFor(m)
   const hint = (axis: 'board' | 'tradeDown') => {
@@ -1423,6 +1426,7 @@ function GmSlab({ m, ctx, boss }: { m: StaffMember; ctx: Ctx; boss: boolean }) {
           <h3 className="mt-1 font-display text-[22px] font-800 italic uppercase leading-none text-ink sm:text-[26px]">
             <NameButton m={m} onClick={() => ctx.inspect(m)} />
           </h3>
+          <GmStyleTag tag={style.tag} line={style.line} className="mt-2" />
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <RoleTag>GM</RoleTag>
             <SchemeFor m={m} ctx={ctx} />

@@ -20,6 +20,7 @@
 import type { CareerState, DraftProspect, Player, Position, StaffMember } from '../types'
 import type { World } from './generate'
 import { generalManager, gmTemperament } from './generate'
+import { gmArchetype } from './gmStyle'
 import { clamp, hash32 } from './rng'
 import { schemeFit } from './style'
 import { mentorFor } from './people'
@@ -390,12 +391,19 @@ function npcVector(world: World, teamId: string, seat: SeatKey, member?: StaffMe
     // The GM's stance is HIS: a sharp evaluator backs his own board (BPA), a thin
     // one leans on need; a bold trader works the phones, a cautious one stays put.
     // Individual — his own temperament from his own id + rating, never a mean.
+    // FUTURES #49: and it is his ARCHETYPE that frames it, so an Analytics GM
+    // hoards picks and takes the best player, while Draft & develop does the same
+    // from the other end of the board.
     if (seat === 'gm') {
       const t = gmTemperament(member)
+      const arch = gmArchetype(member)
       if (t.drafting >= 70) v.board = 'BPA'
       else if (t.drafting <= 55) v.board = 'Need'
       if (t.trading >= 70) v.tradeDown = 'Open'
       else if (t.trading <= 45) v.tradeDown = 'Stand pat'
+      if (arch === 'analytics' || arch === 'draftdev') v.tradeDown = 'Accumulate'
+      else if (arch === 'tradehappy' || arch === 'capreckless') v.tradeDown = 'Open'
+      else if (arch === 'oldschool') v.tradeDown = 'Stand pat'
     }
   } else if (seat === 'hc') {
     const philosophy = mentorFor(world, teamId).philosophy

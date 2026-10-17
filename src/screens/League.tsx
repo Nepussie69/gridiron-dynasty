@@ -3,6 +3,7 @@ import { cn } from '../lib/cn'
 import { leagueGroups } from '../game/data/leagueGroups'
 import { recordOf, rosterOf, teamAvgOvr } from '../game/selectors'
 import { recordBook, teamHistory } from '../game/engine/statsDb'
+import { gmStyle } from '../game/engine/gmStyle'
 import { heroSlab } from '../lib/teamColor'
 import { useGame, useWorld } from '../store/gameStore'
 import {
@@ -10,6 +11,7 @@ import {
   Badge,
   Button,
   Card,
+  GmStyleTag,
   PageHeader,
   RatingTile,
   Sheet,
@@ -118,6 +120,8 @@ function TeamDetail({ teamId, activeTeamId, onView }: { teamId: string; activeTe
   const top = [...roster].sort((a, b) => b.ovr - a.ovr).slice(0, 6)
   const rec = recordOf(league, teamId)
   const coach = league.staff[teamId]?.[0]
+  // FUTURES #49: the club's General Manager — his style is what runs the roster.
+  const gm = league.staff[teamId]?.find((m) => m.role === 'General Manager')
 
   return (
     <div className="space-y-4">
@@ -157,6 +161,21 @@ function TeamDetail({ teamId, activeTeamId, onView }: { teamId: string; activeTe
           ))}
           {!top.length && <p className="text-body text-muted">No roster data.</p>}
         </div>
+      </Card>
+
+      <Card>
+        <h3 className="mb-3 font-display text-[20px] font-800 italic uppercase leading-none text-ink">General Manager</h3>
+        {gm ? (
+          <div className="flex items-center gap-3">
+            <Avatar name={gm.name} size={40} />
+            <div className="min-w-0">
+              <div className="truncate font-display text-[18px] font-800 italic uppercase leading-none text-ink">{gm.name}</div>
+              <GmStyleTag tag={gmStyle(gm).tag} line={gmStyle(gm).line} className="mt-1" />
+            </div>
+          </div>
+        ) : (
+          <p className="text-body text-muted">No general manager on file.</p>
+        )}
       </Card>
 
       <Card>

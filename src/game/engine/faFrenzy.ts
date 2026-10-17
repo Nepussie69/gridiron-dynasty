@@ -16,7 +16,7 @@
 import type { Contract, NewsItem, Player, Position } from '../types'
 import type { CareerDatabase } from './statsDb'
 import type { World } from './generate'
-import { teamStrength } from './generate'
+import { generalManager, teamStrength } from './generate'
 import { STARTERS, depthAt } from './depth'
 import { schemeFit } from './style'
 import { clubCulture, discountFromClub, type ClubCulture } from './culture'
@@ -26,6 +26,7 @@ import { agentStyle } from './negotiation'
 import { FA_NEEDS, marketPrice } from './progress'
 import { ledgerFreeAgent } from './picks'
 import { hash32, clamp } from './rng'
+import { gmStyle, type GmStyle } from './gmStyle'
 
 /** How many lots the frenzy runs each March (the top of the market). */
 export const FRENZY_LOTS = 40
@@ -441,7 +442,7 @@ function committedHits(
   return out
 }
 
-/** This year AND next must fit under 98% of the cap after the deal and the club's other live offers. */
+/** This year AND next must fit under his own ceiling after the deal and the club's other live offers. */
 function canAfford(
   world: World,
   state: FrenzyState,
@@ -449,22 +450,27 @@ function canAfford(
   teamId: string,
   offer: FrenzyDealOffer,
   day: number,
+  style: GmStyle,
 ): boolean {
   const roster = world.roster[teamId] ?? []
   const dead = world.deadMoney[teamId] ?? 0
   const cap = capForSeason(world.season)
+  // FUTURES #49: how close to the ceiling he will go is his own discipline.
+  const ceil = cap * clamp(0.93 + (style.faSpend - 0.85) * 0.07, 0.9, 0.99)
   const deal = buildFreeAgentDeal(p, world.season, offer)
   const [c0, c1] = committedHits(world, state, teamId, day, 2)
-  if (usedCap(world, teamId) + c0 + deal.capHit > cap * 0.98) return false
+  if (usedCap(world, teamId) + c0 + deal.capHit > ceil) return false
   const plan = projectCap(roster, dead, world.season, 2)
   if (plan.years[1] && plan.years[1].space - c1 < projectedCapHit(deal, 1)) return false
   return true
 }
 
-function guaranteedFor(world: World, teamId: string): FrenzyGuarantee {
+function guaranteedFor(world: World, teamId: string, style: GmStyle): FrenzyGuarantee {
   const health = 1 - usedCap(world, teamId) / capForSeason(world.season)
-  if (health > 0.25) return 'high'
-  if (health > 0.12) return 'mid'
+  // A GM who pays over the market also guarantees more of it (gmStyle faSpend).
+  const adj = (style.faSpend - 1) * 0.06
+  if (health > 0.25 - adj) return 'high'
+  if (health > 0.12 - adj) return 'mid'
   return 'low'
 }
 
@@ -475,17 +481,21 @@ function yearsFor(p: Player): number {
   return 1
 }
 
-/** A priced bid within 90–115% of market (never with the K2 discount on it). */
-function makeBid(world: World, p: Player, teamId: string, day: number): FrenzyOffer {
+/** A priced bid around the market, in HIS hands (gmStyle faSpend scales it). */
+function makeBid(world: World, p: Player, teamId: string, day: number, style: GmStyle): FrenzyOffer {
   const bias = world.era?.positionBias?.[p.pos] ?? 1
   const market = marketPrice(p, world.season, bias)
   const d = draw(world, 'bid-amt', teamId, p.id, day)
-  const aav = Math.round((market * (0.9 + d * 0.25)) / 1e5) * 1e5
+  // His appetite widens the range: a draft-and-develop club opens under the
+  // market, a cap-reckless one over it (still priced off the market, not an
+  // average of what anyone else paid).
+  const mult = (0.9 + d * 0.25) * clamp(0.85 + (style.faSpend - 0.55) * 0.35, 0.8, 1.25)
+  const aav = Math.round((market * mult) / 1e5) * 1e5
   return {
     teamId,
     years: yearsFor(p),
     aav,
-    guarantee: guaranteedFor(world, teamId),
+    guarantee: guaranteedFor(world, teamId, style),
     madeDay: day,
     expiresDay: day + OFFER_LIFE_DAYS,
   }
@@ -530,6 +540,18 @@ export function aiBidDay(
 ): FrenzyEvent[] {
   const ctx = buildFrenzyContext(world, db)
   const teams = nflTeams(world)
+  // FUTURES #49: the man in the chair bids. His appetite (gmStyle.ts `faSpend`)
+  // sets how likely he is to be in on a lot and how far over the market he will
+  // go; his cap discipline sets the ceiling he will bid to. Read once per club.
+  const styles = new Map<string, GmStyle>()
+  const styleOf = (id: string) => {
+    let s = styles.get(id)
+    if (s === undefined) {
+      s = gmStyle(generalManager(world, id))
+      styles.set(id, s)
+    }
+    return s
+  }
   for (const lot of state.lots) {
     if (lot.status !== 'open') continue
     const p = findPlayer(world, lot.playerId)
@@ -542,14 +564,16 @@ export function aiBidDay(
       if (t.id === userTeamId) continue
       const info = ctx.clubs[t.id]
       if (!info) continue
+      const style = styleOf(t.id)
       const existing = lot.offers.find((o) => o.teamId === t.id)
       const live = existing && (existing.user || existing.expiresDay >= day)
 
       if (existing && live) {
         // A club out of the lead may raise once, or walk away.
         if (!existing.user && leader !== t.id && !existing.raised) {
+          // A hungry GM raises more often; a patient one lets it go.
           const r = draw(world, 'raise', t.id, p.id, day)
-          if (r < 0.55) {
+          if (r < clamp(0.35 + (style.faSpend - 0.55) * 0.5, 0.3, 0.8)) {
             const bump = 1.03 + draw(world, 'raise-amt', t.id, p.id, day) * 0.05
             existing.aav = Math.round((existing.aav * bump) / 1e5) * 1e5
             existing.raised = true
@@ -564,7 +588,7 @@ export function aiBidDay(
         }
         // Otherwise, a stalled club renews an expiring offer or lets it lapse.
         if (!existing.user && existing.expiresDay === day) {
-          if (draw(world, 'renew', t.id, p.id, day) < 0.5) {
+          if (draw(world, 'renew', t.id, p.id, day) < clamp(0.4 + (style.faSpend - 0.55) * 0.3, 0.35, 0.75)) {
             existing.expiresDay = day + OFFER_LIFE_DAYS
             events.push({ kind: 'renew', lotId: p.id, teamId: t.id, day, text: `${t.abbr} stay in on ${p.name}` })
           }
@@ -576,13 +600,16 @@ export function aiBidDay(
       // A fresh bid: a real need, cap room, and a plausible draw.
       if (needAt(world, t.id, p.pos) <= 0) continue
       if (openOfferCount(state, t.id, day) >= MAX_OPEN_OFFERS) continue
-      // Rebuilders chase the young; contenders can chase anyone (esp. stars).
-      if (info.rank > 22 && p.age > 28) continue
-      const probe = makeBid(world, p, t.id, day)
-      if (!canAfford(world, state, p, t.id, probe, day)) continue
+      // Rebuilders chase the young; contenders can chase anyone (esp. stars). A
+      // cap-reckless GM will pay a veteran wherever he finishes.
+      if (info.rank > 22 && p.age > 28 && style.faSpend < 1.2) continue
+      const probe = makeBid(world, p, t.id, day, style)
+      if (!canAfford(world, state, p, t.id, probe, day, style)) continue
       let prob = 0.18 + 0.09 * Math.min(needAt(world, t.id, p.pos), 3)
       if (info.rank <= 10) prob += 0.12
       if (p.ovr >= 88 && info.rank > 10 && info.rank <= 22) prob += 0.06
+      // Appetite: a spender is in on more lots, a draft-and-develop club on fewer.
+      prob *= clamp(0.55 + style.faSpend * 0.45, 0.6, 1.4)
       if (draw(world, 'will-bid', t.id, p.id, day) >= Math.min(prob, 0.8)) continue
       lot.offers.push(probe)
       events.push({ kind: 'bid', lotId: p.id, teamId: t.id, day, text: `${t.abbr} bid $${(probe.aav / 1e6).toFixed(1)}M on ${p.name}` })
