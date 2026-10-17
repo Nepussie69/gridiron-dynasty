@@ -112,4 +112,4 @@ Plus a **real Spike** (user only, same window): stops the clock, costs a down, ~
 | Item | Status |
 |---|---|
 | Spec | ✅ 2026-10-11 |
-| T1 engine · T2 UI · T3 animation · T4 AI rates | T1 ✅ merged 2026-10-15 (row 445) · T2 ⏳ · T3 ⏳ · T4 ⏳ |
+| T1 engine · T2 UI · T3 animation · T4 AI rates | T1 ✅ merged 2026-10-15 (row 445) · T2 🔄 futt2 running (row 495) · T3 ⏳ · T4 ⏳ |
