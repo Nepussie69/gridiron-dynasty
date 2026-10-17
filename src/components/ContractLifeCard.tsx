@@ -11,6 +11,7 @@ import {
   tagUsed,
 } from '../game/engine/contractLife'
 import { marketAsk } from '../game/engine/negotiation'
+import { extensionFactorFor } from '../game/engine/personality'
 import { cultureDiscountFor } from '../game/engine/culture'
 import { getStatsDb, useGame, useWorld } from '../store/gameStore'
 import type { Player } from '../game/types'
@@ -124,7 +125,7 @@ export function ContractLifeCard({ className }: { className?: string }) {
           <div className="space-y-2">
             {holdouts.map((p) => {
               const disc = cultureDiscountFor(league, getStatsDb(), career.teamId, p)
-              const pay = marketAsk(p, league.season, career.skills.negotiation, disc.pct)
+              const pay = marketAsk(p, league.season, career.skills.negotiation, disc.pct, extensionFactorFor(p, league, career.teamId))
               const items: MenuItem[] = [
                 {
                   id: 'pay',

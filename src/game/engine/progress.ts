@@ -16,6 +16,7 @@ import { mentorGrowthBonus } from './lockerRoom'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
 import { isTradeablePick, pickTradeValue, playerTradeValue } from './trade'
 import { gmHoardsPicks, gmPaysPicks, gmStyle, styledDeal, type GmStyle } from './gmStyle'
+import { R2PERSONALITY, personalityFaaFactor, personalityResign } from './personality'
 import type { CareerDatabase } from './statsDb'
 
 // ── Player development ───────────────────────────────────────────────────────
@@ -438,7 +439,16 @@ export function runAIResign(world: World, skipTeamId?: string, db?: CareerDataba
       const bias = world.era?.positionBias?.[p.pos] ?? 1
       const base = marketPrice(p, world.season, bias)
       const pct = db ? cultureDiscountFor(world, db, t.id, p).pct : 0
-      const aav = pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
+      const listed = pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
+      // REALISM2 #12: his own priorities price the deal and can end it. A loyal
+      // man gives a hometown discount; a ring-chaser on a club that is not close
+      // takes his chances in March instead of re-signing.
+      let aav = listed
+      if (R2PERSONALITY.on) {
+        const decision = personalityResign(world, t.id, p, listed)
+        aav = decision.aav
+        if (!decision.signs) continue
+      }
       const next = styledDeal(p, world.season, aav, resignYears(p), 0.7, style)
       // The club is already carrying his final-year hit, so only the DELTA counts.
       const delta = next.capHit - p.contract.capHit
@@ -896,7 +906,8 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
     // hands. A cap-reckless GM pays over the market to close; a draft-and-develop
     // one negotiates under it. Individual: his own faSpend, not a league mean.
     const spend = gmStyle(generalManager(world, teamId)).faSpend
-    return Math.round((ask * (1 + (spend - 1) * 0.25)) / 1e5) * 1e5
+    const pf = R2PERSONALITY.on ? personalityFaaFactor(world, teamId, p) : 1
+    return Math.round((ask * (1 + (spend - 1) * 0.25) * pf) / 1e5) * 1e5
   }
   const qualifying = db ? cultureQualifiedClubs(world, db) : null
   const teamOrder = qualifying

@@ -23,6 +23,7 @@ import { clubCulture, discountFromClub, type ClubCulture } from './culture'
 import { capForSeason, dealFromAav } from './cap'
 import { projectCap, projectedCapHit } from './capPlan'
 import { agentStyle } from './negotiation'
+import { R2PERSONALITY, playerPriorities, styleOf } from './personality'
 import { FA_NEEDS, marketPrice } from './progress'
 import { ledgerFreeAgent } from './picks'
 import { hash32, clamp } from './rng'
@@ -157,6 +158,16 @@ function nflTeams(world: World) {
  * unless the lot is on the shadow board (then exact bars).
  */
 export function frenzyPriorities(p: Player, season: number): FrenzyPriorities {
+  // REALISM2 #12: with personalities on, the board listens to the man's own
+  // priorities instead of the generic template — money, reps, market, winning
+  // and the club he can stay with, straight from `personality.playerPriorities`.
+  if (R2PERSONALITY.on) {
+    const pp = playerPriorities(p, season)
+    return normalisePriorities(
+      { money: pp.money, role: pp.playingTime, fit: pp.market, winning: pp.winning, culture: pp.loyalty },
+      styleOf(p.id) === 'hardball',
+    )
+  }
   const jitter = (k: number) => ((hash32(p.id, season * 97 + k) % 1000) / 1000 - 0.5) * 0.12
   const w = {
     money: 0.4 + jitter(1),

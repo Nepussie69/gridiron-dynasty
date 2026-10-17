@@ -20,6 +20,9 @@ import { capForSeason, capScale, marketAAV, recomputeCapHit, tagValue } from './
 import { hash32, clamp } from './rng'
 import { unscaleOvr } from './ovrScale'
 import { gmHoardsPicks, gmStyle } from './gmStyle'
+// REALISM2 #12: whether a qualifying star holds out is his own personality —
+// money-first men do, loyal ones almost never. Same hash, different threshold.
+import { R2PERSONALITY, personalityHoldsOut } from './personality'
 
 /** The un-scaled OVR a player must clear to count as a star for a holdout. */
 const HOLDOUT_STAR_RAW = 78
@@ -103,6 +106,7 @@ export function holdoutCandidate(p: Player, season: number): boolean {
 
 /** Deterministic yes/no: does this candidate hold out this offseason? */
 export function holdsOut(p: Player, season: number): boolean {
+  if (R2PERSONALITY.on) return personalityHoldsOut(p, season)
   return hash32(`${p.id}:${season}:holdout`, 977) % 100 < HOLDOUT_RATE
 }
 

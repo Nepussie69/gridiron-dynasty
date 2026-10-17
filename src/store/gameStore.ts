@@ -264,6 +264,7 @@ import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummar
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
 import { MAX_SHADOW, canShadow, gradeShadowBoard, isOnShadowBoard, pruneShadowBoard, shadowHits, toggleShadow } from '../game/engine/shadow'
 import { buildExtension, judgeOffer, marketAsk, type ExtensionOffer } from '../game/engine/negotiation'
+import { extensionFactorFor } from '../game/engine/personality'
 import {
   addGuaranteedYear,
   fifthYearOptionValue,
@@ -3465,7 +3466,9 @@ export const useGame = create<GameStore>((set, get) => ({
     // here (one year at market, pro-rated for the weeks left in season).
     // L12.9 K2: a winning-culture club signs him at a discounted asking price.
     const disc = cultureDiscountFor(world, statDb, career.teamId, p)
-    const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, negotiationAskMultiplier(career.skills.negotiation), disc.pct)
+    // REALISM2 #12: his own priorities move the ask (money/loyalty/winning/role).
+    const pf = extensionFactorFor(p, world, career.teamId)
+    const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, negotiationAskMultiplier(career.skills.negotiation) * pf, disc.pct)
     const cap = summarizeCap(world.roster[career.teamId] ?? [], world.deadMoney[career.teamId] ?? 0, world.season)
     if (cap.space < contract.capHit) {
       get().showToast('Not enough cap space to sign this player.')
@@ -3680,7 +3683,7 @@ export const useGame = create<GameStore>((set, get) => ({
       get().showToast('His camp has stopped taking calls this season.')
       return
     }
-    const verdict = judgeOffer(p, world.season, offer, career.skills.negotiation, cultureDiscountFor(world, statDb, career.teamId, p).pct)
+    const verdict = judgeOffer(p, world.season, offer, career.skills.negotiation, cultureDiscountFor(world, statDb, career.teamId, p).pct, extensionFactorFor(p, world, career.teamId))
     if (!verdict.accepted) {
       const nextTries = tries + 1
       talks[playerId] = { season: world.season, tries: nextTries, closed: nextTries >= 3 }
@@ -3837,7 +3840,7 @@ export const useGame = create<GameStore>((set, get) => ({
     }
     if (choice === 'pay') {
       const disc = cultureDiscountFor(world, statDb, career.teamId, p)
-      const ask = marketAsk(p, world.season, career.skills.negotiation, disc.pct)
+      const ask = marketAsk(p, world.season, career.skills.negotiation, disc.pct, extensionFactorFor(p, world, career.teamId))
       p.contract = buildExtension(p, world.season, { years: 3, aav: ask, guarantee: 'mid' })
       p.holdout = { ...h, status: 'resolved', resolution: 'paid' }
       pushLedger(career, {
@@ -4027,7 +4030,7 @@ export const useGame = create<GameStore>((set, get) => ({
           if (q) q.contract = restructure(q.contract)
         }
       }
-      const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, 1, disc)
+      const contract = freeAgentContract(p, world.season, world.week, world.phase, undefined, extensionFactorFor(p, world, career.teamId), disc)
       world.freeAgents.splice(world.freeAgents.indexOf(p), 1)
       p.teamId = career.teamId
       p.contract = contract
