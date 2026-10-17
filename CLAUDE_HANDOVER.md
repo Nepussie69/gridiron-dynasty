@@ -14,6 +14,9 @@ NFL-realistic play where every effect comes from the individual players on the p
   - **e1cseam** (prompts/e1cseam.txt): beta handoff "teleport" — seam between scripted handoff and recorded path; last scan 2 seam frames + 9 plays with a mover over his pace cap (safeties on runs). Animation only.
 - **Infra:** `~/gridiron-work/autocont.sh name=prompt …` relaunches a job whose wrapper is gone and verify not `^FINAL` (max 3; restart the daemon to reset counts), waits for opencode.ai, writes `DEEPSEEK-DOWN <job>` on quota/model-unavailable errors → launch ONE Claude Opus Agent with `prompts/emerjoint-claude.txt`-style brief (user approved; cap 5h window ~70%). Monitor `tail -F logs/autocont.log | grep -E "FINAL|gave up|DEEPSEEK-DOWN"`. Session cron 39e4413d at :13/:43 does checks+merges (dies with the session). caffeinate 12 h started ~14:40 + keep-awake.sh.
 
+## Realism 2 queue
+`~/gridiron-work/logs/queue-r2.sh` (running) launches NEXT_PHASE_REALISM2.md jobs: r2aging now, r2personality after a main commit message starting `futgmstyle:`, the 10 sim jobs (max 2 at once) after a main commit starting `emerjoint:` — so merge commits MUST start with `<job>: `. Each launch also starts its own autocont.sh.
+
 ## Merge rule (after a conflict was committed to main on 10-15)
 `set -o pipefail`; commit in wt; `git merge main` in wt; stop if `git diff --name-only --diff-filter=U` or `^<<<<<<<` — resolve as UNION; build; lint 4; gate20 SIM-IDENTICAL (UI/anim/OFF jobs; refresh logs/dice-base-sim20.out when main's sim legitimately changes); check-broadcast PASS; then merge into main. `git reset --hard` is blocked by auto mode → fix forward.
 
