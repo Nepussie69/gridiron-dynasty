@@ -15,10 +15,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Contract, Player } from '../types'
-import type { World } from './generate'
+import { generalManager, type World } from './generate'
 import { capForSeason, capScale, marketAAV, recomputeCapHit, tagValue } from './cap'
-import { hash32 } from './rng'
+import { hash32, clamp } from './rng'
 import { unscaleOvr } from './ovrScale'
+import { gmHoardsPicks, gmStyle } from './gmStyle'
 
 /** The un-scaled OVR a player must clear to count as a star for a holdout. */
 const HOLDOUT_STAR_RAW = 78
@@ -185,18 +186,25 @@ export function runAITags(world: World, skipTeamId?: string): number {
     if (t.tier !== 'NFL' || t.id === skipTeamId) continue
     const roster = world.roster[t.id] ?? []
     if (tagUsed(roster, 'franchise', world.season) || tagUsed(roster, 'transition', world.season)) continue
-    // The club's own best player, and a real star (display 87+): the NFL tags its
-    // franchise man, not its best eligible body. One club, one man, its own cap.
+    // FUTURES #49: his own view of the tag. A GM who hoards picks and hates the
+    // market values keeping his own star more (a slightly lower bar); a
+    // trade-happy or cap-reckless one would rather pay him than tie himself down.
+    const style = gmStyle(generalManager(world, t.id))
+    const bar = 87 - Math.round(gmHoardsPicks(style) * 2)
+    // The club's own best player, and a real star: the NFL tags its franchise man,
+    // not its best eligible body. One club, one man, its own cap.
     const best = roster.reduce<Player | null>((a, b) => (b.ovr > (a?.ovr ?? -1) ? b : a), null)
     const cand = roster
-      .filter((p) => tagEligible(p) && p.ovr >= 87 && p.ovr >= (best?.ovr ?? 0))
+      .filter((p) => tagEligible(p) && p.ovr >= bar && p.ovr >= (best?.ovr ?? 0))
       .sort((a, b) => b.ovr - a.ovr)[0]
     if (!cand) continue
     const used = roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
     const limit = capForSeason(world.season)
     // A tight club uses the cheaper transition number (the tag itself only adds
-    // a year at the end of the deal, so this year's cap hit is unchanged).
-    const kind: 'franchise' | 'transition' = used > limit * 0.9 ? 'transition' : 'franchise'
+    // a year at the end of the deal, so this year's cap hit is unchanged). How
+    // tight counts as tight is the GM's own cap discipline.
+    const tight = clamp(0.9 - (style.capStrict - 0.5) * 0.04, 0.86, 0.92)
+    const kind: 'franchise' | 'transition' = used > limit * tight ? 'transition' : 'franchise'
     const value = tagSalary(world.players, cand, kind)
     cand.contract = addGuaranteedYear(cand.contract, value, world.season)
     cand.tag = { season: world.season, kind }

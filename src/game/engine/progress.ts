@@ -1,20 +1,21 @@
-import type { CareerState, Contract, Player, Position, Recommendation, SeasonStats } from '../types'
-import { tickContractYear, marketAAV, capScale, capForSeason, CAP_FLOOR_PCT, minSalary, deadMoney, dealFromAav, restructure } from './cap'
+import type { CareerState, Contract, DraftPick, Player, Position, Recommendation, SeasonStats, Team } from '../types'
+import { tickContractYear, marketAAV, capScale, capForSeason, minSalary, deadMoney, restructure } from './cap'
 import { coachEffect } from './coaching'
-import { generateProspectClass, generateStreetPool, indexPlayers, type World } from './generate'
+import { generalManager, generateProspectClass, generateStreetPool, indexPlayers, type World } from './generate'
 import { depthAt, STARTERS } from './depth'
 import { coverageGrade, passerRating } from './stats'
-import { ledgerFreeAgent } from './picks'
+import { ledgerFreeAgent, picksOwnedBy } from './picks'
 import { unscaleOvr } from './ovrScale'
 import { bustRisk, devModifier } from './character'
 import { isEvaluator, recordReport } from './scoutBias'
-import { clamp, hash32, makeRng, rpick } from './rng'
+import { clamp, hash32, makeRng } from './rng'
 import { nextClassCount, nextClassSeed, promoteNextClass } from './futureClasses'
 import { applyDevFocus, focusPointsFor, devGroupFor } from './devPlan'
 import { boostPointsFor, groupDevMultiplier } from './staffMarket'
 import { mentorGrowthBonus } from './lockerRoom'
 import { cultureDiscountFor, cultureQualifiedClubs } from './culture'
-import { playerTradeValue } from './trade'
+import { isTradeablePick, pickTradeValue, playerTradeValue } from './trade'
+import { gmHoardsPicks, gmPaysPicks, gmStyle, styledDeal, type GmStyle } from './gmStyle'
 import type { CareerDatabase } from './statsDb'
 
 // ── Player development ───────────────────────────────────────────────────────
@@ -417,27 +418,34 @@ export function runAIResign(world: World, skipTeamId?: string, db?: CareerDataba
     const expiring = roster
       .filter((p) => p.contract.years <= 1 && unscaleOvr(p.ovr) >= 68)
       .sort((a, b) => b.ovr - a.ovr)
+    // FUTURES #49: the GM's own appetite sets the size of the core and the room
+    // he insists on keeping. A cap-reckless GM extends eight and spends to the
+    // ceiling; a draft-and-develop one extends four and holds a cushion back.
+    // His number, from his own temperament — no league average.
+    const style = gmStyle(generalManager(world, t.id))
+    const coreSize = clamp(Math.round(4 + (style.faSpend - 0.55) * 4), 4, 8)
+    const keepRoom = clamp(0.86 + (style.capStrict - 0.85) * 0.05, 0.82, 0.92)
     // A front office re-signs its core, not its whole depth chart: the old pass's
     // limit of four was the right instinct (it kept payrolls — and therefore
     // roster-filling room — healthy); its ORDER was the bug (four men, priced so
     // the whole AAV hit year 1, and only when the club sat at 98% or less). Now
-    // six, priced as real deals, and the depth behind them walks.
+    // a style-sized core, priced as real deals, and the depth behind them walks.
     let extended = 0
     for (const p of expiring) {
-      if (extended >= 6) break
+      if (extended >= coreSize) break
       if (!keep.has(p.id) && unscaleOvr(p.ovr) < 78) continue
       // L12.9 K2: a qualifying club re-signs at a discounted asking price.
       const bias = world.era?.positionBias?.[p.pos] ?? 1
       const base = marketPrice(p, world.season, bias)
       const pct = db ? cultureDiscountFor(world, db, t.id, p).pct : 0
       const aav = pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
-      const next = dealFromAav(p, world.season, aav, resignYears(p), 0.7)
+      const next = styledDeal(p, world.season, aav, resignYears(p), 0.7, style)
       // The club is already carrying his final-year hit, so only the DELTA counts.
       const delta = next.capHit - p.contract.capHit
       // Keep real room: the leftover cap is what lets the club replace in-season
       // injuries, so a roster never runs under the 45-man floor. A star who does
       // not fit is kept by the tag pass instead (`runAITags`).
-      if (used() + delta > capLimit * 0.86) continue
+      if (used() + delta > capLimit * keepRoom) continue
       p.contract = next
       p.teamId = t.id
       extended++
@@ -476,7 +484,11 @@ export function enforceCapCompliance(world: World) {
     if (t.tier !== 'NFL') continue
     const roster = world.roster[t.id] ?? []
     const limit = capForSeason(world.season)
-    const target = limit * 0.94
+    // FUTURES #49: where he trims to is his own cap discipline. A strict GM keeps
+    // a real cushion (he will be the one who can absorb an injury); a loose one
+    // runs hot, right up against the ceiling — every target stays safely legal.
+    const capStrict = gmStyle(generalManager(world, t.id)).capStrict
+    const target = limit * clamp(0.94 - (capStrict - 0.95) * 0.03, 0.9, 0.97)
     const used = () => roster.reduce((s, p) => s + p.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
     if (used() <= target) continue
     const counts: Record<string, number> = {}
@@ -530,75 +542,186 @@ export function enforceCapCompliance(world: World) {
 }
 
 /**
- * A few AI-to-AI trades each offseason, so the league moves on its own: teams
- * swap similar-value players where each has a surplus. Cheap, but it makes the
- * world feel alive and gives the media something to report.
+ * The offseason trade market, run by the men in the chairs. FUTURES #49: which
+ * clubs work the phones is a GM's own trade appetite (gmStyle.ts) — a trade-happy
+ * GM is drawn far more often and will make up to five deals, an old-school one
+ * ("trade hunger" near zero) barely picks up the phone. Each club also has his
+ * own ceiling on deals, so the league volume that falls out of the league stays
+ * NFL-shaped while the SPREAD between personalities is large.
+ *
+ * Two kinds of deal:
+ *   · a swap of similar-value veterans where each side has a surplus (backlog
+ *     399's parity/need rules, with a bolder GM allowed a slightly wider talent
+ *     gap), and
+ *   · a veteran sold for a DRAFT PICK, which is where the personality shows
+ *     loudest: a pick-hoarding GM (analytics / draft & develop) sells a spare
+ *     for capital; a pick-spending GM (trade happy / cap reckless) sends a
+ *     second- or third-day pick to get a player who fills a hole now.
  *
  * `skipTeamId`: a head coach who holds the trade pen (CareerState.tradeControl
- * 'coach') — the AI GM makes no deal involving that club on its own. The
- * draws are still made first, so the rng stream is unchanged.
+ * 'coach') — no AI GM may deal that club on its own.
+ *
+ * Deterministic: its own rng stream (`seed + season*7079`), never the sim's.
  */
 export function runAITrades(world: World, skipTeamId?: string | null) {
   const rng = makeRng(world.seed + world.season * 7079)
   const nfl = world.teams.filter((t) => t.tier === 'NFL')
+  // Each GM's own style, read once. A seat the user holds reads league-ordinary.
+  const styles = new Map<string, GmStyle>()
+  const styleOf = (id: string) => {
+    let s = styles.get(id)
+    if (s === undefined) {
+      s = gmStyle(generalManager(world, id))
+      styles.set(id, s)
+    }
+    return s
+  }
   // League-average bodies per position, the yardstick for "surplus" and "need".
   const avgBody: Record<string, number> = {}
   for (const t of nfl) for (const p of world.roster[t.id] ?? []) avgBody[p.pos] = (avgBody[p.pos] ?? 0) + 1
   for (const k of Object.keys(avgBody)) avgBody[k] /= nfl.length || 1
+  const madeBy: Record<string, number> = {}
+  const deals = (id: string) => madeBy[id] ?? 0
+  // His own summer ceiling: tradeFreq ~2.3 → up to five deals, ~0.3 → none.
+  const limit = (id: string) => Math.max(0, Math.round(styleOf(id).tradeFreq * 2))
+  const pool = (exclude?: string) =>
+    nfl.filter((t) => t.id !== exclude && t.id !== skipTeamId && deals(t.id) < limit(t.id))
+  /** A club drawn in proportion to how much its GM works the phones. */
+  const drawClub = (exclude?: string) => {
+    const list = pool(exclude)
+    if (!list.length) return null
+    const w = list.map((t) => Math.max(0.05, styleOf(t.id).tradeFreq))
+    let r = rng() * w.reduce((x, y) => x + y, 0)
+    for (let i = 0; i < list.length; i++) {
+      r -= w[i]
+      if (r <= 0) return list[i]
+    }
+    return list[list.length - 1]
+  }
+  // The league's own volume ceiling, so personalities redistribute deals rather
+  // than inflate the market out of shape.
+  const MAX_DEALS = 12
   let made = 0
-  for (let i = 0; i < 20 && made < 4; i++) {
-    const a = rpick(rng, nfl)
-    const b = rpick(rng, nfl)
-    if (a.id === b.id) continue
-    const ra = world.roster[a.id] ?? []
-    const rb = world.roster[b.id] ?? []
-    const pa = [...ra].filter((p) => unscaleOvr(p.ovr) >= 70 && unscaleOvr(p.ovr) <= 84).sort(() => rng() - 0.5)[0]
-    const pb = [...rb].filter((p) => unscaleOvr(p.ovr) >= 70 && unscaleOvr(p.ovr) <= 84).sort(() => rng() - 0.5)[0]
+  const vetFor = (roster: Player[]) => [...roster].filter((p) => unscaleOvr(p.ovr) >= 70 && unscaleOvr(p.ovr) <= 84).sort(() => rng() - 0.5)[0]
+  const cnt = (id: string, pos: Position) => (world.roster[id] ?? []).filter((x) => x.pos === pos).length
+  const better = (id: string, p: Player) => (world.roster[id] ?? []).filter((x) => x.pos === p.pos && unscaleOvr(x.ovr) > unscaleOvr(p.ovr)).length
+  const record = (a: Team, b: Team, pa: Player, pb: Player, kind: 'swap' | 'pick', pickLabel = '') => {
+    const gm = generalManager(world, a.id)
+    world.news.unshift({
+      id: `aitrade_${world.season}_${made}_${a.id}${b.id}`,
+      week: world.week,
+      season: world.season,
+      category: 'Trade',
+      headline: kind === 'swap' ? `${a.abbr} and ${b.abbr} swap players` : `${a.abbr} send ${pa.name} to ${b.abbr}`,
+      body:
+        kind === 'swap'
+          ? `${a.name} send ${pa.name} (${pa.pos}) to ${b.name} for ${pb.name} (${pb.pos}). A low-key deal between two clubs filling needs.`
+          : `${b.name} send ${pickLabel} to ${a.name} for ${pa.name} (${pa.pos}, ${Math.round(pa.ovr)} OVR).${
+              gm ? ` ${gm.name} turns a spare into draft capital.` : ''
+            }`,
+      read: false,
+    })
+    madeBy[a.id] = deals(a.id) + 1
+    madeBy[b.id] = deals(b.id) + 1
+    made++
+  }
+  for (let i = 0; i < 140 && made < MAX_DEALS; i++) {
+    const a = drawClub()
+    if (!a) break
+    const b = drawClub(a.id)
+    if (!b) break
+    const pa = vetFor(world.roster[a.id] ?? [])
+    const pb = vetFor(world.roster[b.id] ?? [])
     if (!pa || !pb) continue
-    // Both players are drawn above, so skipping a deal never shifts the rng stream.
-    if (skipTeamId && (a.id === skipTeamId || b.id === skipTeamId)) continue
-    if (Math.abs(unscaleOvr(pa.ovr) - unscaleOvr(pb.ovr)) > 7 || pa.pos === pb.pos) continue
+    // ── the pick market: one side hoards picks, the other spends them ─────────
+    const aHoards = gmHoardsPicks(styleOf(a.id))
+    const bHoards = gmHoardsPicks(styleOf(b.id))
+    const aPays = gmPaysPicks(styleOf(a.id))
+    const bPays = gmPaysPicks(styleOf(b.id))
+    // A sells pa to B (B sends a pick) when B pays picks and A hoards them.
+    if (bPays > 0.35 && aHoards > 0.3 && rng() < 0.5) {
+      const pk = pickFor(world, b.id, pa)
+      if (pk && better(a.id, pa) >= 1) {
+        const label = `a ${world.season + 1} round-${pk.round} pick`
+        pk.ownerTeam = a.id
+        const rb0 = world.roster[b.id]
+        world.roster[b.id] = rb0.filter((x) => x.id !== pa.id)
+        pa.teamId = a.id
+        world.roster[a.id].push(pa)
+        record(a, b, pa, pa, 'pick', label)
+        continue
+      }
+    }
+    // B sells pb to A.
+    if (aPays > 0.35 && bHoards > 0.3 && rng() < 0.5) {
+      const pk = pickFor(world, a.id, pb)
+      if (pk && better(b.id, pb) >= 1) {
+        const label = `a ${world.season + 1} round-${pk.round} pick`
+        pk.ownerTeam = b.id
+        const ra0 = world.roster[a.id]
+        world.roster[a.id] = ra0.filter((x) => x.id !== pb.id)
+        pb.teamId = b.id
+        world.roster[b.id].push(pb)
+        record(b, a, pb, pb, 'pick', label)
+        continue
+      }
+    }
+    // ── the classic swap of two spares ───────────────────────────────────────
+    if (Math.abs(unscaleOvr(pa.ovr) - unscaleOvr(pb.ovr)) > 7 + Math.round(Math.max(0, (styleOf(a.id).tradeFreq + styleOf(b.id).tradeFreq) / 2 - 1) * 3)) continue
+    if (pa.pos === pb.pos) continue
     // Backlog 399: the swap has to be a real trade by the market's own values.
-    // Clubs never move their passer like this, the two assets have to be close
-    // in trade value (position and contract included), and each side has to be
-    // filling a position it is thinner at.
     if (pa.pos === 'QB' || pb.pos === 'QB') continue
     const va = playerTradeValue(pa)
     const vb = playerTradeValue(pb)
     if (va <= 0 || vb <= 0) continue
-    // Value parity (backlog 399): across-position swaps legitimately differ by
-    // their position multipliers, so a tight cap starved the market. 3.0x is
-    // still far from a free lunch — a lopsided offer is declined elsewhere.
+    // Value parity (backlog 399): 3.0x is still far from a free lunch.
     if (Math.max(va, vb) / Math.min(va, vb) > 3.0) continue
     // Clubs trade from a surplus to fill a need. Numbers first — deeper than the
     // league average at the position they give up, thinner at the one they take
     // — with a talent fallback for the common case where trimming has levelled
     // the counts: the man given up is only a spare (two better bodies sit ahead
     // of him) and he would be a top-two player at the partner's.
-    const cnt = (id: string, pos: Position) => (world.roster[id] ?? []).filter((x) => x.pos === pos).length
-    const better = (id: string, p: Player) => (world.roster[id] ?? []).filter((x) => x.pos === p.pos && unscaleOvr(x.ovr) > unscaleOvr(p.ovr)).length
     const fillNeed = (id: string, give: Player, take: Player) =>
       (cnt(id, give.pos) > (avgBody[give.pos] ?? 3) && cnt(id, take.pos) < (avgBody[take.pos] ?? 3)) ||
       (better(id, give) >= 2 && better(id, take) <= 1)
     if (!fillNeed(a.id, pa, pb) || !fillNeed(b.id, pb, pa)) continue
-    world.roster[a.id] = ra.filter((x) => x.id !== pa.id)
+    world.roster[a.id] = (world.roster[a.id] ?? []).filter((x) => x.id !== pa.id)
     pa.teamId = b.id
     world.roster[b.id].push(pa)
     world.roster[b.id] = world.roster[b.id].filter((x) => x.id !== pb.id)
     pb.teamId = a.id
     world.roster[a.id].push(pb)
-    world.news.unshift({
-      id: `aitrade_${world.season}_${made}_${a.id}${b.id}`,
-      week: world.week,
-      season: world.season,
-      category: 'Trade',
-      headline: `${a.abbr} and ${b.abbr} swap players`,
-      body: `${a.name} send ${pa.name} (${pa.pos}) to ${b.name} for ${pb.name} (${pb.pos}). A low-key deal between two clubs filling needs.`,
-      read: false,
-    })
-    made++
+    record(a, b, pa, pb, 'swap')
   }
   return made
+}
+
+/**
+ * The pick a buying club would send for one veteran: a tradeable pick outside
+ * round 1 whose chart value is within 60% of the player's own trade value, the
+ * closest one. Returns null when the club has no capital or no hole to fill —
+ * a GM who pays picks still has to want the player.
+ */
+function pickFor(world: World, buyerId: string, p: Player): DraftPick | null {
+  const want = playerTradeValue(p)
+  if (want <= 0) return null
+  const wantAtPos = FA_NEEDS[p.pos]
+  if (wantAtPos == null) return null
+  if ((world.roster[buyerId] ?? []).filter((x) => x.pos === p.pos).length >= wantAtPos) return null
+  let best: DraftPick | null = null
+  let bestRatio = Infinity
+  for (const pk of picksOwnedBy(world, buyerId)) {
+    if (pk.round < 2) continue
+    if (!isTradeablePick(world, pk)) continue
+    const v = pickTradeValue(world, pk)
+    if (v <= 0) continue
+    const ratio = Math.max(v, want) / Math.min(v, want)
+    if (ratio <= 1.6 && ratio < bestRatio) {
+      bestRatio = ratio
+      best = pk
+    }
+  }
+  return best
 }
 
 // ── Free agency AI: teams re-sign or sign to fill needs ───────────────────────/** Minimum bodies per position when trimming a roster to 53. */
@@ -768,7 +891,12 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
   const price = (teamId: string, p: Player, bias: number) => {
     const base = freeAgentAsk(p, world.season, p.faWeeks ?? 0, bias)
     const pct = db ? cultureDiscountFor(world, db, teamId, p).pct : 0
-    return pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
+    const ask = pct ? Math.round((base * (1 - pct / 100)) / 1e5) * 1e5 : base
+    // FUTURES #49: what the club actually hands over is the market ask in HIS
+    // hands. A cap-reckless GM pays over the market to close; a draft-and-develop
+    // one negotiates under it. Individual: his own faSpend, not a league mean.
+    const spend = gmStyle(generalManager(world, teamId)).faSpend
+    return Math.round((ask * (1 + (spend - 1) * 0.25)) / 1e5) * 1e5
   }
   const qualifying = db ? cultureQualifiedClubs(world, db) : null
   const teamOrder = qualifying
@@ -778,6 +906,10 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
   for (const t of teamOrder) {
     if (t.tier !== 'NFL') continue
     const roster = world.roster[t.id] ?? []
+    // FUTURES #49: the man in the chair. His appetite sets how far past the need
+    // table he shops, how high he will push the payroll, and the SHAPE of the
+    // deal he writes (progress.ts `styledDeal`).
+    const style = gmStyle(generalManager(world, t.id))
     const counts: Record<string, number> = {}
     for (const p of roster) counts[p.pos] = (counts[p.pos] ?? 0) + 1
     for (const pos of Object.keys(needed)) {
@@ -803,7 +935,7 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
         const annual = price(t.id, cand, eraBias)
         taken.add(cand.id)
         cand.teamId = t.id
-        cand.contract = { ...cand.contract, annual, years: 2, base: [annual, annual], capHit: annual }
+        cand.contract = styledDeal(cand, world.season, annual, 2, 0.5, style)
         world.roster[t.id].push(cand)
         counts[pos] = (counts[pos] ?? 0) + 1
         deficit--
@@ -811,15 +943,20 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
       }
     }
     // W1: top up toward the cap floor. The need-filling above can leave AI
-    // payrolls far below the floor; sign up to three more best-OVR bodies.
+    // payrolls far below the floor; sign more best-OVR bodies. FUTURES #49: how
+    // many, and how high up the payroll each club pushes, is its GM's appetite —
+    // a cap-reckless GM shops past the need table to the ceiling, a
+    // draft-and-develop one stops at the floor.
     if (t.id !== skipTeamId) {
       const usedCap = () => roster.reduce((s, q) => s + q.contract.capHit, 0) + (world.deadMoney[t.id] ?? 0)
+      const topUpMax = clamp(Math.round(1 + (style.faSpend - 0.55) * 3.5), 1, 5)
+      const ceilPct = clamp(0.93 + (style.faSpend - 0.85) * 0.1, 0.9, 0.99)
       let topUps = 0
-      while (topUps < 3 && usedCap() < capLimit * CAP_FLOOR_PCT) {
+      while (topUps < topUpMax && usedCap() < capLimit * ceilPct) {
         const cand = freeCopy.find((p) => {
           if (taken.has(p.id) || p.pos === 'K' || p.pos === 'P') return false
           const bias = world.era?.positionBias?.[p.pos as import('../types').Position] ?? 1
-          return usedCap() + price(t.id, p, bias) <= capLimit * 0.95
+          return usedCap() + price(t.id, p, bias) <= capLimit * ceilPct
         })
         if (!cand) break
         // A full roster swaps cheap depth for the better free agent instead of
@@ -848,7 +985,7 @@ export function runAIFreeAgency(world: World, skipTeamId?: string, db?: CareerDa
         const annual = price(t.id, cand, bias)
         taken.add(cand.id)
         cand.teamId = t.id
-        cand.contract = { ...cand.contract, annual, years: 2, base: [annual, annual], capHit: annual }
+        cand.contract = styledDeal(cand, world.season, annual, 2, 0.5, style)
         world.roster[t.id].push(cand)
         counts[cand.pos] = (counts[cand.pos] ?? 0) + 1
         ledgerFreeAgent(world, t.id, 'gained', cand.ovr)
