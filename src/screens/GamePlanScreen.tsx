@@ -1,10 +1,12 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronRight, ClipboardList, Cloud, CloudRain, CloudSnow, CloudSun, Repeat, Search, Thermometer, Volume2, Wind, X } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronRight, ClipboardList, Cloud, CloudRain, CloudSnow, CloudSun, Megaphone, Repeat, Search, Thermometer, Volume2, Wind, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { forecastFor, gameWeather, getWeather, type GameWeather } from '../game/engine/weather'
 import { signed } from '../lib/format'
 import { PLAN_PRESETS, describePlan, type GamePlan } from '../game/engine/gameplan'
 import { DEFAULT_ST, stRecordText, alertness } from '../game/engine/specialCalls'
+import { trickRecordText } from '../game/engine/trickPlays'
+import { trickRecordFor } from '../lib/trickUi'
 import { coachTendency, DEFAULT_CALL_SHEET, BUCKETS, BUCKET_LABEL, OFF_CLASSES, DEF_CALLS, OFF_CLASS_LABEL, DEF_CALL_LABEL, topKey, type CallSheet, type FourthStyle } from '../game/engine/decisions'
 import { capabilities } from '../game/engine/capabilities'
 import { coordinatorAdvice } from '../game/engine/advice'
@@ -15,6 +17,7 @@ import { CulturePanel } from '../components/CulturePanel'
 import { SchemeFitReport } from '../components/SchemeFitReport'
 import { WrinkleCard } from '../components/WrinkleCard'
 import { InstallCard } from '../components/InstallCard'
+import { TrickPlaysCard } from '../components/TrickPlaysCard'
 import { KeysCard } from '../components/KeysCard'
 import { PracticeCard } from '../components/PracticeCard'
 import { PlayCallingCard } from '../components/PlayCallingCard'
@@ -49,6 +52,46 @@ import {
   VerdictChip,
 } from '../ui/kit'
 import { useAccessLevel } from '../ui/hooks'
+
+/**
+ * FUTURES #7 (H3): the halftime-speech standing order for simmed games. Only a
+ * head coach owns a speech — the engine asks the card at 'hc' scope, and a
+ * coordinator's game never carries one — so a coordinator sees nothing. The
+ * default ("stay") reproduces the pre-speech baseline byte for byte.
+ */
+function HalftimeSpeechCard({ disabled = false }: { disabled?: boolean }) {
+  const career = useGame((s) => s.career)!
+  const setHalftimeAuto = useGame((s) => s.setHalftimeAuto)
+  if (capabilities(career).planScope !== 'both') return null
+  const mode = career.halftimeAuto ?? 'stay'
+  return (
+    <Card>
+      <div className="mb-1 flex items-center gap-2">
+        <Megaphone size={16} className="text-muted" aria-hidden />
+        <h3 className="font-display text-lg font-700 uppercase tracking-wide">Halftime speech</h3>
+      </div>
+      <p className="mb-2 text-small leading-snug text-muted">
+        When a game is simmed, your halftime speech is answered for you — the staff read the room and pick the best
+        fit, or you keep the old baseline.
+      </p>
+      <SegmentedControl
+        label="Halftime speech when simmed"
+        disabled={disabled}
+        value={mode}
+        onChange={setHalftimeAuto}
+        options={[
+          { id: 'stay', label: 'Stay the course', title: 'No speech — exactly the baseline.' },
+          { id: 'staff', label: 'Let the staff read the room', title: 'Your staff picks the best-fitting speech.' },
+        ]}
+      />
+      <p className="mt-2 text-label leading-snug text-muted">
+        {mode === 'staff'
+          ? 'The staff picks the speech that fits the score and the room at the break.'
+          : 'No speech: the second half plays out exactly as it always has.'}
+      </p>
+    </Card>
+  )
+}
 
 export function GamePlanScreen() {
   const league = useWorld()
@@ -283,6 +326,8 @@ export function GamePlanScreen() {
           <MatchupCard disabled={readOnly} />
           <UsageCard disabled={readOnly} />
           <SpecialTeamsCard disabled={readOnly} />
+          <HalftimeSpeechCard disabled={readOnly} />
+          <TrickPlaysCard disabled={readOnly} />
         </div>
       </section>
 
@@ -477,6 +522,8 @@ function StudyOpponentCard({ oppId }: { oppId?: string }) {
   const opp = league.byId[oppId]
   const read = career.oppRead && career.oppRead.week === league.week && career.oppRead.oppId === oppId ? career.oppRead : null
   const sharp = !!read?.sharp
+  // FUTURES #24: what the league has on their trick plays this season.
+  const oppTricks = trickRecordText(trickRecordFor(league, oppId))
   return (
     <Card>
       <div className="mb-3 flex items-center gap-2">
@@ -491,6 +538,11 @@ function StudyOpponentCard({ oppId }: { oppId?: string }) {
             ? `You have a fuzzy read on the ${opp.name}. Study again to sharpen it.`
             : `Study the ${opp.name} to learn their tendencies before kickoff.`}
       </p>
+      {oppTricks && (
+        <p className="mb-3 text-small text-muted">
+          Tricks: <strong className="text-ink-2">{oppTricks}</strong>.
+        </p>
+      )}
       <Button size="sm" variant={sharp ? 'secondary' : 'primary'} disabled={sharp} onClick={studyOpponent}>
         {read ? `Sharpen the read on the ${opp.abbr}` : `Study ${opp.name}`}
       </Button>

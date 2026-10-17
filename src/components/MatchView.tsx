@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Goal, Pause, PanelBottom, Play, RotateCcw, Settings, Shield, SkipForward, Target, Timer, Wind, Zap } from 'lucide-react'
+import { Anchor, BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Flame, Goal, Megaphone, Minus, Pause, PanelBottom, Play, RotateCcw, Settings, Shield, SkipForward, Target, Timer, TrendingDown, Wind, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, penaltyTotals, PENALTY_INFO, type DecisionLog, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import { BUCKET_LABEL } from '../game/engine/decisions'
 import { audibleBannerFor, defCallLabel, playCallerTag, sheetModeHint, sheetPlaysFor } from './matchCalling'
+import { speechChipLabel, speechChipTone, speechOptionRisk, speechToastLine } from './speechUi'
+import type { SpeechOutcome } from '../game/engine/halftimeSpeech'
 import type { World } from '../game/engine/generate'
 import type { GameStatLine } from '../game/types'
 import { capabilities } from '../game/engine/capabilities'
@@ -25,10 +27,12 @@ import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
 import { actorPlayers, teamJerseys } from './jersey'
 import { PLAY_TYPE_TABS, playTypeTabForId, type PlayTypeTab } from './playTypes'
+import { isTrickOption, surpriseTone, trickCallOptions, trickCallStaffLine, trickDiagramName, trickRecordFor, trickSurprisePct } from '../lib/trickUi'
 import { effRating } from './animRatings'
 import { TeamHoverCard } from './TeamHoverCard'
 import { PlayerHoverCard } from './PlayerHoverCard'
-import { Badge, BroadcastScope, Button, ConfirmSheet, DivergingMeter, IconButton, OptionCard, OptionGroup, OverflowMenu, ScoreBlock, TeamCrest, VerdictChip, type MenuItem } from '../ui/kit'
+import { Badge, BroadcastScope, Button, Chip, ConfirmSheet, DivergingMeter, IconButton, OptionCard, OptionGroup, OverflowMenu, ScoreBlock, TeamCrest, VerdictChip, type MenuItem } from '../ui/kit'
+import { lockerRoomState } from '../game/engine/lockerRoom'
 import { usePhone } from '../ui/hooks'
 import { challengeThreshold, type ChallengeState, type PlayReview } from '../game/engine/review'
 import { ReviewCard } from './ReviewCard'
@@ -147,6 +151,12 @@ const TOAST_TONE: Record<ToastTone, string> = {
 
 /** The TV play-result toast, built only from the recorded PlayEvent fields. */
 function playToast(play: PlayEvent, next?: PlayEvent): { text: string; tone: ToastTone } | null {
+  const base = baseToast(play, next)
+  // FUTURES #24: a trick snap is flagged on the toast so the call reads as one.
+  return play.trick && base ? { text: `TRICK · ${base.text}`, tone: base.tone } : base
+}
+
+function baseToast(play: PlayEvent, next?: PlayEvent): { text: string; tone: ToastTone } | null {
   if (play.type === 'run' || play.type === 'pass') {
     if (play.result === 'TOUCHDOWN!') return { text: 'TOUCHDOWN', tone: 'gold' }
     if (play.type === 'pass' && play.result.startsWith('Sack')) return { text: `SACK −${Math.abs(play.yards)}`, tone: 'bad' }
@@ -197,6 +207,7 @@ export function MatchView() {
   const abandonGameDay = useGame((s) => s.abandonGameDay)
   const viewTeam = useGame((s) => s.viewTeam)
   const career = useGame((s) => s.career)
+  const showToast = useGame((s) => s.showToast)
 
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
@@ -691,6 +702,10 @@ export function MatchView() {
   const userTeamId = gameDay?.state.ctx?.userTeamId ?? career?.teamId
   const timeoutsLeft = userTeamId ? (gameDay?.state.timeouts[userTeamId] ?? 0) : 0
   const timeoutArmed = !!gameDay && !!userTeamId && gameDay.state.manualTimeout === userTeamId
+  // FUTURES #7 (H3): the user's halftime speech, shown beside their club on the
+  // scorebug for the second half (the chosen answer, with its verdict).
+  const speechOut = userTeamId ? (gameDay?.state.speech ?? match?.speech)?.[userTeamId] : undefined
+  const speechChip = speechOut && play.qtr >= 3 ? speechOut : null
   // FUTURES #5 C3: the challenge moment's replay read, threshold and flags left.
   const challengeInfo = moment?.kind === 'challenge'
     ? {
@@ -759,7 +774,14 @@ export function MatchView() {
   const answer = (choiceId: string) => {
     setFrozen(false)
     setPlaying(true)
-    void answerGameMoment(choiceId)
+    // FUTURES #7 (H3): after the halftime speech is answered the engine has
+    // stored the verdict — read it back for the one-line result toast.
+    const wasSpeech = moment?.kind === 'speech'
+    void answerGameMoment(choiceId).then(() => {
+      if (!wasSpeech) return
+      const out = userTeamId ? useGame.getState().gameDay?.state.speech?.[userTeamId] : undefined
+      if (out) showToast(speechToastLine(out.result, out.line))
+    })
   }
 
   const advance = (stop: 'play' | 'drive' | 'moment') => {
@@ -837,6 +859,7 @@ export function MatchView() {
         <TeamHoverCard team={away} className="min-w-0">
           <ScoreBlock team={away} score={shownScore.away} hasBall={play.offId === away.id} timeouts={gameDay?.state.timeouts?.[away.id]} challenges={gameDay?.state.challenges?.[away.id]?.left} align="left" />
         </TeamHoverCard>
+        {speechChip && userTeamId === away.id && <SpeechChip out={speechChip} />}
         <div className="mx-auto flex min-w-0 flex-col items-center justify-center leading-tight">
           <div className="flex items-center gap-1.5">
             <span className="whitespace-nowrap rounded bg-surface-2 px-2 py-0.5 font-cond text-label font-700 tnum">Q{play.qtr} · {play.clock}</span>
@@ -862,6 +885,7 @@ export function MatchView() {
             </span>
           )}
         </div>
+        {speechChip && userTeamId === home.id && <SpeechChip out={speechChip} />}
         <TeamHoverCard team={home} className="min-w-0">
           <ScoreBlock team={home} score={shownScore.home} hasBall={play.offId === home.id} timeouts={gameDay?.state.timeouts?.[home.id]} challenges={gameDay?.state.challenges?.[home.id]?.left} align="right" />
         </TeamHoverCard>
@@ -1621,6 +1645,7 @@ function PlayLog({ plays, idx, world, onJump, downText, decisions, userTeamId }:
                       <span title={who.title} className="mr-1 font-cond text-label font-700 uppercase tracking-wide text-muted">{who.label}</span>
                     )}
                     <span className="font-600 text-ink">{p.concept}</span> — {p.result}
+                    {p.trick && <Badge tone="gold" className="ml-1">Trick</Badge>}
                     {defLabel && defWho && (
                       <span title={defWho.title} className="text-muted"> · {defWho.label} {defLabel}</span>
                     )}
@@ -1830,11 +1855,13 @@ function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote, challenge }
   const isChallenge = moment.kind === 'challenge' && !!challenge
   // FUTURES #26 P3b: the audible is its own card — the look line is the title.
   const isAudible = moment.kind === 'audible'
+  // FUTURES #7 (H3): the halftime speech is its own card too (per-option fit + staff read).
+  const isSpeech = moment.kind === 'speech'
   const likely = !!challenge && challenge.read >= challenge.threshold
   return (
     <div className={cn('rounded-2xl border bg-canvas/60 p-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.85)]', isChallenge ? 'border-loss/70' : 'border-gold/70')}>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        {isChallenge ? <Badge tone="loss">Red flag</Badge> : isAudible ? <Badge tone="gold">Audible</Badge> : <Badge tone="gold">Your call</Badge>}
+        {isChallenge ? <Badge tone="loss">Red flag</Badge> : isAudible ? <Badge tone="gold">Audible</Badge> : isSpeech ? <Badge tone="gold">Halftime</Badge> : <Badge tone="gold">Your call</Badge>}
         {!isAudible && <span className="font-display text-base font-700 uppercase text-ink">{moment.title}</span>}
         <div className="ml-auto flex items-center gap-1.5">
           <span className="rounded-full bg-surface-2 px-2 py-0.5 font-cond text-xs font-700 tnum text-ink-2">
@@ -1883,6 +1910,8 @@ function MomentCard({ moment, fieldPos, onAnswer, quick, fourthNote, challenge }
         </>
       ) : isAudible ? (
         <AudibleBody moment={moment} onAnswer={onAnswer} />
+      ) : isSpeech ? (
+        <SpeechBody moment={moment} onAnswer={onAnswer} />
       ) : (
         <>
           {moment.staffRead && (
@@ -2008,8 +2037,102 @@ function AudibleBody({ moment, onAnswer }: { moment: Moment; onAnswer: (id: stri
   )
 }
 
+/**
+ * FUTURES #7 (H3): the halftime speech card. Each option carries a risk badge
+ * read from the engine's own fit (in the option's hint), and the staff read
+ * (room, challenged star, owner note) sits above them. Kept compact — a speech
+ * can be the third card of the halftime sequence.
+ */
+function SpeechBody({ moment, onAnswer }: { moment: Moment; onAnswer: (id: string) => void }) {
+  const world = useWorld()
+  const career = useGame((s) => s.career)
+  const captains = career ? lockerRoomState(career, world.season).captains.length : 0
+  const margin = moment.us - moment.them
+  return (
+    <div>
+      <div className="mb-2 flex items-start gap-2">
+        <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gold-soft text-gold">
+          <Megaphone size={16} />
+        </span>
+        <span className="min-w-0">
+          <span className="block font-display text-lg font-700 uppercase leading-tight text-ink">{moment.title}</span>
+          <span className="mt-0.5 block text-label text-muted">
+            {margin >= 0 ? `Up ${margin}` : `Down ${-margin}`} at the break — pick your words.
+          </span>
+        </span>
+        {captains > 0 && (
+          <Chip className="ml-auto shrink-0">
+            {captains} captain{captains === 1 ? '' : 's'}
+          </Chip>
+        )}
+      </div>
+      {moment.staffRead && (
+        <div className="mb-2 flex items-start gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5 text-label text-muted">
+          <Eye size={12} className="mt-0.5 shrink-0" />
+          <span className="min-w-0">{moment.staffRead}</span>
+        </div>
+      )}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {moment.options.map((o) => {
+          const Icon = optionIcon(moment.kind, o.id)
+          const risk = speechOptionRisk(o.id, o.hint)
+          return (
+            <button
+              key={o.id}
+              onClick={() => onAnswer(o.id)}
+              className={cn(
+                'flex items-start gap-2.5 rounded-xl border p-2.5 text-left transition hover:bg-surface-3',
+                o.id === moment.defaultId ? 'border-gold/70 bg-surface-3' : 'border-line-strong bg-surface-2',
+              )}
+            >
+              <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-gold">
+                <Icon size={17} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex w-full flex-wrap items-center gap-1.5">
+                  <span className="font-cond text-sm font-700 uppercase text-ink">{o.label}</span>
+                  {risk && <Badge tone={risk.tone} className="ml-auto">{risk.label}</Badge>}
+                </span>
+                {o.hint && <span className="mt-0.5 block text-label leading-snug text-muted">{o.hint}</span>}
+                {o.id === moment.defaultId && (
+                  <span className="mt-1 block font-cond text-label font-700 uppercase tracking-wide text-gold/85">Standing order</span>
+                )}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * FUTURES #7 (H3): the user's chosen halftime speech beside their club on the
+ * scorebug, for the second half (the verdict read from the engine's outcome).
+ */
+function SpeechChip({ out }: { out: SpeechOutcome }) {
+  const tone = speechChipTone(out.result)
+  const toneClass = tone === 'win' ? 'text-win' : tone === 'loss' ? 'text-loss' : 'text-muted'
+  const Icon = out.result === 'backfired' ? TrendingDown : out.result === 'flat' ? Minus : out.id === 'fireUp' ? Flame : out.id === 'calmDown' ? Wind : Target
+  return (
+    <Chip className="shrink-0 gap-1">
+      <Icon size={11} className={cn('shrink-0', toneClass)} aria-hidden />
+      <span className={cn('font-cond text-label font-700 uppercase tracking-wide', toneClass)}>{speechChipLabel(out)}</span>
+    </Chip>
+  )
+}
+
 /** U2: a decorative icon per moment option (the sim only exposes id/label/hint). */
 function optionIcon(kind: MomentKind, id: string) {
+  // FUTURES #7 (H3): the halftime speech's own set (fire up / calm down /
+  // challenge a star / stay the course).
+  if (kind === 'speech') {
+    if (id === 'fireUp') return Flame
+    if (id === 'calmDown') return Wind
+    if (id === 'challenge') return Target
+    if (id === 'stayCourse') return Anchor
+    return Megaphone
+  }
   // FUTURES #26 P3b: the audible card's own set (keep / check / hot; stay / rotate
   // / pressure / load box).
   if (kind === 'audible') {
@@ -2069,8 +2192,49 @@ function QuickCallBar({ quick, onAnswer }: { quick: (lean: 'run' | 'pass') => st
   )
 }
 
+/**
+ * FUTURES #24: one card in the game-day Tricks tab — the installed trick (or
+ * Spike / Fake spike), its surprise meter and the staff's read of the look.
+ */
+function TrickCallCard({
+  option,
+  rec,
+  onAnswer,
+}: {
+  option: Moment['options'][number]
+  rec: Parameters<typeof trickCallStaffLine>[1]
+  onAnswer: (id: string) => void
+}) {
+  const pct = trickSurprisePct(option.hint)
+  const diagram = trickDiagramName(option)
+  return (
+    <button
+      type="button"
+      onClick={() => onAnswer(option.id)}
+      title={`${option.label} — ${option.hint}`}
+      className="flex items-start gap-2 rounded-lg border border-line-strong bg-surface-2 p-2 text-left transition hover:bg-surface-3"
+    >
+      {diagram && <RouteDiagram name={diagram} className="h-9 w-14 shrink-0 rounded" />}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="truncate font-cond text-label font-700 uppercase tracking-wide text-ink">{option.label}</span>
+          {pct == null ? (
+            <Badge tone="neutral" className="ml-auto">Clock</Badge>
+          ) : (
+            <Badge tone={surpriseTone(pct)} className="ml-auto">{pct}% surprise</Badge>
+          )}
+        </span>
+        <span className="mt-0.5 block text-label leading-snug text-muted">{trickCallStaffLine(option, rec)}</span>
+      </span>
+    </button>
+  )
+}
+
 function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: string) => void }) {
   const plan = useGame((s) => s.career?.playCalling)
+  const world = useWorld()
+  const myTeamId = useGame((s) => s.career?.teamId)
+  const rec = myTeamId ? trickRecordFor(world, myTeamId) : undefined
   // The grouping switch (UI only, remembered per viewer): by type by default.
   const [mode, setMode] = useState<CallGroupMode>(() => {
     try {
@@ -2090,6 +2254,8 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
   const groups = useMemo(() => {
     const m = new Map<string, Moment['options']>()
     for (const o of moment.options) {
+      // FUTURES #24: tricks and the spike keep their own tab, never a formation.
+      if (isTrickOption(o.id)) continue
       const f = playbookPlay(o.id)?.formation ?? 'Other'
       const arr = m.get(f) ?? []
       arr.push(o)
@@ -2097,13 +2263,14 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
     }
     return [...m.entries()].sort((a, b) => FORMATION_ORDER.indexOf(a[0]) - FORMATION_ORDER.indexOf(b[0]))
   }, [moment.options])
-  // By type: the seven type tabs (empty ones hidden) plus, for options that are
-  // not playbook plays — the installed tricks and the real spike — a tab of
-  // their own, so they never fall into a type they don't have.
+  // By type: the seven type tabs (empty ones hidden). The installed tricks, the
+  // real spike and the fake spike never fall into a type they don't have — they
+  // get the Tricks tab at the end.
   const typeGroups = useMemo(() => {
     const m = new Map<PlayTypeTab, Moment['options']>()
     const other: Moment['options'] = []
     for (const o of moment.options) {
+      if (isTrickOption(o.id)) continue
       const t = playTypeTabForId(o.id)
       if (!t) {
         other.push(o)
@@ -2115,6 +2282,8 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
     }
     return { plays: m, other, tabs: PLAY_TYPE_TABS.filter((t) => (m.get(t.id)?.length ?? 0) > 0).map((t) => ({ id: t.id as string, label: t.label })) }
   }, [moment.options])
+  // FUTURES #24: only the installed tricks plus Spike / Fake spike when eligible.
+  const tricks = useMemo(() => trickCallOptions(moment), [moment])
   // FUTURES #26 P3b: this bucket's plays on the user's own sheet come first, as
   // their own tab. No sheet for the bucket (or no plan) = today's picker exactly.
   const sheet = useMemo(() => {
@@ -2133,21 +2302,29 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
         ? [
             ...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []),
             ...typeGroups.tabs,
-            ...(typeGroups.other.length ? [{ id: 'other', label: 'Trick' }] : []),
+            ...(typeGroups.other.length ? [{ id: 'other', label: 'Other' }] : []),
+            // FUTURES #24: the Tricks tab sits after the type tabs (and Sheet).
+            ...(tricks.length ? [{ id: 'tricks', label: 'Tricks' }] : []),
           ]
-        : [...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []), ...groups.map(([f]) => ({ id: f, label: f }))],
-    [mode, sheet.plays.length, groups, typeGroups],
+        : [
+            ...(sheet.plays.length ? [{ id: 'sheet', label: 'Sheet' }] : []),
+            ...groups.map(([f]) => ({ id: f, label: f })),
+            ...(tricks.length ? [{ id: 'tricks', label: 'Tricks' }] : []),
+          ],
+    [mode, sheet.plays.length, groups, typeGroups, tricks.length],
   )
   const fallback = sheet.plays.length ? 'sheet' : mode === 'type' ? defaultType : defaultFormation
   const active = tabs.some((t) => t.id === tab) ? tab : fallback
   const activeLabel = tabs.find((t) => t.id === active)?.label ?? active
   const plays = active === 'sheet'
     ? sheet.plays.map((id) => moment.options.find((o) => o.id === id)).filter((o): o is Moment['options'][number] => !!o)
-    : mode === 'type'
-      ? active === 'other'
-        ? typeGroups.other
-        : typeGroups.plays.get(active as PlayTypeTab) ?? []
-      : groups.find(([f]) => f === active)?.[1] ?? []
+    : active === 'tricks'
+      ? tricks
+      : mode === 'type'
+        ? active === 'other'
+          ? typeGroups.other
+          : typeGroups.plays.get(active as PlayTypeTab) ?? []
+        : groups.find(([f]) => f === active)?.[1] ?? []
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -2179,7 +2356,13 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
           ))}
         </div>
         <span className="truncate text-label text-muted">
-          {open ? (active === 'sheet' ? `Your sheet for ${BUCKET_LABEL[sheet.bucket]} — tap a play to call it` : 'Tap a play to call it — scroll for more') : `${activeLabel} · tap to browse the book`}
+          {open
+            ? active === 'sheet'
+              ? `Your sheet for ${BUCKET_LABEL[sheet.bucket]} — tap a play to call it`
+              : active === 'tricks'
+                ? 'Surprise is how much they are not expecting it — tap a trick to call it'
+                : 'Tap a play to call it — scroll for more'
+            : `${activeLabel} · tap to browse the book`}
         </span>
       </div>
       {open && (
@@ -2199,32 +2382,40 @@ function CallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: strin
               </button>
             ))}
           </div>
-          <div className="flex gap-1.5 overflow-x-auto pb-1">
-            {plays.map((o) => {
-              const pb = playbookPlay(o.id)
-              // By type: the card's own formation is the small sub-label.
-              const sub = active === 'sheet'
-                ? 'On your sheet'
-                : mode === 'type'
-                  ? pb?.formation ?? 'Trick'
-                  : o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''
-              return (
-                <button
-                  key={o.id}
-                  onClick={() => onAnswer(o.id)}
-                  title={`${o.label} — ${o.hint}`}
-                  className={cn(
-                    'flex w-[78px] shrink-0 flex-col gap-0.5 rounded-lg border p-1 text-left transition',
-                    o.id === moment.defaultId ? 'border-gold/70 bg-surface-3' : 'border-line-strong bg-surface-2 hover:bg-surface-3',
-                  )}
-                >
-                  <RouteDiagram name={o.id} className="h-8 w-full rounded" />
-                  <span className="truncate font-cond text-label font-700 uppercase leading-tight text-ink">{o.label}</span>
-                  <span className="truncate font-cond text-label uppercase leading-none text-muted">{sub}</span>
-                </button>
-              )
-            })}
-          </div>
+          {active === 'tricks' ? (
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {plays.map((o) => (
+                <TrickCallCard key={o.id} option={o} rec={rec} onAnswer={onAnswer} />
+              ))}
+            </div>
+          ) : (
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {plays.map((o) => {
+                const pb = playbookPlay(o.id)
+                // By type: the card's own formation is the small sub-label.
+                const sub = active === 'sheet'
+                  ? 'On your sheet'
+                  : mode === 'type'
+                    ? pb?.formation ?? 'Trick'
+                    : o.id === moment.defaultId ? 'Standing order' : pb?.type ?? ''
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => onAnswer(o.id)}
+                    title={`${o.label} — ${o.hint}`}
+                    className={cn(
+                      'flex w-[78px] shrink-0 flex-col gap-0.5 rounded-lg border p-1 text-left transition',
+                      o.id === moment.defaultId ? 'border-gold/70 bg-surface-3' : 'border-line-strong bg-surface-2 hover:bg-surface-3',
+                    )}
+                  >
+                    <RouteDiagram name={o.id} className="h-8 w-full rounded" />
+                    <span className="truncate font-cond text-label font-700 uppercase leading-tight text-ink">{o.label}</span>
+                    <span className="truncate font-cond text-label uppercase leading-none text-muted">{sub}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
