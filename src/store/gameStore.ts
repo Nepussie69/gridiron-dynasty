@@ -12,7 +12,7 @@ import {
   ERAS,
   type World,
 } from '../game/engine/generate'
-import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type WeekRecovery } from '../game/engine/sim'
+import { finalizeGame, healAfterWeek, simWeek, simulatePlayoffs, type PlayoffResult, type WeekRecovery } from '../game/engine/sim'
 import { simulatePlayByPlay, createGame, runToMoment, runUntil, answerMoment, finishGame, setUserCoaching, setStamina, getStamina, setLivePlan, offStyle, isSack, type GameSim, type GameCtx, type GameState, type Moment, type PlanChange } from '../game/engine/playsim'
 import { DEFAULT_CALL_SHEET, emptyBook, bucketFor, offClassFor, type CallSheet, type DefCall, type OffClass } from '../game/engine/decisions'
 import { normalizeSpecial, emptySTRecord, type SpecialTeamsPlan } from '../game/engine/specialCalls'
@@ -244,6 +244,15 @@ import {
   type OwnerMeetingEntry,
   type OwnerMeetingState,
 } from '../game/engine/ownerMeeting'
+// FUTURES #50 (Market & fans): the market engine hook — one call a season, after
+// the standings are final. Grouped here so the parallel gameStore edit merges cleanly.
+import {
+  TICKET_MAX,
+  TICKET_MIN,
+  TICKET_STEP,
+  updateMarket,
+  type SeasonOutcome,
+} from '../game/engine/market'
 import { evaluateTraits } from '../game/engine/earnedTraits'
 import { applyWilderness, makeSuccessor } from '../game/engine/legacy'
 import { pushLedger, gradeLedger, logCoachCalls } from '../game/engine/ledger'
@@ -370,6 +379,8 @@ export type ScreenId =
   | 'career' | 'history' | 'dashboard' | 'ledger' | 'roster' | 'depth' | 'development' | 'gameplan' | 'staff' | 'scouting' | 'draft'
   | 'freeagency' | 'trades' | 'cap' | 'schedule' | 'standings'
   | 'stats' | 'awards' | 'league' | 'inbox' | 'players'
+  // FUTURES #50: the club's market, attendance and revenue (the Business view).
+  | 'business'
   // L12.8 V1: a read-only page for another club (not in the sidebar).
   | 'team'
 
@@ -395,6 +406,7 @@ export const SCREENS: ScreenMeta[] = [
   { id: 'freeagency', label: 'Free Agency', group: 'Personnel', tiers: ['NFL'] },
   { id: 'trades', label: 'Trade Center', group: 'Personnel', tiers: ['NFL'] },
   { id: 'cap', label: 'Salary Cap', group: 'Club', tiers: ['NFL'] },
+  { id: 'business', label: 'Business', group: 'Club', tiers: ['NFL'] },
   { id: 'staff', label: 'Staff & Hiring', group: 'Club', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'players', label: 'Find a Player', group: 'League', tiers: ['NFL', 'FBS', 'FCS'] },
   { id: 'standings', label: 'Standings', group: 'League', tiers: ['NFL', 'FBS', 'FCS'] },
@@ -774,6 +786,11 @@ interface GameStore {
    *  recommended cuts (with an inbox note) instead of blocking once for the Cutdown view. */
   advanceStage: () => void
   startNextSeason: (opts?: { sim?: boolean }) => void
+  /**
+   * FUTURES #50: set your club's ticket price (bounded to engine/market.ts
+   * TICKET_MIN/MAX). Attendance and fan interest react on the Business view.
+   */
+  setTicketPrice: (price: number) => void
   /** offseason90: open/close the Cutdown view on the Roster screen. */
   openCutdown: () => void
   closeCutdown: () => void
@@ -2304,6 +2321,14 @@ export const useGame = create<GameStore>((set, get) => ({
   setLeaguePbp: (v) => {
     set({ leaguePbp: v, tick: get().tick + 1 })
     get().showToast(v ? 'Authentic league sim ON — every game runs play-by-play.' : 'Fast league sim restored.')
+  },
+
+  setTicketPrice: (price) => {
+    const career = get().career
+    if (!career) return
+    const bounded = Math.max(TICKET_MIN, Math.min(TICKET_MAX, Math.round(price / TICKET_STEP) * TICKET_STEP))
+    set({ career: { ...career, ticketPrice: bounded }, tick: get().tick + 1 })
+    get().save()
   },
 
   advanceStage: () => {
@@ -5987,6 +6012,25 @@ function completeOffseasonStages(world: World, career: CareerState | null) {
   fillNflRosters(world, career?.teamId)
 }
 
+/**
+ * FUTURES #50: turn the playoff bracket into the fan-interest outcome — who made
+ * it, how many rounds each club won (by its own results), and the final two.
+ */
+function marketOutcome(world: World, playoffs: PlayoffResult): SeasonOutcome {
+  const byAbbr = new Map(world.teams.map((t) => [t.abbr, t.id]))
+  const roundsWon: Record<string, number> = {}
+  for (const r of playoffs.rounds) {
+    const id = byAbbr.get(r.winner)
+    if (id) roundsWon[id] = (roundsWon[id] ?? 0) + 1
+  }
+  return {
+    made: new Set(playoffs.seeds),
+    roundsWon,
+    champion: playoffs.champion,
+    runnerUp: playoffs.runnerUp,
+  }
+}
+
 function runEndOfRegularSeason(
   set: (p: Partial<GameStore>) => void,
   get: () => GameStore,
@@ -6002,6 +6046,11 @@ function runEndOfRegularSeason(
   const playoffs = simulatePlayoffs(world)
   const mvp = computeMVP()
   world.awards = { mvp: mvp ?? undefined }
+
+  // FUTURES #50: move every club's fan interest and bank the season's revenue.
+  // Pure arithmetic over the final standings, schedule and rosters — no rng draw,
+  // so the play sim and every AI result stay byte-identical.
+  updateMarket(world, marketOutcome(world, playoffs), career)
 
   // L12.16 H1: index every player's season BEFORE development, so a retiree's
   // final line is never lost, and stamp each active player's peak OVR.
