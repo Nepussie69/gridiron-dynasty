@@ -11,6 +11,12 @@ import {
   type ExtensionOffer,
 } from '../game/engine/negotiation'
 import { cultureDiscountFor } from '../game/engine/culture'
+import {
+  extensionFactorFor,
+  getR2Personality,
+  hometownDiscountPct,
+  priorityRead,
+} from '../game/engine/personality'
 import { getStatsDb, useGame, useWorld } from '../store/gameStore'
 import { ContractExplainer } from './ContractExplainer'
 import {
@@ -65,7 +71,9 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
 
   const style = agentStyle(p.id)
   const disc = cultureDiscountFor(league, getStatsDb(), career.teamId, p)
-  const ask = marketAsk(p, league.season, career.skills.negotiation, disc.pct)
+  // REALISM2 #12: his own priorities move the ask — money, loyalty, winning, role.
+  const pf = extensionFactorFor(p, league, career.teamId)
+  const ask = marketAsk(p, league.season, career.skills.negotiation, disc.pct, pf)
   const aav = Math.round((ask * pct) / 100)
   const talk = career.talks?.[playerId]
   const active = talk && talk.season === league.season
@@ -80,7 +88,7 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
   const guaranteeDollars = Math.round(aav * years * (g.pct / 100))
 
   // The line the agent needs, adjusted for the guarantee you are offering.
-  const judge = judgeOffer(p, league.season, { years, aav, guarantee }, career.skills.negotiation, disc.pct)
+  const judge = judgeOffer(p, league.season, { years, aav, guarantee }, career.skills.negotiation, disc.pct, pf)
   const securityPenalty = p.age >= 29 && years >= 4 ? 3 : 0
   const threshold = Math.max(80, Math.min(120, judge.needed - g.boost + securityPenalty))
   const willAccept = judge.accepted || pct + 1e-9 >= threshold
@@ -124,6 +132,18 @@ export function ExtensionTalks({ playerId, onClose }: { playerId: string; onClos
         <Badge tone={style === 'hardball' ? 'loss' : style === 'loyal' ? 'win' : 'info'}>{STYLE_LABEL[style]} agent</Badge>
         <span className="text-small text-muted">{STYLE_BLURB[style]}</span>
       </div>
+
+      {getR2Personality() && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Badge tone="info">Priorities</Badge>
+          <span className="text-small text-muted">
+            {priorityRead(p, league.season)}
+            {hometownDiscountPct(p, league.season) > 0
+              ? ` · hometown discount −${hometownDiscountPct(p, league.season)}%`
+              : ''}
+          </span>
+        </div>
+      )}
 
       <div className="mb-4 grid grid-cols-2 gap-3">
         <div className="rounded-[var(--r-md)] border border-line bg-surface-2 p-3">

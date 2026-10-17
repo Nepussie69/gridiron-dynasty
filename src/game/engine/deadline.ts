@@ -11,9 +11,10 @@
 
 import type { CareerState, Player } from '../types'
 import type { World } from './generate'
-import { teamStrength } from './generate'
+import { generalManager, teamStrength } from './generate'
 import { hash32 } from './rng'
 import { unscaleOvr } from './ovrScale'
+import { gmStyle } from './gmStyle'
 import { capForSeason } from './cap'
 import {
   executeTrade,
@@ -197,12 +198,27 @@ export function runDeadlineAI(world: World, userTeamId: string): number {
   const buyerPool = contenders.filter((id) => id !== userTeamId)
   const sellerPool = sellers.filter((id) => id !== userTeamId)
   if (!buyerPool.length || !sellerPool.length) return 0
+  // FUTURES #49: the deadline phone ring is a GM's business. A club is drawn in
+  // proportion to its man's own trade appetite (gmStyle.ts), so a trade-happy
+  // front office is the one buying at the deadline and an old-school one sits
+  // out. Deterministic: the same hash draws, re-weighted by his own number.
+  const styleOf = (id: string) => gmStyle(generalManager(world, id))
+  const pickWeighted = (pool: string[], tag: string, i: number, salt: number) => {
+    const w = pool.map((id) => Math.max(0.05, styleOf(id).tradeFreq))
+    const total = w.reduce((a, b) => a + b, 0)
+    let r = (hash32(`${tag}-${i}`, salt) / 4294967296) * total
+    for (let k = 0; k < pool.length; k++) {
+      r -= w[k]
+      if (r <= 0) return pool[k]
+    }
+    return pool[pool.length - 1]
+  }
   let made = 0
   const used = new Set<string>()
   for (let i = 0; i < 16 && made < 3; i++) {
     const salt = world.season * 131 + world.week * 17 + i * 7
-    const sellerId = sellerPool[hash32(`dl-seller-${i}`, salt) % sellerPool.length]
-    const buyerId = buyerPool[hash32(`dl-buyer-${i}`, salt) % buyerPool.length]
+    const sellerId = pickWeighted(sellerPool, 'dl-seller', i, salt)
+    const buyerId = pickWeighted(buyerPool, 'dl-buyer', i, salt)
     if (sellerId === buyerId) continue
     const targets = (world.roster[sellerId] ?? [])
       .filter((p) => p.age >= 28 && unscaleOvr(p.ovr) >= 76 && unscaleOvr(p.ovr) <= 92 && p.contract.years <= 2)
@@ -218,13 +234,16 @@ export function runDeadlineAI(world: World, userTeamId: string): number {
     used.add(target.id)
     const buyer = world.byId[buyerId]
     const seller = world.byId[sellerId]
+    const gm = generalManager(world, buyerId)
     world.news.unshift({
       id: `deadlineai_${world.season}_${made}_${target.id}`,
       week: world.week,
       season: world.season,
       category: 'Trade',
       headline: `${buyer.abbr} buy ${target.name} at the deadline`,
-      body: `${buyer.name} send ${pkg.give.map((a) => deadlineAssetName(world, a)).join(' + ')} to ${seller.name} for ${target.name} (${target.pos}, ${target.ovr}). A contender paying up for the stretch run.`,
+      body: `${buyer.name} send ${pkg.give.map((a) => deadlineAssetName(world, a)).join(' + ')} to ${seller.name} for ${target.name} (${target.pos}, ${target.ovr}). ${
+        gm ? `${gm.name} pays up` : 'A contender pays up'
+      } for the stretch run.`,
       read: false,
     })
     made++

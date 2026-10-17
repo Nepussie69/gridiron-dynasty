@@ -20,6 +20,7 @@ import { Draft } from './screens/Draft'
 import { FreeAgency } from './screens/FreeAgency'
 import { Trades } from './screens/Trades'
 import { Cap } from './screens/Cap'
+import { Business } from './screens/Business'
 import { Schedule } from './screens/Schedule'
 import { Standings } from './screens/Standings'
 import { FindPlayer } from './screens/FindPlayer'
@@ -89,6 +90,7 @@ export default function App() {
         {screen === 'freeagency' && <FreeAgency />}
         {screen === 'trades' && <Trades />}
         {screen === 'cap' && <Cap />}
+        {screen === 'business' && <Business />}
         {screen === 'schedule' && <Schedule />}
         {screen === 'standings' && <Standings />}
         {screen === 'players' && <FindPlayer />}
