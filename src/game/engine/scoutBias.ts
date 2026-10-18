@@ -11,6 +11,7 @@
 
 import type { DraftProspect, ScoutBias, StaffMember } from '../types'
 import { clamp, hash32 } from './rng'
+import { drillPercentileOf, framePercentile, measurablesCached } from './measure'
 
 const AXES: ScoutBias['axis'][] = ['speed', 'size', 'production', 'conference', 'character']
 
@@ -44,13 +45,29 @@ function localRng(seed: string) {
   }
 }
 
+/**
+ * #47: the man's own 40-yard dash for his position, 0–100 — his stopwatch, never
+ * a unit or class average. 50 when he did not run (no testing, no reaction).
+ */
+function speedPct(p: DraftProspect): number {
+  return drillPercentileOf(p, 'forty')
+}
+
+/** #47: where his own height and weight sit for his position, 0–100. */
+function sizePct(p: DraftProspect): number {
+  return framePercentile(p.pos, measurablesCached(p))
+}
+
 /** How strongly this prospect presses the scout's bias. */
 function focusValue(axis: ScoutBias['axis'], p: DraftProspect): number {
   switch (axis) {
     case 'speed':
-      return clamp((p.ovr - 60) / 40, -1, 1)
+      // #47: a speed-blind-spot scout reacts to the man's own stopwatch, not to a
+      // shared overall grade — so the report moves with his testing.
+      return clamp((speedPct(p) - 50) / 40, -1, 1)
     case 'size':
-      return clamp((p.ovr - 62) / 38, -1, 1)
+      // #47: "measurables" means his own frame for his position.
+      return clamp((sizePct(p) - 50) / 40, -1, 1)
     case 'production':
       return clamp((p.production - 62) / 38, -1, 1)
     case 'conference':

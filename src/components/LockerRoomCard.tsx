@@ -1,4 +1,4 @@
-import { AlertTriangle, Shield, Sparkles, Users } from 'lucide-react'
+import { AlertTriangle, Megaphone, Shield, Sparkles, Users } from 'lucide-react'
 import { cn } from '../lib/cn'
 import {
   MAX_CAPTAINS,
@@ -14,8 +14,9 @@ import {
 } from '../game/engine/lockerRoom'
 import type { Player } from '../game/types'
 import { useGame, useWorld } from '../store/gameStore'
-import { Badge, Button, Card, OvrBadge, RatingBar } from '../ui/kit'
+import { Badge, Button, Card, Chip, OvrBadge, RatingBar } from '../ui/kit'
 import { TONE_COLOR } from '../ui/nav'
+import { SPEECH_LABEL, speechRecordCounts, speechRepeatWarning } from './speechUi'
 import type { Tone } from '../lib/format'
 
 const SELECT_CLASS =
@@ -53,6 +54,9 @@ export function LockerRoomCard({ teamId, className }: { teamId: string; classNam
   const morale = avgMorale(world, teamId)
   const effort = lockerEffort(world, career)
   const mentored = Object.keys(state.mentors).length
+  const speeches = state.speeches ?? []
+  const speechCounts = speechRecordCounts(speeches)
+  const repeatWarn = speechRepeatWarning(speeches)
   const captainPlayers = captains
     .map((id) => (world.roster[teamId] ?? []).find((p) => p.id === id))
     .filter((p): p is Player => !!p)
@@ -106,6 +110,41 @@ export function LockerRoomCard({ teamId, className }: { teamId: string; classNam
             ? `Morale is feeding a ${effort.off >= 0 ? '+' : ''}${effort.off.toFixed(2)} effort edge on both sides of the ball. This is opt-in and only touches your club.`
             : 'Off by default, so morale never changes a game result. Turn it on and a settled, happy room plays a little harder — a sour one lets down.'}
         </p>
+      </div>
+
+      {/* FUTURES #7 (H3): the season's halftime-speech record and repetition warning. */}
+      <div className="mb-3 rounded-[var(--r-md)] border border-line bg-surface-2 p-3">
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+          <Megaphone size={13} className="text-muted" aria-hidden />
+          <span className="font-cond text-label font-700 uppercase tracking-[0.06em] text-ink-2">Halftime speeches</span>
+          <span className="text-label text-muted">· this season</span>
+        </div>
+        {speeches.length ? (
+          <>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge tone="win">{speechCounts.landed} landed</Badge>
+              <Badge tone="neutral">{speechCounts.flat} flat</Badge>
+              <Badge tone="loss">{speechCounts.backfired} backfired</Badge>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {[...speeches].slice(-4).reverse().map((s, i) => (
+                <Chip key={`${s.week}-${s.id}-${i}`}>
+                  Wk {s.week} · {SPEECH_LABEL[s.id]} · {s.result}
+                </Chip>
+              ))}
+            </div>
+            {repeatWarn && (
+              <p className="mt-2 flex items-start gap-1.5 text-label leading-snug text-warn">
+                <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden />
+                <span>{repeatWarn}</span>
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm leading-snug text-muted">
+            No halftime speeches yet. As head coach, answer the speech card at the break — a landed speech lifts the room for the second half.
+          </p>
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">

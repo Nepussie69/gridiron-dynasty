@@ -1,4 +1,4 @@
-import { CalendarClock, FastForward, Handshake, LayoutGrid, List, SlidersHorizontal, Timer, Trophy, Users } from 'lucide-react'
+import { CalendarClock, FastForward, Gauge, Handshake, LayoutGrid, List, SlidersHorizontal, Timer, Trophy, Users } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { DraftProspect, Position } from '../game/types'
 import {
@@ -19,6 +19,15 @@ import { DraftRoom } from '../components/DraftRoom'
 import { DraftTradePanel, PickClock } from '../components/DraftTradePanel'
 import { useDraftTradeCalls } from '../components/draftTradeCalls'
 import { DataTable, type Column } from '../components/DataTable'
+import { DrillCell, PercentileBadge } from '../components/Measurables'
+import {
+  DRILL_META,
+  DRILL_ORDER,
+  athleticPercentileOf,
+  drillPercentileOf,
+  formatHeight,
+  measurablesCached,
+} from '../game/engine/measure'
 import { FutureClasses } from './draft/FutureClasses'
 import {
   AccessBanner,
@@ -67,7 +76,7 @@ export function Draft() {
   const finishDraft = useGame((s) => s.finishDraft)
   const phone = usePhone()
   const [tab, setTab] = useState<'this' | 'next' | 'two'>('this')
-  const [boardView, setBoardView] = useState<'list' | 'cards' | 'room' | 'trades'>('list')
+  const [boardView, setBoardView] = useState<'list' | 'cards' | 'combine' | 'room' | 'trades'>('list')
   // Row 459: draft-day trades are their own view; its label counts the calls, and the
   // pick clock runs in the header chip so it keeps counting on every view.
   const tradeCalls = useDraftTradeCalls()
@@ -228,6 +237,74 @@ export function Draft() {
     },
   ]
 
+  // ── Combine view (#47): the testing card, one column per drill, all sortable ──
+  // Sort by percentile (not the raw time), so "best first" holds in every
+  // direction and an untested drill sorts on its position's 50th.
+  const combineColumns: Column<DraftProspect>[] = [
+    {
+      key: 'name',
+      label: 'Prospect',
+      card: 'title',
+      sortValue: (p) => p.name,
+      render: (p) => (
+        <span className="block min-w-0">
+          <span className="block min-w-0 truncate font-600 text-ink">{p.name}</span>
+          <span className="block text-small text-muted">{p.college}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'pos',
+      label: 'Pos',
+      card: 'value',
+      sortValue: (p) => p.pos,
+      render: (p) => <span className="font-cond text-small font-700 uppercase text-ink-2">{p.pos}</span>,
+    },
+    {
+      key: 'ht',
+      label: 'HT',
+      align: 'right',
+      card: 'meta',
+      sortValue: (p) => measurablesCached(p).heightIn,
+      render: (p) => <span className="text-ink-2 tnum">{formatHeight(measurablesCached(p).heightIn)}</span>,
+    },
+    {
+      key: 'wt',
+      label: 'WT',
+      align: 'right',
+      card: 'meta',
+      sortValue: (p) => measurablesCached(p).weightLb,
+      render: (p) => <span className="text-ink-2 tnum">{measurablesCached(p).weightLb}</span>,
+    },
+    {
+      key: 'arm',
+      label: 'Arm',
+      align: 'right',
+      card: 'meta',
+      headerTitle: 'Arm length in inches',
+      sortValue: (p) => measurablesCached(p).armIn,
+      render: (p) => <span className="text-ink-2 tnum">{measurablesCached(p).armIn.toFixed(1)}</span>,
+    },
+    {
+      key: 'ath',
+      label: 'Ath',
+      align: 'right',
+      card: 'value',
+      headerTitle: 'Composite athletic percentile for his position',
+      sortValue: (p) => athleticPercentileOf(p),
+      render: (p) => <PercentileBadge pct={athleticPercentileOf(p)} title="Composite athletic percentile for his position" />,
+    },
+    ...DRILL_ORDER.map((d) => ({
+      key: d,
+      label: DRILL_META[d].short,
+      align: 'right' as const,
+      card: 'value' as const,
+      headerTitle: `${DRILL_META[d].label} · percentile for his position`,
+      sortValue: (p: DraftProspect) => drillPercentileOf(p, d),
+      render: (p: DraftProspect) => <DrillCell prospect={p} drill={d} />,
+    })),
+  ]
+
   const posFilters = (
     <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Position filter">
       {(['ALL', ...classPositions] as (Position | 'ALL')[]).map((p) => (
@@ -260,6 +337,7 @@ export function Draft() {
                 options={[
                   { id: 'list', label: 'List', icon: <List size={14} aria-hidden /> },
                   { id: 'cards', label: 'Cards', icon: <LayoutGrid size={14} aria-hidden /> },
+                  { id: 'combine', label: 'Combine', icon: <Gauge size={14} aria-hidden />, title: 'Every prospect\u2019s true testing card, sortable by drill' },
                   { id: 'room', label: 'Room', icon: <Users size={14} aria-hidden />, title: 'Who has a say in this room, and who holds the pen' },
                   { id: 'trades', label: tradeCalls ? `Trades · ${tradeCalls}` : 'Trades', icon: <Handshake size={14} aria-hidden />, title: 'Draft-day trades: calls for your pick, and moving up' },
                 ]}
@@ -460,6 +538,32 @@ export function Draft() {
             <DraftTradePanel className="order-1 lg:order-2" />
           ) : boardView === 'room' ? (
             <DraftRoom className="order-1 lg:order-2" />
+          ) : boardView === 'combine' ? (
+          <Card pad={false} className="order-1 overflow-hidden lg:order-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">
+              <SectionTitle spacing="none">Combine</SectionTitle>
+              <Badge tone="neutral">{boardShown.length} prospects</Badge>
+            </div>
+            <p className="border-b border-line px-4 py-2 text-small text-muted">
+              Every prospect&rsquo;s true testing card — 40, split, shuttle, 3-cone, jumps and bench — with the
+              percentile it sits at for his position. Sort by any drill; the numbers are the same ones every club sees.
+            </p>
+            <div className="flex items-center gap-1.5 overflow-x-auto border-b border-line px-3 py-2" role="group" aria-label="Position filter">
+              {posFilters}
+            </div>
+            <div className="p-1 sm:p-0">
+              <DataTable
+                label="Combine board"
+                rows={boardShown}
+                columns={combineColumns}
+                rowKey={(p) => p.id}
+                defaultSortKey="ath"
+                defaultDir="desc"
+                maxHeight="560px"
+                emptyText={posFilter === 'ALL' ? 'No prospects left on the board.' : `No ${posFilter} prospects left on the board.`}
+              />
+            </div>
+          </Card>
           ) : (
           <Card pad={false} className="order-1 overflow-hidden lg:order-2">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5">

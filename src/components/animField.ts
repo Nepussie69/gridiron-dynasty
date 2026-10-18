@@ -88,17 +88,50 @@ export const E1C = {
    */
   maxFix: 4,
   /**
+   * The seam (e1cseam): the ball's own speed (yd/s) from the passer's hands to the
+   * carrier's chest at a handoff. The field's carrier is aligned where the field
+   * had him — his lane is the gap the play attacks, up to a whole gap away from
+   * the animation's own backfield — and the recorded clock starts at the snap, so
+   * the drawn handoff sits wherever his recorded path comes nearest the passer. A
+   * handoff there is an instant exchange (inside `meshTol` of the passer); a wider
+   * one is the pitch / toss it really is, and the ball is drawn travelling to him
+   * at this speed — fast, continuous, never a teleport.
+   */
+  tossV: 18,
+  /**
+   * How far (yd) the passer attacks the ball toward the recorded runner: inside
+   * this the drawn handoff is a real meeting (the ball leaves his hands where the
+   * runner takes it) and the relay is an exchange; beyond it the relay is the
+   * toss. Also how far the passer's own mesh may sit from the recording.
+   */
+  meshTol: 2.5,
+  /**
+   * The recorded YAC segment's own start is `emergentYac.catchY` — the field picks
+   * the catch's side of the field by hash, so it can sit a few yards from where the
+   * drawn route ends. That gap is a real stride the receiver runs before the
+   * recording starts (see buildPass's bridge — at his own pace, so ~2 s of stride is
+   * the most a catch can be re-aligned), and the recording itself is then drawn
+   * exactly as recorded. A segment that starts further than this from the drawn
+   * catch point is not this catch's after-catch segment at all: it is refused
+   * (counted in `E1C_STAT.caught`) — never drawn as a jump.
+   */
+  catchTol: 18,
+  /**
    * How much of the play a man's recording may miss (s) before he is left to the
    * live field: a man whose last sample sits this far short of the play's end was
    * on a block through the whistle, and the field draws that better than a
    * recording that has no pinned stretch in it.
    */
   maxGap: 0.6,
-  /** The bridge from a man's alignment to his first recorded sample is capped at
-   *  his own pace (a recording that would need more is not drawn as a jump: the
-   *  field's own spot is used instead — its front lines up differently from the
-   *  animation's four-man table). */
-  bridgeTol: 1.15,
+  /**
+   * The bridge from a man's alignment to his first recorded sample is capped at
+   * his own pace: a recording that would need more is not drawn as a faster move
+   * (the field's own spot is used instead — a man the field had free from the snap
+   * stands where the field had him). This was 1.15 (a bridge allowed to be 15%
+   * over the man's own pace); the seam scan found those 1.15x bridges, so the
+   * bridge now never exceeds the man's own stride.
+   */
+  bridgeTol: 1.0,
   /** How far the recorded credited tackler may be from the carrier at the field's
    *  stop and still be drawn riding him: a tackle by contact is well inside this,
    *  an aim-stop that credited the nearest man (nobody touched him) is not, and
@@ -172,6 +205,13 @@ export const E1C_STAT = {
   /** Credited tackles the recording does not support (an aim-stop credited the
    *  nearest man): drawn by the animation's own chase, as today. */
   chased: 0,
+  /** Handoffs drawn as a toss (the recorded runner's own start is further from
+   *  the passer than his own reach — `E1C.meshTol` — so the ball is drawn
+   *  travelling to him at `E1C.tossV`, never jumping). */
+  toss: 0,
+  /** Recorded after-catch segments refused by the lateral anchor (the field's own
+   *  catch-side fiction is too far from the drawn catch point to re-anchor). */
+  caught: 0,
   /**
    * The dots drawn away from their recording on the current play (reset at the
    * top of every play): a recorded man the animation had to move to make the
@@ -223,7 +263,19 @@ export function recordedField(play: Play): RecField | null {
     for (const id of Object.keys(fp)) {
       if (id === carry.id) continue
       const q = fp[id]
-      if (q && q.length) men.push(recMan(id, q, EMERGENT.pathEvery, EMERGENT.pathEvery))
+      if (q && q.length) {
+        // The recording's OWN cadence: a run's field (`emergent.ts`) saves each
+        // defender every `pathEvery` ticks (his samples span the play at that
+        // stride), but an after-catch segment (`emergentYac.ts`) records every man
+        // through the shared LiveField, which writes a sample EVERY tick — one per
+        // tick, exactly the carrier's own. Reading a per-tick segment at the run
+        // cadence stretched his ticks past the play's own tick count and the
+        // shared clock extrapolated a teleport (the pass-YAC seam). A man with at
+        // least as many samples as the carrier was recorded at the carrier's own
+        // stride (from the snap / the catch); a shorter one at `pathEvery`.
+        const perTick = q.length >= cp.length
+        men.push(recMan(id, q, perTick ? 0 : EMERGENT.pathEvery, perTick ? 1 : EMERGENT.pathEvery))
+      }
     }
   }
   return { carryId: carry.id, carry, men, ticks: carry.pts.length }
@@ -283,7 +335,7 @@ export function recEndT(man: RecMan, ticks: number, t0: number, clock?: (tick: n
  * the animation's, so no drawn leg is a jump and no man outruns a real stride.
  * Returns the animation time of every recorded sample.
  */
-export function recClock(pts: Pt[], pace: Pace, secPerSample: number, v0: number, t0: number): number[] {
+export function recClock(pts: Pt[], pace: Pace, secPerSample: number, v0: number, t0: number, extra?: { man: RecMan; cap: number }[]): number[] {
   const top = Math.max(1.5, pace.top)
   const acc = Math.max(0.8, pace.acc)
   const times: number[] = [t0]
@@ -300,7 +352,11 @@ export function recClock(pts: Pt[], pace: Pace, secPerSample: number, v0: number
     if (vt > v) {
       const dAcc = (vt * vt - v * v) / (2 * acc)
       if (dAcc >= L) {
-        const vEnd = Math.sqrt(v * v + 2 * acc * L)
+        // A leg shorter than the run to the man's top: he never reaches it, so the
+        // leg's own end speed is capped AT his top (sqrt(v² + 2accL) could sit over
+        // it, and the leg's mean speed — what the drawn, linearly interpolated line
+        // actually plays at — then sat over his pace cap: the e1cseam scan's frame).
+        const vEnd = Math.min(top, Math.sqrt(v * v + 2 * acc * L))
         dtl = (vEnd - v) / acc
         v = vEnd
       } else {
@@ -326,6 +382,31 @@ export function recClock(pts: Pt[], pace: Pace, secPerSample: number, v0: number
     // (a flag at the far side of a compressed interval was drawn at 60 yd/s).
     t += Math.max(dtl, secPerSample)
     times.push(t)
+  }
+  // e1cseam: the clock is SHARED (every recorded man is at his tick's spot when the
+  // animation is at that tick — the tackler stays on the carrier), but a man's own
+  // stride can be slower than the carrier's. The field can record a defender at
+  // 11.5 yd/s (his cap 9.24): drawn on the carrier's clock that leg is a step over
+  // his pace cap. Stretch the shared clock wherever a recorded man's own leg would
+  // exceed HIS cap (the recording's shape is exact — only the timing stretches, so
+  // the recorded spot, tackler and yards are untouched). Everyone slows together;
+  // nothing is drawn faster than the slowest man on the ball's own tick needs.
+  if (extra?.length) {
+    const n = pts.length
+    const req: number[] = new Array(n).fill(0)
+    for (const g of extra) {
+      const cap = Math.max(0.8, g.cap)
+      const tk = recTicks(g.man, n)
+      for (let k = 1; k < g.man.pts.length; k++) {
+        const a = tk[k - 1]
+        const b = tk[k]
+        const span = Math.max(1, b - a)
+        const L = Math.hypot(g.man.pts[k].x - g.man.pts[k - 1].x, g.man.pts[k].y - g.man.pts[k - 1].y)
+        const per = L / (span * cap)
+        for (let q = Math.max(1, a + 1); q <= b && q < n; q++) req[q] = Math.max(req[q], per)
+      }
+    }
+    for (let k = 1; k < n; k++) times[k] = Math.max(times[k], times[k - 1] + req[k])
   }
   return times
 }
@@ -445,8 +526,16 @@ export function carryOn(mv: AnimMv, t: number, cap: number): void {
     const d = Math.hypot(b.x - a.x, b.y - a.y)
     const v = dt > 1e-6 ? Math.min(d / dt, cap) : 0
     if (v > 0.2 && d > 1e-6) {
-      const x = Math.max(1, Math.min(119, b.x + ((b.x - a.x) / d) * v * gap))
-      const y = Math.max(1.2, Math.min(52.1, b.y + ((b.y - a.y) / d) * v * gap))
+      // The field's own frame runs past the animation's (a stop in the end zone, a
+      // man already over the wall): the clamp must never pull him BACK toward the
+      // field — that was a 2.5 yd jump on a sneak's safety (a guard of the form
+      // `Math.max(Math.min(1, b.x), Math.min(119, tx))` is a no-op: `Math.min(1, b.x)`
+      // is 1 for every b.x >= 1, so it clamped 121.5 to 119). Clamp only a man who
+      // was already inside the band; one outside it keeps the field's own heading.
+      const tx = b.x + ((b.x - a.x) / d) * v * gap
+      const ty = b.y + ((b.y - a.y) / d) * v * gap
+      const x = b.x >= 1 && b.x <= 119 ? Math.max(1, Math.min(119, tx)) : tx
+      const y = b.y >= 1.2 && b.y <= 52.1 ? Math.max(1.2, Math.min(52.1, ty)) : ty
       mv.path.push({ t, x, y })
       mv.t = t
       mv.x = x
@@ -472,4 +561,72 @@ export function recDeviation(man: RecMan, ticks: number, t0: number, at: (t: num
     max = Math.max(max, Math.hypot(p.x - man.pts[k].x, p.y - man.pts[k].y))
   }
   return { n: man.pts.length, max }
+}
+
+// ── the seam (e1cseam) ────────────────────────────────────────────────────────
+
+/** The recorded sample of `man` nearest a point (anim frame), on the drawn clock. */
+export function recNearest(man: RecMan, ticks: number, clock: (tick: number) => number, pt: Pt): { x: number; y: number; t: number; d: number } {
+  const tk = recTicks(man, ticks)
+  let bx = 0
+  let by = 0
+  let bt = 0
+  let bd = Infinity
+  for (let k = 0; k < man.pts.length; k++) {
+    const d = Math.hypot(man.pts[k].x - pt.x, man.pts[k].y - pt.y)
+    if (d < bd) { bd = d; bx = man.pts[k].x; by = man.pts[k].y; bt = clock(tk[k]) }
+  }
+  return { x: bx, y: by, t: bt, d: bd }
+}
+
+/** The time (s) a man needs to cover `dist` yd at 90% of his own pace (a bridge). */
+export function bridgeT(dist: number, cap: number): number {
+  return dist / Math.max(0.8, 0.9 * cap)
+}
+
+/** The transfer of the ball at a handoff: how it is drawn (see `ballRelay`). */
+export interface Relay {
+  /** The animation time the ball leaves the passer's hands. */
+  from: number
+  /** The transfer's knots (the passer's hands, then the carrier's chest). */
+  knots: { t: number; x: number; y: number }[]
+  /** The animation time the carrier takes it. */
+  take: number
+  /** The transfer's own length (yd). */
+  dist: number
+}
+
+/**
+ * E1c: the ball's own seam. The field's recorded carrier is aligned where the
+ * field had him — his lane is the gap the play attacks, up to a whole gap from
+ * the animation's own backfield — so the animation's passer and the recorded
+ * runner often do not meet, and the ball used to change hands in one frame (a 6
+ * to 23 yd teleport: "rushing handoffs are like they are teleported"). Instead the
+ * ball is drawn travelling from the passer's own drawn position to the carrier's
+ * chest at `v` yd/s at most: an instant exchange when they do meet (inside
+ * `E1C.meshTol`), the toss it really is across the gap otherwise. `take` is
+ * pushed out until the transfer fits after `notBefore` (the snap), so the ball
+ * never leaves the passer's hands before he has it.
+ */
+export function ballRelay(
+  passer: { t: number; x: number; y: number }[],
+  carrier: { t: number; x: number; y: number }[],
+  take0: number,
+  v: number,
+  notBefore: number,
+): Relay {
+  let take = Math.max(take0, notBefore)
+  let dist = 0
+  for (let i = 0; i < 8; i++) {
+    const q = posAtPath(passer, take)
+    const c = posAtPath(carrier, take)
+    dist = Math.hypot(c.x - q.x, c.y - q.y)
+    const need = dist / Math.max(1, v)
+    if (take - need >= notBefore - 1e-9) break
+    take = notBefore + need + 0.002
+  }
+  const from = Math.max(notBefore, take - dist / Math.max(1, v))
+  const q = posAtPath(passer, from)
+  const c = posAtPath(carrier, take)
+  return { from, knots: [{ t: from, x: q.x, y: q.y }, { t: take, x: c.x, y: c.y }], take, dist }
 }

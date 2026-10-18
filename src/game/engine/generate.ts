@@ -146,6 +146,10 @@ export interface World {
    *  shared snaps). Optional — a legacy save has none and builds it as it plays;
    *  see engine/chemistry.ts. */
   chem?: import('./chemistry').ChemState
+  /** FUTURES #50: the club markets — fan interest and each season's revenue.
+   *  Optional — a legacy save has none and rebuilds it from the market data on
+   *  read; see engine/market.ts. */
+  market?: import('./market').MarketState
 }
 
 // Backwards-compatible alias used by screen/selector imports.

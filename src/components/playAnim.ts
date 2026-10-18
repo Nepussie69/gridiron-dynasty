@@ -33,7 +33,7 @@ import { carrierMove, effAttrs, effRating, fatigueMap, fatiguePace } from './ani
 import { attrOf, paceFor, type Pace } from '../game/engine/pace'
 import { planOf } from './jersey'
 import { applyReadPaths, eyeJumpPicker } from './broadcast/qbReads'
-import { E1C, E1C_STAT, carryOn, clockOf, drawRecorded, recClock, recCrossTick, recEndT, recExitSpeed, recFirstT, recFillsAll, recordedField, REC_DT, type RecField, type RecMan } from './animField'
+import { E1C, E1C_STAT, ballRelay, bridgeT, carryOn, clockOf, drawRecorded, recClock, recCrossTick, recEndT, recExitSpeed, recFirstT, recFillsAll, recNearest, recordedField, REC_DT, type RecField, type RecMan } from './animField'
 
 export const FIELD_W = 120
 export const FIELD_H = 53.3
@@ -1086,19 +1086,23 @@ function startMovers(f: Formation, ctx: AnimContext): Record<string, Mover> {
 }
 
 /** animflow 6c: no teleport — cap a waypoint so a defender never exceeds ~12 yd/s. */
-function capSpeed(p: { t: number; x: number; y: number }[], maxT: number) {
-  const MAXV = 11.9 // yd/s
+function capToPace(p: { t: number; x: number; y: number }[], maxT: number, capV: number) {
+  const v = Math.max(0.8, capV)
   for (let i = 1; i < p.length; i++) {
     const a = p[i - 1], b = p[i]
     const dt = (b.t - a.t) * maxT
     if (dt <= 1e-6) continue
     const d = Math.hypot(b.x - a.x, b.y - a.y)
-    const vm = MAXV * dt
+    const vm = v * dt
     if (d > vm) {
       const s = vm / d
       p[i] = { t: b.t, x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s }
     }
   }
+}
+
+function capSpeed(p: { t: number; x: number; y: number }[], maxT: number) {
+  capToPace(p, maxT, 11.9) // yd/s
 }
 
 /** Convert second-based motion into the finished 0..1 timeline. */
@@ -1128,8 +1132,21 @@ function finish(  f: Formation,
   const engagements = rec ? trimEngagements(rec.eng, movers, frac, maxT) : []
   const events = rec ? takeEvents(rec.ev, frac) : []
   const sheds = rec ? rec.shed.filter((sh) => sh.t0 < maxT).map((sh) => ({ ...sh, t0: frac(sh.t0), t1: frac(Math.min(sh.t1, maxT)) })) : []
+  // e1cseam: the ONE speed model, enforced on the finished drawing. Every man the
+  // recorded field drew plays on the animation clock `recClock` timed by his own
+  // pace — but the drawing's own overlays (a pre-snap rotation, the read visuals'
+  // ball placement, the settle's braking) can re-time one of his legs. Pulling the
+  // offending waypoint back toward the previous one (a few cm, exactly as the dl
+  // cap below) keeps every drawn step inside the man's own stride. The carrier is
+  // exempt: his end spot is the recording's own and must land exactly.
+  const drewKeys = new Set(E1C_STAT.drewKeys)
+  const carrierKey = (() => {
+    for (let i = rest.holders.length - 1; i >= 0; i--) if (rest.holders[i].key) return rest.holders[i].key
+    return null
+  })()
   const actors: Actor[] = keys.map((k) => {
     const p = movers[k].path.map((w) => ({ t: frac(w.t), x: w.x, y: w.y }))
+    if (drewKeys.has(k) && k !== carrierKey) capToPace(p, maxT, movers[k].pace.top)
     // animflow 6c (no teleports): a defensive lineman never covers more ground per
     // frame than a real 12 yd/s burst. A handful of rush/pursuit paths spike just
     // over the bar at a phase hand-off; pulling the offending waypoint back toward
@@ -1716,7 +1733,21 @@ export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim
     }
   }
   // Read visuals (qbReads.ts): the eye jump's break and the ball placement, plan attached.
-  return presentAnim(applyReadPaths(buildRaw(), play, ctx), play, ctx)
+  const raw = buildRaw()
+  // e1cseam: the read visuals' ball placement (qbReads.adjustPath) drifts the target
+  // and his cover man onto the placed ball — a fiction laid over a choreographed
+  // route. A man E1c drew is the field's own recorded line, so the drift may not
+  // stack on it: it re-timed his recorded leg and drove the cover man ~1.2x over his
+  // own pace (the pass-YAC seam the scan found). The recording wins. Only the men
+  // E1c actually drew are kept (`E1C_STAT.drewKeys`); the placement the BALL is drawn
+  // to, and every play E1c did not take over, is untouched.
+  const drew = new Set(E1C_STAT.drewKeys)
+  const placed = applyReadPaths(raw, play, ctx)
+  if (drew.size) {
+    const before = new Map(raw.actors.map((a) => [a.key, a.path]))
+    placed.actors = placed.actors.map((a) => (drew.has(a.key) && before.has(a.key) ? { ...a, path: before.get(a.key)! } : a))
+  }
+  return presentAnim(placed, play, ctx)
 }
 
 /** A numeric attribute, or `fallback` when the player does not carry it (never
@@ -2402,13 +2433,35 @@ interface E1cPlan {
  * The plan for this play, or null (no recording / not this phase). `t0` is the
  * animation-clock time of the recording's own start (the snap for a run, the
  * catch for a pass's after-catch segment): the field's tick 0.
+ *
+ * `anchor` (a pass only) is the drawn catch point. `emergentYac.catchY` picks the
+ * catch side by hash, so the segment's own first sample can sit a few yards from
+ * where this route ends; the gap is a real stride the drawing covers before the
+ * recording starts (see buildPass), never a jump — and the recording itself is
+ * drawn EXACTLY as recorded (its lateral frame, its spot, its tackler and its
+ * yards are the field's own; nothing is mirrored or shifted). A segment whose own
+ * start is further than `E1C.catchTol` from the anchor is refused (counted).
  */
-function e1cPlan(play: Play, ctx: AnimContext, t0: number): E1cPlan | null {
+function e1cPlan(play: Play, ctx: AnimContext, t0: number, anchor?: Pt): E1cPlan | null {
   E1C_STAT.chaseKeys.length = 0
   E1C_STAT.drewKeys.length = 0
   E1C_STAT.lastDrawn = false
-  const rec = recordedField(play)
-  if (!rec) return null
+  const rec0 = recordedField(play)
+  if (!rec0) return null
+  const rec = rec0
+  if (anchor) {
+    // e1cseam: the recording is drawn EXACTLY as recorded. The only question the
+    // drawn catch point asks is whether the stride from it to the segment's own
+    // first sample is one a receiver can run (see buildPass's bridge): further
+    // than `E1C.catchTol` and the animation's own drawing makes the play.
+    const q0 = rec0.carry.pts[0]
+    const gap = Math.hypot(anchor.x - q0.x, anchor.y - q0.y)
+    if (gap > E1C.catchTol) {
+      E1C_STAT.caught++
+      E1C_STAT.aimStop++
+      return null
+    }
+  }
   // A loose ball is not a carry: the ball came out where the recording ends and
   // the play is spotted where it was recovered (somewhere else). Today's
   // choreography draws the loose ball and the recovery; the recording does not.
@@ -2596,9 +2649,24 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   // mesh and the carry are drawn on his own line with no seam. The QUARTERBACK
   // keeps the animation's own snap depth (the gun / under-centre set the r8 snap
   // check pins) and eases onto the recording from there.
-  if (e1 && !qbRun) {
+  if (e1) {
+    // e1cseam: the drawn alignment IS the recording's own start — the lane the
+    // field attacked (up to a whole gap wide of the animation's own backfield; a
+    // spot the animation does not use). Aligning the drawn backfield to it, rather
+    // than bridging over the gap, is what makes the seam seamless: the carrier is
+    // where the field had him from the snap, and the ball is drawn travelling to
+    // him (below) instead of changing hands in one frame.
+    //
+    // Two exceptions keep the animation's own alignment, where the bridge (`bt`
+    // below, at the man's own pace) is the smaller lie:
+    //   • the QUARTERBACK (a run) keeps the gun / under-centre set the r8 snap
+    //     check pins — his x gap is a short bridge, not a set 20 yd wide of the
+    //     ball (and the ball is his from the snap: nothing crosses between them);
+    //   • a WILDCAT's direct snap goes to the back in the gun spot (r8 J38), which
+    //     is the animation's own formation, not the field's lane.
     const c0 = e1.rec.carry.pts[0]
-    f[e1.carryKey] = { x: c0.x, y: c0.y, side: 'off', role: f[e1.carryKey]?.role ?? carRole }
+    const own = f[e1.carryKey]
+    f[e1.carryKey] = qbRun ? own : { x: c0.x, y: c0.y, side: 'off', role: own?.role ?? carRole }
   }
   const m = startMovers(f, ctx)
   // E1c: the animation's own clock for the recording (see animField.recClock):
@@ -2607,7 +2675,22 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   // preserved exactly however the clock stretches the play. Any gap between the
   // animation's own spot and the recording's first sample is a bridge timed by
   // his own pace — a real move, never a jump.
-  const recT = e1 ? recClock(e1.rec.carry.pts, m[e1.carryKey].pace, REC_DT, 0, SNAP) : []
+  const recT = e1
+    ? recClock(
+        e1.rec.carry.pts,
+        m[e1.carryKey].pace,
+        REC_DT,
+        0,
+        SNAP,
+        // e1cseam: the carrier is on the same clock as everyone else, and the
+        // recording may have run his own leg faster than his cap (a fast back) or
+        // an end-spot fix may have stretched his last step a few cm. Stretching the
+        // shared clock where HIS leg would exceed his own pace makes every drawn
+        // step his own stride — the shape, the spot, the tackler and the yards stay
+        // exactly as recorded (only the timing moves, and everyone moves with him).
+        [...e1.men.map((x) => ({ man: x.man, cap: m[x.key]?.pace.top ?? 0 })), { man: e1.rec.carry, cap: m[e1.carryKey]?.pace.top ?? 0 }],
+      )
+    : []
   if (e1) {
     const c0 = e1.rec.carry.pts[0]
     const a0 = f[e1.carryKey]
@@ -2711,11 +2794,26 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     // passer's mesh and fake (the handoff lands where the runner passes him),
     // and the pile on the spot the sim recorded.
     const mv = m[e1.carryKey]
+    // e1cseam: the recorded runner is aligned where the FIELD had him, so the
+    // animation's own passer often does not meet him (his lane is the gap the play
+    // attacked, up to 23 yd away). The passer attacks the ball toward him — up to
+    // E1C.meshTol, his own reach — and the moment of the handoff is the recorded
+    // sample nearest that point; the ball itself is drawn travelling to him (see
+    // `ballRelay` below), so the change of hands is never a teleport.
+    const meshNear = recNearest(e1.rec.carry, e1.rec.ticks, clk, { x: meshX, y: meshY })
+    let meshX2 = meshX
+    let meshY2 = meshY
+    if (!qbRun && !wildcat) {
+      const dn = meshNear.d
+      const u = dn > 1e-6 ? Math.min(1, E1C.meshTol / dn) : 0
+      meshX2 = meshX + (meshNear.x - meshX) * u
+      meshY2 = meshY + (meshNear.y - meshY) * u
+    }
     if (wildcat) {
       // the direct snap: the split-out quarterback releases as a decoy
       m.qb.run([{ x: los + 0.6, y: f.qb.y }, { x: los + 4.5, y: clampY(f.qb.y - side * 1.5) }], { stop: true })
     } else if (!qbRun) {
-      m.qb.run([{ x: meshX, y: meshY }], { stop: true })
+      m.qb.run([{ x: meshX2, y: meshY2 }], { stop: true })
     }
     mv.hold(SNAP)
     // The animation's own clock for the recording (animField.recClock), computed
@@ -2731,17 +2829,13 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       // taking it as he passes, or the quarterback himself keeping it
       handoffT = SNAP
     } else {
-      // the handoff: the moment the recorded runner is closest to the passer
-      handoffT = SNAP
-      let best = Infinity
-      for (let k = 0; k < e1.rec.carry.pts.length; k++) {
-        const t = clk(k)
-        const q = posAt(m.qb.path, t)
-        const d = Math.hypot(q.x - e1.rec.carry.pts[k].x, q.y - e1.rec.carry.pts[k].y)
-        if (d < best) { best = d; handoffT = t }
-      }
+      // e1cseam: the handoff is the recorded sample nearest the point the passer
+      // attacked (his own reach), not the closest approach to wherever the passer
+      // happened to be — that landed on the snap whenever the runner's lane was
+      // wide, so the ball changing hands off the snap WAS the teleport.
+      handoffT = meshNear.t
       m.qb.hold(Math.max(0, handoffT - m.qb.t))
-      m.qb.run([{ x: (snapK === 'under' ? meshX : f.qb.x) - 1.5, y: MID_Y - side * 4 }], { stop: false })
+      m.qb.run([{ x: (snapK === 'under' ? meshX2 : f.qb.x) - 1.5, y: MID_Y - side * 4 }], { stop: false })
     }
     // The carry: the recorded tackle, then the pile to the sim's recorded spot
     // (or over the sideline / through the goal line exactly as today).
@@ -2762,7 +2856,20 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     // exactly on the sim's spot so the end-spot probe is exact, never 6 mm off.
     if (!scoreRun && !oobRun) {
       const lk = mv.path[mv.path.length - 1]
-      if (lk && Math.abs(lk.x - endX) > 1e-9 && Math.abs(lk.x - endX) < E1C.maxFix) { lk.x = endX; mv.x = endX }
+      if (lk && Math.abs(lk.x - endX) > 1e-9 && Math.abs(lk.x - endX) < E1C.maxFix) {
+        const pv = mv.path[mv.path.length - 2]
+        lk.x = endX
+        mv.x = endX
+        // e1cseam: the fix is a few cm, but on the recording's own last tick they
+        // must not be spent as a sprint — give the step the time his stride needs.
+        if (pv && lk.t > pv.t) {
+          const dt = Math.hypot(lk.x - pv.x, lk.y - pv.y) / Math.max(1, mv.pace.top)
+          if (lk.t - pv.t < dt) {
+            lk.t = pv.t + dt
+            mv.t = lk.t
+          }
+        }
+      }
     }
   } else {
   if (qbRun) {
@@ -3367,17 +3474,34 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     //  shove - so the shared OOB drawing and its metrics are untouched.)
     ...(oobRun ? { ...(e1 ? { oobAt: contactT } : {}), ...(clockOut ? { stepOut: true } : { pushFrom: contactT }) } : {}),
   })
+  // e1cseam: the ball's own seam. The passer's hands and the recorded runner's
+  // chest are up to a whole gap apart (the field's lane), so the ball is drawn
+  // travelling from the one to the other at <= E1C.tossV — an exchange when they
+  // meet, the toss across the gap otherwise — never in one frame. A wildcat's
+  // direct snap is the same leg from the snap point (a long snap to a back aligned
+  // wide, not a 23 yd ball jump). The carrier's own holder time is where the ball
+  // arrives.
+  const relay = e1 && !qbRun
+    ? ballRelay(wildcat ? [{ t: 0, x: los, y: MID_Y }] : m.qb.path, m[carrier].path, wildcat ? SNAP : handoffT, E1C.tossV, wildcat ? 0 : SNAP)
+    : null
+  if (relay && relay.dist > E1C.meshTol) E1C_STAT.toss++
+  const takeT = relay ? relay.take : handoffT
   const ball: WP[] = qbRun
     ? snapBall(m, los, res.endSec)
-    : [...runSnap(handoffT), ...shadow(m[carrier].path, handoffT, res.endSec).slice(1)]
+    : [
+        ...(wildcat && relay ? [{ t: 0, x: los, y: MID_Y }] : runSnap(relay ? relay.from : handoffT)),
+        ...(relay ? relay.knots : []),
+        ...shadow(m[carrier].path, takeT, res.endSec).slice(1),
+      ]
   return finish(f, m, {
     ball,
     holders: [
       { t: 0, key: null },
       ...(wildcat ? [] : [{ t: SNAP, key: 'qb' }]),
-      ...(qbRun ? [] : [{ t: handoffT, key: carrier }]),
+      ...(qbRun ? [] : [{ t: takeT, key: carrier }]),
     ],
-    flights: [],
+    // a handoff is no flight; a toss across the gap is a low lateral in the air
+    flights: relay && relay.dist > 1.5 ? [{ t0: relay.from, t1: relay.take, height: 0.6 }] : [],
   })
 }
 
@@ -5858,10 +5982,26 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   // score — exactly as on a run. A pass with no recording (E1b off, an old save,
   // an interception) keeps today's drawing, untouched.
   {
-    const e1p = int || inc ? null : e1cPlan(play, ctx, catchSec)
+    // e1cseam: the segment is drawn EXACTLY as recorded (its lateral frame — the
+    // field's catch side — its spot, its tackler and its yards are the field's
+    // own), and the leg from the drawn catch point to its first recorded sample
+    // (both the residual x and the catch side's few yards) is a real stride at the
+    // receiver's own pace: the recording's clock starts `br` later, so the gap is
+    // covered over time, never crossed in one frame.
+    const e1p = int || inc ? null : e1cPlan(play, ctx, catchSec, catchPt)
     if (e1p && e1p.carryKey === tgt) {
       const mv = m[tgt]
-      const recT = recClock(e1p.rec.carry.pts, mv.pace, REC_DT, Math.min(catchV0, mv.pace.top), catchSec)
+      const q0 = e1p.rec.carry.pts[0]
+      const br = bridgeT(Math.hypot(q0.x - catchPt.x, q0.y - catchPt.y), mv.pace.top)
+      const recT = recClock(
+        e1p.rec.carry.pts,
+        mv.pace,
+        REC_DT,
+        Math.min(catchV0, mv.pace.top),
+        catchSec,
+        [...e1p.men.map((x) => ({ man: x.man, cap: m[x.key]?.pace.top ?? 0 })), { man: e1p.rec.carry, cap: mv.pace.top }],
+      )
+      for (let k = 0; k < recT.length; k++) recT[k] += br
       const clk = (tick: number) => clockOf(recT, tick)
       drawRecorded(mv, e1p.rec.carry, e1p.rec.ticks, catchSec, catchSec, clk)
       const contactT = mv.t
@@ -5881,7 +6021,18 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       // land the drawn end exactly on the sim's spot (see buildRun)
       if (!isTD && !play.outOfBounds) {
         const lk = mv.path[mv.path.length - 1]
-        if (lk && Math.abs(lk.x - endX) > 1e-9 && Math.abs(lk.x - endX) < E1C.maxFix) { lk.x = endX; mv.x = endX }
+        if (lk && Math.abs(lk.x - endX) > 1e-9 && Math.abs(lk.x - endX) < E1C.maxFix) {
+          const pv = mv.path[mv.path.length - 2]
+          lk.x = endX
+          mv.x = endX
+          if (pv && lk.t > pv.t) {
+            const dt = Math.hypot(lk.x - pv.x, lk.y - pv.y) / Math.max(1, mv.pace.top)
+            if (lk.t - pv.t < dt) {
+              lk.t = pv.t + dt
+              mv.t = lk.t
+            }
+          }
+        }
       }
       // A rusher the sim sent at the passer is drawn rushing BEFORE the catch (the
       // animation's own blitz). Re-seating him at his recorded spot would wipe that
