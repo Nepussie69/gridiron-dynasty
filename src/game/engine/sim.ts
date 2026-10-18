@@ -20,6 +20,14 @@ export interface WeekRecovery {
   restHeal?: boolean
   /** Rest week: the club's players shed 10 fatigue (deterministic, no rng). */
   fatigueRelief?: boolean
+  /**
+   * FUTURES #45: each player's own soft-tissue threshold multiplier this week,
+   * keyed by player id — a heavy practice-rep load raises the odds for the man who
+   * carried it and lowers them for the man who did not. Only the threshold moves,
+   * so the number of rng() draws is fixed (the practice plan's club-wide
+   * multiplier still applies on top).
+   */
+  risk?: Record<string, number>
 }
 
 const HOME_ADV = 1.4
@@ -121,7 +129,7 @@ function healPlayers(world: World, rng: Rng, week: number, recovery?: WeekRecove
     // L12 E2/R5: a player's TGH moves his own threshold (relative to his position
     // mean). The fallback still reads the OVR-derived attribute, unchanged.
     if (!p.injured && p.teamId) {
-      const m = recovery?.teamId === p.teamId ? mult : 1
+      const m = (recovery?.teamId === p.teamId ? mult : 1) * (recovery?.risk?.[p.id] ?? 1)
       const tghMean = POS_MEAN[p.pos]?.TGH
       const tgh = (playerAttrs(p).TGH ?? tghMean ?? 70)
       const tghMult = tghMean === undefined ? 1 : clamp(1 + (tghMean - tgh) / INJ_TGH_SLOPE, 0.5, 1.7)

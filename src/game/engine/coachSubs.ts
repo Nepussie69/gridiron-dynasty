@@ -62,7 +62,7 @@ export const COACH_SUBS_FLOOR: CoachSubs = {
 }
 
 /** Which sub a specialty sharpens (specialties come from names.ts + coachingTree.ts). */
-const SPECIALTY_SUB: Record<string, keyof CoachSubs> = {
+export const SPECIALTY_SUB: Record<string, keyof CoachSubs> = {
   'Play Calling': 'playCalling',
   'Offense architect': 'playCalling',
   'Game manager': 'gameManagement',

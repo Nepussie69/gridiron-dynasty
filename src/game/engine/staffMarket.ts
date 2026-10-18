@@ -20,6 +20,7 @@ import { NFL_TEAMS } from '../data/nflTeams'
 import { FIRST, LAST, SPECIALTIES } from './names'
 import { clamp, hash32 } from './rng'
 import { ownerPersonality } from './owner'
+import { coachAgeFor } from './coachAges'
 import { ownerStaffBudgetBonus, ownerStaffFundOpen } from './ownerMeeting'
 import { coordinatorEdge } from './coaching'
 import { devGroupFor } from './devPlan'
@@ -341,7 +342,7 @@ function marketCoach(seed: number, season: number, role: StaffRole, i: number): 
     id,
     name: `${FIRST[(h >>> 3) % FIRST.length]} ${LAST[(h >>> 11) % LAST.length]}`,
     role,
-    age: 32 + (h % 28),
+    age: coachAgeFor(role, h % 30),
     rating,
     specialty: SPECIALTIES[(h >>> 5) % SPECIALTIES.length],
     scheme: pools[h % pools.length],

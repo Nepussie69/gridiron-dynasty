@@ -20,6 +20,7 @@ import { InstallCard } from '../components/InstallCard'
 import { TrickPlaysCard } from '../components/TrickPlaysCard'
 import { KeysCard } from '../components/KeysCard'
 import { PracticeCard } from '../components/PracticeCard'
+import { PracticeRepsCard } from '../components/PracticeRepsCard'
 import { PlayCallingCard } from '../components/PlayCallingCard'
 import { canWrinkle } from '../game/engine/wrinkle'
 import { teamRatings } from '../game/engine/depth'
@@ -311,6 +312,7 @@ export function GamePlanScreen() {
           <SchemeFitReport teamId={team.id} side={side} />
           <KeysCard oppId={opp?.id} disabled={readOnly} />
           <PracticeCard disabled={readOnly} />
+          <PracticeRepsCard disabled={readOnly} />
           <InstallCard disabled={readOnly} />
           {canWrinkle(career) && <WrinkleCard disabled={readOnly} />}
           <ScriptCard disabled={readOnly} />
