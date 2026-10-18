@@ -58,6 +58,7 @@ import { ActorLayer } from '../src/components/broadcast/actors.ts'
 import { ballZAt, kickFlight, presentAnim, THROW_STATE, THROW_TIMING, throwHand, type BroadcastAnim, type ThrowStyle } from '../src/components/broadcast/animData.ts'
 import { LiveField, livePos, pursue, PAIR_GAP, type LiveMover } from '../src/components/playLive.ts'
 import { runReturnField } from '../src/components/playReturn.ts'
+import { defenseImpact, hasDefenseStat } from '../src/game/engine/stats.ts'
 import type { BroadcastFrame } from '../src/components/broadcast/renderer.ts'
 import { readFileSync } from 'node:fs'
 import type { ActorScreen } from '../src/components/broadcast/actors.ts'
@@ -3075,7 +3076,10 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     const C = [0, 0]
     const bad: string[] = []
     const badC: string[] = []
-    games6d(10, 131, (play, anim) => {
+    // A sim/animation stream that shifts a couple of the rarer catch-and-run ends
+    // needs more games, not a weaker floor (the 6b-wx precedent above): sample whole
+    // games until the coverage floor is met, capped at 24.
+    const take = (play: Play, anim: BroadcastAnim) => {
       if (!play.outOfBounds || play.endYard >= 100 || play.turnover || play.result.startsWith('Sack') || play.result.startsWith('Incomplete') || play.result.startsWith('Interception')) return
       const car = anim.holders[anim.holders.length - 1]?.key
       const ca = car ? anim.actors.find((a) => a.key === car) : undefined
@@ -3104,7 +3108,21 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       r[1]++
       if (ok2) r[0]++
       else bad.push(`${play.type} ${play.n} ${play.concept}${push ? '' : ' (no push)'}`)
-    })
+    }
+    store.useGame.getState().startCareer({ name: 'R', path: 'coach', archetype: 'off', teamId: 'CLE', seed: 33333, startLevel: 7 })
+    const world = store.getWorld()
+    const nfl = world.teams.filter((t) => t.tier === 'NFL' && (world.roster[t.id]?.length ?? 0) > 0)
+    for (let g = 0; g < 24 && (R.run[1] < 15 || R.pass[1] < 15); g++) {
+      const home = nfl[(g * 7) % nfl.length].id
+      const away = nfl[(g * 7 + 5) % nfl.length].id
+      const sim = simulatePlayByPlay(world, home, away, world.seed + 131 + g * 389)
+      for (let i = 0; i < sim.plays.length; i++) {
+        const play = sim.plays[i]
+        if (play.type !== 'pass' && play.type !== 'run') continue
+        const other = play.offId === home ? away : home
+        take(play, buildPlayAnim(play, { next: sim.plays[i + 1], actors: actorPlayers(world, play, other, null) }))
+      }
+    }
     console.log(`      forced out of bounds: runs ${R.run[0]}/${R.run[1]}, catch-and-runs ${R.pass[0]}/${R.pass[1]}; clock step-outs angled out ${C[0]}/${C[1]}`)
     assert.ok(R.run[1] >= 15 && R.pass[1] >= 15, `coverage ${JSON.stringify(R)}`)
     assert.ok(R.run[0] === R.run[1] && R.pass[0] === R.pass[1], `unforced out-of-bounds ends ${JSON.stringify(R)}: ${bad.slice(0, 4).join('; ')}`)
@@ -3874,5 +3892,14 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     console.log(`      livetele3: ${plays} pass plays; traces ${runsOk}/${runs} runners, ${blocksOk}/${blocks} blockers; target highlight at the throw ${hlOk}/${hlN}; cone on reads ${aimOk}/${aimN}; no cone before snap ${preSnapOk}/${preSnapN}; teleMs p95 off ${p95Of(offMs).toFixed(3)} / on ${p95Of(onMs).toFixed(3)} ms (added ${addedP95.toFixed(3)}, ${onMs.length} frames)`)
   })
 }
+
+// ── rushvar: assisted tackles (AST) reach the box score ──────────────────────
+ok('assists: the Defense box score has an AST column and assists score impact', () => {
+  const boxSrc = readFileSync(new URL('../src/components/MatchView.tsx', import.meta.url), 'utf8')
+  assert.ok(/k: 'assists', l: 'AST'/.test(boxSrc), 'Defense box score carries an AST column')
+  assert.equal(defenseImpact({ tackles: 1, assists: 1 }), 1.5, 'a gang tackle (1 solo + 1 assist) scores 1.5')
+  assert.equal(hasDefenseStat({ assists: 1 }), true, 'an assist alone lists a defender')
+  assert.equal(hasDefenseStat({}), false, 'an empty line does not list a defender')
+})
 
 console.log(`check-broadcast: PASS (${n} checks)`)

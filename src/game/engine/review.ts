@@ -70,6 +70,8 @@ export interface ReviewSnapshot {
   userDrive: number
   /** C2: in-game fatigue, rested by a possession swap (cloned after chargeSnaps). */
   fat: Record<string, number>
+  /** rushvar: the in-game pressure ledger (see GameState.rushHeat). */
+  heat?: Record<string, number>
   stats: { home: TeamGameStats; away: TeamGameStats }
 }
 

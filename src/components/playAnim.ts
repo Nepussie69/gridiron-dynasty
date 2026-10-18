@@ -1132,6 +1132,28 @@ function finish(  f: Formation,
   const engagements = rec ? trimEngagements(rec.eng, movers, frac, maxT) : []
   const events = rec ? takeEvents(rec.ev, frac) : []
   const sheds = rec ? rec.shed.filter((sh) => sh.t0 < maxT).map((sh) => ({ ...sh, t0: frac(sh.t0), t1: frac(Math.min(sh.t1, maxT)) })) : []
+  // animflow r6c invariant: a shed move is drawn as the man comes off his block,
+  // so it can never START after the block it came off has ended. `trimEngagements`
+  // ends a block window where the finished paths actually separate the pair, which
+  // can sit a hair (a tick) before the recorded shed time; pull the move back to
+  // that end so a drawn rip is never seen off a block that is already over. Small
+  // by construction (the two times are the same event); t1 keeps its length.
+  {
+    const BLK_KINDS = new Set(['block', 'double', 'chip'])
+    for (const sh of sheds) {
+      let end = -1
+      for (const e of engagements) {
+        if (!BLK_KINDS.has(e.kind)) continue
+        if (e.a !== sh.def && e.b !== sh.def) continue
+        if (e.t1 > end) end = e.t1
+      }
+      if (end >= 0 && sh.t0 > end) {
+        const len = Math.max(0.02, sh.t1 - sh.t0)
+        sh.t0 = end
+        sh.t1 = Math.min(1, end + len)
+      }
+    }
+  }
   // e1cseam: the ONE speed model, enforced on the finished drawing. Every man the
   // recorded field drew plays on the animation clock `recClock` timed by his own
   // pace — but the drawing's own overlays (a pre-snap rotation, the read visuals'
@@ -1695,6 +1717,11 @@ function applyBlockEngagements(
 let LAST_THROW_STYLE: ThrowStyle | undefined
 let LAST_CATCH_ROUTE: string | undefined
 export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim {
+  // The men E1c drew are THIS play's: a play that never reaches e1cPlan (an incomplete, an
+  // interception, a kick) must not inherit the previous play's list - it made the read
+  // visuals' eye-jump break (and the speed cap) hit the wrong men.
+  E1C_STAT.drewKeys.length = 0
+  E1C_STAT.chaseKeys.length = 0
   // animflow r6b: the sim's fatigue at the snap rides along (tired gait / poses).
   const fat = ctx0.fat ?? fatigueMap(play)
   const ctx: AnimContext = fat.size ? { ...ctx0, fat } : ctx0
@@ -3719,7 +3746,7 @@ function presnapShift(mv: Mover, pre: Pt, maxEnd = Infinity, minDur = 0.8): void
  *  bounds runs <= 2.0 yd lateral per forward yard). */
 const OUT_OVER = 0.55
 /** animflow r8: how far (yd) over the sideline a deliberate step-out ends. */
-const STEP_OVER = 0.9
+const STEP_OVER = 1.15
 
 /** animflow r8: the sideline nearest y (-1 = y 0, +1 = y FIELD_H) and its y. */
 function sidelineOf(y: number): { s: 1 | -1; yS: number } {
@@ -3778,19 +3805,27 @@ function shoveOut(mv: Mover, endX: number): number {
  */
 function angleOut(mv: Mover, endX: number): number {
   const { s, yS } = sidelineOf(mv.y)
-  const E = { x: endX, y: yS + s * STEP_OVER }
+  // A deliberate step-out never drifts IN toward the field: he ends at least
+  // STEP_OVER yd over the chalk, and always a stride FURTHER out than he already
+  // is — the recorded approach can already sit at (or past) the chalk, and a
+  // straight line to a fixed end point then reads as a shallow drift ALONG the
+  // chalk (r8 wants >= 25 deg over the last 0.35 s). Capped so an approach the
+  // recording left well over the line cannot be marched yards out of bounds.
+  const over = s * (mv.y - yS)
+  const out = clampN(Math.max(STEP_OVER, over + 0.9), STEP_OVER, STEP_OVER + 1.6)
+  const E = { x: endX, y: yS + s * out }
   const hv = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 0, y: 0 }
   const v = Math.min(Math.hypot(hv.x, hv.y), mv.pace.top)
-  // A step-out is ANGLED toward the line (r8: >= 25 deg as he crosses it). A long,
-  // shallow run to the spot would arrive nearly parallel to the chalk, so the last
-  // leg turns in at ~32 deg: the way point sits up to 2 yd inside the line.
   const ddx = E.x - mv.x
   const ddy = Math.abs(E.y - mv.y)
   let pts: Pt[]
-  if (ddx > 2 && Math.atan2(ddy, ddx) < (30 * Math.PI) / 180) {
-    const tan = Math.tan((32 * Math.PI) / 180)
-    const dl = Math.min(ddy, 2.0, ddx * tan * 0.6)
-    const W = { x: E.x - dl / tan, y: E.y - s * dl }
+  // A step-out is ANGLED toward the line (r8: >= 25 deg as he crosses it). A long,
+  // shallow run to the spot would arrive nearly parallel to the chalk, so the last
+  // leg turns in at ~34 deg: the way point sits up to 2 yd inside the line.
+  if (Math.abs(ddx) > 0.4 && ddy > 0 && Math.atan2(ddy, Math.abs(ddx)) < (32 * Math.PI) / 180) {
+    const tan = Math.tan((34 * Math.PI) / 180)
+    const dl = Math.min(ddy, 2.0, Math.abs(ddx) * tan * 0.6)
+    const W = { x: E.x - Math.sign(ddx) * (dl / tan), y: E.y - s * dl }
     pts = bendPts(mv, W, Math.max(0.5, v * 0.12), 10)
     for (let i = 1; i <= 6; i++) pts.push({ x: W.x + ((E.x - W.x) * i) / 6, y: W.y + ((E.y - W.y) * i) / 6 })
   } else pts = bendPts(mv, E, Math.max(0.5, v * 0.12), 14)
@@ -3936,7 +3971,14 @@ function ensurePush(tk: Mover, carrier: Mover, tP: number, endSec: number): void
     return Math.hypot(q.x - c.x, q.y - c.y)
   }
   if (tk.t >= endSec - 1e-6 && dAt(Math.max(tP, endSec - 0.3)) <= 1.0 && dAt(endSec) <= 1.0) return
-  const from = Math.max(0.05, Math.min(tP - 0.3, endSec - 1.0))
+  // animflow r8 (354 / 373): the drawn invariant is a defender ON the carrier as he goes over the
+  // line (hands on him, driving him out) - the probe reads the contact 0.12 s out and the whistle.
+  // The ride is capped at the forcer's OWN pace (animshed: never dragged faster than he can run),
+  // so a slow man (a lineman, a late pursuer) needs a lead long enough to run the gap down before
+  // the whistle: the ride closes at ~7 yd/s (rideOn's own blend), so the chase is opened a couple
+  // of strides further back and the blend is given the room to finish. Only a forcer who is
+  // already on him (the guard above) is left alone.
+  const from = Math.max(0.05, Math.min(tP - 0.3, endSec - 2.6))
   const u = pushSide(carrier, tk, tP)
   const tR = Math.max(from + 0.04, Math.min(tP, endSec - 0.35))
   const hands = (t: number) => {
@@ -5554,6 +5596,48 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   }
   if (m.fb) m.fb.run([{ x: los - 3, y: MID_Y + 1 }, { x: los - 1, y: MID_Y + side * 4 }], { stop: true })
 
+  // e1cseam x emerjoint: the field's after-catch segment starts at ITS catch side (a hash
+  // across the field), not where this route ends. Bridged AFTER the catch that gap is a
+  // sideways run (a catch-and-run that does not turn downfield), so the receiver works to
+  // the field's catch spot over the last stretch of the route instead - the ball is thrown
+  // there and the recording then starts under his feet (bridge 0). Zero rng; a segment
+  // further than `E1C.catchTol` is refused later and keeps the drawn catch.
+  if (!inc && !int) {
+    const rec = recordedField(play)
+    const q0 = rec?.carry.pts[0]
+    if (rec && q0 && keyOf(ctx, rec.carryId, [...OFF_KEYS, 'fb']) === tgt && m[tgt]) {
+      const dx = q0.x - catchPt.x
+      const dy = q0.y - catchPt.y
+      const gap = Math.hypot(dx, dy)
+      if (gap > 0.15 && gap <= E1C.catchTol) {
+        const W = clampN(gap / 4.2, 0.7, 2.4)
+        const tA = Math.max(SNAP + 0.4, catchSec - W)
+        if (catchSec - tA > 0.3) {
+          const k = Math.min(1, (catchSec - tA) * 4.2 / gap)
+          const sx = dx * k
+          const sy = dy * k
+          const old = m[tgt].path
+          const out = old.filter((w) => w.t < tA - 1e-9)
+          for (let t = tA; t < catchSec - 1e-6; t += 0.04) {
+            const q = posAt(old, t)
+            const u = (t - tA) / (catchSec - tA)
+            const e = u * u * (3 - 2 * u)
+            out.push({ t, x: clampX(q.x + sx * e), y: clampY(q.y + sy * e) })
+          }
+          const qc = posAt(old, catchSec)
+          out.push({ t: catchSec, x: clampX(qc.x + sx), y: clampY(qc.y + sy) })
+          for (const w of old) if (w.t > catchSec + 1e-6) out.push({ t: w.t, x: clampX(w.x + sx), y: clampY(w.y + sy) })
+          m[tgt].path = out
+          const last = out[out.length - 1]
+          m[tgt].t = last.t
+          m[tgt].x = last.x
+          m[tgt].y = last.y
+          catchPt = { x: clampX(qc.x + sx), y: clampY(qc.y + sy) }
+        }
+      }
+    }
+  }
+
   // Release and flight: throw power sets a bullet vs a floater.
   const flightSec = flightFor(Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y))
   const releaseSec = Math.max(minRel, catchSec - flightSec)
@@ -6213,6 +6297,10 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       }
       followTo(fk, catchSec, Math.max(catchSec + 0.04, tQ - 0.1), hands, { acc: Math.max(6.5, fk.pace.acc * 1.3), w: 4.5 })
       rideOn(fk, m[tgt], fk.t, endSec, u)
+      // animflow r8 (354 / 373): the same guarantee the run path uses - if the pace-capped ride
+      // (or the pick-your-way floor) still leaves him a stride short, his own chase runs the rest
+      // of the gap down so the hand is on the receiver as he goes over the line.
+      ensurePush(fk, m[tgt], tQ, endSec)
     }
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
