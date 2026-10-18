@@ -77,7 +77,7 @@ export interface RecField {
 /** Every knob E1c adds, in one place (nothing else in the animation is tuned). */
 export const E1C = {
   /** OFF by default: the animation choreographs exactly as it did before. */
-  on: false,
+  on: true,
   /**
    * How far the recorded stop may sit from the sim's recorded spot and still be
    * drawn. A tackle lands on the field's stop and the sim's yards are that gain

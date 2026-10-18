@@ -2626,8 +2626,14 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   const side = hash(seed) < 0.5 ? -1 : 1
   // Inside holes sit between the guards and tackles (NFL R4: inside runs cross
   // the line ~1.5 yd from the ball); designed outside runs bend to the edge.
-  const edgeIn = 2.5 + hash(seed + 1) * 0.8
-  const holeY = oobEarly ? (side < 0 ? edgeIn : FIELD_H - edgeIn) : MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
+  // A run the sim ends out of bounds crosses the line AT the edge, not 2.5-3.3 yd
+  // inside it: on a 1-3 yd gain the old lane put the crossing ~3 yd from the
+  // chalk and then spent another OUT_OVER shoving him over, so the drawn carry
+  // travelled 4+ yd sideways per forward yard (check-broadcast r8 sideways:
+  // out-of-bounds runs <= 2.0). A strung-out toss reaches the chalk as it crosses
+  // and steps out from there.
+  const oobEdge = 1.1 + hash(seed + 1) * 0.5
+  const holeY = oobEarly ? (side < 0 ? oobEdge : FIELD_H - oobEdge) : MID_Y + side * (wide ? 11 + hash(seed + 1) * 4 : 0.8 + hash(seed + 1) * 2.8)
   const endX = clampX(10 + play.endYard)
   const fumble = !!play.turnover
   // ── the carrier's line (animflow r4: NFL tracking targets, logs/nfl-motion-reference.out) ──
@@ -2647,7 +2653,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
   // T2M: a run that went out of bounds finishes against the sideline, not in the
   // middle of the field. The end spot (x) is unchanged.
   const endY0 = play.outOfBounds
-    ? (side < 0 ? 1.6 : FIELD_H - 1.6)
+    ? (side < 0 ? 0.9 : FIELD_H - 0.9)
     : clampY(lane + driftDir * drift)
   // E1c: where the field's own stop was (the recorded path's last spot) is the
   // spot the animation finishes on, so the tackle and the pile land there.
@@ -3583,8 +3589,11 @@ function presnapShift(mv: Mover, pre: Pt, maxEnd = Infinity, minDur = 0.8): void
 // (shoveOut + the forcer riding on his inside shoulder, pushOut pose). A deliberate step-out (two
 // minutes or less in a half, clockStepOut) angles out early and visibly, and nobody touches him.
 
-/** animflow r8: how far (yd) over the sideline a carrier shoved out of bounds ends up. */
-const OUT_OVER = 1.2
+/** animflow r8: how far (yd) over the sideline a carrier shoved out of bounds ends up.
+ *  Kept small: the carry crosses at the chalk (oobEdge) and the shove is the last
+ *  step over it, so the drawn lateral travel stays bounded (r8 sideways: out of
+ *  bounds runs <= 2.0 yd lateral per forward yard). */
+const OUT_OVER = 0.55
 /** animflow r8: how far (yd) over the sideline a deliberate step-out ends. */
 const STEP_OVER = 0.9
 
@@ -3648,7 +3657,20 @@ function angleOut(mv: Mover, endX: number): number {
   const E = { x: endX, y: yS + s * STEP_OVER }
   const hv = mv.path.length > 1 ? speedVec(mv.path, mv.t) : { x: 0, y: 0 }
   const v = Math.min(Math.hypot(hv.x, hv.y), mv.pace.top)
-  mv.run(bendPts(mv, E, Math.max(0.5, v * 0.12), 14), { v0: v, stop: true, cut: true })
+  // A step-out is ANGLED toward the line (r8: >= 25 deg as he crosses it). A long,
+  // shallow run to the spot would arrive nearly parallel to the chalk, so the last
+  // leg turns in at ~32 deg: the way point sits up to 2 yd inside the line.
+  const ddx = E.x - mv.x
+  const ddy = Math.abs(E.y - mv.y)
+  let pts: Pt[]
+  if (ddx > 2 && Math.atan2(ddy, ddx) < (30 * Math.PI) / 180) {
+    const tan = Math.tan((32 * Math.PI) / 180)
+    const dl = Math.min(ddy, 2.0, ddx * tan * 0.6)
+    const W = { x: E.x - dl / tan, y: E.y - s * dl }
+    pts = bendPts(mv, W, Math.max(0.5, v * 0.12), 10)
+    for (let i = 1; i <= 6; i++) pts.push({ x: W.x + ((E.x - W.x) * i) / 6, y: W.y + ((E.y - W.y) * i) / 6 })
+  } else pts = bendPts(mv, E, Math.max(0.5, v * 0.12), 14)
+  mv.run(pts, { v0: v, stop: true, cut: true })
   mv.x = E.x
   mv.y = E.y
   mv.lastStop = true
@@ -4195,13 +4217,18 @@ function pileDrive(mv: Mover, pts: Pt[], v0: number) {
   // animresid (amendment): the pile drive never crawls - he drives forward on his feet (>= ~1 yd/s)
   // right up to the contact, so the carrier is never drawn standing still inside the carry.
   const STOP_FLOOR = 1.05
-  let v = Math.max(drive, v0)
+  // A spot SHORT of where the carrier stopped (the sim's yards are the calibrated
+  // anchor blended toward the field's gain) is the pile shoving him back: a slow
+  // shove (under a stride), never a run back along the chalk.
+  const shoved = mv.x - all[all.length - 1].x > 0.3
+  const vCap = shoved ? 1.4 : Infinity
+  let v = Math.min(vCap, Math.max(drive, v0))
   const dec = clampN((v * v) / (2 * Math.max(0.3, L)), 0.8, 12)
   let t = 0
   while (s < L - 1e-4 && t < 4) {
-    v = Math.max(1.2, v - dec * dt)
+    v = (shoved ? 1.3 : Math.max(1.2, v - dec * dt))
     const vEnd = Math.sqrt(2 * dec * Math.max(0, L - s)) + 0.15
-    const sp = Math.min(v, Math.max(STOP_FLOOR, vEnd))
+    const sp = Math.min(v, (shoved ? 1.3 : Math.max(STOP_FLOOR, vEnd)), vCap)
     s = Math.min(L, s + sp * dt)
     t += dt
     const p = at(s)
@@ -5794,7 +5821,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
   if (int) {
     const spotX = changeSpot(play, ctx.next) ?? catchPt.x - 8
     // Read visuals: the credited defender who read the QB's eyes jumps the route and makes the pick.
-    const near = eyeJumpPicker(play, ctx, (k) => (m[k] ? posAt(m[k].path, catchSec - 1.0) : null), catchPt) ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)
+    const near = eyeJumpPicker(play, ctx, (k) => (m[k] ? posAt(m[k].path, catchSec - 1.6) : null), catchPt) ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)
     recEv(catchSec, 'interception', [near, tgt], catchPt)
     recEv(catchSec, 'turnover', [near], catchPt)
     const v0 = seek(m[near], Math.max(0.12, catchSec - 0.06))
@@ -5856,21 +5883,34 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
         const lk = mv.path[mv.path.length - 1]
         if (lk && Math.abs(lk.x - endX) > 1e-9 && Math.abs(lk.x - endX) < E1C.maxFix) { lk.x = endX; mv.x = endX }
       }
+      // A rusher the sim sent at the passer is drawn rushing BEFORE the catch (the
+      // animation's own blitz). Re-seating him at his recorded spot would wipe that
+      // rush from the timeline, so a rusher whose recording cannot be bridged from
+      // where he is at the catch keeps the animation's own drawing.
+      const rushKeys = new Set<string>()
+      for (const id of play.blitzIds ?? []) { const k = keyOf(ctx, id, DEF_KEYS); if (k) rushKeys.add(k) }
+      const rushSkipped = new Set<string>()
       for (const x of e1p.men) {
         const dmv = m[x.key]
         if (!dmv) continue
-        E1C_STAT.drewKeys.push(x.key)
         const p0 = x.man.pts[0]
         const tFirst = recFirstT(x.man, e1p.rec.ticks, catchSec, clk)
         const need = tFirst > 0.05 ? Math.hypot(p0.x - dmv.x, p0.y - dmv.y) / tFirst : Infinity
-        if (recFillsAll(x.man, e1p.rec.ticks) || need > dmv.pace.top * E1C.bridgeTol) {
+        const reseat = recFillsAll(x.man, e1p.rec.ticks) || need > dmv.pace.top * E1C.bridgeTol
+        if (reseat && rushKeys.has(x.key)) {
+          rushSkipped.add(x.key)
+          E1C_STAT.menSkipped++
+          continue
+        }
+        E1C_STAT.drewKeys.push(x.key)
+        if (reseat) {
           dmv.reset(p0.x, p0.y)
           if (need > dmv.pace.top * E1C.bridgeTol) E1C_STAT.bridge++
         }
         drawRecorded(dmv, x.man, e1p.rec.ticks, catchSec, tFirst, clk)
         carryOn(dmv, endSec, dmv.pace.top)
       }
-      const recKeys = new Set(e1p.men.map((x) => x.key))
+      const recKeys = new Set(e1p.men.filter((x) => !rushSkipped.has(x.key)).map((x) => x.key))
       let tackler = keyOf(ctx, play.tackleIds?.[0], DEF_KEYS) ?? closestRecorded(e1p, catchPt)
       let tkFromRec = !!tackler && recKeys.has(tackler)
       if (!tackler || !m[tackler]) {
@@ -5903,6 +5943,8 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       }
       capAll(m, ALL_KEYS(f), endSec)
       ball.push(...shadow(mv.path, catchSec).slice(1))
+      // (the look back is the last beat before the catch: the recording starts AT the catch)
+      if (backShoulder) fadeLookBack(m, tgt, catchSec, catchPt)
       recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
       recMissedTacklesE1(play, ctx, tgt, m, DEF_KEYS, catchSec, contactT)
       recClose(m, tgt, tkEff, endSec, pursuers, {
@@ -6023,6 +6065,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     }
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
+    if (backShoulder) fadeLookBack(m, tgt, catchSec, catchPt)
     recEv(catchSec, 'catch', [tgt, coverKey ?? nearestKey(m, DEF_KEYS, catchPt, catchSec)], catchPt)
     if (forcer) {
       recEv(tQ, 'contact', [tgt, forcer], posAt(m[tgt].path, tQ))

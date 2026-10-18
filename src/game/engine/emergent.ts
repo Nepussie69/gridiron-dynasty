@@ -65,7 +65,10 @@ function effA(p: Player, key: string): number {
  * spec's own list; the rest are the layout / centring knobs the field needs.
  */
 export const EMERGENT = {
-  on: false,
+  // ON by default (emerjoint 2026-10-17): the joint emergent calibration landed
+  // E1a in the NFL bands, so the field is the shipped model. `setEmergentE1(false)`
+  // remains the dev toggle and restores the OFF path byte-for-byte.
+  on: true,
   // ── the field (spec list) ───────────────────────────────────────────────────
   dt: 0.05,
   farDt: 0.25,
@@ -97,8 +100,9 @@ export const EMERGENT = {
   /** The same on the short side (a stopped-short play is only nudged, so the
    *  calibrated ≤0 shape holds while the field's breakaways fatten the tail). */
   deltaNegW: 1.2,
-  /** A flat yards shift (the one mean knob; measured from the ON panel). */
-  bias: 0.25,
+  /** A flat yards shift (the one mean knob; re-centred for the joint config so
+   *  YPC holds at the band while the field is ON). */
+  bias: 0.46,
   // ── layout (the concept/personnel alignment the animation uses) ────────────
   /** The lateral span the run's lanes are spread over (yd). */
   aimSpan: 44,
@@ -113,7 +117,7 @@ export const EMERGENT = {
   /** How far past his aim a clean (untouched) back may run before he is credited
    *  to the nearest chaser — the second, larger tail cap, so a clean back cannot
    *  turn every medium carry into a 99-yd play. */
-  cleanExtra: 9,
+  cleanExtra: 24,
   /**
    * A run stopped wide of the ball is often forced out of bounds rather than
    * tackled down in bounds: P(OOB) rises with how wide the carrier is. Hash-only.
@@ -149,7 +153,8 @@ export const EMERGENT = {
   /** The lateral kick a broken tackle puts on the carrier (yd/s). */
   juke: 3.0,
   openW: 1.0,
-  /** A global scale on the attempted miss chance (the league MT-rate knob). */
+  /** A global scale on the attempted miss chance (the league MT-rate knob;
+   *  re-centred for the joint config). */
   missW: 0.66,
   /** The geometric openness → the miss model's `gain` input (see the caller). */
   openScale: 2.8,
@@ -160,9 +165,26 @@ export const EMERGENT = {
   farThresh: 3.5,
   sideLo: 1,
   sideHi: 52.3,
-  /** Fast-path mirror (statAlloc): the ON rush base and MT base (measured). */
-  stRushBase: 112,
-  stMtBase: -1,
+  /** Fast-path mirror (statAlloc): the ON rush base and MT base (measured from the
+   *  E1d parity probe, logs/e1d-parity.mjs: fast 114.9 vs pbp 116.2 rush yds and
+   *  9.46 vs 7.52 missed tackles at 112 / 8, n=200 games -> 113 / 6.4). */
+  stRushBase: 112.5,
+  stMtBase: 5.95,
+  /** Red-zone score guard: at/inside this yard line the field may not manufacture
+   *  a score the calibrated draw did not itself make (`planned`), the same
+   *  `anchorScored` rule the pass field (E1b) uses. A breakaway outside this line
+   *  still stands — it is the field's own chase. 0 = off (dev). Measured by the
+   *  joint panel: without it goal-line carries the field won scored at 62% vs
+   *  main's 43.5%, rushing TD 1.16 vs the 0.8 band, red-zone TD% 62 vs 56. */
+  rzScoreGuard: 60,
+  /** Run-side line-to-gain guard: how far PAST the sticks (yd) a carry the
+   *  calibrated draw did not convert may still be carried before the marker's
+   *  tackle counts as broken. A man stopped within this distance is tackled AT
+   *  the marker (the field owned the yards up to it); a clean breakaway past the
+   *  sticks stands. The pass field's `AIR_COH.markerStop` is the same rule.
+   *  Measured jointly: the run field's own deviation walked the chains ~1.05
+   *  extra times a game. 0 = off (dev). */
+  markerStop: 3,
   /** Warmup: the recorded path cadence (ticks between fieldPaths points). */
   pathEvery: 5,
 } as const
@@ -407,6 +429,39 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
   }
 
   // ── the field ──────────────────────────────────────────────────────────────
+  // ── the aim ────────────────────────────────────────────────────────────────
+  // The anchor's put-up spot (`yard + planned`) is the yards the scheme intends,
+  // and outside the goal band it is the aim exactly as before. Inside the band —
+  // the design's own spot within `breakR` of the plane — the GOAL LINE itself is
+  // what is at stake: the carrier aims at the line (the pylon when he is on the
+  // chalk; the sideline clamp above keeps him in bounds, so a pylon touch is in
+  // bounds and the plane is broken) and only a defender who can really get there
+  // stops him. Geometry, not a knob: the same `breakR` the field already uses for
+  // "nobody is close enough to be credited with stopping him".
+  const anchorX = yard + planned
+  const atStake = anchorX >= 100 - R.breakR
+  const aimX = atStake ? 100 : Math.min(anchorX, 100)
+  /** Can any free defender still get within `contactR` of him before the ball
+   *  crosses the plane at his own pace? (The field's own intercept idea, aimed at
+   *  the goal line: the earliest time a man of his own top speed is on the ball's
+   *  line. A trailer 2 yd behind at the 99 is too late; a man in front is not.) */
+  const canReachGoal = (): boolean => {
+    const tGoal = Math.max(R.dt, (100 - carrier.x) / Math.max(0.5, carrier.vx))
+    for (const m of defs) {
+      if (m.pinned > t) continue
+      if (t < m.react) continue
+      if (t < m.recover) continue
+      const stop = Math.min(tGoal, 3)
+      for (let tau = R.dt; tau <= stop + 1e-9; tau += R.dt) {
+        const qx = carrier.x + carrier.vx * tau
+        const qy = carrier.y + carrier.vy * tau
+        const qd = Math.sqrt((qx - m.x) * (qx - m.x) + (qy - m.y) * (qy - m.y))
+        if (qd - R.contactR <= m.top * tau) return true
+      }
+    }
+    return false
+  }
+
   const contact2 = R.contactR * R.contactR
   const far2 = R.farThresh * R.farThresh
   const path: LPt[] = [{ x: carrier.x, y: carrier.y }]
@@ -438,13 +493,20 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
     t += R.dt
     tick++
     // carrier: run the gap/aim line (a broken tackle lets him continue past it).
+    // The lateral aim is clamped to the playable width: aimed PAST the chalk (the old
+    // +-2 yd) a man pinned on the wall kept spending his acceleration budget on a
+    // lateral push the wall zeroed every tick, so he bled downfield speed (a 70-yd
+    // score drawn at 3 yd/s into the goal line) and drifted sideways. Once he is on
+    // the wall he runs straight up it.
     // A run aimed at the edge drifts toward that sideline, so an outside run can
     // be forced out of bounds (the field's own sideline end).
-    const aimX = yard + planned
-    const targetX = missed.length ? carrier.x + 6 : aimX
+    // Inside the last `breakR` yards the aim IS the goal line (the pylon when he is
+    // on the chalk): the design's own spot can never steer him back there.
+    const goalBand = carrier.x > 100 - R.breakR
+    const targetX = missed.length ? carrier.x + 6 : goalBand ? 100 : aimX
     const wide = lane >= MID ? lane - MID : MID - lane
     const aimY = wide > R.driftFrom
-      ? clamp(lane + (lane >= MID ? 1 : -1) * R.outsideDrift * t, R.sideLo - 2, R.sideHi + 2)
+      ? clamp(lane + (lane >= MID ? 1 : -1) * R.outsideDrift * t, R.sideLo, R.sideHi)
       : lane
     steer(carrier, targetX, aimY, R.dt, cBurstAcc * (t < burstT ? R.burstSpeed : 1))
     // defenders
@@ -483,7 +545,11 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
     // defender gets home. The end zone still scores.
     if (carrier.y < R.sideLo) { carrier.y = R.sideLo; carrier.vy = 0 }
     else if (carrier.y > R.sideHi) { carrier.y = R.sideHi; carrier.vy = 0 }
-    if (carrier.x >= 100) { td = true; break }
+    // The goal line is a real end, not the anchor's spot: the ball is over the
+    // plane the moment he carries it across in bounds (the chalk clamp above kept
+    // him in bounds, and a man pinned on the pylon is on the chalk), so the
+    // crossing is recorded and the play is a score at once.
+    if (carrier.x >= 100) { td = true; path.push({ x: carrier.x, y: carrier.y }); break }
     // the nearest free defender in reach makes the attempt
     let near: Man | null = null
     let nearD2 = contact2
@@ -531,8 +597,17 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
       }
     }
     // (a) a broken tackle is run down after `missExtraYd` past the aim (the cap
-    //     that keeps a single miss from becoming an untouchable 99-yd play)
-    if (missed.length && carrier.x >= aimX + R.missExtraYd) {
+    //     that keeps a single miss from becoming an untouchable 99-yd play), and
+    // (b) down at the aim: the play gained what the scheme designed unless a
+    //     defender got there first (above) or a broken tackle let him past it.
+    //     The nearest defender closes the play here (the tackle attempt that
+    //     credits him); a miss lets the carrier run on past his aim.
+    // Inside the goal band neither applies: the plane is the only end there. A
+    // man who can really get there is already handled by the contact test above
+    // (within `contactR`); anyone else cannot stop him, so the anchor's own spot
+    // and the capped tail may not end the play — he is over the line (the goal
+    // check above records the crossing) unless somebody touches him first.
+    if (!goalBand && missed.length && carrier.x >= aimX + R.missExtraYd) {
       let who: Man | null = null
       let bd = Infinity
       for (const m of defs) {
@@ -546,11 +621,7 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
       stopX = carrier.x
       break
     }
-    // (b) down at the aim: the play gained what the scheme designed unless a
-    //     defender got there first (above) or a broken tackle let him past it.
-    //     The nearest defender closes the play here (the tackle attempt that
-    //     credits him); a miss lets the carrier run on past his aim.
-    if (!missed.length && carrier.x >= aimX - 0.05) {
+    if (!goalBand && !missed.length && carrier.x >= aimX - 0.05) {
       let who: Man | null = null
       let bd = Infinity
       for (const m of defs) {
@@ -619,12 +690,20 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
   else if (oob) fieldGain = carrier.x - yard
   else if (stopX !== null) fieldGain = stopX - yard
   else {
-    // nobody reached him inside maxT: cap the runaway at his own current gain
-    const cur = Math.max(0, carrier.x - yard)
-    const u = h01(`${key}:tail`)
-    const tl = cur * Math.min(R.tailCap, R.tailLo + (R.tailHi - R.tailLo) * u)
-    fieldGain = Math.min(cur, Math.max(0, tl))
-    if (!tacklerId) tacklerId = nearestId()
+    // Nobody reached him inside maxT: cap the runaway at his own current gain —
+    // but never inside the goal band, where the ball is over the plane before any
+    // defender can get to him (the same test as at the aim).
+    if (carrier.x > 100 - R.breakR && !canReachGoal()) {
+      td = true
+      path.push({ x: carrier.x, y: carrier.y })
+      fieldGain = 100 - yard
+    } else {
+      const cur = Math.max(0, carrier.x - yard)
+      const u = h01(`${key}:tail`)
+      const tl = cur * Math.min(R.tailCap, R.tailLo + (R.tailHi - R.tailLo) * u)
+      fieldGain = Math.min(cur, Math.max(0, tl))
+      if (!tacklerId) tacklerId = nearestId()
+    }
   }
 
   // ── the yards: the calibrated anchor plus the field's own deviation ────────

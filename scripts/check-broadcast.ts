@@ -96,6 +96,7 @@ import type { World } from '../src/game/engine/generate.ts'
 import { BENCHES, buildTeamArea, officialsAt, OFFICIAL_ROLES, readPlay, sideY } from '../src/components/broadcast/sideline.ts'
 import { TEAM_BOX } from '../src/components/broadcast/field.ts'
 
+
 let n = 0
 // CB_ONLY=<regex>: run only the checks whose name matches (debugging aid; the full run leaves it unset).
 const CB_ONLY = process.env.CB_ONLY ? new RegExp(process.env.CB_ONLY) : null
@@ -2568,7 +2569,16 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     let tds = 0
     let slowTd = 0
     const bad: string[] = []
-    for (let g = 0; g < 8; g++) {
+    // emerjoint: with the joint emergent config ON (the default) the run/catch
+    // tail is produced by the E1a/E1b field, and the round-1 outcome guards
+    // (EMERGENT.rzScoreGuard / AIR_COH.rzCap) deliberately run a field-made
+    // goal-line score down at the 1 unless the calibrated draw scored, so the
+    // long-SCORE count is far below main's sampled CDF tail: measured 2 long
+    // scores in a 24-game sample (round 1: ~9). The coverage floor below needs
+    // >= 5 of them, so the sample is widened to 96 games (measured ~8 at that
+    // size); the three behavioural thresholds (alone/tackles, cred/tackles,
+    // slowTd) are untouched, so the check is strictly stronger, not looser.
+    for (let g = 0; g < 96; g++) {
       const home = nfl[(g * 3) % nfl.length].id
       const away = nfl[(g * 3 + 1) % nfl.length].id
       const sim = simulatePlayByPlay(world, home, away, world.seed + 71 + g * 977)
@@ -3186,6 +3196,7 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       const v = { n: 1, tSide, tAll, lat, down, dist, yds }
       const into = (acc: Acc) => { for (const k of Object.keys(v) as (keyof Acc)[]) acc[k] += v[k] }
       if (kind === 'run') { into(A.run); into(play.outOfBounds ? A.runOob : A.runIn) }
+      if (process.env.R8_DIAG && kind === 'run' && play.outOfBounds) { const cp = (play as unknown as { carryPath?: { x: number; y: number }[] }).carryPath; console.log(`R8D lat ${lat.toFixed(1)} down ${down.toFixed(1)} yds ${play.yards} y0 ${p(s0).y.toFixed(1)} y1 ${p(s1).y.toFixed(1)} hy ${p(holder.t * D).y.toFixed(1)} los ${los} x0 ${(p(s0).x - los).toFixed(1)} x1 ${(p(s1).x - los).toFixed(1)} cp ${cp ? cp.length + ' ' + cp[0].y.toFixed(1) + '>' + cp[cp.length - 1].y.toFixed(1) + ' dx ' + (cp[cp.length - 1].x - cp[0].x).toFixed(1) : 'none'} ${play.concept}`) }
       else if (kind === 'cr') { into(A.cr); if (!play.outOfBounds) into(A.crIn) }
       else into(A.ret)
       if (tAll > 0.5 && tSide / tAll > 0.7 && !play.outOfBounds && worst.length < 4) worst.push(`${kind} ${play.n} ${play.concept}`)
@@ -3474,7 +3485,13 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
       const sim = simulatePlayByPlay(world, home, away, world.seed + 3301 + g * 7919)
       for (let i = 0; i < sim.plays.length; i++) {
         const play = sim.plays[i]
-        if (play.type !== 'pass' || play.spike) continue
+        // emerjoint: TARGET_DIST ON (the joint default) gives the QB a real
+        // throwaway — the read finds no answer, `targetId` is deliberately
+        // undefined and `throwAway` is set (the NFL targets/attempts gap). This
+        // check's invariant ("the highlighted target is the engine's") cannot
+        // apply to a dropback with no intended receiver, exactly like a spike or
+        // a sack, so those plays are skipped rather than counted as bad.
+        if (play.type !== 'pass' || play.spike || play.throwAway) continue
         const other = play.offId === home ? away : home
         const tPos = play.targetId ? byId.get(play.targetId)?.pos : undefined
         const tKey = play.targetId ? targetKey(play, { targetPos: tPos }) : null
@@ -3704,13 +3721,17 @@ ok('animflow r6b (item 4): tired men (sim fatigue at the snap) stand hands-on-hi
     let aimOk = 0
     const bad: string[] = []
     const perfCases: { anim: BroadcastAnim; items: TeleItems; traces: RouteTraces; cx: number }[] = []
-    for (let g = 0; g < 20; g++) {
+    // emerjoint (additive coverage, no threshold moved): with the joint config the
+    // checkdown back releases late and the routes run at speed, so a "pure blocker"
+    // (an eligible man under 3.5 yd of travel) is rare — the 20-game sample found
+    // one, under this floor's 2. 48 games clears it with the same thresholds.
+    for (let g = 0; g < 48; g++) {
       const home = nfl[(g * 7) % nfl.length].id
       const away = nfl[(g * 7 + 3) % nfl.length].id
       const sim = simulatePlayByPlay(world, home, away, world.seed + 7703 + g * 6151)
       for (let i = 0; i < sim.plays.length; i++) {
         const play = sim.plays[i]
-        if (play.type !== 'pass' || play.spike || play.kneel) continue
+        if (play.type !== 'pass' || play.spike || play.kneel || play.throwAway) continue
         const other = play.offId === home ? away : home
         const tPos = play.targetId ? byId.get(play.targetId)?.pos : undefined
         const tKey = play.targetId ? targetKey(play, { targetPos: tPos }) : null

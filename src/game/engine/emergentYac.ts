@@ -64,7 +64,9 @@ const MPH_YDS = 0.4889
 
 // ── the one tunable object ───────────────────────────────────────────────────
 export const EMERGENT_YAC = {
-  on: false,
+  // ON by default (emerjoint 2026-10-17): the joint calibration landed the YAC
+  // field in the NFL bands. `setEmergentE1b(false)` is the dev toggle.
+  on: true,
   /** Engine step (s) — the shared LiveField step. */
   dt: 0.05,
   /** Tail fallback: after this long nobody reached — resolve as a run-down. */
@@ -102,6 +104,16 @@ export const EMERGENT_YAC = {
    *  calibrated level without touching the rest of the field). */
   glZone: 11,
   glBoost: 1.30,
+  /** Red-zone compression (rzcompress): the end line limits the field, so the
+   *  pursuers sit between the receiver and the goal. `c` rises from 0 at `rzZone` yd
+   *  out to 1 at `rzFull` yd; a non-cover defender starts at least `c * rzSit * AWR
+   *  factor` yd downfield (never past the goal line) and `c * rzNarrow` of his lateral
+   *  gap is squeezed out. Geometry + the man's own AWR; no rng draw. */
+  rzZone: 17,
+  rzFull: 5,
+  rzSit: 3.0,
+  rzAwrW: 0.012,
+  rzNarrow: 0.3,
   /** The coverage velocity every defender carries into the segment. */
   covVel: 0.9,
   /** Pursuit aim is projected this far so `steer` never brakes into it (yd). */
@@ -423,8 +435,16 @@ export function emergentYac(inp: YacInput): YacResult {
   const seen = new Set<string>()
   const addDef = (p: Player | undefined, key: string, dx: number, dy: number) => {
     if (!p || seen.has(p.id)) return
-    const px = clamp(x0 + dx, 0.6, 119.4)
-    const py = clamp(y0 + dy, 0.8, FH - 0.8)
+    let ddx = dx
+    let ddy = dy
+    const toGoal = 100 - x0
+    if (key !== 'cov' && E.rzSit > 0 && toGoal > 0 && toGoal < E.rzZone) {
+      const c = clamp((E.rzZone - toGoal) / (E.rzZone - E.rzFull), 0, 1)
+      ddx = Math.max(dx, Math.min(toGoal, c * E.rzSit * clamp(1 + (attrOf(p!, 'AWR') - 70) * E.rzAwrW, 0.6, 1.4)))
+      ddy = dy * (1 - c * E.rzNarrow)
+    }
+    const px = clamp(x0 + ddx, 0.6, 119.4)
+    const py = clamp(y0 + ddy, 0.8, FH - 0.8)
     if (Math.hypot(px - x0, py - y0) > E.maxReach) return
     seen.add(p.id)
     const pace = paceFor(p, p.pos)
@@ -472,6 +492,9 @@ export function emergentYac(inp: YacInput): YacResult {
   let outOfBounds = false
   let scored = false
   let contactT = -1
+  /** A man who is on him at the moment the ball crosses the plane: a contested
+   *  crossing is the calibrated stand-up (`tdGate`), not a clean score. */
+  let contestedPlane = false
   const oobRoll = (cp: LPt): boolean => {
     const lat = Math.abs(cp.y - MID)
     const p = clamp((lat - E.oobFrom) * E.oobW, 0, E.oobMax)
@@ -481,7 +504,15 @@ export function emergentYac(inp: YacInput): YacResult {
   while (field.t < E.maxT - 1e-9) {
     field.run(field.t + E.dt)
     const cp = field.where(carrierKey)!
-    if (cp.x >= 100 - 1e-9) { scored = true; break }
+    if (cp.x >= 100 - 1e-9) {
+      // The ball is over the plane: it is a score unless a defender is on him
+      // right there (the crossing is checked before the attempt below, so the man
+      // who is touching him at the line is read here).
+      const at = nearest(field, defs, cp, field.t)
+      contestedPlane = !!at && at.dist <= E.contactR
+      scored = true
+      break
+    }
     if (cp.y <= E.oobTight || cp.y >= FH - E.oobTight) { outOfBounds = true; break }
     const cand = nearest(field, defs, cp, field.t)
     if (!cand || cand.dist > E.contactR) continue
@@ -515,12 +546,29 @@ export function emergentYac(inp: YacInput): YacResult {
   else {
     raw = Math.max(0, cpEnd.x - x0)
     if (contactT < 0 && !outOfBounds && field.t >= E.maxT - 1e-9) {
-      // Nobody reached him inside maxT: cap the runaway at his own current gain.
-      const u = h01(`${seed}:tail`)
-      raw = raw * (E.tailLo + (E.tailHi - E.tailLo) * u)
-      const near = nearest(field, defs, cpEnd, field.t)
-      tackler = near?.d.p
-      outOfBounds = cpEnd.y <= E.oobTight || cpEnd.y >= FH - E.oobTight
+      // Nobody reached him inside maxT. Capping the runaway at his own gain is
+      // right in the open field, but it may never end a play short of the goal
+      // when no defender can reach him before he crosses: the ball is over the
+      // plane. (The same intercept solve the pursuit itself uses — a man who
+      // cannot get to the carrier's line before he crosses cannot stop him.)
+      const cv = field.velOf(carrierKey)
+      const tGoal = Math.max(E.dt, (100 - cpEnd.x) / Math.max(0.5, cv.x))
+      let reaches = false
+      for (const d of defs) {
+        const a = field.agents.get(d.key)
+        if (!a) continue
+        const tInt = interceptT(cpEnd.x, cpEnd.y, cv.x, cv.y, a.x, a.y, d.top * (cpEnd.x >= 100 - E.glZone ? E.glBoost : 1), E.contactR)
+        if (tInt != null && tInt <= tGoal) { reaches = true; break }
+      }
+      if (cv.x > 0 && !reaches) scored = true
+      else {
+        // Nobody reached him inside maxT: cap the runaway at his own current gain.
+        const u = h01(`${seed}:tail`)
+        raw = raw * (E.tailLo + (E.tailHi - E.tailLo) * u)
+        const near = nearest(field, defs, cpEnd, field.t)
+        tackler = near?.d.p
+        outOfBounds = cpEnd.y <= E.oobTight || cpEnd.y >= FH - E.oobTight
+      }
     }
   }
 
@@ -534,11 +582,12 @@ export function emergentYac(inp: YacInput): YacResult {
   const dev = fieldTotal - centre
   const posB = E.posBias[pos] ?? E.posBias.default
   const anchorScored = inp.yard + inp.anchor >= 100
-  // The field confirms the calibrated anchor's score, but it only ADDS its own
-  // goal-line arrival through a hash gate (`tdGate`); at tdGate 0 the league TD
-  // rate is exactly the calibrated one. This is the knob the joint calibration
-  // opens; the yards still come from the specific men either way.
-  const fieldTd = !anchorScored && scored && E.tdGate > 0 && h01(`${seed}:tdgate`) < E.tdGate
+  // The plane is a real end: a crossing no defender can contest is a score — the
+  // ball was carried into the end zone, and the specific men on the play put it
+  // there — whatever the calibrated anchor says. A CONTESTED crossing (a man on
+  // him as he crosses: a diving goal-line tackle) is the calibrated stand-up, and
+  // that share is what `tdGate` decides (at 0 the league TD rate is the anchor's).
+  const fieldTd = !anchorScored && scored && (!contestedPlane || (E.tdGate > 0 && h01(`${seed}:tdgate`) < E.tdGate))
   const emittedTd = anchorScored || fieldTd
   let total: number
   if (anchorScored)

@@ -44,7 +44,9 @@ const h01 = (key: string) => (hash32(key) >>> 0) / 4294967296
 // bands are centred by `sepCenter`/`compCenter` (measured by `e2-probe`), so the
 // object only moves the *spread*, not the league mean.
 export const EMERGENT_E2 = {
-  on: false,
+  // ON by default (emerjoint 2026-10-17): the joint calibration landed the route
+  // field in the NFL bands. `setEmergentE2(false)` is the dev toggle.
+  on: true,
   /** Engine step (s) — the shared LiveField step. */
   dt: 0.05,
   /** Separation at which a defender is considered engaged (the field ring). */
@@ -122,13 +124,25 @@ export const EMERGENT_E2 = {
    *  the J7 completion term it replaces ((meanJ7 − MU_CENTER.comp)/compPerYd of
    *  measured offset, see the verify log) — the league level is held by
    *  construction, and only the field's own spread moves. */
-  compCenter: { screen: 2.562, short: 2.164, mid: 2.345, deep: 5.266 } as Record<string, number>,
+  compCenter: { screen: 1.375, short: 2.12, mid: 3.088, deep: 6.131 } as Record<string, number>,
   /** Measured league anchor for the aggregate completion (the J8C.coverBase role).
    *  Measured by the paired OFF/ON sweep: the field's per-play spread holds the
    *  league rate a little low once it replaces the J7 term, so a small positive
    *  lift (0.011 ≈ 1.1 pts, probe/calib: pooled 6-seed drift, see the verify log)
    *  puts the aggregate back on the OFF level. */
   compLift: 0.011,
+  // ── red-zone field compression (rzcompress) ─────────────────────────────────
+  // The end line limits the field: a defender cannot be beaten deep past the back of
+  // the end zone, so coverage plays tighter as the snap nears the goal. `c` rises from
+  // 0 at `rzZone` yd out to 1 at `rzFull` yd (pure geometry: the room that is left);
+  // the raw separation loses `c * rzSepLoss` yd, scaled by the cover man's own MCV and
+  // the receiver's route skill (an elite cover man loses the receiver more, a sharp
+  // route runner less). No rng draw.
+  rzZone: 20,
+  rzFull: 7,
+  rzSepLoss: 2.2,
+  rzMcvW: 0.012,
+  rzRouteW: 0.008,
   /** A coverage bust / mis-call leaves the man open (extra yd). */
   bustAdd: 6.5,
   miscallAdd: 4.5,
@@ -407,6 +421,13 @@ export function emergentRoute(inp: E2Input): E2Result {
   if (helpA) {
     const hp = field.where('help')
     if (hp) sep = Math.min(sep, Math.hypot(hp.x - rp.x, hp.y - rp.y))
+  }
+  // Red-zone compression: the end line is the room that is left (see rzZone).
+  const toGoal = 100 - inp.yard
+  if (E.rzSepLoss > 0 && toGoal < E.rzZone) {
+    const c = clamp((E.rzZone - toGoal) / (E.rzZone - E.rzFull), 0, 1)
+    const rf = clamp(1 + (mcv - 72) * E.rzMcvW, 0.6, 1.5) * clamp(1 - (routeR - 72) * E.rzRouteW, 0.7, 1.3)
+    sep = Math.max(0, sep - c * E.rzSepLoss * rf)
   }
   // A coverage bust / mis-call is a broken assignment — the man is simply open.
   if (inp.bust) sep += E.bustAdd
