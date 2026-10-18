@@ -61,6 +61,8 @@ export const MAX_YAW_RAD = 0.1396 // 8°
 export const MAX_PITCH_RAD = 0.61
 export const MIN_PITCH_RAD = -0.7
 
+const HANDOFF_LOOK = 0.9
+const HANDOFF_FAR = 9
 const FRAME_SEC = 1 / 60
 const SNAP_FALLBACK_SEC = 0.14
 /** A player's head above the turf (yards) — used as a must-hold framing point. */
@@ -709,6 +711,21 @@ export function createDirector(opts: DirectorOptions = {}): Director {
         if (s) {
           watch.push({ x: s.x[k], y: s.y[k], z: 0 }, { x: s.x[k], y: s.y[k], z: HEAD_Z })
           spanPts.push({ x: s.x[k], y: s.y[k] })
+        }
+        // A holder switch to a man far across the field (a handoff to a back who lines up
+        // in a distant gap lane): the pan is rate-limited and cannot jump with him, so the
+        // incoming holder is watched from HANDOFF_LOOK seconds before the switch. The
+        // safe frame is not touched; the camera simply starts moving earlier.
+        const look = Math.ceil(HANDOFF_LOOK / FRAME_SEC)
+        for (let j = k + 1; j <= Math.min(nFrames, k + look); j++) {
+          const nh = holders[j]
+          if (!nh || nh === hKey) continue
+          const ns = ax.get(nh)
+          if (ns && s && Math.hypot(ns.x[k] - s.x[k], ns.y[k] - s.y[k]) > HANDOFF_FAR) {
+            watch.push({ x: ns.x[k], y: ns.y[k], z: 0 }, { x: ns.x[k], y: ns.y[k], z: HEAD_Z })
+            spanPts.push({ x: ns.x[k], y: ns.y[k] })
+          }
+          break
         }
       } else if (flightActive[k] && targetKey) {
         const s = ax.get(targetKey)

@@ -589,4 +589,65 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
   if (pSeamBad) throw new Error(`E1c pass seam: ${pSeamBad} drawn passes move the ball faster than an exchange outside a declared flight (worst ${fmt(pSeamMax)} yd/s ${pSeamWho})`)
 }
 
+// ── e1goal (2026-10-17): the goal line is a real end ─────────────────────────
+// A carrier with a clear lane must score: the aim inside the last `breakR` yards
+// is the plane (the pylon on the chalk), no hook-back steering in the open, and
+// the maxT / tail fallback may never end a play short of the goal when no
+// defender can reach him before he crosses. These are deterministic synthetic
+// carries through the field itself (E1 ON) — not a league sample — so a stop
+// short with nobody in reach is a hard failure, never a tolerance.
+{
+  const glRB = P('glrb', 'RB', { SPD: 90, ACC: 90, AGI: 88, BCV: 85 })
+  const glRun = (o: Record<string, unknown>) => em.emergentRun({ ...(inp as unknown as Record<string, unknown>), ...o } as never)
+  let glN = 0
+  let glScored = 0
+  let glShort = 0
+  let glHooked = 0
+  let glBack = 0
+  for (let y = 96; y <= 99; y++) {
+    for (let pl = 1; pl <= 4; pl++) {
+      const out = glRun({ n: 90000 + y * 10 + pl, yard: y, planned: pl, distance: Math.max(1, 100 - y), carrier: glRB, dl: [], lbs: [], saf: [], cbs: [], poaIdx: -1 })
+      const cp = (out as { carryPath: { x: number; y: number }[] }).carryPath
+      const end = cp[cp.length - 1].x
+      glN++
+      if ((out as { scorerId?: string }).scorerId) glScored++
+      if (end < 100 - 1e-9 && end > 97) glShort++
+      const k = Math.max(1, cp.length - 1 - Math.round(1 / em.EMERGENT.dt))
+      if (cp[cp.length - 1].x - cp[k].x <= 0) glHooked++
+      for (let j = 1; j < cp.length; j++) if (cp[j].x < cp[j - 1].x - 1e-9) { glBack++; break }
+    }
+  }
+  // On the chalk: a lane to the pylon still reaches the goal (breaking the plane
+  // in bounds counts, and a pylon touch counts) — the aim never bends back inside.
+  let glChalk = 0
+  let glChalkScored = 0
+  for (let y = 96; y <= 99; y++) {
+    for (const pi of [0, 1, 4, 5]) {
+      const out = glRun({ n: 91000 + y * 10 + pi, yard: y, planned: 4, distance: Math.max(1, 100 - y), carrier: glRB, dl, lbs: [], saf: [], cbs: [], poaIdx: pi })
+      glChalk++
+      if ((out as { scorerId?: string }).scorerId) glChalkScored++
+    }
+  }
+  // A recorded crossing is always credited (the field never carries the ball over
+  // the plane without a score; a booth review is the only thing that can call it
+  // back, and that is not the field's decision).
+  let glCrossN = 0
+  let glCrossBad = 0
+  for (let y = 97; y <= 99; y++) {
+    for (let pl = 1; pl <= 3; pl++) {
+      const out = glRun({ n: 92000 + y * 10 + pl, yard: y, planned: pl, distance: 100 - y })
+      const cp = (out as { carryPath: { x: number; y: number }[] }).carryPath
+      glCrossN++
+      if (cp[cp.length - 1].x >= 100 - 1e-9 && !(out as { scorerId?: string }).scorerId) glCrossBad++
+    }
+  }
+  console.log(`E1 ON: e1goal goal line: ${glN} clear-lane carries from inside the 5 scored ${glScored}/${glN} (stopped inside 3 yd ${glShort}, hooked ${glHooked}, backward steps ${glBack}); chalk lanes ${glChalkScored}/${glChalk}; plane crossings unscored ${glCrossBad}/${glCrossN}`)
+  if (glScored !== glN) throw new Error(`e1goal: only ${glScored}/${glN} clear-lane carries from inside the 5 scored (a carrier with a lane must score)`)
+  if (glShort) throw new Error(`e1goal: ${glShort}/${glN} clear-lane carries stopped within 3 yd of the plane with nobody in contact range`)
+  if (glHooked) throw new Error(`e1goal: ${glHooked}/${glN} clear-lane carries hook back off the goal`)
+  if (glBack) throw new Error(`e1goal: ${glBack} clear-lane carry paths step backward off the goal`)
+  if (glChalkScored !== glChalk) throw new Error(`e1goal: only ${glChalkScored}/${glChalk} clear-lane chalk carries scored`)
+  if (glCrossBad) throw new Error(`e1goal: ${glCrossBad}/${glCrossN} recorded plane crossings are not credited`)
+}
+
 await import('./check-broadcast.ts')

@@ -222,8 +222,16 @@ export function computeReadPlan(anim: PlayAnim, play: Play, ctx: AnimContext = {
   let pre: string[]
   if (sack) pre = others.slice(0, Math.max(1, Math.min(others.length, Math.max(2, Math.ceil(reach) + 1))))
   else if (checkdown) {
-    const deep = others.filter((k) => posAt(pathOf(anim, k)!, endT).x - los >= 5)
-    pre = (deep.length ? deep : others).slice(0, Math.max(1, Math.min(2, Math.round(reach) + 1)))
+    // Downfield first: the men who have cleared 5 yards past the line at the
+    // release. emerjoint: on a quick outlet the throw can arrive before ANY route
+    // has cleared the `runner` threshold above, so `others` is empty and the eyes
+    // would never leave the checkdown ("downfield reads first", check-broadcast).
+    // The invariant only demands the reads be downfield when somebody IS downfield,
+    // so when nobody is, work the designed read order over every eligible receiver
+    // (the first designed reads, then dump it) rather than start on the back.
+    const rest = present.filter((k) => k !== target).sort((a, b) => rankOf(a) - rankOf(b) || present.indexOf(a) - present.indexOf(b))
+    const deep = rest.filter((k) => posAt(pathOf(anim, k)!, endT).x - los >= 5)
+    pre = (deep.length ? deep : others.length ? others : rest).slice(0, Math.max(1, Math.min(2, Math.round(reach) + 1)))
   } else pre = others.slice(0, readNo - 1)
   const seq = target ? [...pre, target] : pre
 
@@ -476,13 +484,16 @@ function jumpPlan(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan):
 }
 
 /** buildPass (INT branch) hook: the defender who read the QB's eyes makes the pick
- *  when the sim credits him (intId) and he can get there; else null (nearest). */
+ *  when the sim credits him (intId) and he can get there; else null (nearest).
+ *  `posBefore` is read 1.6 s before the catch: the jump plan lets him break at the QB's
+ *  look (well before 1.0 s), so a man ~8.5 yd off at the break still arrives (10.5 yd at
+ *  his ~6.5 yd/s break speed). */
 export function eyeJumpPicker(play: Play, ctx: AnimContext, posBefore: (key: string) => Pt | null, catchPt: Pt): string | null {
   if (!play.eyeJumpId || play.eyeJumpId !== play.intId || !ctx.actors) return null
   for (const [k, p] of ctx.actors) {
     if (p.id !== play.eyeJumpId || !/^(cb|s|lb)/.test(k)) continue
     const q = posBefore(k)
-    return q && Math.hypot(q.x - catchPt.x, q.y - catchPt.y) <= 8 ? k : null
+    return q && Math.hypot(q.x - catchPt.x, q.y - catchPt.y) <= 10.5 ? k : null
   }
   return null
 }
@@ -784,9 +795,28 @@ function jumpPath(path: WP[], plan: ReadPlan, anim: PlayAnim, play: Play): WP[] 
   const out: WP[] = path.filter((w) => w.t < tB - 1e-9).map((w) => ({ ...w }))
   out.push({ t: tB, x: p0.x, y: p0.y })
   const n = Math.max(2, Math.ceil(T / 0.04))
+  const seg: WP[] = []
   for (let i = 1; i <= n; i++) {
     const q = herm(va, vEnd, i / n)
-    out.push({ t: tB + (C - tB) * (i / n), x: q.x, y: q.y })
+    seg.push({ t: tB + (C - tB) * (i / n), x: q.x, y: q.y })
+  }
+  // The drawn break must stay inside the animshed speed bound (check-broadcast:
+  // <= 11 yd/s). A cubic between the man and the ball can peak near 1.5x its own
+  // average when the break window is short (a late read on a fast-developing
+  // throw), so when the curve would overrun the bound, walk the same span at the
+  // constant chord speed instead - the endpoint (the ball, at the catch) is
+  // unchanged, so the break-up-at-the-ball checks still read the same arrival.
+  const tSpan = Math.max(1e-9, C - tB)
+  let peak = 0
+  {
+    let prevT = tB, prevX = p0.x, prevY = p0.y
+    for (const q of seg) { peak = Math.max(peak, Math.hypot(q.x - prevX, q.y - prevY) / ((q.t - prevT) * D)); prevT = q.t; prevX = q.x; prevY = q.y }
+  }
+  const straight = peak > 10.9
+  for (const q of seg) {
+    if (!straight) { out.push(q); continue }
+    const u = (q.t - tB) / tSpan
+    out.push({ t: q.t, x: p0.x + (P.x - p0.x) * u, y: p0.y + (P.y - p0.y) * u })
   }
   const orig = posAt(path, C)
   const after = path.filter((w) => w.t > C + 1e-9)
