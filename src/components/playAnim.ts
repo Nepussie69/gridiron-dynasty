@@ -1695,6 +1695,11 @@ function applyBlockEngagements(
 let LAST_THROW_STYLE: ThrowStyle | undefined
 let LAST_CATCH_ROUTE: string | undefined
 export function buildPlayAnim(play: Play, ctx0: AnimContext = {}): BroadcastAnim {
+  // The men E1c drew are THIS play's: a play that never reaches e1cPlan (an incomplete, an
+  // interception, a kick) must not inherit the previous play's list - it made the read
+  // visuals' eye-jump break (and the speed cap) hit the wrong men.
+  E1C_STAT.drewKeys.length = 0
+  E1C_STAT.chaseKeys.length = 0
   // animflow r6b: the sim's fatigue at the snap rides along (tired gait / poses).
   const fat = ctx0.fat ?? fatigueMap(play)
   const ctx: AnimContext = fat.size ? { ...ctx0, fat } : ctx0
@@ -5553,6 +5558,48 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
     }
   }
   if (m.fb) m.fb.run([{ x: los - 3, y: MID_Y + 1 }, { x: los - 1, y: MID_Y + side * 4 }], { stop: true })
+
+  // e1cseam x emerjoint: the field's after-catch segment starts at ITS catch side (a hash
+  // across the field), not where this route ends. Bridged AFTER the catch that gap is a
+  // sideways run (a catch-and-run that does not turn downfield), so the receiver works to
+  // the field's catch spot over the last stretch of the route instead - the ball is thrown
+  // there and the recording then starts under his feet (bridge 0). Zero rng; a segment
+  // further than `E1C.catchTol` is refused later and keeps the drawn catch.
+  if (!inc && !int) {
+    const rec = recordedField(play)
+    const q0 = rec?.carry.pts[0]
+    if (rec && q0 && keyOf(ctx, rec.carryId, [...OFF_KEYS, 'fb']) === tgt && m[tgt]) {
+      const dx = q0.x - catchPt.x
+      const dy = q0.y - catchPt.y
+      const gap = Math.hypot(dx, dy)
+      if (gap > 0.15 && gap <= E1C.catchTol) {
+        const W = clampN(gap / 4.2, 0.7, 2.4)
+        const tA = Math.max(SNAP + 0.4, catchSec - W)
+        if (catchSec - tA > 0.3) {
+          const k = Math.min(1, (catchSec - tA) * 4.2 / gap)
+          const sx = dx * k
+          const sy = dy * k
+          const old = m[tgt].path
+          const out = old.filter((w) => w.t < tA - 1e-9)
+          for (let t = tA; t < catchSec - 1e-6; t += 0.04) {
+            const q = posAt(old, t)
+            const u = (t - tA) / (catchSec - tA)
+            const e = u * u * (3 - 2 * u)
+            out.push({ t, x: clampX(q.x + sx * e), y: clampY(q.y + sy * e) })
+          }
+          const qc = posAt(old, catchSec)
+          out.push({ t: catchSec, x: clampX(qc.x + sx), y: clampY(qc.y + sy) })
+          for (const w of old) if (w.t > catchSec + 1e-6) out.push({ t: w.t, x: clampX(w.x + sx), y: clampY(w.y + sy) })
+          m[tgt].path = out
+          const last = out[out.length - 1]
+          m[tgt].t = last.t
+          m[tgt].x = last.x
+          m[tgt].y = last.y
+          catchPt = { x: clampX(qc.x + sx), y: clampY(qc.y + sy) }
+        }
+      }
+    }
+  }
 
   // Release and flight: throw power sets a bullet vs a floater.
   const flightSec = flightFor(Math.hypot(catchPt.x - (f.qb.x - drop), catchPt.y - MID_Y))
