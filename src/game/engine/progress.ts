@@ -188,6 +188,24 @@ export function developPlayers(
     else if (!p.teamId && (p.age >= 34 || (p.age >= 30 && unscaleOvr(p.ovr) < 72 && rng() < (aging ? agingRetireChance(aging) : 0.4)))) retired.push(p)
   }
 
+  // FUTURES #51: hand the season's retirees to the coaching intake (a share of
+  // them become position coaches at season end). A snapshot, not references —
+  // they are removed from every roster below. No rng draw is added.
+  world.lastRetired = retired.map((p) => {
+    const proYears = (p.stats ?? []).filter((s) => s.level === 'NFL').length
+    return {
+      id: p.id,
+      name: p.name,
+      pos: p.pos,
+      age: p.age,
+      ovr: p.ovr,
+      awr: p.attrs?.AWR ?? Math.round(p.ovr * 0.86),
+      // Career length: real pro seasons when the save tracks them, else his age.
+      seasons: Math.max(proYears, clamp(p.age - 22, 0, 16)),
+      teamId: p.teamId,
+      team: p.teamId ? world.byId[p.teamId]?.name : undefined,
+    }
+  })
   if (retired.length) {
     const ids = new Set(retired.map((p) => p.id))
     world.players = world.players.filter((p) => !ids.has(p.id))

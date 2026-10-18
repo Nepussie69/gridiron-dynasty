@@ -46,6 +46,7 @@ import {
 import { OfficeScene } from '../components/OfficeScene'
 import { KeysCard } from '../components/KeysCard'
 import { PracticeCard } from '../components/PracticeCard'
+import { PracticeRepsCard } from '../components/PracticeRepsCard'
 import { ByeWeekCard } from '../components/ByeWeekCard'
 import { OwnerMeetingCard } from '../components/OwnerMeetingCard'
 import { RoomCard } from '../components/RoomCard'
@@ -300,6 +301,7 @@ export function Dashboard() {
             <KeysCard oppId={opp.id} />
             <PracticeCard />
           </div>
+          <PracticeRepsCard className="mb-4" />
         </>
       )}
 
