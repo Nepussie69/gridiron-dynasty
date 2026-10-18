@@ -50,7 +50,9 @@ import { POS_MEAN } from './ratingMeans'
 import { styleProfile } from './style'
 
 export const EMERGENT_E3 = {
-  on: false,
+  // ON by default (emerjoint 2026-10-17): the joint calibration landed the
+  // protection field in the NFL bands. `setEmergentE3(false)` is the dev toggle.
+  on: true,
   // ── the stage: yards from a rusher's alignment to the QB's throwing spot ────
   // An edge rusher has to come around the corner (longer path); an interior man
   // starts closer; a blitzing backer a few yards deep; a runner no one blocks is

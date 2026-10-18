@@ -187,6 +187,38 @@ export const CLOCK_REALISM = {
   twoAggroMin: 0.3,
   twoEarlyRate: 0.05,
 }
+/**
+ * emerjoint: the joint-calibration play-mix compensation. With every emergent
+ * layer ON the field's own yardage shifts the snap texture: measured over 160
+ * games (logs/emerjoint-mix.log) the field leaves +950 snaps at 1-2 yards to go
+ * and −667 at 10+ per 320 team-games, which the NFL down×distance table
+ * (situational.ts) turns into ~+1.5 rush attempts/team-game (29.2 vs 27.7 OFF),
+ * off the 25.3-28.3 band. This is the same run→pass lean the J6 clock layer uses
+ * (`CLOCK_REALISM.passShift`): it only moves the threshold of the pickConcept
+ * rng() draw that already exists, so no draw is added or removed. Gated on
+ * `EMERGENT.on` (E1a's field is the bulk of the shift), so the OFF path is
+ * byte-identical. Calibrated so all three seeds land Rush attempts in band
+ * without moving YPC or the passing bands.
+ */
+export const JOINT = {
+  /** The flat (all-situation) run→pass lean. */
+  passShift: 0.015,
+  /**
+   * Distance (yd) at/under which the short-yardage lean below applies.
+   */
+  shortMax: 2,
+  /**
+   * The short-yardage run→pass lean. The joint field's excess rush attempts are
+   * concentrated at 1–2 yards to go (measured 160 games: 11.5% of ON snaps vs
+   * 7.3% of OFF at dist ≤ 2 — the field's own gains are less explosive, so more
+   * snaps are played with a fresh set of downs), i.e. the field's run success is
+   * fed back into run calling exactly where the NFL table calls runs hardest. The
+   * flat lean alone removed *average* carries (it cost ypc: 3.96 → 3.93, out of
+   * the ±0.2 gate); a lean pointed at ≤ 2 yd to go removes the lowest-yield
+   * carries instead — rush attempts fall while ypc holds or rises.
+   */
+  shortShift: 0.05,
+}
 // J1: dev-only toggle for the situational pass-rate model (the setStamina
 // pattern). The flag itself lives in situational.ts; re-exported here so the
 // probe and both pickConcept call sites share one switch. Default ON.
@@ -351,7 +383,7 @@ export function getDepthAware(): boolean {
 //
 // Dev-only in the setStamina pattern, default ON; with `setAirCoh(false)` no line
 // below is read and the sim is byte-identical to unmodified main.
-let AIR_COH_ON = false // orchestrator 2026-10-17: OFF until the joint emergent calibration (physics met, league bands not alone)
+let AIR_COH_ON = true // emerjoint 2026-10-17: ON with the joint config; setAirCoh(false) is the dev toggle
 export function setAirCoh(on: boolean) {
   AIR_COH_ON = on
 }
@@ -377,18 +409,18 @@ export const AIR_COH = {
    * used, which is the whole swap.
    */
   airMean: {
-    WR: { 3: 5.44, 8: 10.2, 14: 18.0, 22: 28.9 } as Record<number, number>,
-    TE: { 3: 2.47, 8: 4.94, 14: 9.77, 22: 16.8 } as Record<number, number>,
-    RB: { 3: 0.02, 8: 0.67, 14: 3.07, 22: 7.37 } as Record<number, number>,
+    WR: { 3: 3.98, 8: 7.46, 14: 13.17, 22: 21.14 } as Record<number, number>,
+    TE: { 3: 1.81, 8: 3.62, 14: 7.15, 22: 12.29 } as Record<number, number>,
+    RB: { 3: 0.02, 8: 0.49, 14: 2.25, 22: 5.39 } as Record<number, number>,
   } as Record<string, Record<number, number>>,
   /** Air spread per position: a three-uniform bell (sd 0.5) × this. */
-  airSpread: { WR: 10.0, TE: 8.0, RB: 5.0 } as Record<string, number>,
+  airSpread: { WR: 8.5, TE: 6.8, RB: 4.25 } as Record<string, number>,
   /**
    * Mean YAC (yd) per position on a completion (nflverse 2021-25: WR 4.32,
    * TE 4.91, RB 7.84). Set a shade above the NFL target: the vcenter trim and the
    * tackler shrink take the rest off.
    */
-  yacMean: { WR: 2.83, TE: 4.38, RB: 7.9 } as Record<string, number>,
+  yacMean: { WR: 3.0, TE: 4.65, RB: 8.4 } as Record<string, number>,
   /** YAC spread per position: a three-uniform bell (sd 0.5) × this. */
   yacSpread: { WR: 11.0, TE: 10.0, RB: 9.0 } as Record<string, number>,
   /** Weight on the calibrated draw's deviation from `pooledMean` (preserves the
@@ -399,13 +431,13 @@ export const AIR_COH = {
   pooledMean: 10.776,
   /** Left/right skew of the YAC bell (0 = off). Positive stretches the positive
    *  side, matching the NFL's right-skewed after-catch tail (WR mean 4.32, p50 2). */
-  skew: 0.25,
+  skew: 0,
   /** E|bell| of the three-uniform bell, so the skew keeps the mean at `yacMean`
    *  (measured 0.388 over 4e5 draws of the exact key layout). */
   bellAbs: 0.388,
   /** The NFL's negative-YAC slice: the share of completions allowed to end
    *  behind the catch point (nflverse completions with yards < air: 0.96%). */
-  negShare: 0.011,
+  negShare: 0.018,
   /**
    * aircoh: the throw's OWN depth decides how hard it is to complete. On main the
    * completion probability keyed on the CONCEPT's nominal depth, and so the
@@ -424,8 +456,8 @@ export const AIR_COH = {
    */
   compDepthBase: 0.7,
   airRef: 7.5,
-  compDepthW: 16.0,
-  compLift: 0.015,
+  compDepthW: 44.0,
+  compLift: 0.085,
   /**
    * The base completion clamp. Main's 0.42-0.74 caps a shallow throw well below
    * the NFL's ~0.83 short catch rate, so the air slope cannot buy depth
@@ -442,10 +474,27 @@ export const AIR_COH = {
    *  corrected (never-short-of-the-catch-point) gains move the chains far more
    *  often than main's 41%-sub-air bug did, and the drive-level bands (first downs,
    *  punts) run hot. It never touches the league air or YAC. */
-  moneyStop: 0.65,
+  moneyStop: 0.95,
   /** Cap on the recorded gain, and the deepest behind-the-line air allowed. */
   gainMax: 85,
   airMin: -5,
+  /**
+   * aircoh + E1b: how far PAST the first-down marker (yd) a completion the
+   * calibrated draw did not convert may still be carried before the marker's
+   * tackle counts as broken. A man stopped within this distance of the sticks is
+   * tackled AT them (the field still owned the yards up to the marker); a clean
+   * breakaway past them stands. Measured by the joint panel: the unguarded field
+   * walked the chains 1.9 extra times a game, all on FIRST down (7.6 vs main's
+   * 5.3), while the hard cap at the marker cost 25 passing yards. 3 yd keeps the
+   * one-tackle narrative and the league's first downs.
+   */
+  markerStop: 4,
+  /**
+   * The red-zone pass score cap: a completion whose field gain would cross the
+   * goal line but whose calibrated draw would not is run down at the 1. 1 = the
+   * cap is on (the outcome-preserving rule); 0 = dev ablation.
+   */
+  rzCap: 1,
 }
 
 /** aircoh: a position key that folds the fullback into the back family. */
@@ -5946,6 +5995,11 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // emitted passDepth) changes. `gain` (the calibrated draw) is reused as the
     // deterministic shape/quality driver — no new rng draw.
     const preReshapeGain = gain
+    // The calibrated draw's own final yardage (the J3 draw plus its money-down
+    // yards): every outcome-preserving guard below (aircoh, E1b, J3) tests
+    // against it, so the draw keeps owning the first down and the red-zone score
+    // while the reshape only owns the recorded yards.
+    const baseFinal = preReshapeGain + (env?.down === 3 ? R2.moneyYards : 0)
     if (AIR_COH_ON) {
       // aircoh: the recorded gain IS air + YAC (the calibrated draw is only the
       // after-catch driver), so a deep throw that completes records its air plus
@@ -5959,14 +6013,20 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // own `passAir` (the catch point) so a completion still never records fewer
     // yards than the throw — `dist-1 >= passAir` when `passAir < dist`, and
     // `100-yard-1 >= passAir` when the air itself falls short of the goal line.
+    // The last two guards MIRROR the J3 guard below (which is OFF-path only) so the
+    // reshape cannot manufacture a first down or a red-zone score the calibrated
+    // draw would not have produced. Without them the air+YAC model ran hot exactly
+    // there: measured first downs 22 vs main's 20, red-zone TD% 62 vs the 56 band,
+    // and — because "a throw short of the goal line is never walked in by YAC" was
+    // absolute — every red-zone pass completion became a goal-line rush (passing TD
+    // 1.35 vs the 1.4 band, rushing TD 1.27 vs 0.92). `dist-1`/`100-yard-1` still
+    // hold the air-coherence floor.
     //  · A throw that lands short of the sticks is stopped short of them on the
     //    `moneyStop` share of such plays; the rest break the tackle past the marker.
-    //    Without it a deep completion out-converts the calibrated league badly
-    //    (measured 45-49% 3rd down against main's 38.5%); with it alone, 34.5%.
-    //  · A throw that lands short of the goal line is never walked in by YAC alone.
     if (AIR_COH_ON) {
-      if (down >= 3 && dist > 0 && passAir < dist && gain >= dist && h01(`${n}:${offId}:moneystop`) < AIR_COH.moneyStop) gain = dist - 1
-      if (gain > passAir && yard + passAir < 100 && yard + gain >= 100) gain = Math.max(passAir, 100 - yard - 1)
+      if (down >= 3 && dist > 0 && passAir < dist && gain >= dist && h01(`${n}:${offId}:moneystop`) < AIR_COH.moneyStop) gain = Math.max(passAir, dist - 1)
+      if (dist > 0 && baseFinal < dist && gain >= dist) gain = Math.max(passAir, dist - 1)
+      if (AIR_COH.rzCap > 0 && gain > 0 && yard + baseFinal < 100 && yard + gain >= 100) gain = Math.max(passAir, 100 - yard - 1)
     }
     // J3 outcome-preserving guard: the reshape may add yards, but it must not
     // manufacture a first down (any down) or a score in the red zone that the
@@ -5974,7 +6034,6 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // (gain === preReshapeGain), so the OFF/neutral path is bit-exact.
     // aircoh: OFF only — the air+YAC model is re-capped above (in air terms).
     if (DEPTH_AWARE_ON && !AIR_COH_ON) {
-      const baseFinal = preReshapeGain + (env?.down === 3 ? R2.moneyYards : 0)
       if (dist > 0 && baseFinal < dist && gain >= dist) gain = dist - 1
       if (gain > 0 && yard + baseFinal < 100 && yard + gain >= 100) gain = Math.max(-4, 100 - yard - 1)
     }
@@ -6072,6 +6131,15 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       oobOut = e1b.outOfBounds
       carryPathOut = e1b.carryPath
       fieldPathsOut = e1b.fieldPaths
+      // aircoh + E1b: the field owns the YARDS, the calibrated draw still owns the
+      // first down — the J3b principle on the run side. E1b replaces `gain` above,
+      // so a completion the draw would only have taken for 5 yards walked the
+      // chains whenever the field's pursuit broke down just past the marker:
+      // measured first downs 21.9 vs the 20 band, and the whole excess was on
+      // FIRST down (7.6 vs main's 5.3 per game) because the pre-field guard holds
+      // only 3rd down. A man stopped within `stopLen` of the sticks is tackled AT
+      // them (the same hash, no rng draw); a clean breakaway past them stands.
+      if (dist > 0 && baseFinal < dist && gain >= dist && gain <= dist + AIR_COH.markerStop) gain = Math.max(passAir, dist - 1)
     }
     if (J8C_STAT.on && stopped) {
       const sp = [...cbs, ...saf, ...lbs].find((p) => p.id === stopped)
@@ -6149,7 +6217,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // J10a: the defender who broke on a stared-down (off-cone) throw gets a hand on
   // it more often — his own PRC/AWR decide how often. Bookkeeping for the
   // animation, like the J8c break-up above; the outcome is untouched.
-  if (vThrow && vThrow.offCone > 0 && coverPlayer && eyeJumpId && !incomplete.pbuId && !incomplete.dropId) {
+  if (vThrow && vThrow.offCone > 0 && coverPlayer && eyeJumpId && !incomplete.pbuId && !incomplete.dropId && (sepYd ?? 0) <= VISION_CFG.jumpMaxSep) {
     const jumpP = clamp(vThrow.offCone * VISION_CFG.jumpPbuW * vEyeSkill, 0, 0.35)
     if (h01(`${n}:${defId}:eyejump`) < jumpP) { incomplete.pbuId = eyeJumpId; incomplete.eyeJumpId = eyeJumpId }
   }
@@ -6541,6 +6609,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // when the stop actually fires. A stuffed carrier is stopped at the 1. No rng().
   let glStopId: string | undefined
   let glPoaId: string | undefined
+  // The stand's own verdict, kept for the E1 field below: the field replaces the
+  // YARDS, but a plunge the drawn rep stuffed must stay stuffed (no rng).
+  let glStood = false
   if (J3B_ON && gain > 0 && yard >= J3B.glYard && yard < J3B.glNoStuffYard &&
     (env?.down ?? 0) <= J3B.glMaxDown && yard + gain >= 100) {
     const glDefs = [poiDl, poiLb].filter((p): p is Player => !!p)
@@ -6549,6 +6620,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
       if (h01(`${n}:${defId}:glstuff`) < glStuffChance(carrier, glDefs)) {
         gain = Math.min(gain, 100 - yard - 1)
         glStopId = glDefs[0].id
+        glStood = true
       }
     }
   }
@@ -6568,6 +6640,9 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // men on the play then decide it. `EMERGENT.on` false ⇒ `e1` undefined ⇒ the
   // resolver never enters the field file (byte-identical OFF path).
   const carrierC = carrier
+  // The drawn gain the field deviates from (the RED-ZONE score guard reads it
+  // after the field has replaced `gain`).
+  const plannedGain = gain
   const e1 = EMERGENT.on && carrierC
     ? emergentRun({
         n, defId, offId, yard, distance, down: env?.down ?? 0,
@@ -6646,9 +6721,36 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     forcedMissedIds = e1.forcedMissedIds
     // a fumble is decided by contact: its forcer is never charged a miss
     if (fumble) { missedTackleIds = undefined; forcedMissedIds = undefined }
-    if (!lost && yard + gain >= 100) tackler = undefined
+    // J3b: same principle as the pass side's line-to-gain guard — the field owns
+    // the YARDS, the drawn rep still owns the score. A plunge the goal-line rep
+    // stuffed (the same hash above, no rng draw) is stood up at the 1 even when
+    // the field carried the carrier in. Without it every doorstep carry the field
+    // won scored: measured goal-line conversion (start >= the 7) 62.0% vs main's
+    // 43.5%, rushing TD 1.16 vs the 0.8 band, red-zone TD% 62 vs 56.
+    if (glStood && !lost && !fumble && gain > 0 && yard + gain >= 100) {
+      gain = Math.min(gain, 100 - yard - 1)
+      tackler = glPoaId
+      missedTackleIds = undefined
+      forcedMissedIds = undefined
+      glStopId = glPoaId
+    } else {
+      glStopId = undefined
+    }
+    // EMERGENT.rzScoreGuard: in the red zone the field may not manufacture a
+    // score the calibrated draw did not itself make — the same `anchorScored`
+    // rule E1b applies to a completion. The carrier is run down at the 1 instead
+    // (the drawn gain, which is itself skill-driven, keeps the score). Outside
+    // the line the field's own breakaway chase is the model and is untouched.
+    if (EMERGENT.rzScoreGuard > 0 && yard >= EMERGENT.rzScoreGuard && gain > 0 &&
+      yard + plannedGain < 100 && yard + gain >= 100) gain = Math.min(gain, 100 - yard - 1)
+    // EMERGENT.markerStop: the run-side line-to-gain guard (the pass field's
+    // `AIR_COH.markerStop` rule). The field owns the yards; a carry the calibrated
+    // draw did not convert, stopped within this distance of the sticks, is
+    // tackled AT the marker. A clean breakaway past them stands.
+    if (EMERGENT.markerStop > 0 && distance > 0 && plannedGain < distance &&
+      gain >= distance && gain <= distance + EMERGENT.markerStop) gain = Math.max(0, distance - 1)
     glPoaId = undefined
-    glStopId = undefined
+    if (!lost && yard + gain >= 100) tackler = undefined
   }
   const isBig = gain >= 20
   const tackleIds = tackler ? [tackler] : []
@@ -8566,11 +8668,19 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // J6: a small run→pass lean while clock-realism is on, compensating the dropback
   // a scramble converts to a rush so pass/rush attempts stay in band. OFF adds 0.
   const clockPassShift = CLOCK_ON ? CLOCK_REALISM.passShift : 0
-  const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj + rzPassAdj + clockPassShift
+  // emerjoint: the joint field's own yardage shifts the snap texture toward
+  // short-yardage (see JOINT), which the NFL table converts into ~+1.5 rush
+  // attempts/team-game. The same run→pass lean holds the band on all seeds; only
+  // the existing pickConcept threshold moves, and it is gated on E1a so OFF is
+  // byte-identical.
+  const jointPassShift = EMERGENT.on
+    ? JOINT.passShift + (s.distance > 0 && s.distance <= JOINT.shortMax ? JOINT.shortShift : 0)
+    : 0
+  const passAdj = s.passAdj + planPassAdj + quickPassAdj + modePassAdj + rzPassAdj + clockPassShift + jointPassShift
   // J1: with the situational model ON the table replaces the base league lean
   // (s.passAdj) and the red-zone lean (rzPassAdj) — no double counting — while
   // the plan/quick/mode edges stay additive. OFF keeps the legacy combined lean.
-  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj + clockPassShift : passAdj
+  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj + clockPassShift + jointPassShift : passAdj
 
   // ── L10 G9/G10: the snap's concept and any call-matrix edge. The `call` and
   //    `defCall` decisions sit before the penalty rng; the AI's counter-call is

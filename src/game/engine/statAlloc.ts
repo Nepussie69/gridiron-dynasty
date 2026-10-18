@@ -179,10 +179,29 @@ const MT_ALLOC_BASE = 8
 const MT_FORCE_EXP = 0.08
 const MT_FORCE_LO = 0.95
 const MT_FORCE_HI = 1.05
+/**
+ * E1d mirror (emerjoint): the raw sum of this weight is what the allocated
+ * offence's `forcedMissed` reports, so under the joint config it is scaled to
+ * land on the team missed-tackle total the played league reconciles to (the
+ * allocator otherwise reports ~35% more forced misses than the played box
+ * score). Played per team-game: forced 7.44 vs fast 10.04 at scale 1 (measured
+ * logs/emerjoint-mirror.mjs). OFF keeps 1 — byte-identical.
+ */
+const MT_FORCE_MIRROR = 0.712
+/**
+ * E1d mirror (emerjoint): the played target model hands the tight ends (and, a
+ * little, the backs) more targets and the wideouts fewer than the season weight
+ * prior alone (played vs fast target shares under the joint config: 60.3/22.7/17.0
+ * vs 63.1/18.1/16.6 — the FB bucket is the per-receiver +0.5 noise, played ~0).
+ * The allocator scales the position prior so a score-only season matches the
+ * played mix; play-by-play is untouched.
+ */
+const E1D_TGT_TILT: Record<string, number> = { WR: 1, TE: 1.31, RB: 1.05, FB: 0.1 }
 
 function forcedWeight(p: Player, touches: number): number {
   const rel = clamp(carrierMissRate(p) / MT_ALLOC_REF, MT_FORCE_LO, MT_FORCE_HI)
-  return Math.pow(Math.max(1, touches), MT_FORCE_EXP) * rel
+  const mirror = getEmergentE1() ? MT_FORCE_MIRROR : 1
+  return Math.pow(Math.max(1, touches), MT_FORCE_EXP) * rel * mirror
 }
 
 /** R5: a deterministic uniform in [0,1) from a string key — never an rng() draw. */
@@ -319,8 +338,15 @@ export function allocateTeamGame(
   }
 
   const isNFL = world.byId[teamId]?.tier === 'NFL'
-  const basePass = isNFL ? 220 : 235
+  // E1d mirror (emerjoint): with E1a ON the PLAYED model passes more (the joint
+  // play mix) and records longer gains, so the score-only allocator's pass base is
+  // re-centred on the played league (logs/emerjoint-mirror.mjs measures both sides
+  // under the same scoreline). OFF keeps 220 — byte-identical.
+  const basePass = isNFL ? (getEmergentE1() ? 230 : 220) : 235
   const baseRush = isNFL ? (getEmergentE1() ? EMERGENT.stRushBase : 112) : 165
+  // E1d mirror: yards per carry. The allocator derives carries from the rush-yard
+  // total, so this divisor IS the fast path's ypc; it mirrors the played league's.
+  const ypcMirror = isNFL ? (getEmergentE1() ? 4.08 : 4.35) : 4.5
   const pace = isNFL ? 1 : 1.08
   const schemePassBias = { 'Air Raid': 1.16, 'Pro Style': 0.95, Spread: 1.1, 'West Coast': 1.05, 'RPO Heavy': 0.9 }[scheme] ?? 1
 
@@ -359,7 +385,10 @@ export function allocateTeamGame(
     // R8: sacks taken by the QB (SK) and sack yards lost (SKY). The fast sim has no
     // play-by-play, so the club's sack total is a plausible deterministic count; the
     // offense's dropback count (att + sk) is what the defence's pressure rate uses.
-    const qbSacks = clamp(Math.round(2.4 + (hashUnit(`${gameKey}:${teamId}:skt`) - 0.5) * 2.6), 0, 7)
+    // E1d mirror (emerjoint): the played sack rate under the joint config
+    // (pbp 2.14 vs fast 2.36 per team-game) — the fast base is re-centred on it.
+    const skBase = getEmergentE1() ? 2.18 : 2.4
+    const qbSacks = clamp(Math.round(skBase + (hashUnit(`${gameKey}:${teamId}:skt`) - 0.5) * 2.6), 0, 7)
     const qbSackYds = qbSacks * (5 + Math.round(hashUnit(`${gameKey}:${teamId}:sky`) * 4))
     addOff(qb.id, {
       playerId: qb.id, passAtt: att, passComp: comp, passYds, passTD: td, ints,
@@ -370,7 +399,7 @@ export function allocateTeamGame(
   // ── Rushing ──
   const rbs = group(world, teamId, ['RB'], 3, 'rush', scheme, means)
   if (rbs.items.length) {
-    const carries = Math.round(rushYds / (isNFL ? 4.35 : 4.5))
+    const carries = Math.round(rushYds / ypcMirror)
     const shares = rbs.weights.map((w, i) => (i === 0 ? w * rbConc : w))
     // realism-qbrun parity: score-only games must give each QB the same designed-
     // carry rate his OWN legs (and size, for the sneak) earn in play-by-play —
@@ -395,7 +424,7 @@ export function allocateTeamGame(
     if (qb && qa && qbCarries > 0) {
       // Same elusiveness playsim gives a QB run: SPD / AGI / BCV.
       const legs = (qa.SPD ?? 70) * 0.5 + (qa.AGI ?? 70) * 0.4 + (qa.BCV ?? 70) * 0.1
-      const qbYpc = clamp((isNFL ? 4.35 : 4.5) + (legs - 70) * 0.08, 1.5, 9)
+      const qbYpc = clamp(ypcMirror + (legs - 70) * 0.08, 1.5, 9)
       qbYds = Math.min(rushYds, Math.round(qbCarries * qbYpc))
     }
     const split_ = split(rng, carries - qbCarries, shares)
@@ -438,7 +467,7 @@ export function allocateTeamGame(
       ? recvs.items.map((p, i) => {
           let rank = 0
           for (let j = 0; j < i; j++) if (recvs.items[j].pos === p.pos) rank++
-          return targetSeasonWeight(p, rank, 10)
+          return targetSeasonWeight(p, rank, 10) * (E1D_TGT_TILT[p.pos] ?? 1)
         })
       : recvs.weights.map((w, i) => w * Math.pow(recDecay, i))
     const recSplit = split(rng, completions, shares)

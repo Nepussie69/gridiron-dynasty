@@ -141,6 +141,8 @@ const RUN_SPEED = 0.6
  * inside this reach is still drawn as the tackler). The recorded event is untouched either way.
  */
 const DRAWN_TACKLER_REACH = 2.2
+/** A drawn dive ends this close to the carrier at the whistle (the check allows a dive 2.5 yd). */
+const DIVE_END_GAP = 2.3
 
 /** Position along a keyframed path (local copy of playAnim.posAt). */
 function posAt(path: WP[] | undefined, t: number): Pt {
@@ -617,6 +619,37 @@ export function presentAnim(anim: PlayAnim, play: Play, ctx: AnimContext = {}): 
     const tk = evTkPref && (gapAtT(evTkPref) <= DRAWN_TACKLER_REACH || !nearK || gapAtT(evTkPref) <= gapAtT(nearK))
       ? evTkPref
       : (nearK ?? evTkPref)
+    // touch-and-freeze (emerjoint): the credited man can be the NEAREST man and still be
+    // out of a dive's reach at the whistle (the field credits an aim-stop to a defender up to
+    // its break radius away). The drawing then has him lunge the last stride: his path's final
+    // 0.4 s leans toward the carrier so the dive ends on the legs (<= DIVE_END_GAP). Bookkeeping
+    // and outcome are untouched; only the drawn man's last strides move (idempotent).
+    if (tk && tk !== carrierKey && paths[tk]?.length) {
+      const g0 = gapAtT(tk)
+      if (g0 > DIVE_END_GAP && g0 <= DIVE_END_GAP + 1.6) {
+        const pth = paths[tk]
+        const tkp = posAt(pth, tackleT)
+        const ux = (cSpot.x - tkp.x) / g0
+        const uy = (cSpot.y - tkp.y) / g0
+        const need = g0 - DIVE_END_GAP
+        const tA = Math.max(0, tackleT - 0.4 / D)
+        const addWp = (t: number) => {
+          if (pth.some((w) => Math.abs(w.t - t) < 1e-6)) return
+          const q = posAt(pth, t)
+          let i = pth.findIndex((w) => w.t > t)
+          if (i < 0) i = pth.length
+          pth.splice(i, 0, { t, x: q.x, y: q.y })
+        }
+        addWp(tA)
+        addWp(tackleT)
+        for (const w of pth) {
+          if (w.t <= tA + 1e-9) continue
+          const u = Math.min(1, (w.t - tA) / Math.max(1e-6, tackleT - tA))
+          w.x += ux * need * u
+          w.y += uy * need * u
+        }
+      }
+    }
     if (tk && tk !== carrierKey) {
       // animflow r6a: how he brings him down follows the angle and speed of the
       // hit (BDB 2021 tackles after a catch: 54% from behind, 34% on an angle,

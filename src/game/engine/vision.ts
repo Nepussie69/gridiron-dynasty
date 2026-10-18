@@ -174,6 +174,8 @@ export const VISION = {
   // ── defender breaks on the QB's eyes (INT + PBU on a late/stared throw) ────
   eyeIntW: 0.05, // per unit of off-cone × the defender's PRC/AWR skill
   jumpPbuW: 0.12, // per unit of off-cone (PBU bookkeeping on an incompletion)
+  /** The cover man only gets the eye-jump break-up credit when the field left him within this many yd of the catch (a man trailing the play by more cannot be drawn at the ball). */
+  jumpMaxSep: 4.5,
   eyeMax: 0.35,
   // ── league centring (never shrinks an individual effect) ───────────────────
   /** Share of completions (>2 yd) trimmed by a yard: holds YPA / first downs. */
