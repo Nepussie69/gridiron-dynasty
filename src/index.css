@@ -413,6 +413,17 @@ table[data-density='compact'] {
 }
 .gd-slide-up { animation: gd-slide-up 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
 
+/* ── U4 screen pass: a short wipe when the screen changes ──────────────────────
+   transform + opacity only, so nothing reflows (no layout shift). The wrapper
+   is keyed on the screen id in AppShell, so this replays on every navigation. */
+@keyframes screen-pass {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.screen-pass {
+  animation: screen-pass var(--d2) ease-out both;
+}
+
 .gd-pill-slide { transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1); }
 
 /* ── F2 kit overlays: sheets slide up (d3), dialogs pop, menus wipe in (d2) ── */
@@ -459,7 +470,8 @@ table[data-density='compact'] {
   .gd-burst,
   .gd-flash,
   .gd-confetti-piece,
-  .gd-slide-up {
+  .gd-slide-up,
+  .screen-pass {
     animation: none;
   }
   .gd-pill-slide {

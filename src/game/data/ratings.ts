@@ -191,14 +191,20 @@ export function playerAttrs(p: {
   attrs?: Record<string, number>
   /** L15: earned development-plan rating gains (additive, clamped to 40–99). */
   devRatings?: Record<string, number>
+  /** FUTURES #45: practice-rep development gains (additive, clamped to 40–99). */
+  repDev?: Record<string, number>
+  /** FUTURES #45: this week's practice-readiness bonus (temporary, additive). */
+  snapReady?: Record<string, number>
   /** L15 (FUTURES #15): a playing-hurt penalty, applied only while set. */
   hurt?: HurtState
 }): Record<string, number> {
   const out = { ...attributesFor(p.id, p.pos, p.ovr), ...(p.attrs ?? {}) }
-  const gains = p.devRatings
-  if (gains) {
-    for (const k of Object.keys(gains)) {
-      const g = gains[k]
+  // The additive buckets (a dev plan, practice reps, this week's readiness) share
+  // one clamp so none of them can push a rating past the 40–99 scale.
+  for (const bucket of [p.devRatings, p.repDev, p.snapReady]) {
+    if (!bucket) continue
+    for (const k of Object.keys(bucket)) {
+      const g = bucket[k]
       if (!g) continue
       out[k] = Math.max(40, Math.min(99, (out[k] ?? 70) + g))
     }

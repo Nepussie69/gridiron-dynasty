@@ -22,6 +22,7 @@ import { FIRST, LAST } from './names'
 import { OFF_SCHEMES, DEF_SCHEMES } from './hiring'
 import { noteCoordinatorChange, noteCoordinatorRef } from './playbook'
 import { clamp, hash32 } from './rng'
+import { coachAgeFor } from './coachAges'
 
 /** One line of coaching-tree news for the inbox. */
 export interface TreeNews {
@@ -85,7 +86,8 @@ function isDefensive(role: string): boolean {
   return role.includes('Defensive') || role === 'DL Coach' || role === 'Secondary Coach'
 }
 
-function schemeFor(role: string, label: string): string {
+/** FUTURES #44: exported so the career module generates the same schemes. */
+export function schemeFor(role: string, label: string): string {
   const pool = isDefensive(role) ? DEF_SCHEMES : OFF_SCHEMES
   return pool[hash32(`${role}|${label}`, 19) % pool.length]
 }
@@ -96,7 +98,7 @@ function annualFor(role: string, rating: number): number {
 }
 
 /** A replacement coach generated without any rng draws (rating is fixed). */
-function makeCoach(
+export function makeCoach(
   role: StaffRole,
   teamId: string,
   rating: number,
@@ -110,7 +112,7 @@ function makeCoach(
     id,
     name: name ?? `${FIRST[(h >>> 3) % FIRST.length]} ${LAST[(h >>> 11) % LAST.length]}`,
     role,
-    age: 34 + (h % 26),
+    age: coachAgeFor(role, h % 30),
     rating: clamp(Math.round(rating), 30, 99),
     specialty: SPECIALTIES[(h >>> 5) % SPECIALTIES.length],
     scheme,
@@ -279,7 +281,136 @@ export function advanceCoachingTree(world: World, career: CareerState, champion:
     }
   }
 
+  // FUTURES #44: the rest of the league works the carousel too.
+  const carousel = poachLeagueCoaches(world, career)
+  news.push(...carousel)
+
   return { career: { ...career, tree }, news }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUTURES #44 — the league's own carousel (interim head coaches, poaching).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Position-coach seats, by the side of the ball they work. */
+const OFF_POS_SEATS: StaffRole[] = ['QB Coach', 'OL Coach', 'WR Coach']
+const DEF_POS_SEATS: StaffRole[] = ['DL Coach', 'Secondary Coach', 'LB Coach']
+
+/**
+ * FUTURES #44: hand a club to an interim head coach, drawn from its own staff.
+ * The best coordinator (or position coach) takes the chair with HIS OWN
+ * sub-ratings; the seat he leaves is filled by promoting the next man down the
+ * ladder, so no seat goes vacant and the club plays out the season whole. No
+ * rng draw; return null when the club has nobody to promote.
+ */
+export function promoteInterimHeadCoach(world: World, teamId: string, season: number): StaffMember | null {
+  const staff = world.staff[teamId] ?? (world.staff[teamId] = [])
+  const serving = staff.filter((m) => m.role !== 'Head Coach')
+  const coords = serving.filter((m) => m.role.includes('Coordinator')).sort(byRatingThenId)
+  const posMen = serving
+    .filter((m) => (OFF_POS_SEATS as string[]).concat(DEF_POS_SEATS as string[]).includes(m.role))
+    .sort(byRatingThenId)
+  const from = coords[0] ?? posMen[0]
+  if (!from) return null
+  const hc: StaffMember = {
+    ...from,
+    role: 'Head Coach',
+    rating: from.rating,
+    contractYears: Math.max(1, from.contractYears || 3),
+    notes: 'Promoted interim head coach',
+    career: from.career ? { ...from.career, interim: { season, teamId } } : from.career,
+  }
+  const i = staff.findIndex((m) => m.id === from.id)
+  if (i >= 0) staff[i] = hc
+  else staff.push(hc)
+  // Fill the seat he left behind, from the best man still below it.
+  if ((from.role as string).includes('Coordinator')) {
+    const seats = from.role === 'Defensive Coordinator' ? DEF_POS_SEATS : OFF_POS_SEATS
+    const next = staff.filter((m) => (seats as string[]).includes(m.role)).sort(byRatingThenId)[0]
+    if (next) {
+      const ni = staff.findIndex((m) => m.id === next.id)
+      if (ni >= 0) staff[ni] = { ...next, role: from.role, rating: Math.max(30, next.rating - 2), notes: `Promoted to ${from.role}` }
+    } else {
+      const land = world.byId[teamId]
+      staff.push(makeCoach(from.role, teamId, clamp(Math.round((land?.prestige ?? 80) * 0.82), 45, 90), schemeFor(from.role, `${teamId}|${from.role}|${season}`), `${teamId}|${from.role}|${season}|interim`))
+    }
+  }
+  return hc
+}
+
+function byRatingThenId(a: StaffMember, b: StaffMember): number {
+  return b.rating - a.rating || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+}
+
+/**
+ * FUTURES #44: the offseason carousel. At most two moves a season — a
+ * coordinator promoted to a head job at another club (the club he leaves
+ * promotes from within), and a hot position coach given a coordinator chair.
+ * Only the user's tree is preserved in CareerState; this is the rest of the
+ * league. Deterministic; the user's own staff are never moved without an offer.
+ */
+export function poachLeagueCoaches(world: World, career: CareerState): TreeNews[] {
+  const news: TreeNews[] = []
+  const season = world.season
+  const userTeam = career.teamId
+  const clubs = world.teams.filter((t) => t.tier === 'NFL').map((t) => t.id)
+
+  // 1. A club whose head coach is at the end of the road (or just had a bad
+  //    year) turns to the best coordinator in the league.
+  const needy = clubs
+    .filter((id) => id !== userTeam)
+    .map((id) => {
+      const hc = (world.staff[id] ?? []).find((m) => m.role === 'Head Coach')
+      const rec = world.standings[id]
+      const g = (rec?.wins ?? 0) + (rec?.losses ?? 0)
+      const winPct = g ? rec!.wins / g : 0.5
+      const stale = !!hc && hc.age >= 61
+      const bad = !!hc && g >= 12 && winPct < 0.34
+      return { id, hc, score: (stale ? 1 : 0) + (bad ? 1 : 0), h: hash32(`needy|${world.seed}|${season}|${id}`, 63) }
+    })
+    .filter((x) => x.score > 0 && x.hc)
+    .sort((a, b) => b.score - a.score || a.h - b.h)
+    .slice(0, 2)
+
+  for (const need of needy) {
+    // The best coordinator at a club that is not the destination or the user's.
+    const candidates: { teamId: string; m: StaffMember }[] = []
+    for (const tid of clubs) {
+      if (tid === need.id || tid === userTeam) continue
+      for (const m of world.staff[tid] ?? []) {
+        if (m.role.includes('Coordinator') && m.rating >= 76) candidates.push({ teamId: tid, m })
+      }
+    }
+    if (!candidates.length) continue
+    candidates.sort((a, b) => b.m.rating - a.m.rating || (a.m.id < b.m.id ? -1 : a.m.id > b.m.id ? 1 : 0))
+    const pick = candidates[hash32(`pick|${world.seed}|${season}|${need.id}`, 65) % Math.min(4, candidates.length)]
+    const fromStaff = world.staff[pick.teamId] ?? []
+    const fi = fromStaff.findIndex((m) => m.id === pick.m.id)
+    if (fi < 0) continue
+    fromStaff.splice(fi, 1)
+    const destStaff = world.staff[need.id] ?? (world.staff[need.id] = [])
+    const oldHc = need.hc!
+    const di = destStaff.findIndex((m) => m.id === oldHc.id)
+    if (di >= 0) destStaff[di] = { ...pick.m, role: 'Head Coach', notes: `Hired away from ${world.byId[pick.teamId]?.name ?? pick.teamId}` }
+    // The old head coach takes the open market (his career sheet intact).
+    world.staffPool.push({ ...oldHc, teamId: null, status: 'Available', notes: `Let go by ${world.byId[need.id]?.name ?? need.id}` })
+    // His old club promotes from within to keep the seat warm.
+    const seat = pick.m.role
+    const seats = (seat as string).includes('Defensive') ? DEF_POS_SEATS : OFF_POS_SEATS
+    const next = fromStaff.filter((m) => (seats as string[]).includes(m.role)).sort(byRatingThenId)[0]
+    if (next) {
+      const ni = fromStaff.findIndex((m) => m.id === next.id)
+      if (ni >= 0) fromStaff[ni] = { ...next, role: seat, rating: Math.max(30, next.rating - 2), notes: `Promoted to ${seat}` }
+    } else {
+      const land = world.byId[pick.teamId]
+      fromStaff.push(makeCoach(seat, pick.teamId, clamp(Math.round((land?.prestige ?? 80) * 0.82), 45, 90), schemeFor(seat, `${pick.teamId}|${seat}|${season}`), `${pick.teamId}|${seat}|${season}|poach`))
+    }
+    news.push({
+      headline: `${pick.m.name} hired as ${world.byId[need.id]?.name ?? need.id} head coach`,
+      body: `${world.byId[need.id]?.name ?? need.id} move on from ${oldHc.name} and hand the chair to ${pick.m.name}, the ${pick.m.role.toLowerCase()} from ${world.byId[pick.teamId]?.name ?? pick.teamId}.`,
+    })
+  }
+  return news
 }
 
 export interface PoachResult {
