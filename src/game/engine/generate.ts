@@ -7,6 +7,7 @@ import { NFL_TEAMS } from '../data/nflTeams'
 import { SALARY_CAP, capForSeason, makeRookieContract, makeVeteranContract, recomputeCapHit } from './cap'
 import { FIRST, LAST, SPECIALTIES } from './names'
 import { FRONT_SPECIALTIES, frontOfficeProfile, generateAnalyticsPool } from './hiring'
+import { generateMedicalPool } from './medicalStaff'
 import { freshDraftWindow } from './picks'
 import { makeCharacter } from './character'
 import { makeScoutBias, prospectStock } from './scoutBias'
@@ -91,6 +92,16 @@ export interface World {
   /** FUTURES 19: analysts the user can hire (never touched by the AI). Optional
    *  save field — a legacy save gets it on load. */
   analyticsPool?: StaffMember[]
+  /** FUTURES #48: medical staff the user can hire (Trainer / Physician / S&C).
+   *  User-only, like `analyticsPool`; never touched by the AI. Optional. */
+  medicalPool?: StaffMember[]
+  /**
+   * FUTURES #48: the men held out of the CURRENT week's game under load
+   * management (the user's club only). Written at the top of the week and read by
+   * `depthGroup`, so a rested man is simply not on the field. Optional — an old
+   * save, and every week the user rests nobody, has none.
+   */
+  gameRest?: { season: number; week: number; ids: string[] }
   standings: Record<string, TeamRecord>
   /** Backlog 227: last completed season's division finish (1–4) per club, used
    *  by the schedule's same-finish games. Missing (first season / old save)
@@ -1124,6 +1135,8 @@ export function buildWorld(seed = 20261004, data?: RealData | null): World {
     staff,
     staffPool: generateStaffPool(rng, 44),
     analyticsPool: generateAnalyticsPool(seed),
+    // FUTURES #48: the medical market (user-only; hash-built, no rng draws).
+    medicalPool: generateMedicalPool(seed),
     standings,
     news: buildNews('BUF', 'Buffalo Bills', 'NFL'),
     draft,

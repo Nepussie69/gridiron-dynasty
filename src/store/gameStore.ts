@@ -289,6 +289,17 @@ import {
   type InjuryRestoreResult,
 } from '../game/engine/injuryCalls'
 import { injuryProbe } from '../game/engine/injuryProbe'
+import { medicalProbe as medicalStaffProbe } from '../game/engine/medicalProbe'
+import {
+  generateMedicalPool,
+  isMedicalRole,
+  loadManagedMult,
+  loadRestIds,
+  preventionFactor,
+  restGameIds,
+  runMedicalWeek,
+  seatFilled,
+} from '../game/engine/medicalStaff'
 import { recordGhostSeason } from '../game/engine/ghost'
 import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
@@ -892,6 +903,13 @@ interface GameStore {
    * can be sent out; an Out (or IR) player is never a choice.
    */
   setInjuryCall: (playerId: string, call: InjuryCall) => void
+  /**
+   * FUTURES #48: put a man on (or take him off) load management — 'practice'
+   * takes reps off him, 'game' holds him out of this week's game.
+   */
+  toggleLoadRest: (playerId: string, mode: 'practice' | 'game') => void
+  /** FUTURES #48: sign a medical candidate (delegates to the one staff path). */
+  hireMedical: (candidateId: string, salary: number) => void
   pickAmbition: (id: string) => void
   dropAmbition: (id: string) => void
   /** Accept/decline a stretch assignment (#8). */
@@ -1706,6 +1724,21 @@ export const useGame = create<GameStore>((set, get) => ({
     // clubs pass no recovery, so league-wide injuries are unchanged.
     // FUTURES 17: a Rest bye week heals the club the same way.
     const byeRest = byeIsRest(career, world)
+    // FUTURES #48: the sports-science department's own prevention read, per man.
+    // Absent unless an S&C director is actually in the chair, so a club with a
+    // vacant seat (and every old save) passes no map at all.
+    let prevention: Record<string, number> | undefined
+    if (seatFilled(world, career.teamId, 'Sports Science Director')) {
+      prevention = {}
+      for (const p of world.roster[career.teamId] ?? []) {
+        prevention[p.id] = preventionFactor(world, career.teamId, p)
+      }
+    }
+    // FUTURES #48: load management — the men held out of THIS week's game.
+    const restedThisWeek = restGameIds(career, world.season, week)
+    world.gameRest = restedThisWeek.length
+      ? { season: world.season, week, ids: [...restedThisWeek] }
+      : undefined
     const recovery: WeekRecovery = {
       teamId: career.teamId,
       injuryMult: practiceInjuryMult(career, world),
@@ -1713,6 +1746,8 @@ export const useGame = create<GameStore>((set, get) => ({
       fatigueRelief: practiceIsRest(career, world) || byeRest,
       // FUTURES #45: each man's own soft-tissue load from the reps he took.
       risk: repRisk,
+      // FUTURES #48: the S&C director's own read, per man (no league averages).
+      prevention,
     }
     // Authentic mode runs the whole league through play-by-play in a worker,
     // falling back to the fast allocator if the worker is unavailable.
@@ -2005,6 +2040,55 @@ export const useGame = create<GameStore>((set, get) => ({
         }
       }
       for (const n of r.news) pushCareerNews(world, nextCareer, { category: 'Injury', headline: n.headline, body: n.body })
+    }
+    // FUTURES #48: the club's medical week. The training room's rehab is applied
+    // to every fresh injury, the Team Physician may clear a man a week early, and
+    // any lingering (early-cleared) tissue that played this week can tear again.
+    // Hash-only and user-club-only: a vacant room is a complete no-op, so the
+    // league, the fast sim and every old save are untouched.
+    {
+      const clubGame = world.schedule.find((g) => g.week === week && (g.homeId === career.teamId || g.awayId === career.teamId))
+      const med = runMedicalWeek(world, career, week, {
+        played: !!clubGame,
+        restedIds: restedThisWeek,
+      })
+      if (med.career.medical) nextCareer = { ...nextCareer, medical: med.career.medical }
+      for (const ev of med.events) {
+        const last = ev.name.split(' ').slice(-1)[0]
+        if (ev.kind === 'early-clear') {
+          nextCareer = logMoment(nextCareer, {
+            week,
+            text: `${ev.name} was cleared early from his ${ev.note.toLowerCase()} — the training room expects him Sunday.`,
+            tone: 'info',
+          })
+        } else if (ev.kind === 're-injury') {
+          nextCareer = logMoment(nextCareer, {
+            week,
+            text: `${last}'s ${ev.note.toLowerCase()} went again — out ${ev.games} more ${ev.games === 1 ? 'game' : 'games'}.`,
+            tone: 'loss',
+          })
+        } else if (ev.kind === 'rehab-shortened') {
+          nextCareer = logMoment(nextCareer, {
+            week,
+            text: `${ev.name} is ahead of schedule on his ${ev.note.toLowerCase()} — back in ${ev.games} ${ev.games === 1 ? 'game' : 'games'}.`,
+            tone: 'info',
+          })
+        }
+      }
+      if (med.events.length) {
+        const early = med.events.filter((e) => e.kind === 'early-clear')
+        const again = med.events.filter((e) => e.kind === 're-injury')
+        if (early.length || again.length) {
+          pushCareerNews(world, nextCareer, {
+            category: 'Injury',
+            headline: again.length ? `${again.length} setback${again.length === 1 ? '' : 's'} in the training room` : 'Cleared ahead of schedule',
+            body: [
+              ...early.map((e) => `${e.name} (${e.note.toLowerCase()}) cleared early`),
+              ...again.map((e) => `${e.name} — ${e.note.toLowerCase()} re-injured, out ${e.games}`),
+            ].join('. '),
+          })
+        }
+      }
     }
     // The week's ONE big decision (#2). Generated from the new week's state.
     nextCareer = { ...nextCareer, dilemma: currentDilemma(world, nextCareer) ?? undefined }
@@ -3400,6 +3484,35 @@ export const useGame = create<GameStore>((set, get) => ({
     else delete calls[playerId]
     set({ career: { ...career, injuryCalls: calls }, tick: get().tick + 1 })
     get().save()
+  },
+
+  /**
+   * FUTURES #48: load management. `mode: 'practice'` adds/removes a man from the
+   * practice load-management plan (his own reps are pulled and his soft-tissue
+   * load drops from this week on); `mode: 'game'` holds him out of THIS week's
+   * game. Both are the user's own club only, both are free to change.
+   */
+  toggleLoadRest: (playerId, mode) => {
+    const career = get().career
+    if (!career) return
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+    if (!p) return
+    if (mode === 'game') {
+      const cur = restGameIds(career, world.season, world.week)
+      const ids = cur.includes(playerId) ? cur.filter((id) => id !== playerId) : [...cur, playerId]
+      set({ career: { ...career, restGame: { season: world.season, week: world.week, ids } }, tick: get().tick + 1 })
+    } else {
+      const cur = loadRestIds(career, world.season)
+      const ids = cur.includes(playerId) ? cur.filter((id) => id !== playerId) : [...cur, playerId]
+      set({ career: { ...career, loadRest: { season: world.season, ids } }, tick: get().tick + 1 })
+    }
+    get().save()
+  },
+
+  hireMedical: (candidateId, salary) => {
+    // FUTURES #48: the medical market hires through the same offer path as any
+    // other staff seat (interest, budget, buyout, dead money) — one system.
+    get().hireStaff(candidateId, salary)
   },
 
   pickAmbition: (id) => {
@@ -4812,6 +4925,9 @@ export const useGame = create<GameStore>((set, get) => ({
     // user-only pool so the Analytics market keeps listing them (never the AI's).
     const open = { ...m, teamId: null, status: 'Available' as const }
     if (m.role === ANALYTICS_ROLE) world.analyticsPool = [...(world.analyticsPool ?? []), open]
+    // FUTURES #48: a fired medical man returns to the medical market, not the
+    // coaching one, so the seat keeps listing him (never the AI's).
+    else if (isMedicalRole(m.role)) world.medicalPool = [...(world.medicalPool ?? []), open]
     else world.staffPool.push(open)
     if (buyout > 0) {
       const per = Math.floor(buyout / buyoutYears)
@@ -5227,6 +5343,18 @@ function runPracticeWeek(world: World, career: CareerState, week: number, repped
     repped.padded += booked
     career.practiceReps = { ...repped }
   }
+  // FUTURES #48: load management. A man the user has put on the plan takes a
+  // lighter week — his own soft-tissue load drops, so his injury threshold drops
+  // with it. The S&C director's own prevention read decides how much the week
+  // actually buys. User club only; no rng draw, and nothing at all when the list
+  // is empty (which is every club but the user's).
+  for (const id of loadRestIds(career, world.season)) {
+    const p = world.players.find((x) => x.id === id && x.teamId === career.teamId)
+    if (!p) continue
+    const cut = loadManagedMult(world, career.teamId, p)
+    p.repRisk = (p.repRisk ?? 1) * cut
+    risk[p.id] = (risk[p.id] ?? 1) * cut
+  }
   const tier = world.byId[career.teamId]?.tier
   world.aiPractice ??= {}
   for (const t of world.teams) {
@@ -5621,6 +5749,8 @@ export function migrateWorld(w: World): World {
   w.staffTenureRef ??= {}
   // FUTURES 19: legacy saves get the deterministic analyst market (no rng draw).
   w.analyticsPool ??= generateAnalyticsPool(w.seed)
+  // FUTURES #48: legacy saves get the deterministic medical market (no rng draw).
+  w.medicalPool ??= generateMedicalPool(w.seed)
   // FUTURES #29: the future-classes overlay is optional; an empty one is dropped
   // so a legacy save and a modern one behave identically. Real overlays are
   // consumed by `promoteNextClass` at the next rollover.
@@ -10182,6 +10312,18 @@ export function injuryCallProbe(n = 1200) {
   const career = useGame.getState().career
   if (!career) return { error: 'no career' }
   return injuryProbe(world, career, n)
+}
+
+/**
+ * Dev-only probe (FUTURES #48): the medical-staff report for the LIVE career,
+ * exposed to the browser as `__medicalProbe(weeks)` and to the node acceptance
+ * probe as `store.medicalProbe()`. Pure — every mutation happens on a clone, so
+ * the live career is never touched.
+ */
+export function medicalProbe(weeks = 18) {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  return medicalStaffProbe(world, career, weeks)
 }
 
 /**
