@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, faFrenzyProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, penaltyProbe, ownerMeetingProbe, ovrDistribution, ownerProbe, staminaProbe, futureProbe, injuryCallProbe, setProbeIsolation, useGame } from './store/gameStore'
+import { simTest, getWorld, staffProbe, hiringProbe, cohesionProbe, draftProbe, draftFlowProbe, seasonProbe, tradeProbe, balanceProbe, marketProbe, deadMoneyProbe, askGmProbe, rookieProbe, careerSmoke, leaguePbpProbe, adviceProbe, scoutBiasProbe, characterProbe, rhythmProbe, dominanceProbe, aiManagerProbe, planMatrix, personnelMatrix, statShape, gameDayEquivalence, ratingSpread, clockProbe, decisionProbe, waiverProbe, faFlowProbe, faFrenzyProbe, skillProbe, masteryProbe, hofProbe, gmDeskProbe, deadlineProbe, contractLifeProbe, draftTradeProbe, devPlanProbe, seasonRealism, scoutTravelProbe, lockerRoomProbe, penaltyProbe, ownerMeetingProbe, ovrDistribution, ownerProbe, staminaProbe, futureProbe, injuryCallProbe, medicalProbe, setProbeIsolation, useGame } from './store/gameStore'
 import { leagueWorkerDebug } from './game/engine/leagueSim'
 import { simulatePlayByPlay, matchupProbe, setMatchups } from './game/engine/playsim'
 import { animProbe } from './game/engine/animProbe'
@@ -95,6 +95,7 @@ if (import.meta.env.DEV) {
     __staminaProbe: staminaProbe,
     __futureProbe: futureProbe,
     __injuryCallProbe: injuryCallProbe,
+    __medicalProbe: medicalProbe,
   }
   for (const [name, fn] of Object.entries(probes)) w[name] = isolated(fn)
   w.__leagueWorkerDebug = leagueWorkerDebug
