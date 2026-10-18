@@ -3009,7 +3009,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
     pileDrive(m[carrier], post, carrySpeed(m[carrier]))
   }
   } // end of the scripted (non-E1c) carry
-  const endSec = m[carrier].t
+  let endSec = m[carrier].t
   const popT = fumble ? Math.max(holeT + 0.1, endSec * 0.9) : endSec
   const liveTo = fumble ? popT : contactT
   const tackleFrom = Math.max(holeT * 0.5, liveTo - 1.4)
@@ -3406,7 +3406,7 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       E1C_STAT.chased++
       E1C_STAT.chaseKeys.push(tackler)
       hitAndRide(m[tackler], m[carrier], Math.max(tackleFrom, contactT - 1.2), contactT, endSec, oobRun ? 3.2 : 2.2)
-      if (oobRun) ensurePush(m[tackler], m[carrier], contactT, endSec)
+      if (oobRun) endSec = Math.max(endSec, ensurePush(m[tackler], m[carrier], contactT, endSec))
     } else if (tackler !== carrier && m[tackler] && !scoreRun && !clockOut) {
       const tk = m[tackler]
       // the field's man takes the play over from its own stop: his recording is
@@ -3423,12 +3423,12 @@ function buildRun(play: Play, ctx: AnimContext, slow = 1): PlayAnim {
       const ul = Math.hypot(ux, uy) || 1
       const u = oobRun ? pushSide(m[carrier], tk, contactT) : { x: ux / ul, y: uy / ul }
       rideOn(tk, m[carrier], contactT, endSec, u)
-      if (oobRun) ensurePush(tk, m[carrier], contactT, endSec)
+      if (oobRun) endSec = Math.max(endSec, ensurePush(tk, m[carrier], contactT, endSec))
     }
   } else if (oobRun && !clockOut) {
     // animflow r8: the forcer comes on his cut-off angle and drives him out from the inside shoulder.
     hitAndRide(m[tackler], m[carrier], hitFrom, contactT, endSec, 3.2, pushSide(m[carrier], m[tackler], contactT))
-    ensurePush(m[tackler], m[carrier], contactT, endSec)
+    endSec = Math.max(endSec, ensurePush(m[tackler], m[carrier], contactT, endSec))
   } else if (!scoreRun && !clockOut) hitAndRide(m[tackler], m[carrier], hitFrom, contactT, endSec)
   const res = { tackler, endSec }
   capAll(m, ALL_KEYS(f), res.endSec)
@@ -3934,22 +3934,37 @@ function pushSide(carrier: Mover, tk: Mover, t: number): Pt {
  * (a long lateral run, a late pursuer), his last strides run the gap down on a smooth follow to the
  * carrier's inside shoulder, then ride him over the line.
  */
-function ensurePush(tk: Mover, carrier: Mover, tP: number, endSec: number): void {
+function ensurePush(tk: Mover, carrier: Mover, tP: number, endSec: number): number {
   const dAt = (t: number) => {
     const q = posAt(tk.path, Math.min(t, tk.t))
     const c = posAt(carrier.path, t)
     return Math.hypot(q.x - c.x, q.y - c.y)
   }
-  if (tk.t >= endSec - 1e-6 && dAt(Math.max(tP, endSec - 0.3)) <= 1.0 && dAt(endSec) <= 1.0) return
-  const from = Math.max(0.05, Math.min(tP - 0.3, endSec - 1.0))
+  if (tk.t >= endSec - 1e-6 && dAt(Math.max(tP, endSec - 0.3)) <= 1.0 && dAt(endSec) <= 1.0) return endSec
+  // (a man whose own path already reaches the whistle is re-seeked from a beat before it, not
+  //  appended to: `followTo` starts from `from`, so a from/tR beyond his last drawn beat would be
+  //  a no-op and the forcer would stay where his own chase left him - the unforced OOB the
+  //  backlog-354 check reads on a fast carry the pursuit cannot match.)
+  const from = Math.max(0.05, Math.min(tP - 0.3, endSec - 1.0, tk.t - 0.04))
   const u = pushSide(carrier, tk, tP)
-  const tR = Math.max(from + 0.04, Math.min(tP, endSec - 0.35))
+  const tR = Math.max(from + 0.04, Math.min(tP, endSec - 0.35, tk.t))
   const hands = (t: number) => {
     const c = posAt(carrier.path, Math.min(Math.max(t, tR), endSec))
     return { x: c.x + u.x * 0.62, y: c.y + u.y * 0.62 }
   }
   followTo(tk, from, tR, hands, { acc: Math.max(9, tk.pace.acc * 1.7), w: 6.5 })
   rideOn(tk, carrier, tk.t, endSec, u)
+  // animflow r8 (backlog 354): a carry quick enough to outrun the forcer's own capped pace (a jet
+  // man to the edge) still ends FORCED - the ride may not break his own pace law, so the whistle
+  // waits a bounded beat for his last strides, exactly as recClose's own arriveByWhistle does for a
+  // tackle. The carrier is over the line already: the wait is his last step out, hands on him.
+  if (dAt(endSec) > 0.9 && tk.t >= endSec - 1e-6) {
+    const extra = clampN((dAt(endSec) - 0.55) / Math.max(3.5, tk.pace.top), 0.06, 0.6)
+    carrier.hold(Math.max(0, endSec + extra - carrier.t))
+    rideOn(tk, carrier, endSec, endSec + extra, u)
+    return endSec + extra
+  }
+  return endSec
 }
 
 function coverageScheme(play: Play, seed: number): 'man' | 'zone' | 'blitz' | 'twoHigh' | 'stack' {
@@ -6116,6 +6131,28 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
         tackler = chooseTackler(m, free.length ? free : pursuers, creditKey, catchPt, catchSec, Math.max(0.6, endSec - catchSec), TACKLE_SLACK_PASS)
         tkFromRec = recKeys.has(tackler)
       }
+      // animflow r8 (354/373) on a recorded end: an out-of-bounds pass must be
+      // drawn FORCED. The sim's credited man can be a blitzer the recording left
+      // far behind (20+ yd, no drawn path to the spot) - the ride then trims to
+      // nothing and nobody is on the carrier at the whistle. Seat the DRAWN man
+      // nearest the end spot instead (recorded men first), so ensurePush /
+      // recClose can put his hands on him as he crosses the line.
+      if (play.outOfBounds && !isTD && !clockStepOut(play)) {
+        const cEnd = posAt(mv.path, endSec)
+        const gapAtEnd = (k: string) => {
+          const q = posAt(m[k].path, Math.min(endSec, m[k].t))
+          return Math.hypot(q.x - cEnd.x, q.y - cEnd.y)
+        }
+        let best: string | undefined
+        for (const k of [...recKeys, ...pursuers]) {
+          if (k === tgt || !m[k]) continue
+          if (!best || gapAtEnd(k) < gapAtEnd(best)) best = k
+        }
+        if (best && (!tackler || !m[tackler] || gapAtEnd(best) + 1e-9 < gapAtEnd(tackler))) {
+          tackler = best
+          tkFromRec = recKeys.has(best)
+        }
+      }
       const tkEff = tackler && tackler !== tgt && m[tackler] ? tackler : tgt
       let tkRide = false
       if (tkEff !== tgt && !isTD && !clockStepOut(play)) {
@@ -6130,13 +6167,13 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
           const ul = Math.hypot(ux, uy) || 1
           const u = oob ? pushSide(mv, m[tkEff], contactT) : { x: ux / ul, y: uy / ul }
           rideOn(m[tkEff], mv, contactT, endSec, u)
-          if (oob) ensurePush(m[tkEff], mv, contactT, endSec)
+          if (oob) endSec = Math.max(endSec, ensurePush(m[tkEff], mv, contactT, endSec))
           tkRide = true
         } else {
           E1C_STAT.chased++
           E1C_STAT.chaseKeys.push(tkEff)
           hitAndRide(m[tkEff], mv, Math.max(catchSec, contactT - 1.2), contactT, endSec, oob ? 3.2 : 2.2)
-          if (oob) ensurePush(m[tkEff], mv, contactT, endSec)
+          if (oob) endSec = Math.max(endSec, ensurePush(m[tkEff], mv, contactT, endSec))
         }
       }
       capAll(m, ALL_KEYS(f), endSec)
@@ -6244,7 +6281,7 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       if (forcer) break
     }
     forcer ??= forcerOf(tQ, true)
-    const endSec = shoveOut(m[tgt], endX)
+    let endSec = shoveOut(m[tgt], endX)
     const others = pursuers.filter((k) => k !== forcer)
     angleChase(m, others, catchSec, m[tgt], endSec, seed)
     if (forcer) {
@@ -6260,6 +6297,21 @@ function buildPass(play: Play, ctx: AnimContext): PlayAnim {
       }
       followTo(fk, catchSec, Math.max(catchSec + 0.04, tQ - 0.1), hands, { acc: Math.max(6.5, fk.pace.acc * 1.3), w: 4.5 })
       rideOn(fk, m[tgt], fk.t, endSec, u)
+      // animflow r8 (backlog 354): the receiver can outrun the forcer's own capped pace (or
+      // the best man available could not arrive in time). The whistle waits a bounded beat
+      // for his last strides, exactly as the run path's ensurePush does - the catch-and-run
+      // out of bounds still ends with his hands on him at the line.
+      const gapFor = () => {
+        const q = posAt(fk.path, Math.min(endSec, fk.t))
+        const c = posAt(m[tgt].path, endSec)
+        return Math.hypot(q.x - c.x, q.y - c.y)
+      }
+      if (gapFor() > 0.9 && fk.t >= endSec - 1e-6) {
+        const extra = clampN((gapFor() - 0.55) / Math.max(3.5, fk.pace.top), 0.06, 0.6)
+        m[tgt].hold(Math.max(0, endSec + extra - m[tgt].t))
+        rideOn(fk, m[tgt], endSec, endSec + extra, u)
+        endSec += extra
+      }
     }
     capAll(m, ALL_KEYS(f), endSec)
     ball.push(...shadow(m[tgt].path, catchSec).slice(1))
