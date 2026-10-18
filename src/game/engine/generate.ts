@@ -17,6 +17,7 @@ import { playerAttrs } from '../data/ratings'
 import { assignSlots } from './primetime'
 import { buildNflSchedule, divisionFinishFromStandings, type DivisionFinish } from './schedule'
 import { STARS } from './starSeed'
+import { coachAgeFor } from './coachAges'
 import type { RealCfbPlayer, RealCfbTeam, RealData, RealNflPlayer } from '../data/realData'
 import type { PlayerBoxScore } from './stats'
 import type { WaiverEntry } from './waivers'
@@ -81,6 +82,12 @@ export interface World {
   roster: Record<string, Player[]>
   staff: Record<string, StaffMember[]>
   staffPool: StaffMember[]
+  /**
+   * FUTURES #51: the players who retired in the season just developed. Cleared
+   * by the season-end coaching intake, which turns a share of them into
+   * position coaches. Optional — a legacy save has none.
+   */
+  lastRetired?: import('./formerPlayers').RetiredSnapshot[]
   /** FUTURES 19: analysts the user can hire (never touched by the AI). Optional
    *  save field — a legacy save gets it on load. */
   analyticsPool?: StaffMember[]
@@ -398,7 +405,7 @@ function makeStaff(rng: Rng, teamId: string, role: StaffRole, rating: number, se
     id,
     name: `${rpick(rng, FIRST)} ${rpick(rng, LAST)}`,
     role,
-    age: rint(rng, 34, 63),
+    age: coachAgeFor(role, rint(rng, 0, 29)),
     rating,
     specialty: rpick(rng, SPECIALTIES),
     scheme: def ? rpick(rng, SCHEMES_DEF) : rpick(rng, SCHEMES_OFF),

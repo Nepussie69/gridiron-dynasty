@@ -55,6 +55,8 @@ import { gateMenuItem, useAccessLevel, useMediaQuery, usePhone, WIDE_QUERY } fro
 import { DataTable, type Column } from '../components/DataTable'
 import { DraftStanceChips } from '../components/DraftPhilosophyCard'
 import { CoachSubRatings } from '../components/CoachSubRatings'
+import { CoachCareerTimeline, FormerPlayerBadge, InterimHeadCoachBanner } from '../components/CoachCareer'
+import { isCoachSeat } from '../game/engine/coachCareer'
 import { isSubKey, SUB_FLOOR, SUB_META, subsForRole, subValue, type SubKey } from '../components/coachSubsUi'
 import { staffGrade, coordinatorEdge, type CoachEffect } from '../game/engine/coaching'
 import {
@@ -1389,8 +1391,10 @@ function HeadCoachSlab({ m, ctx, withYou = false }: { m: StaffMember; ctx: Ctx; 
             <SchemeFor m={m} ctx={ctx} />
             <MemberEffect m={m} ctx={ctx} />
             <StaffTags m={m} ctx={ctx} />
+            <FormerPlayerBadge m={m} />
           </div>
           <SeatStance m={m} ctx={ctx} className="mt-1.5" />
+          <InterimHeadCoachBanner m={m} world={ctx.world} className="mt-2" />
           <CoachSubRatings m={m} className="mt-2" />
         </div>
         <RatingTile value={m.rating} size="lg" tierWord delta label="Staff rating" />
@@ -1613,6 +1617,7 @@ function StaffTable({
         <span className="block min-w-0">
           <span className="block font-600 text-ink">{m.name}</span>
           <span className="block text-small text-muted">{SHORT_ROLE[m.role] ?? m.role}</span>
+          {isCoachSeat(m.role) && <FormerPlayerBadge m={m} className="mt-0.5" />}
         </span>
       ),
     },
@@ -1850,6 +1855,13 @@ function InspectorBody({
         <section>
           <div className="label mb-1.5">Sub-ratings</div>
           <CoachSubRatings m={m} layout="rows" />
+        </section>
+      )}
+
+      {isCoachSeat(m.role) && (
+        <section>
+          <div className="label mb-1.5">Career</div>
+          <CoachCareerTimeline m={m} world={ctx.world} />
         </section>
       )}
 
