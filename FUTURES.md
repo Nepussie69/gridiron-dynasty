@@ -52,7 +52,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 42 | **In-game confidence / hot hand** (user 2026-10-11) | Per-player confidence within a game (a WR who's caught 3 in a row, a CB who got beaten deep) — individual, not a team momentum meter | J7 | ⏳ |
 | 43 | **Rotation control** (user 2026-10-11) | Set DL rotation %, RB committee, snap shares; fatigue-aware | R15 fatigue | ⏳ |
 | 44 | **Coaching careers** (user 2026-10-11) | Coaches gain sub-ratings with experience, have contracts, get poached, fired mid-season, interim HC | J9, #21 | ✅ fut44 2026-10-18 |
-| 45 | **Practice-week reps** (user 2026-10-11) | Split reps starters vs backups: development vs fatigue vs game readiness; install opponent-specific plays | #13 | ⏳ |
+| 45 | **Practice-week reps** (user 2026-10-11) | Split reps starters vs backups: development vs fatigue vs game readiness; install opponent-specific plays | #13 | ✅ fut45 2026-10-18 |
 | 46 | **Player personalities in contracts** (user 2026-10-11) | Money, winning, loyalty, playing time, market; agent behaviour in talks | #11, #12 | ✅ r2personality 2026-10-17 |
 | 47 | **Combine & pro-day measurables** (user 2026-10-11) | 40 time, shuttle, vertical tied to ratings with scouting error, mapped with the real BDB speed proxies | #14 | ✅ futcombine 2026-10-17 |
 | 48 | **Medical staff & sports science** (user 2026-10-11) | Trainer rating shortens injuries; load management | #15 | ⏳ |
