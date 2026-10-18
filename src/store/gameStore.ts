@@ -192,6 +192,7 @@ import { applyDraftTradeDown, buildDraftTradeDownOffers, buildDraftTradeUpTarget
 import {
   DEFAULT_PHILOSOPHY,
   PHILOSOPHY_STEPS,
+  roomTilt,
   tradeDownOfferLimit,
   withAxis,
   type DraftPhilosophy,
@@ -831,6 +832,8 @@ interface GameStore {
    * gets heard, the GM decides).
    */
   setDraftPhilosophy: (axis: PhilosophyAxis, step: PhilosophyStep) => void
+  /** FUTURES #27: drop the philosophy back to the sim's own middle-step board. */
+  clearDraftPhilosophy: () => void
   /** FUTURES #27 DF4: give AI clubs hashed draft identities (off by default). */
   setAiDraftIdentities: (on: boolean) => void
   /** K1: pick (or clear) this week's game-plan wrinkle for a side. */
@@ -2947,6 +2950,19 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  /**
+   * FUTURES #27: clear the philosophy back to today's board (the middle step of
+   * every axis). Same gate as setting it; the room still argues on screen.
+   */
+  clearDraftPhilosophy: () => {
+    const career = get().career
+    if (!career) return
+    if (!canAdvise(career, 'draft') && !canDecide(career, 'draft')) return
+    set({ career: { ...career, draftPhilosophy: undefined }, tick: get().tick + 1 })
+    get().showToast('Draft philosophy cleared — the board runs as it always did.')
+    get().save()
+  },
+
   setAiDraftIdentities: (on) => {
     const career = get().career
     if (!career) return
@@ -4592,9 +4608,16 @@ export const useGame = create<GameStore>((set, get) => ({
       }
     }
     if (!prospect) {
+      // FUTURES #27: the clock running out is an auto pick — your vector at 0.7
+      // plus the room's at 0.3, exactly like the sim's own auto path.
       prospect =
-        bestAvailableFor(world, career.teamId, undefined, (p) => departmentGrade(world, career, p) ?? p.grade) ??
-        undefined
+        bestAvailableFor(
+          world,
+          career.teamId,
+          undefined,
+          (p) => departmentGrade(world, career, p) ?? p.grade,
+          roomTilt(world, career, { auto: true }),
+        ) ?? undefined
     }
     if (!prospect) return
     get().draftProspect(prospect.id)

@@ -832,6 +832,13 @@ export interface CareerState {
   draftPhilosophy?: import('./engine/draftRoom').DraftPhilosophy & { season: number }
   /** FUTURES #27 DF4: give AI clubs hashed draft identities (off by default). */
   aiDraftIdentities?: boolean
+  /**
+   * FUTURES #27 DF2: how many times the room has already moved your club off the
+   * clock this draft. A room hoards picks, it does not trade away its whole class:
+   * the cap keeps an Accumulate draft NFL-real (a club that works the phones still
+   * makes most of its own selections). Optional — an old save starts at zero.
+   */
+  draftRoomMoves?: { season: number; count: number }
   /** K1: this week's game-plan wrinkle per side, plus the last few weeks of film. */
   wrinkles?: {
     season: number
