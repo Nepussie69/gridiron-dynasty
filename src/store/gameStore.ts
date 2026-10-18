@@ -146,6 +146,23 @@ import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, red
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus, installSides } from '../game/engine/install'
 import { canPractice, practiceEdge, practiceInjuryMult, practiceIsRest, practiceMasteryMult, PRACTICE_OPTIONS, type PracticePlan } from '../game/engine/practice'
+import {
+  aiWeekReps,
+  applyPracticeWeek,
+  autoSplit,
+  autoInstall,
+  convertRepBank,
+  installBudget,
+  installMasteryMult,
+  opponentOf,
+  playInfo,
+  practicePlan,
+  repGroupsFor,
+  userWeekReps,
+  weekStructure,
+  PADDED_CAP,
+  type RepWeekState,
+} from '../game/engine/practice'
 import { BYE_OPTIONS, byeEdge, byeIsRest, byeLastWeek, byeMasteryMult, canByeWeek, isByeWeek, type ByePlan } from '../game/engine/bye'
 import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId, type KeyGrade } from '../game/engine/keys'
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
@@ -836,6 +853,14 @@ interface GameStore {
   chooseInstall: (plan: 'lean' | 'full') => void
   /** L12 W1: pick this week's practice plan (kept week to week). */
   pickPractice: (plan: PracticePlan) => void
+  /** FUTURES #45: set a position group's starter share of the week's reps (0–1). */
+  pickRepSplit: (group: string, share: number) => void
+  /** FUTURES #45: let the staff split a group's reps (Auto), or take it back. */
+  setRepAuto: (group: string, auto: boolean) => void
+  /** FUTURES #45: add or remove one opponent-specific install pick this week. */
+  pickInstall: (play: string) => void
+  /** FUTURES #45: hand the whole practice week to the staff (every group Auto). */
+  autoRepWeek: () => void
   /** FUTURES 17: pick this bye week's plan (Rest / Install / Self-scout). */
   pickBye: (plan: ByePlan) => void
   /** FUTURES 25: hold the periodic owner meeting and make one ask. */
@@ -1651,6 +1676,12 @@ export const useGame = create<GameStore>((set, get) => ({
     // free agent who most improves their depth chart (their asks having fallen
     // while unsigned), and stale 34+ vets retire (2c).
     runInSeasonFreeAgency(world, career.teamId)
+    // FUTURES #45: the practice week. The user's club splits reps on the card
+    // (Auto groups use the staff's policy); every AI club runs the same Auto
+    // policy. Readiness, the soft-tissue load and the young players' banked reps
+    // are written here, before any game.
+    const repped = canPractice(career) && !isByeWeek(world, career.teamId) ? userWeekReps(world, career) : null
+    const repRisk = runPracticeWeek(world, career, week, repped)
     // Apply the saved pre-game plan to the user's game this week.
     const plan = get().defaultPlan
     const userGameForPlan = world.schedule.find(
@@ -1674,6 +1705,8 @@ export const useGame = create<GameStore>((set, get) => ({
       injuryMult: practiceInjuryMult(career, world),
       restHeal: practiceIsRest(career, world) || byeRest,
       fatigueRelief: practiceIsRest(career, world) || byeRest,
+      // FUTURES #45: each man's own soft-tissue load from the reps he took.
+      risk: repRisk,
     }
     // Authentic mode runs the whole league through play-by-play in a worker,
     // falling back to the fast allocator if the worker is unavailable.
@@ -1716,7 +1749,12 @@ export const useGame = create<GameStore>((set, get) => ({
       // FUTURES #37: the user's game feeds the QB–receiver and adjacent-OL pair
       // chemistry (its real shared reps); AI games accrue a nominal game in simWeek.
       accrueGameChemistry(world, sim)
-      growPlaybookFromGame(world, sim, practiceMasteryMult(career, world) * byeMasteryMult(career, world), career.teamId)
+      growPlaybookFromGame(
+        world,
+        sim,
+        practiceMasteryMult(career, world) * byeMasteryMult(career, world) * installMasteryMult(career.practiceReps?.install ?? [], installBudget(world, career.teamId)),
+        career.teamId,
+      )
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
       // FUTURES #4: record the game's special-teams surprises for opponent scouting.
@@ -2463,6 +2501,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // L12 W1/W2: the weekly practice plan, the keys you promised and the
     // season's leadership ledger all belong to the season that set them.
     seasonCareer.practice = undefined
+    seasonCareer.practiceReps = undefined
     seasonCareer.bye = undefined
     seasonCareer.keys = undefined
     seasonCareer.keysLedger = undefined
@@ -2985,6 +3024,67 @@ export const useGame = create<GameStore>((set, get) => ({
       prev = { plan: current.plan, week: world.week - 1 }
     }
     set({ career: { ...career, practice: { plan, week: world.week, season: world.season, prev } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  // ── FUTURES #45: the practice-rep split, the Auto policy and the install ────
+  pickRepSplit: (group, share) => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    if (!repGroupsFor(world, career.teamId).includes(group)) return
+    const base = userWeekReps(world, career)
+    const v = clamp(Math.round(share * 20) / 20, 0.3, 0.95)
+    const next: RepWeekState = {
+      ...base,
+      split: { ...base.split, [group]: v },
+      // Setting a dial takes the group off Auto; Auto keeps the staff's number.
+      auto: base.auto.filter((g) => g !== group),
+    }
+    set({ career: { ...career, practiceReps: next }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  setRepAuto: (group, auto) => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    if (!repGroupsFor(world, career.teamId).includes(group)) return
+    const base = userWeekReps(world, career)
+    const has = base.auto.includes(group)
+    if (auto === has) return
+    const auto2 = auto ? [...base.auto, group] : base.auto.filter((g) => g !== group)
+    const next: RepWeekState = { ...base, auto: auto2 }
+    set({ career: { ...career, practiceReps: next }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  pickInstall: (play) => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    if (!playInfo(play)) return
+    const base = userWeekReps(world, career)
+    const budget = installBudget(world, career.teamId)
+    const on = base.install.includes(play)
+    // The coordinator's budget is a hard cap: one more concept comes off the list.
+    const list = on ? base.install.filter((n) => n !== play) : [...base.install, play].slice(-budget)
+    if (!on && base.install.includes(play)) return
+    set({ career: { ...career, practiceReps: { ...base, install: list } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  autoRepWeek: () => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    const base = userWeekReps(world, career)
+    const budget = installBudget(world, career.teamId)
+    const next: RepWeekState = {
+      season: base.season,
+      week: base.week,
+      split: autoSplit(world, career.teamId, { short: weekStructure(world, career.teamId, world.week).short }),
+      auto: repGroupsFor(world, career.teamId),
+      install: autoInstall(world, career.teamId, opponentOf(world, career.teamId, world.week), budget),
+      padded: base.padded,
+    }
+    set({ career: { ...career, practiceReps: next }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -5063,6 +5163,51 @@ function applyUserCoaching(career: CareerState | null) {
  * The user's per-game context from their career: `planScope` decides whether
  * they call moments at all, and `unitFocus` narrows a coordinator to one side.
  */
+/**
+ * FUTURES #45: run the league's practice week, once, at the week rollover and
+ * before any game is simulated.
+ *
+ * The user's club runs the split on the card (a group left on Auto uses the
+ * staff's policy); every AI club in the same tier runs the staff's Auto policy
+ * itself — same week structure, same CBA pad budget, same install budget from its
+ * own coordinator. Every man's readiness is written, his load charged and a young
+ * player's reps banked. Returns the per-player soft-tissue map for `healPlayers`.
+ * No rng is drawn anywhere, so the week's draw sequence is unchanged.
+ */
+function runPracticeWeek(world: World, career: CareerState, week: number, repped: RepWeekState | null): Record<string, number> {
+  const risk: Record<string, number> = {}
+  const run = (teamId: string, state: RepWeekState, plan: PracticePlan): number => {
+    const applied = applyPracticeWeek(world, teamId, state.split, {
+      season: state.season,
+      week,
+      plan,
+      paddedLeft: PADDED_CAP - state.padded,
+      install: state.install,
+    })
+    Object.assign(risk, applied.risk)
+    return applied.padded
+  }
+  if (repped) {
+    const booked = run(career.teamId, repped, practicePlan(career, world))
+    repped.padded += booked
+    career.practiceReps = { ...repped }
+  }
+  const tier = world.byId[career.teamId]?.tier
+  world.aiPractice ??= {}
+  for (const t of world.teams) {
+    if (t.id === career.teamId || t.tier !== tier) continue
+    if (!opponentOf(world, t.id, week)) continue
+    const state = aiWeekReps(world, t.id, world.season, week)
+    // The club's own plan: a win-now owner runs pads through the fall, then
+    // everyone is on walkthroughs once the CBA's 14 are spent.
+    const plan: PracticePlan =
+      ownerPersonality(t.id) === 'win-now' && week <= 12 ? 'sharpen' : 'balanced'
+    const booked = run(t.id, state, plan)
+    world.aiPractice[t.id] = { ...state, padded: state.padded + booked }
+  }
+  return risk
+}
+
 export function userCtx(career: CareerState | null): GameCtx | undefined {
   if (!career) return undefined
   const scope = capabilities(career).planScope
@@ -6066,6 +6211,9 @@ function runEndOfRegularSeason(
   // apply, and only for the user's club.
   const locker = career?.lockerRoom
   const mentors = locker && locker.season === world.season ? locker.mentors : undefined
+  // FUTURES #45: a season of banked practice reps becomes whole rating points on
+  // each young player's own focus ratings, before `developPlayers` reads him.
+  convertRepBank(world)
   const retired = developPlayers(
     world,
     career
@@ -8916,6 +9064,23 @@ export async function careerSmoke(
     if (canPractice(career)) {
       const plans: PracticePlan[] = ['install', 'sharpen', 'rest', 'balanced']
       exercise('pickPractice', () => get().pickPractice(plans[(world.week - 1) % plans.length]))
+      // FUTURES #45: split the reps, run one group on Auto, and buy an install
+      // pick (rotating so both the Auto and the chosen paths are exercised).
+      const groups = repGroupsFor(world, career.teamId)
+      const g = groups[world.week % Math.max(1, groups.length)]
+      if (g) {
+        if (world.week % 2 === 0) {
+          exercise('pickRepSplit', () => get().pickRepSplit(g, 0.45))
+          exercise('setRepAuto', () => get().setRepAuto(g, world.week % 4 === 0))
+        } else {
+          exercise('setRepAuto', () => get().setRepAuto(g, true))
+        }
+      }
+      const budget = installBudget(world, career.teamId)
+      const pickList = autoInstall(world, career.teamId, opponentOf(world, career.teamId, world.week), budget)
+      const pick = pickList[world.week % Math.max(1, pickList.length)]
+      if (pick) exercise('pickInstall', () => get().pickInstall(pick))
+      if (world.week % 6 === 0) exercise('autoRepWeek', () => get().autoRepWeek())
     }
     // FUTURES 17: on the bye, run the bye-week plan (cycles so every path runs).
     if (canByeWeek(career) && isByeWeek(world, career.teamId)) {

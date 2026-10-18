@@ -112,6 +112,13 @@ export interface World {
   ir: Record<string, Player[]>
   /** Stored depth-chart order per team and position (ordered player ids). */
   depth?: Record<string, Partial<Record<Position, string[]>>>
+  /**
+   * FUTURES #45: every AI club's practice-rep state for the week just run — the
+   * split the staff Auto policy chose per group, the install picks the
+   * coordinator bought, and the padded practices used this season (CBA cap 14).
+   * Absent on an old save; absent for a club before its first practice week.
+   */
+  aiPractice?: Record<string, import('./practice').AiWeekState>
   /** R6: optional kick/punt returner overrides per club (player ids); unset = auto. */
   returners?: Record<string, { kr?: string; pr?: string }>
   /** NPCs who began the climb the same year you did (#12). */
