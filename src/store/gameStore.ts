@@ -232,6 +232,9 @@ import {
 import { ownerFiringLine, ownerName, ownerPersonality, ownerProfile } from '../game/engine/owner'
 import { speechAftermath, type SpeechId } from '../game/engine/halftimeSpeech'
 import { advanceCoachingTree, backfillAICoordinators, poachAssistant } from '../game/engine/coachingTree'
+// FUTURES #44/#51: coaching careers — age/growth/contracts, mid-season owner
+// firings with an interim head coach, and retired players entering coaching.
+import { advanceCoachCareers, midseasonCoachFirings } from '../game/engine/coachCareer'
 // FUTURES #28 (C2): the staff-market engine hooks — market refresh, contract tick,
 // poach offers, budget gate, buyouts, interim promotion. Kept in one block so the
 // parallel gameStore edit (#15 B) merges cleanly.
@@ -1720,6 +1723,15 @@ export const useGame = create<GameStore>((set, get) => ({
     let qbSwitchLine: string | null = null
     let rbInjuryLine: string | null = null
     let keysRepDelta = 0
+    // FUTURES #44: owners with a bad season pull the trigger mid-season and the
+    // club promotes an interim head coach from its own staff (at most 3 a season,
+    // never the user's own club). Deterministic — no rng draw.
+    for (const n of midseasonCoachFirings(world, week, {
+      userTeamId: career.teamId,
+      userIsHeadCoach: career.path === 'coach' && roleTitle(career) === 'Head Coach',
+    })) {
+      pushCareerNews(world, career, { category: 'League', headline: n.headline, body: n.body })
+    }
     // FUTURES #7 (H2): the halftime speech's aftermath (the men it reached, the
     // record it leaves, the owner's read). Captured here, applied to nextCareer.
     let speechLine: string | null = null
@@ -6748,6 +6760,13 @@ function runEndOfRegularSeason(
     careerNext = {
       ...careerNext,
       contacts: advanceContacts(careerNext.contacts ?? [], rngPeople),
+    }
+    // FUTURES #44: age/grow every coach, bank his season, retire the old ones,
+    // and turn this year's retirees into position coaches (#51). Runs before the
+    // tree so the carousel sees every materialized career.
+    const coachAdvance = advanceCoachCareers(world, careerNext.teamId)
+    for (const n of coachAdvance.news) {
+      pushCareerNews(world, careerNext, { category: 'League', headline: n.headline, body: n.body })
     }
     // FUTURES 21: advance the coaching tree — credit protégés' records, let a
     // struggling head coach go, and maybe see a coordinator hired away.

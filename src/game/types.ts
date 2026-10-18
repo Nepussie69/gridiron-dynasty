@@ -442,6 +442,63 @@ export interface CoachSubs {
   development: number
 }
 
+/** FUTURES #44: one season in a coach's career (a club/role/record line). */
+export interface CoachStop {
+  season: number
+  teamId: string | null
+  /** Club name at the time, so a timeline reads even after a rebrand. */
+  team?: string
+  role: StaffRole
+  rating: number
+  wins: number
+  losses: number
+  /** He finished this season as an interim head coach. */
+  interim?: boolean
+}
+
+/** FUTURES #51: what a coach did as a player, before he started coaching. */
+export interface CoachPlayingCareer {
+  pos: Position
+  /** NFL seasons played (0 = a career that never reached the league). */
+  seasons: number
+  /** Playing overall at retirement (40–99). */
+  ovr: number
+  /** Football IQ at retirement — the sub-ratings a retiree brings as a coach. */
+  awr: number
+  /** The club he finished with, for the "Former player" badge. */
+  teamId?: string
+  team?: string
+  /** The last season he played. */
+  lastSeason?: number
+}
+
+/**
+ * FUTURES #44: a coach's career — how long he has been coaching, how fast he
+ * learns, every stop, his record and (if he played) his playing days. Every
+ * field is derived deterministically for a legacy coach, so an old save shows a
+ * plausible career without a migration; the sheet is materialized at season end.
+ */
+export interface CoachCareer {
+  /** First season he coached (pro or college). */
+  startSeason: number
+  /** Seasons coached, including the one in progress. */
+  seasons: number
+  /** 0.6–1.4: how fast his own sub-ratings move each year. */
+  learning: number
+  /** The age his growth plateaus around (his own curve, 37–47). */
+  peakAge: number
+  /** Head-coaching record only (a coordinator's W-L lives on his stops). */
+  wins: number
+  losses: number
+  rings?: number
+  /** Most recent last (capped at 14 entries). */
+  stops: CoachStop[]
+  /** FUTURES #51: he is a former NFL player. */
+  formerPlayer?: CoachPlayingCareer
+  /** FUTURES #44: the season he was handed the club as its interim head coach. */
+  interim?: { season: number; teamId: string }
+}
+
 export interface StaffMember {
   id: string
   name: string
@@ -452,6 +509,8 @@ export interface StaffMember {
   scheme: string
   /** J9: individual sub-ratings. Absent on old saves — derive via coachSubs(). */
   subs?: CoachSubs
+  /** FUTURES #44/#51: his coaching career. Absent on old saves — derive via coachCareerOf(). */
+  career?: CoachCareer
   /** L11.5 Q8: front-office staff focus (Scout/DPP/GM) — replaces scheme for them. */
   focus?: string
   /** L11.5 Q8: season the focus was last changed (once per season for the user's staff). */
