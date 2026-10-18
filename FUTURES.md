@@ -9,7 +9,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 1a | **Playbook mastery that's real** (`NEXT_PHASE_L12_13.md`) | Realistic starting mastery, learning from snaps + production, relative effects for every unit in the sim, readable tooltip | culture | ✅ merged |
 | 1a2 | **Stars are rare** (`NEXT_PHASE_L12_15.md`) | ~25–32 players at 90+ (one per club), more 80s; rank order kept | contracts | ✅ merged (stars7+8 3322c4c; a few seasons dip to 22–24 at 90+) |
 | 1b | **Real NFL numbers retune** (`NEXT_PHASE_REALISM.md`) | Every team stat to the 2015–2024 NFL averages (passing ~241, comp 64%, sacks 2.4, ypc 4.3, red-zone TD 56% …) | playbook, culture | ✅ merged 2026-10-10 (31/31 bands ×3 seeds; team pass-identity restore is a follow-up) |
-| 2 | **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`) | TV field (yard numbers, blue LOS + yellow 1st-down line, end zones, camera follow, result toasts), scorebug/dock, dark mode, ⌘K, screen passes | current batch merged | ⏳ |
+| 2 | **UI Broadcast 2.0** (`NEXT_PHASE_UI.md`) | TV field (yard numbers, blue LOS + yellow 1st-down line, end zones, camera follow, result toasts), scorebug/dock, dark mode, ⌘K, screen passes | current batch merged | ✅ fut2 2026-10-18 (audit: all present; added phone ⌘K button + screen transitions) |
 | 3 | **Personnel packages** (L13) | 11/12/21/22 personnel vs Base/Nickel/Dime; who's on the field and the matchups that follow | 1 | ✅ merged |
 | 4 | **Special-teams calls** (L13) | Onside kick, fake punt/FG, return strategy; fakes get scouted (tendency memory) | R17 unmerged overlap: AI onside + user/AI fakes; user onside, return strategy and tendency memory remain (`NEXT_PHASE_ST_CALLS.md`) | ✅ merged 2026-10-10 (with realism + real kickoffs) |
 | 5 | **Challenges & replay** | Throw the red flag on close spots, catches, fumbles; lose a timeout if wrong; booth reviews in the last 2 minutes | — | ✅ merged |
@@ -52,7 +52,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 42 | **In-game confidence / hot hand** (user 2026-10-11) | Per-player confidence within a game (a WR who's caught 3 in a row, a CB who got beaten deep) — individual, not a team momentum meter | J7 | ⏳ |
 | 43 | **Rotation control** (user 2026-10-11) | Set DL rotation %, RB committee, snap shares; fatigue-aware | R15 fatigue | ⏳ |
 | 44 | **Coaching careers** (user 2026-10-11) | Coaches gain sub-ratings with experience, have contracts, get poached, fired mid-season, interim HC | J9, #21 | ✅ fut44 2026-10-18 |
-| 45 | **Practice-week reps** (user 2026-10-11) | Split reps starters vs backups: development vs fatigue vs game readiness; install opponent-specific plays | #13 | ⏳ |
+| 45 | **Practice-week reps** (user 2026-10-11) | Split reps starters vs backups: development vs fatigue vs game readiness; install opponent-specific plays | #13 | ✅ fut45 2026-10-18 |
 | 46 | **Player personalities in contracts** (user 2026-10-11) | Money, winning, loyalty, playing time, market; agent behaviour in talks | #11, #12 | ✅ r2personality 2026-10-17 |
 | 47 | **Combine & pro-day measurables** (user 2026-10-11) | 40 time, shuttle, vertical tied to ratings with scouting error, mapped with the real BDB speed proxies | #14 | ✅ futcombine 2026-10-17 |
 | 48 | **Medical staff & sports science** (user 2026-10-11) | Trainer rating shortens injuries; load management | #15 | ⏳ |

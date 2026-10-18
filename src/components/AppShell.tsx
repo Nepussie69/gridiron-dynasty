@@ -614,7 +614,16 @@ function PhoneStrip({ m }: { m: ShellModel }) {
               : 'Schedule'}
         </b>
       </button>
-      <div className="ml-auto flex shrink-0 items-stretch overflow-hidden rounded-[3px] bg-slab text-on-slab [transform:skewX(var(--skew))]">
+      <IconButton
+        size="sm"
+        variant="ghost"
+        className="ml-auto shrink-0"
+        label={`Search screens, players, clubs and actions (${PALETTE_KEYS})`}
+        onClick={openCommandPalette}
+      >
+        <Search size={18} />
+      </IconButton>
+      <div className="flex shrink-0 items-stretch overflow-hidden rounded-[3px] bg-slab text-on-slab [transform:skewX(var(--skew))]">
         {m.coach ? (
           <>
             <button type="button" onClick={() => coach()} className={seg} title="Coach this week's game">
@@ -1100,6 +1109,7 @@ function useAdvanceShortcut() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const m = useShellModel()
+  const screen = useGame((s) => s.screen)
   const toast = useGame((s) => s.toast)
   useAdvanceShortcut()
 
@@ -1124,7 +1134,14 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <main id="main" className="min-w-0 flex-1 overflow-y-auto overscroll-contain">
-          <div className="mx-auto max-w-[1500px] p-4 md:p-6 xl:p-8">{children}</div>
+          {/* U4 "screen pass": keying on the screen id replays a short wipe on
+              navigation (transform/opacity only, so no layout shift; off under
+              reduced motion via .screen-pass / index.css). */}
+          <div className="mx-auto max-w-[1500px] p-4 md:p-6 xl:p-8">
+            <div key={screen} className="screen-pass">
+              {children}
+            </div>
+          </div>
         </main>
       </div>
       <PhoneTabBar />

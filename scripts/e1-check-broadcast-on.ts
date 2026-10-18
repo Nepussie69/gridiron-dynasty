@@ -176,7 +176,7 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
   if (af.getEmergentE1c()) throw new Error('E1c: the toggle did not turn off')
   let offN = 0
   let offBad = 0
-  let firstOff: { play: Play; actors: Map<string, { id: string }> } | null = null
+  const offSamples: { play: Play; actors: Map<string, { id: string }> }[] = []
   for (let g = 0; g < 2 && offN < 40; g++) {
     const home = nfl[(g * 7) % nfl.length].id
     const away = nfl[(g * 7 + 5) % nfl.length].id
@@ -191,16 +191,24 @@ const q1y = (r: { carry: { pts: { y: number }[] } }) => r.carry.pts[r.carry.pts.
       const without = JSON.stringify(pa.buildPlayAnim(strip(play), ctx))
       offN++
       if (withRec !== without) offBad++
-      if (!firstOff) firstOff = { play, actors }
+      if (offSamples.length < 20) offSamples.push({ play, actors })
     }
   }
-  if (firstOff) {
-    // and with the toggle on it must DO something (otherwise the check is vacuous)
+  if (offSamples.length) {
+    // and with the toggle on it must DO something (otherwise the check is vacuous):
+    // most recorded runs must draw differently from their stripped copy
     af.setEmergentE1c(true)
-    const onCtx = { carrierIsQB: byId.get(firstOff.play.carrierId ?? '')?.pos === 'QB', actors: firstOff.actors } as unknown as AnimCtx
-    if (JSON.stringify(pa.buildPlayAnim(firstOff.play, onCtx)) === JSON.stringify(pa.buildPlayAnim(strip(firstOff.play), onCtx))) {
-      throw new Error('E1c: switching the drawing on changed nothing')
+    let onDiff = 0
+    const same: string[] = []
+    for (const s of offSamples) {
+      const onCtx = { carrierIsQB: byId.get(s.play.carrierId ?? '')?.pos === 'QB', actors: s.actors } as unknown as AnimCtx
+      if (JSON.stringify(pa.buildPlayAnim(s.play, onCtx)) !== JSON.stringify(pa.buildPlayAnim(strip(s.play), onCtx))) onDiff++
+      else same.push(`${s.play.playType ?? ''} ${s.play.result ?? ''} ${s.play.yards ?? ''}`.trim())
     }
+    if (onDiff < Math.ceil(offSamples.length * 0.8)) {
+      throw new Error(`E1c: switching the drawing on changed only ${onDiff}/${offSamples.length} recorded runs (same: ${same.slice(0, 5).join('; ')})`)
+    }
+    console.log(`E1c ON: ${onDiff}/${offSamples.length} recorded runs drawn from the field${same.length ? ` (same: ${same.slice(0, 3).join('; ')})` : ''}`)
     af.setEmergentE1c(false)
   }
   console.log(`E1c OFF: ${offN} recorded runs drawn byte-identical without the recorded fields (${offBad} differ); the toggle changes the drawing`)
