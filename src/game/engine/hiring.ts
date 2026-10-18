@@ -9,6 +9,7 @@
 import type { StaffMember } from '../types'
 import { coachEffect } from './coaching'
 import { contractYearsForSalary, staffBuyout } from './staffMarket'
+import { isMedicalRole } from './medicalStaff'
 import type { World } from './generate'
 import { FIRST, LAST } from './names'
 import { noteCoordinatorChange } from './playbook'
@@ -192,9 +193,12 @@ export function openCandidates(
 ): HireCandidate[] {
   // FUTURES 19: the analytics pool is separate (user-only). A fired analyst
   // returns to staffPool, so both sources are merged here.
+  // FUTURES #48: the medical pool joins at the END, so every existing role's list
+  // (and the unfiltered 'all' view) is unchanged for a save without medical hires.
   const pool = [
     ...(world.analyticsPool ?? []).filter((m) => m.status === 'Available' && (!role || m.role === role)),
     ...world.staffPool.filter((m) => m.status === 'Available' && (!role || m.role === role)),
+    ...(world.medicalPool ?? []).filter((m) => m.status === 'Available' && (!role || m.role === role)),
   ]
   const out: HireCandidate[] = []
   for (const m of pool.slice(0, 24)) {
@@ -289,6 +293,10 @@ export function applyHire(
   world.staffPool = world.staffPool.filter((m) => m.id !== candidate.id)
   if (candidate.role === ANALYTICS_ROLE) {
     world.analyticsPool = (world.analyticsPool ?? []).filter((m) => m.id !== candidate.id)
+  }
+  // FUTURES #48: a medical hire leaves the medical market.
+  if (isMedicalRole(candidate.role)) {
+    world.medicalPool = (world.medicalPool ?? []).filter((m) => m.id !== candidate.id)
   }
   // Backlog 185 (fix): a new OC/DC (or a scheme install) resets continuity now, at
   // the moment of the hire — not a season later at the regular-season tick.

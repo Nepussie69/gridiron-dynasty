@@ -20,14 +20,13 @@ import type { World } from './generate'
 import { clamp, hash32 } from './rng'
 import { POS_MEAN } from './ratingMeans'
 import { playerAttrs } from '../data/ratings'
+import { gradeFromPhysician } from './medicalStaff'
 import { playoffPicture } from './playoffs'
 import { ownerPersonality } from './owner'
 
 export type InjuryStatus = 'Q' | 'D' | 'OUT'
 export type InjuryCall = 'play' | 'sit'
 export type MedicalGrade = 'A' | 'B' | 'C' | 'D'
-
-const GRADES: MedicalGrade[] = ['A', 'B', 'C', 'D']
 
 /** How much a grade bends the re-injury risk (A safest, D worst). */
 export const MEDICAL_MULT: Record<MedicalGrade, number> = { A: 0.8, B: 0.9, C: 1, D: 1.25 }
@@ -43,15 +42,14 @@ function mix(id: string, ...salts: number[]): number {
 }
 
 /**
- * The medical staff a club can hire (FUTURES #28): a deterministic A–D grade,
- * fixed by the club with a `cheap` owner one grade lower. `world` is accepted so
- * the signature matches the seam the later hireable-Head-Trainer feature needs.
+ * The medical staff a club can hire (FUTURES #28): a deterministic A–D grade.
+ * FUTURES #48: with a Team Physician in the chair the grade is HIS OWN diagnosis
+ * read (a named man's sheet); a vacant seat reproduces the club's incumbent
+ * training room — the exact hash grade this function has always returned, with a
+ * `cheap` owner one grade lower — so #15's advice and risk are unchanged.
  */
-export function medicalGrade(_world: World | undefined, teamId: string): MedicalGrade {
-  let g = hash32(teamId, 905) % 4
-  // A cost-conscious owner runs a leaner training room, one grade lower.
-  if (ownerPersonality(teamId) === 'cheap') g = Math.min(3, g + 1)
-  return GRADES[g]
+export function medicalGrade(world: World | undefined, teamId: string): MedicalGrade {
+  return gradeFromPhysician(world, teamId)
 }
 
 export function medicalGradeLabel(grade: MedicalGrade): string {

@@ -41,9 +41,15 @@ export function depthAt(world: World, teamId: string, pos: Position): Player[] {
  * the position's healthy depth < STARTERS[pos] ? 0 : 1), then OVR desc.
  */
 export function depthGroup(world: World, teamId: string, positions: Position[], n: number): Player[] {
+  // FUTURES #48: a man the user has held out of THIS week's game (load
+  // management) is not available to the sim. Absent field → no filter at all, so
+  // every AI club and every old save is byte-identical.
+  const rest = world.gameRest && world.gameRest.season === world.season && world.gameRest.week === world.week
+    ? new Set(world.gameRest.ids)
+    : null
   const ranked: { p: Player; rank: number }[] = []
   for (const pos of positions) {
-    const list = depthAt(world, teamId, pos).filter((p) => !p.injured)
+    const list = depthAt(world, teamId, pos).filter((p) => !p.injured && !(rest && rest.has(p.id)))
     const quota = POOLED.includes(pos) && !world.depth?.[teamId]?.[pos] ? 0 : (STARTERS[pos] ?? 1)
     list.forEach((p, i) => ranked.push({ p, rank: i < quota ? 0 : 1 }))
   }

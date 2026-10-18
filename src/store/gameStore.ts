@@ -146,6 +146,23 @@ import { MAX_RED_FLAGS, RED_FLAG_TOP_N, canRedFlag, logRedFlags, redFlagIds, red
 import { DEF_WRINKLES, OFF_WRINKLES, canWrinkle, wrinkleBonus, wrinkleSides } from '../game/engine/wrinkle'
 import { canInstall, installBonus, installSides } from '../game/engine/install'
 import { canPractice, practiceEdge, practiceInjuryMult, practiceIsRest, practiceMasteryMult, PRACTICE_OPTIONS, type PracticePlan } from '../game/engine/practice'
+import {
+  aiWeekReps,
+  applyPracticeWeek,
+  autoSplit,
+  autoInstall,
+  convertRepBank,
+  installBudget,
+  installMasteryMult,
+  opponentOf,
+  playInfo,
+  practicePlan,
+  repGroupsFor,
+  userWeekReps,
+  weekStructure,
+  PADDED_CAP,
+  type RepWeekState,
+} from '../game/engine/practice'
 import { BYE_OPTIONS, byeEdge, byeIsRest, byeLastWeek, byeMasteryMult, canByeWeek, isByeWeek, type ByePlan } from '../game/engine/bye'
 import { canPickKeys, gradeKeys, keysReward, pickableKeys, MAX_KEYS, type GameKeyId, type KeyGrade } from '../game/engine/keys'
 import { canPitch, judgePitch, pitchSide } from '../game/engine/pitch'
@@ -192,6 +209,7 @@ import { applyDraftTradeDown, buildDraftTradeDownOffers, buildDraftTradeUpTarget
 import {
   DEFAULT_PHILOSOPHY,
   PHILOSOPHY_STEPS,
+  roomTilt,
   tradeDownOfferLimit,
   withAxis,
   type DraftPhilosophy,
@@ -215,6 +233,9 @@ import {
 import { ownerFiringLine, ownerName, ownerPersonality, ownerProfile } from '../game/engine/owner'
 import { speechAftermath, type SpeechId } from '../game/engine/halftimeSpeech'
 import { advanceCoachingTree, backfillAICoordinators, poachAssistant } from '../game/engine/coachingTree'
+// FUTURES #44/#51: coaching careers — age/growth/contracts, mid-season owner
+// firings with an interim head coach, and retired players entering coaching.
+import { advanceCoachCareers, midseasonCoachFirings } from '../game/engine/coachCareer'
 // FUTURES #28 (C2): the staff-market engine hooks — market refresh, contract tick,
 // poach offers, budget gate, buyouts, interim promotion. Kept in one block so the
 // parallel gameStore edit (#15 B) merges cleanly.
@@ -268,6 +289,17 @@ import {
   type InjuryRestoreResult,
 } from '../game/engine/injuryCalls'
 import { injuryProbe } from '../game/engine/injuryProbe'
+import { medicalProbe as medicalStaffProbe } from '../game/engine/medicalProbe'
+import {
+  generateMedicalPool,
+  isMedicalRole,
+  loadManagedMult,
+  loadRestIds,
+  preventionFactor,
+  restGameIds,
+  runMedicalWeek,
+  seatFilled,
+} from '../game/engine/medicalStaff'
 import { recordGhostSeason } from '../game/engine/ghost'
 import { makeSeasonQuestion, answerSeasonQuestion, topMoments, fingerprintSummary, seasonHeadline, logMoment } from '../game/engine/recap'
 import { MAX_AMBITIONS, makeAmbitionPool, gradeAmbitions } from '../game/engine/ambitions'
@@ -828,6 +860,8 @@ interface GameStore {
    * gets heard, the GM decides).
    */
   setDraftPhilosophy: (axis: PhilosophyAxis, step: PhilosophyStep) => void
+  /** FUTURES #27: drop the philosophy back to the sim's own middle-step board. */
+  clearDraftPhilosophy: () => void
   /** FUTURES #27 DF4: give AI clubs hashed draft identities (off by default). */
   setAiDraftIdentities: (on: boolean) => void
   /** K1: pick (or clear) this week's game-plan wrinkle for a side. */
@@ -836,6 +870,14 @@ interface GameStore {
   chooseInstall: (plan: 'lean' | 'full') => void
   /** L12 W1: pick this week's practice plan (kept week to week). */
   pickPractice: (plan: PracticePlan) => void
+  /** FUTURES #45: set a position group's starter share of the week's reps (0–1). */
+  pickRepSplit: (group: string, share: number) => void
+  /** FUTURES #45: let the staff split a group's reps (Auto), or take it back. */
+  setRepAuto: (group: string, auto: boolean) => void
+  /** FUTURES #45: add or remove one opponent-specific install pick this week. */
+  pickInstall: (play: string) => void
+  /** FUTURES #45: hand the whole practice week to the staff (every group Auto). */
+  autoRepWeek: () => void
   /** FUTURES 17: pick this bye week's plan (Rest / Install / Self-scout). */
   pickBye: (plan: ByePlan) => void
   /** FUTURES 25: hold the periodic owner meeting and make one ask. */
@@ -861,6 +903,13 @@ interface GameStore {
    * can be sent out; an Out (or IR) player is never a choice.
    */
   setInjuryCall: (playerId: string, call: InjuryCall) => void
+  /**
+   * FUTURES #48: put a man on (or take him off) load management — 'practice'
+   * takes reps off him, 'game' holds him out of this week's game.
+   */
+  toggleLoadRest: (playerId: string, mode: 'practice' | 'game') => void
+  /** FUTURES #48: sign a medical candidate (delegates to the one staff path). */
+  hireMedical: (candidateId: string, salary: number) => void
   pickAmbition: (id: string) => void
   dropAmbition: (id: string) => void
   /** Accept/decline a stretch assignment (#8). */
@@ -1651,6 +1700,12 @@ export const useGame = create<GameStore>((set, get) => ({
     // free agent who most improves their depth chart (their asks having fallen
     // while unsigned), and stale 34+ vets retire (2c).
     runInSeasonFreeAgency(world, career.teamId)
+    // FUTURES #45: the practice week. The user's club splits reps on the card
+    // (Auto groups use the staff's policy); every AI club runs the same Auto
+    // policy. Readiness, the soft-tissue load and the young players' banked reps
+    // are written here, before any game.
+    const repped = canPractice(career) && !isByeWeek(world, career.teamId) ? userWeekReps(world, career) : null
+    const repRisk = runPracticeWeek(world, career, week, repped)
     // Apply the saved pre-game plan to the user's game this week.
     const plan = get().defaultPlan
     const userGameForPlan = world.schedule.find(
@@ -1669,11 +1724,30 @@ export const useGame = create<GameStore>((set, get) => ({
     // clubs pass no recovery, so league-wide injuries are unchanged.
     // FUTURES 17: a Rest bye week heals the club the same way.
     const byeRest = byeIsRest(career, world)
+    // FUTURES #48: the sports-science department's own prevention read, per man.
+    // Absent unless an S&C director is actually in the chair, so a club with a
+    // vacant seat (and every old save) passes no map at all.
+    let prevention: Record<string, number> | undefined
+    if (seatFilled(world, career.teamId, 'Sports Science Director')) {
+      prevention = {}
+      for (const p of world.roster[career.teamId] ?? []) {
+        prevention[p.id] = preventionFactor(world, career.teamId, p)
+      }
+    }
+    // FUTURES #48: load management — the men held out of THIS week's game.
+    const restedThisWeek = restGameIds(career, world.season, week)
+    world.gameRest = restedThisWeek.length
+      ? { season: world.season, week, ids: [...restedThisWeek] }
+      : undefined
     const recovery: WeekRecovery = {
       teamId: career.teamId,
       injuryMult: practiceInjuryMult(career, world),
       restHeal: practiceIsRest(career, world) || byeRest,
       fatigueRelief: practiceIsRest(career, world) || byeRest,
+      // FUTURES #45: each man's own soft-tissue load from the reps he took.
+      risk: repRisk,
+      // FUTURES #48: the S&C director's own read, per man (no league averages).
+      prevention,
     }
     // Authentic mode runs the whole league through play-by-play in a worker,
     // falling back to the fast allocator if the worker is unavailable.
@@ -1687,6 +1761,15 @@ export const useGame = create<GameStore>((set, get) => ({
     let qbSwitchLine: string | null = null
     let rbInjuryLine: string | null = null
     let keysRepDelta = 0
+    // FUTURES #44: owners with a bad season pull the trigger mid-season and the
+    // club promotes an interim head coach from its own staff (at most 3 a season,
+    // never the user's own club). Deterministic — no rng draw.
+    for (const n of midseasonCoachFirings(world, week, {
+      userTeamId: career.teamId,
+      userIsHeadCoach: career.path === 'coach' && roleTitle(career) === 'Head Coach',
+    })) {
+      pushCareerNews(world, career, { category: 'League', headline: n.headline, body: n.body })
+    }
     // FUTURES #7 (H2): the halftime speech's aftermath (the men it reached, the
     // record it leaves, the owner's read). Captured here, applied to nextCareer.
     let speechLine: string | null = null
@@ -1716,7 +1799,12 @@ export const useGame = create<GameStore>((set, get) => ({
       // FUTURES #37: the user's game feeds the QB–receiver and adjacent-OL pair
       // chemistry (its real shared reps); AI games accrue a nominal game in simWeek.
       accrueGameChemistry(world, sim)
-      growPlaybookFromGame(world, sim, practiceMasteryMult(career, world) * byeMasteryMult(career, world), career.teamId)
+      growPlaybookFromGame(
+        world,
+        sim,
+        practiceMasteryMult(career, world) * byeMasteryMult(career, world) * installMasteryMult(career.practiceReps?.install ?? [], installBudget(world, career.teamId)),
+        career.teamId,
+      )
       // L10 G8: every user snap feeds the tendency book opponents will exploit.
       updateUserBook(world, sim, career.teamId)
       // FUTURES #4: record the game's special-teams surprises for opponent scouting.
@@ -1952,6 +2040,55 @@ export const useGame = create<GameStore>((set, get) => ({
         }
       }
       for (const n of r.news) pushCareerNews(world, nextCareer, { category: 'Injury', headline: n.headline, body: n.body })
+    }
+    // FUTURES #48: the club's medical week. The training room's rehab is applied
+    // to every fresh injury, the Team Physician may clear a man a week early, and
+    // any lingering (early-cleared) tissue that played this week can tear again.
+    // Hash-only and user-club-only: a vacant room is a complete no-op, so the
+    // league, the fast sim and every old save are untouched.
+    {
+      const clubGame = world.schedule.find((g) => g.week === week && (g.homeId === career.teamId || g.awayId === career.teamId))
+      const med = runMedicalWeek(world, career, week, {
+        played: !!clubGame,
+        restedIds: restedThisWeek,
+      })
+      if (med.career.medical) nextCareer = { ...nextCareer, medical: med.career.medical }
+      for (const ev of med.events) {
+        const last = ev.name.split(' ').slice(-1)[0]
+        if (ev.kind === 'early-clear') {
+          nextCareer = logMoment(nextCareer, {
+            week,
+            text: `${ev.name} was cleared early from his ${ev.note.toLowerCase()} — the training room expects him Sunday.`,
+            tone: 'info',
+          })
+        } else if (ev.kind === 're-injury') {
+          nextCareer = logMoment(nextCareer, {
+            week,
+            text: `${last}'s ${ev.note.toLowerCase()} went again — out ${ev.games} more ${ev.games === 1 ? 'game' : 'games'}.`,
+            tone: 'loss',
+          })
+        } else if (ev.kind === 'rehab-shortened') {
+          nextCareer = logMoment(nextCareer, {
+            week,
+            text: `${ev.name} is ahead of schedule on his ${ev.note.toLowerCase()} — back in ${ev.games} ${ev.games === 1 ? 'game' : 'games'}.`,
+            tone: 'info',
+          })
+        }
+      }
+      if (med.events.length) {
+        const early = med.events.filter((e) => e.kind === 'early-clear')
+        const again = med.events.filter((e) => e.kind === 're-injury')
+        if (early.length || again.length) {
+          pushCareerNews(world, nextCareer, {
+            category: 'Injury',
+            headline: again.length ? `${again.length} setback${again.length === 1 ? '' : 's'} in the training room` : 'Cleared ahead of schedule',
+            body: [
+              ...early.map((e) => `${e.name} (${e.note.toLowerCase()}) cleared early`),
+              ...again.map((e) => `${e.name} — ${e.note.toLowerCase()} re-injured, out ${e.games}`),
+            ].join('. '),
+          })
+        }
+      }
     }
     // The week's ONE big decision (#2). Generated from the new week's state.
     nextCareer = { ...nextCareer, dilemma: currentDilemma(world, nextCareer) ?? undefined }
@@ -2463,6 +2600,7 @@ export const useGame = create<GameStore>((set, get) => ({
     // L12 W1/W2: the weekly practice plan, the keys you promised and the
     // season's leadership ledger all belong to the season that set them.
     seasonCareer.practice = undefined
+    seasonCareer.practiceReps = undefined
     seasonCareer.bye = undefined
     seasonCareer.keys = undefined
     seasonCareer.keysLedger = undefined
@@ -2935,6 +3073,19 @@ export const useGame = create<GameStore>((set, get) => ({
     get().save()
   },
 
+  /**
+   * FUTURES #27: clear the philosophy back to today's board (the middle step of
+   * every axis). Same gate as setting it; the room still argues on screen.
+   */
+  clearDraftPhilosophy: () => {
+    const career = get().career
+    if (!career) return
+    if (!canAdvise(career, 'draft') && !canDecide(career, 'draft')) return
+    set({ career: { ...career, draftPhilosophy: undefined }, tick: get().tick + 1 })
+    get().showToast('Draft philosophy cleared — the board runs as it always did.')
+    get().save()
+  },
+
   setAiDraftIdentities: (on) => {
     const career = get().career
     if (!career) return
@@ -2985,6 +3136,67 @@ export const useGame = create<GameStore>((set, get) => ({
       prev = { plan: current.plan, week: world.week - 1 }
     }
     set({ career: { ...career, practice: { plan, week: world.week, season: world.season, prev } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  // ── FUTURES #45: the practice-rep split, the Auto policy and the install ────
+  pickRepSplit: (group, share) => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    if (!repGroupsFor(world, career.teamId).includes(group)) return
+    const base = userWeekReps(world, career)
+    const v = clamp(Math.round(share * 20) / 20, 0.3, 0.95)
+    const next: RepWeekState = {
+      ...base,
+      split: { ...base.split, [group]: v },
+      // Setting a dial takes the group off Auto; Auto keeps the staff's number.
+      auto: base.auto.filter((g) => g !== group),
+    }
+    set({ career: { ...career, practiceReps: next }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  setRepAuto: (group, auto) => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    if (!repGroupsFor(world, career.teamId).includes(group)) return
+    const base = userWeekReps(world, career)
+    const has = base.auto.includes(group)
+    if (auto === has) return
+    const auto2 = auto ? [...base.auto, group] : base.auto.filter((g) => g !== group)
+    const next: RepWeekState = { ...base, auto: auto2 }
+    set({ career: { ...career, practiceReps: next }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  pickInstall: (play) => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    if (!playInfo(play)) return
+    const base = userWeekReps(world, career)
+    const budget = installBudget(world, career.teamId)
+    const on = base.install.includes(play)
+    // The coordinator's budget is a hard cap: one more concept comes off the list.
+    const list = on ? base.install.filter((n) => n !== play) : [...base.install, play].slice(-budget)
+    if (!on && base.install.includes(play)) return
+    set({ career: { ...career, practiceReps: { ...base, install: list } }, tick: get().tick + 1 })
+    get().save()
+  },
+
+  autoRepWeek: () => {
+    const career = get().career
+    if (!career || !canPractice(career)) return
+    const base = userWeekReps(world, career)
+    const budget = installBudget(world, career.teamId)
+    const next: RepWeekState = {
+      season: base.season,
+      week: base.week,
+      split: autoSplit(world, career.teamId, { short: weekStructure(world, career.teamId, world.week).short }),
+      auto: repGroupsFor(world, career.teamId),
+      install: autoInstall(world, career.teamId, opponentOf(world, career.teamId, world.week), budget),
+      padded: base.padded,
+    }
+    set({ career: { ...career, practiceReps: next }, tick: get().tick + 1 })
     get().save()
   },
 
@@ -3272,6 +3484,35 @@ export const useGame = create<GameStore>((set, get) => ({
     else delete calls[playerId]
     set({ career: { ...career, injuryCalls: calls }, tick: get().tick + 1 })
     get().save()
+  },
+
+  /**
+   * FUTURES #48: load management. `mode: 'practice'` adds/removes a man from the
+   * practice load-management plan (his own reps are pulled and his soft-tissue
+   * load drops from this week on); `mode: 'game'` holds him out of THIS week's
+   * game. Both are the user's own club only, both are free to change.
+   */
+  toggleLoadRest: (playerId, mode) => {
+    const career = get().career
+    if (!career) return
+    const p = (world.roster[career.teamId] ?? []).find((x) => x.id === playerId)
+    if (!p) return
+    if (mode === 'game') {
+      const cur = restGameIds(career, world.season, world.week)
+      const ids = cur.includes(playerId) ? cur.filter((id) => id !== playerId) : [...cur, playerId]
+      set({ career: { ...career, restGame: { season: world.season, week: world.week, ids } }, tick: get().tick + 1 })
+    } else {
+      const cur = loadRestIds(career, world.season)
+      const ids = cur.includes(playerId) ? cur.filter((id) => id !== playerId) : [...cur, playerId]
+      set({ career: { ...career, loadRest: { season: world.season, ids } }, tick: get().tick + 1 })
+    }
+    get().save()
+  },
+
+  hireMedical: (candidateId, salary) => {
+    // FUTURES #48: the medical market hires through the same offer path as any
+    // other staff seat (interest, budget, buyout, dead money) — one system.
+    get().hireStaff(candidateId, salary)
   },
 
   pickAmbition: (id) => {
@@ -4580,9 +4821,16 @@ export const useGame = create<GameStore>((set, get) => ({
       }
     }
     if (!prospect) {
+      // FUTURES #27: the clock running out is an auto pick — your vector at 0.7
+      // plus the room's at 0.3, exactly like the sim's own auto path.
       prospect =
-        bestAvailableFor(world, career.teamId, undefined, (p) => departmentGrade(world, career, p) ?? p.grade) ??
-        undefined
+        bestAvailableFor(
+          world,
+          career.teamId,
+          undefined,
+          (p) => departmentGrade(world, career, p) ?? p.grade,
+          roomTilt(world, career, { auto: true }),
+        ) ?? undefined
     }
     if (!prospect) return
     get().draftProspect(prospect.id)
@@ -4677,6 +4925,9 @@ export const useGame = create<GameStore>((set, get) => ({
     // user-only pool so the Analytics market keeps listing them (never the AI's).
     const open = { ...m, teamId: null, status: 'Available' as const }
     if (m.role === ANALYTICS_ROLE) world.analyticsPool = [...(world.analyticsPool ?? []), open]
+    // FUTURES #48: a fired medical man returns to the medical market, not the
+    // coaching one, so the seat keeps listing him (never the AI's).
+    else if (isMedicalRole(m.role)) world.medicalPool = [...(world.medicalPool ?? []), open]
     else world.staffPool.push(open)
     if (buyout > 0) {
       const per = Math.floor(buyout / buyoutYears)
@@ -5063,6 +5314,63 @@ function applyUserCoaching(career: CareerState | null) {
  * The user's per-game context from their career: `planScope` decides whether
  * they call moments at all, and `unitFocus` narrows a coordinator to one side.
  */
+/**
+ * FUTURES #45: run the league's practice week, once, at the week rollover and
+ * before any game is simulated.
+ *
+ * The user's club runs the split on the card (a group left on Auto uses the
+ * staff's policy); every AI club in the same tier runs the staff's Auto policy
+ * itself — same week structure, same CBA pad budget, same install budget from its
+ * own coordinator. Every man's readiness is written, his load charged and a young
+ * player's reps banked. Returns the per-player soft-tissue map for `healPlayers`.
+ * No rng is drawn anywhere, so the week's draw sequence is unchanged.
+ */
+function runPracticeWeek(world: World, career: CareerState, week: number, repped: RepWeekState | null): Record<string, number> {
+  const risk: Record<string, number> = {}
+  const run = (teamId: string, state: RepWeekState, plan: PracticePlan): number => {
+    const applied = applyPracticeWeek(world, teamId, state.split, {
+      season: state.season,
+      week,
+      plan,
+      paddedLeft: PADDED_CAP - state.padded,
+      install: state.install,
+    })
+    Object.assign(risk, applied.risk)
+    return applied.padded
+  }
+  if (repped) {
+    const booked = run(career.teamId, repped, practicePlan(career, world))
+    repped.padded += booked
+    career.practiceReps = { ...repped }
+  }
+  // FUTURES #48: load management. A man the user has put on the plan takes a
+  // lighter week — his own soft-tissue load drops, so his injury threshold drops
+  // with it. The S&C director's own prevention read decides how much the week
+  // actually buys. User club only; no rng draw, and nothing at all when the list
+  // is empty (which is every club but the user's).
+  for (const id of loadRestIds(career, world.season)) {
+    const p = world.players.find((x) => x.id === id && x.teamId === career.teamId)
+    if (!p) continue
+    const cut = loadManagedMult(world, career.teamId, p)
+    p.repRisk = (p.repRisk ?? 1) * cut
+    risk[p.id] = (risk[p.id] ?? 1) * cut
+  }
+  const tier = world.byId[career.teamId]?.tier
+  world.aiPractice ??= {}
+  for (const t of world.teams) {
+    if (t.id === career.teamId || t.tier !== tier) continue
+    if (!opponentOf(world, t.id, week)) continue
+    const state = aiWeekReps(world, t.id, world.season, week)
+    // The club's own plan: a win-now owner runs pads through the fall, then
+    // everyone is on walkthroughs once the CBA's 14 are spent.
+    const plan: PracticePlan =
+      ownerPersonality(t.id) === 'win-now' && week <= 12 ? 'sharpen' : 'balanced'
+    const booked = run(t.id, state, plan)
+    world.aiPractice[t.id] = { ...state, padded: state.padded + booked }
+  }
+  return risk
+}
+
 export function userCtx(career: CareerState | null): GameCtx | undefined {
   if (!career) return undefined
   const scope = capabilities(career).planScope
@@ -5441,6 +5749,8 @@ export function migrateWorld(w: World): World {
   w.staffTenureRef ??= {}
   // FUTURES 19: legacy saves get the deterministic analyst market (no rng draw).
   w.analyticsPool ??= generateAnalyticsPool(w.seed)
+  // FUTURES #48: legacy saves get the deterministic medical market (no rng draw).
+  w.medicalPool ??= generateMedicalPool(w.seed)
   // FUTURES #29: the future-classes overlay is optional; an empty one is dropped
   // so a legacy save and a modern one behave identically. Real overlays are
   // consumed by `promoteNextClass` at the next rollover.
@@ -6066,6 +6376,9 @@ function runEndOfRegularSeason(
   // apply, and only for the user's club.
   const locker = career?.lockerRoom
   const mentors = locker && locker.season === world.season ? locker.mentors : undefined
+  // FUTURES #45: a season of banked practice reps becomes whole rating points on
+  // each young player's own focus ratings, before `developPlayers` reads him.
+  convertRepBank(world)
   const retired = developPlayers(
     world,
     career
@@ -6600,6 +6913,13 @@ function runEndOfRegularSeason(
     careerNext = {
       ...careerNext,
       contacts: advanceContacts(careerNext.contacts ?? [], rngPeople),
+    }
+    // FUTURES #44: age/grow every coach, bank his season, retire the old ones,
+    // and turn this year's retirees into position coaches (#51). Runs before the
+    // tree so the carousel sees every materialized career.
+    const coachAdvance = advanceCoachCareers(world, careerNext.teamId)
+    for (const n of coachAdvance.news) {
+      pushCareerNews(world, careerNext, { category: 'League', headline: n.headline, body: n.body })
     }
     // FUTURES 21: advance the coaching tree — credit protégés' records, let a
     // struggling head coach go, and maybe see a coordinator hired away.
@@ -8916,6 +9236,23 @@ export async function careerSmoke(
     if (canPractice(career)) {
       const plans: PracticePlan[] = ['install', 'sharpen', 'rest', 'balanced']
       exercise('pickPractice', () => get().pickPractice(plans[(world.week - 1) % plans.length]))
+      // FUTURES #45: split the reps, run one group on Auto, and buy an install
+      // pick (rotating so both the Auto and the chosen paths are exercised).
+      const groups = repGroupsFor(world, career.teamId)
+      const g = groups[world.week % Math.max(1, groups.length)]
+      if (g) {
+        if (world.week % 2 === 0) {
+          exercise('pickRepSplit', () => get().pickRepSplit(g, 0.45))
+          exercise('setRepAuto', () => get().setRepAuto(g, world.week % 4 === 0))
+        } else {
+          exercise('setRepAuto', () => get().setRepAuto(g, true))
+        }
+      }
+      const budget = installBudget(world, career.teamId)
+      const pickList = autoInstall(world, career.teamId, opponentOf(world, career.teamId, world.week), budget)
+      const pick = pickList[world.week % Math.max(1, pickList.length)]
+      if (pick) exercise('pickInstall', () => get().pickInstall(pick))
+      if (world.week % 6 === 0) exercise('autoRepWeek', () => get().autoRepWeek())
     }
     // FUTURES 17: on the bye, run the bye-week plan (cycles so every path runs).
     if (canByeWeek(career) && isByeWeek(world, career.teamId)) {
@@ -9975,6 +10312,18 @@ export function injuryCallProbe(n = 1200) {
   const career = useGame.getState().career
   if (!career) return { error: 'no career' }
   return injuryProbe(world, career, n)
+}
+
+/**
+ * Dev-only probe (FUTURES #48): the medical-staff report for the LIVE career,
+ * exposed to the browser as `__medicalProbe(weeks)` and to the node acceptance
+ * probe as `store.medicalProbe()`. Pure — every mutation happens on a clone, so
+ * the live career is never touched.
+ */
+export function medicalProbe(weeks = 18) {
+  const career = useGame.getState().career
+  if (!career) return { error: 'no career' }
+  return medicalStaffProbe(world, career, weeks)
 }
 
 /**

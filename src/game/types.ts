@@ -264,7 +264,14 @@ export interface Player {
   /** Backlog 408 (2c): weeks this free agent has been unsigned this season. Drives
    *  his falling ask; absent on a legacy save (treated as 0). */
   faWeeks?: number
-  injured?: { games: number; note: string }
+  injured?: {
+    games: number
+    note: string
+    /** FUTURES #48: the club's own rehab has already been applied to this one. */
+    medDone?: boolean
+    /** FUTURES #48: the physician cleared him a week earlier than the tissue wanted. */
+    early?: boolean
+  }
   /**
    * L15 (FUTURES #15): set only for the duration of a game the user chose to play
    * him hurt. Moves the injury into `hurtSaved` so the sim sees him as available.
@@ -316,6 +323,31 @@ export interface Player {
    * empty for every player the user has not given a focus.
    */
   devRatings?: Record<string, number>
+  /**
+   * FUTURES #45: this week's practice-rep execution bonus, keyed by rating. Set
+   * fresh every week by `applyPracticeWeek` (a heavy-rep player is sharp, a
+   * rested one is a little rusty) and merged by `playerAttrs` the same way
+   * `devRatings` is — it never touches `ovr`. Optional: an old save has none, so
+   * it loads and plays exactly as before.
+   */
+  snapReady?: Record<string, number>
+  /**
+   * FUTURES #45: this season's fractional practice-rep development bank, keyed by
+   * the young player's own focus ratings. Converted to whole `repDev` points at
+   * season end (like the dev-plan bank), so nothing drifts mid-season.
+   */
+  repBank?: Record<string, number>
+  /** FUTURES #45: whole practice-rep development points (added by `playerAttrs`). */
+  repDev?: Record<string, number>
+  /**
+   * FUTURES #48: a tissue the club's physician cleared early is still healing.
+   * Set when an early clearance happens; while it is set the man is available but
+   * carries his own re-injury risk (his own ratings, not the club's). Clears
+   * itself after `weeks`, or on the re-injury it causes. Old saves have none.
+   */
+  lingering?: { note: string; weeks: number }
+  /** FUTURES #45: this week's own soft-tissue load (1 = normal) for the heal step. */
+  repRisk?: number
   /**
    * FUTURES #8 (clutch): a season drift (±15) on the player's late-and-close
    * clutch read, set by `seasonClutchAdjust` (P3). Optional and unused by the
@@ -403,6 +435,29 @@ export type StaffRole =
   | 'Director of Player Personnel'
   | 'General Manager'
   | 'Analytics'
+  // FUTURES #48: medical seats. Market-only, like 'Analytics' and the WR/LB
+  // coach seats — never added to NFL_STAFF_ROLES/generateStaffPool, so no world's
+  // rng draw order changes and no AI club ever holds one.
+  | 'Head Athletic Trainer'
+  | 'Team Physician'
+  | 'Sports Science Director'
+
+/**
+ * FUTURES #48: a medical staffer's own sub-ratings, 0–99 — the training-room
+ * equivalent of a coach's J9 sheet. Each in-season medical effect reads exactly
+ * one of these, from the one man who owns that duty, never a club average:
+ *   rehab       Head Athletic Trainer — how fast a man is brought back to play
+ *   diagnosis   Team Physician — how reliably he is cleared (a poor doctor
+ *               clears him a week early and the tissue tears again)
+ *   prevention  Sports Science Director — load management and soft-tissue risk
+ * An old save has no `med`; `medicalSubs()` derives the same sheet from the
+ * man's own id + rating, so nothing migrates.
+ */
+export interface MedicalSubs {
+  rehab: number
+  diagnosis: number
+  prevention: number
+}
 
 /**
  * J9 (FUTURES #32): a coach's individual sub-ratings, 0–99, the staff equivalent
@@ -428,6 +483,63 @@ export interface CoachSubs {
   development: number
 }
 
+/** FUTURES #44: one season in a coach's career (a club/role/record line). */
+export interface CoachStop {
+  season: number
+  teamId: string | null
+  /** Club name at the time, so a timeline reads even after a rebrand. */
+  team?: string
+  role: StaffRole
+  rating: number
+  wins: number
+  losses: number
+  /** He finished this season as an interim head coach. */
+  interim?: boolean
+}
+
+/** FUTURES #51: what a coach did as a player, before he started coaching. */
+export interface CoachPlayingCareer {
+  pos: Position
+  /** NFL seasons played (0 = a career that never reached the league). */
+  seasons: number
+  /** Playing overall at retirement (40–99). */
+  ovr: number
+  /** Football IQ at retirement — the sub-ratings a retiree brings as a coach. */
+  awr: number
+  /** The club he finished with, for the "Former player" badge. */
+  teamId?: string
+  team?: string
+  /** The last season he played. */
+  lastSeason?: number
+}
+
+/**
+ * FUTURES #44: a coach's career — how long he has been coaching, how fast he
+ * learns, every stop, his record and (if he played) his playing days. Every
+ * field is derived deterministically for a legacy coach, so an old save shows a
+ * plausible career without a migration; the sheet is materialized at season end.
+ */
+export interface CoachCareer {
+  /** First season he coached (pro or college). */
+  startSeason: number
+  /** Seasons coached, including the one in progress. */
+  seasons: number
+  /** 0.6–1.4: how fast his own sub-ratings move each year. */
+  learning: number
+  /** The age his growth plateaus around (his own curve, 37–47). */
+  peakAge: number
+  /** Head-coaching record only (a coordinator's W-L lives on his stops). */
+  wins: number
+  losses: number
+  rings?: number
+  /** Most recent last (capped at 14 entries). */
+  stops: CoachStop[]
+  /** FUTURES #51: he is a former NFL player. */
+  formerPlayer?: CoachPlayingCareer
+  /** FUTURES #44: the season he was handed the club as its interim head coach. */
+  interim?: { season: number; teamId: string }
+}
+
 export interface StaffMember {
   id: string
   name: string
@@ -438,6 +550,11 @@ export interface StaffMember {
   scheme: string
   /** J9: individual sub-ratings. Absent on old saves — derive via coachSubs(). */
   subs?: CoachSubs
+  /** FUTURES #48: a medical seat's own sheet (Trainer/Physician/S&C). Absent on
+   *  old saves and for non-medical roles — derive via medicalSubs(). */
+  med?: MedicalSubs
+  /** FUTURES #44/#51: his coaching career. Absent on old saves — derive via coachCareerOf(). */
+  career?: CoachCareer
   /** L11.5 Q8: front-office staff focus (Scout/DPP/GM) — replaces scheme for them. */
   focus?: string
   /** L11.5 Q8: season the focus was last changed (once per season for the user's staff). */
@@ -777,6 +894,13 @@ export interface CareerState {
   draftPhilosophy?: import('./engine/draftRoom').DraftPhilosophy & { season: number }
   /** FUTURES #27 DF4: give AI clubs hashed draft identities (off by default). */
   aiDraftIdentities?: boolean
+  /**
+   * FUTURES #27 DF2: how many times the room has already moved your club off the
+   * clock this draft. A room hoards picks, it does not trade away its whole class:
+   * the cap keeps an Accumulate draft NFL-real (a club that works the phones still
+   * makes most of its own selections). Optional — an old save starts at zero.
+   */
+  draftRoomMoves?: { season: number; count: number }
   /** K1: this week's game-plan wrinkle per side, plus the last few weeks of film. */
   wrinkles?: {
     season: number
@@ -793,6 +917,13 @@ export interface CareerState {
     /** L12 W1: the plan in effect the previous week, for Install's next-week payoff. */
     prev?: { plan: 'balanced' | 'sharpen' | 'install' | 'rest'; week: number }
   }
+  /**
+   * FUTURES #45: this week's practice-rep split per position group, the groups the
+   * staff splits on Auto, this week's install picks, and the padded-practice
+   * counter that the CBA's 14-practice in-season cap runs on. Optional — a legacy
+   * save has none, and an unset week is the staff's Auto policy.
+   */
+  practiceReps?: import('./engine/practice').PracticeRepsState
   /** FUTURES 17: this season's bye-week plan (payoff lands the following week). */
   bye?: {
     plan: import('./engine/bye').ByePlan
@@ -893,6 +1024,20 @@ export interface CareerState {
    * old save (and a user who never opens the card) has none.
    */
   injuryCalls?: Record<string, 'play' | 'sit'>
+  /**
+   * FUTURES #48: load management. Men you have put on a practice load-management
+   * plan — their own reps are pulled and their soft-tissue load drops — and the
+   * men held out of a specific week's game. Both optional: an old save (and a
+   * coach who never touches the toggles) has none and plays as before.
+   */
+  loadRest?: { season: number; ids: string[] }
+  restGame?: { season: number; week: number; ids: string[] }
+  /**
+   * FUTURES #48: this season's medical events (early clearances, re-injuries,
+   * rehab gains), the source of the injury timeline and the probe's counters.
+   * Optional and capped; an old save simply has no history.
+   */
+  medical?: { season: number; log: import('./engine/medicalStaff').MedEvent[] }
   /** The boss who is shaping you (#11). */
   mentor?: { name: string; philosophy: string; teamId: string }
   /** People you developed who now run their own programs (#11, FUTURES 21). */

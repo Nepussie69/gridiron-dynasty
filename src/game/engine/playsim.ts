@@ -686,6 +686,7 @@ function cohesionMult(mean: number | undefined, coh: number | undefined, factor:
 
 import type { World } from './generate'
 import { clamp, hash32, makeRng, type Rng } from './rng'
+import { paceFor } from './pace'
 import { situationalPassRate, getSituational, type SituationInput } from './situational'
 import { J9, centeredSub, coachMeanRating, getCoachSubs } from './coachSubs'
 import { CHEM, getJ37, skillValue, skillRel, skillCentre, olHandoffChem } from './chemistry'
@@ -702,6 +703,15 @@ import { EMERGENT_E3, emergentPassSet } from './emergentRush'
 // `EMERGENT.on`, and the replaced rng() draws are still consumed at the same
 // point in the stream.
 import { EMERGENT, emergentRun } from './emergent'
+// REALISM2 #3 (r2fumbles): fumbles & ball security from the actual hit. OFF by
+// default; when on, the run-carry / catch-strip / muff / strip-sack chances come
+// off the real contact (closing speed, angle, the pile, the hitter's own HPW/TAK
+// against the carrier's BCV/STR/CAR + carry style) and the loose ball is
+// recovered by a bounce model (whoever reaches it first on the field). OFF is
+// byte-identical: nothing below is entered unless `R2FUM.on`, and every replaced
+// threshold still consumes the same rng() draw at the same point.
+import { R2FUM, bounceRecovery, catchFumbleChance, contactFor, fallbackSpot, hitRatings, muffChance2, runFumbleChance, stripSackChance } from './emergentFumbles'
+export { setR2Fumbles, getR2Fumbles, R2FUM } from './emergentFumbles'
 
 // ── R2: NFL 2015–2024 base constants ─────────────────────────────────────────
 // The real-league retune lives in ONE small block of base knobs. Every relative
@@ -5417,8 +5427,35 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R16: a strip sack forces a fumble. A proximity hash decides who falls on it
     // (the rusher is usually on top of the ball, so the defence recovers more).
     // The result keeps the "Sack" prefix so it is still counted as a sack.
-    const strip = h01(`${n}:${defId}:strip`) < R16.stripSackRate
-    const recovery = strip ? fumbleRecovery(`${n}:${defId}:striprec`, R16.stripOffRecover) : undefined
+    // r2fumbles: the strip chance comes off the E3 pass set — the man who actually
+    // won his rep, how early he was home against the QB's own clock, his own
+    // HPW/TAK, a free run — against the QB's own ball security (CAR/AWR/TUP). The
+    // hash below (`:strip`) is the same draw in both modes: only its threshold
+    // moves. OFF: the flat `R16.stripSackRate`.
+    const r2fS = R2FUM.on
+      ? stripSackChance({
+          rusher: sackId ? [...dl, ...lbs, ...cbs].find((p) => p.id === sackId) : undefined,
+          qb: passer,
+          tHome: pb?.credit && typeof e3?.tHome === 'number' ? e3.tHome : undefined,
+          qbT: typeof e3?.qbT === 'number' ? e3.qbT : undefined,
+          free: !!pb?.freeRusher,
+          wx: env?.wx?.fumbleMult ?? 1, scout: 1,
+        })
+      : R16.stripSackRate
+    const strip = h01(`${n}:${defId}:strip`) < r2fS
+    // r2fumbles: the bounce model falls on the loose ball (no recorded paths in
+    // the pocket: each man gets a deterministic pile position, the sacker his
+    // pounce, the offence the ball squirts back toward them).
+    const r2fSack = strip && R2FUM.on
+      ? bounceRecovery({
+          key: `${n}:${defId}:striprec`, spot: fallbackSpot(n, defId, yard + y), carrierId: passer?.id,
+          forcerId: sackId,
+          offence: [passer, ol[0], ol[1], ol[2], ol[3], ol[4], rb, teOff, fb].filter((p): p is Player => !!p),
+          defence: [...dl, ...lbs, ...cbs],
+          fat: env?.fat,
+        })
+      : undefined
+    const recovery = strip ? (r2fSack?.side ?? fumbleRecovery(`${n}:${defId}:striprec`, R16.stripOffRecover)) : undefined
     const lost = strip && recovery === 'def'
     const result = !strip ? (blitz ? 'Sack (blitz)' : 'Sack') : lost ? 'Sack, forced Fumble!' : 'Sack, Fumble recovered by the offence'
     return {
@@ -6194,18 +6231,65 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     // R16: the ball can still come loose on a clean stop — a big-hit strip, or the
     // receiver's own bobble (a muff). Either way a proximity hash decides who falls
     // on it; the offence keeps roughly half of all loose balls.
-    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < (R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)) * (env?.wx?.fumbleMult ?? 1) * (target && scoutFumbleId === target.id ? scoutFumbleMult : 1)
-    const muff = !strip && gain > 0 && yard + gain < 100 && h01(`${n}:${offId}:muff`) < muffChance(target?.pos, tA) * (env?.wx?.muffMult ?? 1)
+    // r2fumbles: the strip comes off the actual contact — the field's stop man's
+    // closing speed and angle (E1b's recorded paths) with his own HPW/TAK against
+    // the receiver's own BCV/STR/CAR and style; his own CTH and body decide the
+    // muff. OFF: `R2.passFumbleBase + tacklerHitPower` and the plain `muffChance`,
+    // both on the same draws (`tu`, `:muff`) in the same place.
+    const r2fP = R2FUM.on && target
+      ? (() => {
+          const pool = [...cbs, ...saf, ...lbs]
+          const hitMan = stopper ? pool.find((p) => p.id === stopper) : undefined
+          const rr = hitRatings(hitMan)
+          const cp = carryPathOut
+          return {
+            contact: contactFor({
+              n, defId, carryPath: cp, paths: fieldPathsOut, hitId: stopper,
+              defIds: pool.map((p) => p.id), dt: EMERGENT.dt,
+              hitSpeedYps: hitMan ? paceFor(hitMan, hitMan.pos).top : 6.5,
+              carrierSpeedYps: paceFor(target, target.pos).top,
+            }),
+            hitPow: rr.pow,
+            hitTak: rr.tak,
+            hitId: hitMan?.id,
+            spot: cp && cp.length ? cp[cp.length - 1] : fallbackSpot(n, defId, yard + gain),
+          }
+        })()
+      : undefined
+    const strip = !!stopper && !missedTackleIds && gain > 0 && yard + gain < 100 && tu < (r2fP
+      ? catchFumbleChance({
+          wx: env?.wx?.fumbleMult ?? 1,
+          scout: target && scoutFumbleId === target.id ? scoutFumbleMult : 1,
+          pos: target?.pos, a: tA, power: tStyle.power,
+          hitPow: r2fP.hitPow, hitTak: r2fP.hitTak, c: r2fP.contact,
+        })
+      : (R2.passFumbleBase + tacklerHitPower(stopper, tacklerGroups)) * (env?.wx?.fumbleMult ?? 1) * (target && scoutFumbleId === target.id ? scoutFumbleMult : 1))
+    const muff = !strip && gain > 0 && yard + gain < 100 && h01(`${n}:${offId}:muff`) < (r2fP
+      ? muffChance2(target?.pos, tA, tStyle.power)
+      : muffChance(target?.pos, tA)) * (env?.wx?.muffMult ?? 1)
     const loose = strip || muff
-    const recovery = loose ? fumbleRecovery(`${n}:${offId}:passrec`, R16.offRecover) : undefined
+    // r2fumbles: the bounce model decides who fell on it (a ball out of the chalk
+    // is dead and stays with the offence). OFF: the proximity hash.
+    const r2fPrec = loose && r2fP
+      ? bounceRecovery({
+          key: `${n}:${offId}:passrec`, spot: r2fP.spot, carrierId: target?.id, forcerId: r2fP.hitId,
+          offence: [target, ...wrs, rb, teOff, fb, ...ol].filter((p): p is Player => !!p),
+          defence: [...lbs, ...dl, ...saf, ...cbs],
+          paths: fieldPathsOut, fat: env?.fat,
+        })
+      : undefined
+    const recovery = loose ? (r2fPrec?.side ?? fumbleRecovery(`${n}:${offId}:passrec`, R16.offRecover)) : undefined
     const lost = loose && recovery === 'def'
     // R6: a loose ball is scooped and returned for a TD ~7–8% of the time
     // (deterministic hash, no rng), but only when the defence recovers it.
     const fumTD = lost && h01(`${n}:${defId}:passtd`) < 0.085
     // The returner is the defender on the stop; a receiver-only muff has no
     // stopper, so fall back to a nearby defender for the scoring credit.
+    // r2fumbles: when the bounce model decided it, the man it put on the ball is
+    // the man who scoops and returns it.
     const fumTDScorer = fumTD
-      ? (stopper ?? hashPick([...cbs, ...saf, ...lbs], (p) => Math.max(1, mkAttrs(p).TAK ?? 70), hash32(`${n}:${defId}:passtdrec`))?.id)
+      ? (r2fPrec?.winnerId ? [...lbs, ...dl, ...cbs, ...saf].find((p) => p.id === r2fPrec?.winnerId)?.id : undefined)
+        ?? (stopper ?? hashPick([...cbs, ...saf, ...lbs], (p) => Math.max(1, mkAttrs(p).TAK ?? 70), hash32(`${n}:${defId}:passtdrec`))?.id)
       : undefined
     const baseResult = fumTD ? 'Fumble returned for a TOUCHDOWN!'
       : lost ? (muff ? 'Muffed catch — Fumble!' : 'Fumble!')
@@ -6701,9 +6785,58 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
   // squirts out. Threshold only, so no rng() draw is added or removed.
   const glMult = yard >= R16.goalLineYard ? R16.goalLineMult : 1
-  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1) * (J36_ON && carrier?.id === scoutFumbleId ? scoutFumbleMult : 1)
+  // ── r2fumbles: ball security from the actual hit ──────────────────────────
+  // The man the field credited with the stop is the man who hit the ball: his
+  // own contact (closing speed and approach angle read off the recorded field
+  // paths, plus the pile around the carrier) and his own HPW/TAK decide the
+  // chance together with the carrier's BCV/STR/CAR and carry style. With the
+  // toggle OFF (`R2FUM.on` false) `r2f` is undefined and the threshold below is
+  // the legacy chain, byte for byte — the same `rng()` draw in both cases.
+  const r2f = R2FUM.on
+    ? (() => {
+        const pool = [...lbs, ...dl, ...saf, ...cbs]
+        const hitMan = e1?.tacklerId ? pool.find((p) => p.id === e1.tacklerId) : undefined
+        const cp = e1?.carryPath
+        const rr = hitRatings(hitMan)
+        return {
+          contact: contactFor({
+            n, defId, carryPath: cp, paths: e1?.fieldPaths, hitId: e1?.tacklerId,
+            defIds: pool.map((p) => p.id), dt: EMERGENT.dt,
+            hitSpeedYps: hitMan ? paceFor(hitMan, hitMan.pos).top : 6.5,
+            carrierSpeedYps: carrier ? paceFor(carrier, carrier.pos).top : 7,
+          }),
+          hitPow: rr.pow,
+          hitTak: rr.tak,
+          hitId: hitMan?.id,
+          spot: cp && cp.length ? cp[cp.length - 1] : fallbackSpot(n, defId, yard + gain),
+        }
+      })()
+    : undefined
+  const fumble = rng() < (r2f
+    ? runFumbleChance({
+        base: R2.runFumbleBase, glMult, cohesion: fumbleMult,
+        wx: env?.wx?.fumbleMult ?? 1,
+        scout: J36_ON && carrier?.id === scoutFumbleId ? scoutFumbleMult : 1,
+        pos: carrier?.pos, a: cA, power: cStyle.power,
+        hitPow: r2f.hitPow, hitTak: r2f.hitTak, c: r2f.contact,
+      })
+    : R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1) * (J36_ON && carrier?.id === scoutFumbleId ? scoutFumbleMult : 1))
   // R16: a proximity hash decides who falls on it; goal-line piles lean defence.
-  const recovery = fumble ? fumbleRecovery(`${n}:${defId}:runrec`, yard >= R16.goalLineYard ? R16.goalLineOffRecover : R16.offRecover) : undefined
+  // r2fumbles: with the toggle on the bounce model puts the first man to the ball
+  // on it — the recorded positions decide, and a ball that rolls out of the chalk
+  // is dead (the fumbling club keeps it), as it is in the real game ~9% of the
+  // time. The hash fallback below is only used when the model yields no winner.
+  const r2fRec = fumble && r2f
+    ? bounceRecovery({
+        key: `${n}:${defId}:runrec`, spot: r2f.spot, carrierId: carrier?.id, forcerId: r2f.hitId,
+        offence: [carrier, ol[0], ol[1], ol[2], ol[3], ol[4], te, te2, fb, rb[0], rb[1]].filter((p): p is Player => !!p),
+        defence: [...lbs, ...dl, ...saf, ...cbs],
+        paths: e1?.fieldPaths, fat: env?.fat,
+      })
+    : undefined
+  const recovery = fumble
+    ? (r2fRec?.side ?? fumbleRecovery(`${n}:${defId}:runrec`, yard >= R16.goalLineYard ? R16.goalLineOffRecover : R16.offRecover))
+    : undefined
   const lost = fumble && recovery === 'def'
   // T2M: an outside run in the two-minute drill can reach the sideline. The
   // runner steps out, so there is no defender to credit and the clock stops.
@@ -6797,10 +6930,13 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   let recoverer: Player | undefined
   if (lost) {
     const pool = [...lbs, ...dl, ...cbs, ...saf]
-    recoverer = hashPick(pool, (p) => {
-      const a = mkAttrs(p)
-      return Math.max(1, (a.TAK ?? 70) * 0.6 + (a.PUR ?? 70) * 0.4)
-    }, hash32(`${n}:${defId}:fumrec`))
+    // r2fumbles: the man the bounce model put on the ball is the man who scoops
+    // and returns it (he was already the first to reach it). OFF: the hash pick.
+    recoverer = (r2fRec?.winnerId ? pool.find((p) => p.id === r2fRec?.winnerId) : undefined)
+      ?? hashPick(pool, (p) => {
+        const a = mkAttrs(p)
+        return Math.max(1, (a.TAK ?? 70) * 0.6 + (a.PUR ?? 70) * 0.4)
+      }, hash32(`${n}:${defId}:fumrec`))
     fumbleTD = h01(`${n}:${defId}:fumtd`) < 0.085
   }
   const baseResult = fumbleTD ? 'Fumble returned for a TOUCHDOWN!'

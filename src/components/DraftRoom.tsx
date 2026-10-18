@@ -17,11 +17,11 @@ import { useState } from 'react'
 import { cn } from '../lib/cn'
 import type { RoomSeat } from '../game/engine/draftRoom'
 import { useGame, useWorld } from '../store/gameStore'
-import { Avatar, Badge, Button, Card, RatingTile, SectionTitle, Sheet, VerdictChip } from '../ui/kit'
+import { Avatar, Badge, Button, Card, RatingTile, SectionTitle, SegmentedControl, Sheet, VerdictChip } from '../ui/kit'
 import { Delta } from '../ui/Kpi'
 import { usePhone } from '../ui/hooks'
 import { DraftStanceChips } from './DraftPhilosophyCard'
-import { consensusLine, roomView, type RoomRow } from './draftRoomUi'
+import { aiIdentityView, consensusLine, roomView, type RoomRow } from './draftRoomUi'
 
 function AuthorityBar({ pct, held }: { pct: number; held: boolean }) {
   return (
@@ -111,10 +111,12 @@ function SeatBlock({ row, phone }: { row: RoomRow; phone: boolean }) {
 export function DraftRoom({ className }: { className?: string }) {
   const world = useWorld()
   const career = useGame((s) => s.career)
+  const setAiDraftIdentities = useGame((s) => s.setAiDraftIdentities)
   const phone = usePhone()
   const [open, setOpen] = useState(false)
   if (!career) return null
   const view = roomView(world, career)
+  const ai = aiIdentityView(world, career)
   const tradeLabel = view.accumulating ? `${view.tradeStep} — the room will take a deal` : view.tradeStep
 
   return (
@@ -203,6 +205,60 @@ export function DraftRoom({ className }: { className?: string }) {
               ? 'No card has gone in yet this draft. Who won the room is written here — and graded two seasons on.'
               : 'Set the philosophy for this draft to put the room on the board.'}
           </p>
+        )}
+      </div>
+
+      {/* FUTURES #27 DF4: the other 31 rooms. Off by default — today's league. */}
+      <div className="mt-2 rounded-[var(--r-md)] border border-line px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <Users size={14} className="shrink-0 text-muted" aria-hidden />
+          <span className="label">AI draft identities</span>
+          <SegmentedControl
+            label="AI draft identities"
+            size="sm"
+            className="ml-auto"
+            value={ai.on ? 'on' : 'off'}
+            onChange={(v) => setAiDraftIdentities(v === 'on')}
+            options={[
+              { id: 'off', label: 'Off', title: 'Every AI club keeps the board it runs today (his GM’s own style)' },
+              { id: 'on', label: 'On', title: 'Every AI club’s whole room carries its own stance — no two boards alike' },
+            ]}
+          />
+        </div>
+        <p className="mt-1 text-micro leading-snug text-muted">
+          {ai.on ? (
+            <>
+              All 31 other rooms argue their own board: <b className="font-600 text-ink-2">{ai.distinct}</b> distinct blended
+              stances, <b className="font-600 text-ink-2">{ai.withStance}</b> clubs with a stance of their own —{' '}
+              {ai.need} lean Need, {ai.bpa} lean BPA. Every club’s numbers come from its own people, never a league average.
+            </>
+          ) : (
+            <>
+              Off: an AI club drafts off its GM’s own style (FUTURES #49) and the rest of its room does not tilt the board.
+              Turn it on and every club’s whole room — scouting director, personnel director, AGM, GM, head coach,
+              coordinator — argues its own stance.
+            </>
+          )}
+        </p>
+        {ai.on && (
+          <div className="mt-2 space-y-1.5">
+            {ai.clubs.slice(0, 3).map((club) => (
+              <div key={club.teamId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-cond text-small font-700 uppercase tracking-[0.04em] text-ink">{club.abbr}</span>
+                <span className="min-w-0 truncate text-micro text-muted">{club.gm}</span>
+                <span className="ml-auto inline-flex flex-wrap items-center gap-1">
+                  {club.chips.slice(0, 2).map((c) => (
+                    <span key={c.axis} title={`${c.label}: ${c.step}`}>
+                      <VerdictChip tone="neutral">{c.step}</VerdictChip>
+                    </span>
+                  ))}
+                  {club.chips.length > 2 && (
+                    <span className="font-cond text-micro font-700 uppercase text-faint">+{club.chips.length - 2}</span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
