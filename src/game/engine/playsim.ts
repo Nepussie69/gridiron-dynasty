@@ -43,6 +43,9 @@ import { officiate, replayRead, challengeThreshold, aiThrows, resolveChallenge, 
 import type { PlayReview, PendingReview, ChallengeState } from './review'
 import { getWeather, wxEffects, WX, WX_CENTER, type GameWeather, type WxEffects } from './weather'
 import { clutchEdge, kickClutch } from './clutch'
+// FUTURES #42: the individual in-game confidence / hot hand (its own const object,
+// its own toggle `setHotHand`, zero rng draws — see hotHand.ts).
+import { getHotHand, hotPassEdge, hotKickEdge, hotCarrySecurity, hotTargetScore, applyPlayConfidence, applyKickConfidence, type HotMap } from './hotHand'
 import { getIndividual, positionRating } from './individual'
 import { buildScoutReport, weaknessEdge, primaryTag, type ScoutFinding } from './scoutReport'
 import {
@@ -1458,6 +1461,10 @@ export interface Play {
   /** R15: the scrimmage players on the field for this snap (offence / defence ids). */
   onFieldOff?: string[]
   onFieldDef?: string[]
+  // ── FUTURES #42: in-game confidence (hot hand) ─────────────────────────────
+  /** The net confidence movement this play caused, per player id (absent when
+   *  nothing moved) — the fold the UI chip and the probe read. */
+  hot?: HotMap
   // ── J8a2: the run-defence read loop (animation) ────────────────────────────
   /** J8a2: the front defender whose read (gap fit) decided the run. */
   readKeyId?: string
@@ -3428,6 +3435,10 @@ export interface PlayOutcome {
   onFieldOff?: string[]
   /** R15: the scrimmage defenders actually on the field for this snap (ids). */
   onFieldDef?: string[]
+  // ── FUTURES #42: in-game confidence (hot hand) ─────────────────────────────
+  /** The net confidence movement this play caused, per player id (absent when
+   *  nothing moved). The UI and the probe fold these into the live map. */
+  hot?: HotMap
   /** J8a2: the front defender whose read decided the run (animation). */
   readKeyId?: string
   /** J8a2: the run defenders who bit on the misdirection / play-action key. */
@@ -3730,6 +3741,10 @@ interface SimEnv {
   wx?: WxEffects
   /** FUTURES #7: the decided halftime speech per club (Q3+ edge), if any. */
   speech?: Record<string, SpeechOutcome>
+  // ── FUTURES #42: in-game confidence (hot hand) ─────────────────────────────
+  /** Live per-player in-game confidence (−1 cold … +1 hot), read by the
+   *  resolvers so each man's own streak moves his own execution. */
+  hot?: HotMap
 }
 
 /**
@@ -5164,6 +5179,9 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       - (Math.max(1, rn) - 1) * TARGET_DIST.readStep
       - routeDepthPen
       + def + r * TARGET_DIST.noise
+      // FUTURES #42: the QB/coordinator lean on the receiver who is hot today
+      // (his OWN in-game confidence; 0 when neutral or with the layer off).
+      + hotTargetScore(env?.hot, c)
   }
   const scored = wrs.map((w) => {
     const a = mkAttrs(w)
@@ -5210,6 +5228,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const onRbScore = TARGET_DIST.tau * Math.log(targetBase(rb.pos, 0))
       + targetQuality(rb.pos, a, concept.depth, rawOvr) + rbTerm + rbDef
       - TARGET_DIST.routeDepthW * Math.max(0, routeDepthYd(rbRoute) - TARGET_DIST.depthRef)
+      // FUTURES #42: a back who is hot today sees a couple more targets.
+      + hotTargetScore(env?.hot, rb)
     scored.push({ w: rb, score: targetDistOn ? onRbScore : offScore, r: -1 })
   }
   // L12.10 B0: a fullback is an occasional flat/checkdown target (handled below).
@@ -5769,6 +5789,12 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // FUTURES #6: a deep ball (depth >= 15) in the wind is harder to complete.
   // Centred multiplier (exactly 1 when weather is off); no rng draw is added.
   if (concept.depth >= 15) compProb = clamp(compProb * (env?.wx?.deepCatchMult ?? 1), 0.42, 0.74)
+  // FUTURES #42: in-game confidence — the thrower's, the target's and the cover
+  // man's OWN today's form, each on his own composure and centred on what his
+  // role normally carries (the league's measured level), so the league's own
+  // numbers hold while the individual spread moves. No rng draw is added.
+  const hotP = hotPassEdge(env?.hot, passer, target, coverPlayer)
+  if (hotP.comp) compProb = clamp(compProb + hotP.comp, MU.compMin, MU.compMax)
   // J7: the individual covering defender (and the LB/S-on-receiver mismatch)
   // moves the completion window directly; centred by MU_CENTER.comp so the
   // league completion rate is unchanged. The outer clamp only widens the range
@@ -5878,7 +5904,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   // multiplier is correlated with the play's own pick rate (backup QBs and rookies carry
   // BOTH the fresh pairs and the high pick rates), so the INT leg is centred on its own
   // `CHEM.intShift` — measured with J37_STAT so the league's mean pick rate holds.
-  const intPre = R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1) * (hb ? hb.intMult : 1)
+  const intPre = R2.intBase * (1 - (qAccuracy - coverage) / 300) * intSkillTerm * planOverrides.intMult * (1 - clutch * 0.03) * (env?.intMult ?? 1) * (weakCb ? 1.15 : 1) * qbIntMult(qbA, concept.depth) * (1 - fatDiff * R15.fatInt) * (concept.depth >= 15 ? (env?.wx?.deepIntMult ?? 1) : 1) * coverIntMult * (1 + disgAdj * J12.foolInt) * scoutIntMult * (1 + vEye) * (featuredOn() && concept.featured ? featuredIntMult(concept.featured, target, concept.featuredRelief ?? 1) : 1) * (throwAwayNow ? THROW_CFG.throwAwayInt : 1) * (hb ? hb.intMult : 1) * hotP.intMult
   // J52: a busted read throws into a closing window — the pick chance rises; a
   // converted route throws to a receiver in phase with his QB, so it falls a
   // little. One relative multiplier, centred on the league's measured mean read
@@ -6663,7 +6689,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // R16: the doorstep is the classic fumble spot — the pile is bigger and the ball
   // squirts out. Threshold only, so no rng() draw is added or removed.
   const glMult = yard >= R16.goalLineYard ? R16.goalLineMult : 1
-  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1) * (J36_ON && carrier?.id === scoutFumbleId ? scoutFumbleMult : 1)
+  const fumble = rng() < R2.runFumbleBase * glMult * (1 - cStyle.power * 0.2) * rbCarrySecurity(carrier?.pos, cA) * fumbleMult * (env?.wx?.fumbleMult ?? 1) * (J36_ON && carrier?.id === scoutFumbleId ? scoutFumbleMult : 1) * hotCarrySecurity(env?.hot, carrier)
   // R16: a proximity hash decides who falls on it; goal-line piles lean defence.
   const recovery = fumble ? fumbleRecovery(`${n}:${defId}:runrec`, yard >= R16.goalLineYard ? R16.goalLineOffRecover : R16.offRecover) : undefined
   const lost = fumble && recovery === 'def'
@@ -6827,7 +6853,11 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
     // to ±3 points. Exactly 0 outside late-and-close and when clutch is off, and
     // it rides the existing probability comparison (no new rng draw).
     const clutchFg = kickClutch(world, offId, { qtr: env?.qtr ?? 0, clock: env?.clock ?? 9999, margin })
-    const made = rng() < fgProb(yard, power) + (env?.wx?.kickMakeAdd ?? 0) + clutchFg
+    // FUTURES #42: the kicker's OWN in-game confidence (his own last kicks,
+    // above what a kicker normally carries) moves his make chance by up to
+    // ±2.5 points. Exactly 0 when neutral or with the layer off, and it rides
+    // the existing comparison (no new rng draw).
+    const made = rng() < fgProb(yard, power) + (env?.wx?.kickMakeAdd ?? 0) + clutchFg + hotKickEdge(env?.hot, k)
     const blocked = h01(`${n}:${offId}:fgblock`) < R17.blockFg
     const good = made && !blocked
     return {
@@ -7378,6 +7408,9 @@ export interface GameState {
   speech?: Record<string, SpeechOutcome>
   /** The speech card has been resolved this halftime. */
   speechDone?: boolean
+  // ── FUTURES #42: in-game confidence (hot hand) ─────────────────────────────
+  /** Per-player in-game confidence (absent = neutral; never persisted). */
+  hot: HotMap
 }
 
 const MAX_PLAYS = 210
@@ -7783,7 +7816,7 @@ function stepHalftimePhase(world: World, s: GameState): 'continue' | 'moment' {
 // ── L10 G7: two-minute drill, timeouts, clock moment ─────────────────────────
 function envFor(s: GameState): SimEnv {
   const margin = s.offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
-  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId), speech: s.speech }
+  return { adjust: s.adjust, qbOverride: s.qbOverride, down: s.down, intMult: s.twoMinMode === 'hurry' ? 1.15 : 1, qtr: s.qtr, clock: s.clock, margin, hurry: s.twoMinMode === 'hurry', userTeamId: s.ctx?.userTeamId, matchups: s.ctx?.matchups, usage: s.ctx?.usage, personnel: s.ctx?.personnel, cohesionOff: s.cohesion?.[s.offId]?.off, cohesionMeanOff: s.cohesionMean?.off, fat: STAMINA_ON ? s.fat : undefined, wind: s.wind, wx: wxFor(s, s.offId === s.homeId), speech: s.speech, hot: getHotHand() ? s.hot : undefined }
 }
 
 /** FUTURES #6: the centred weather effects for one offence (undefined = neutral). */
@@ -8085,6 +8118,8 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     weather,
     review: null,
     challenges: { [homeId]: { left: 2, won: 0, lost: 0 }, [awayId]: { left: 2, won: 0, lost: 0 } },
+    // FUTURES #42: every game starts with every man neutral.
+    hot: {},
   }
   s.defId = s.offId === homeId ? awayId : homeId
   // Backlog 149 follow-up: snapshot the active K/P for each club now, while the
@@ -8266,6 +8301,10 @@ function applyScrimmageOutcome(
   defId: string,
   defCall: DefCall | undefined,
 ): 'continue' | 'done' {
+  // FUTURES #42: move the involved men's OWN in-game confidence for this snap
+  // (before the play is pushed, so the play's drive-start test sees the previous
+  // play). Deterministic from the resolved outcome — no rng draw.
+  applyPlayConfidence(s, out, offId)
   // G7 tempo and timeouts: a used timeout caps this play's clock burn at 6s.
   const tempoMult = s.twoMinMode === 'hurry' ? 0.45 : s.twoMinMode === 'protect' ? 1.25 : 1
   let t = out.timeUsed * s.pace * baseTimeScale(world, offId) * tempoMult
@@ -8447,6 +8486,7 @@ function snapshotFor(s: GameState): ReviewSnapshot {
     n: s.n,
     userDrive: s.userDrive,
     fat: { ...s.fat },
+    hot: { ...s.hot },
     stats: { home: { ...s.stats.home }, away: { ...s.stats.away } },
   }
 }
@@ -8471,6 +8511,7 @@ function restoreSnapshot(s: GameState, snap: ReviewSnapshot): void {
   s.n = snap.n
   s.userDrive = snap.userDrive
   s.fat = { ...snap.fat }
+  if (snap.hot) s.hot = { ...snap.hot }
   s.stats = { home: { ...snap.stats.home }, away: { ...snap.stats.away } }
 }
 
@@ -8653,6 +8694,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       fgS.points += 3
       fgS.fgMade += 1
     }
+    // FUTURES #42: the kicker's own in-game confidence moves with his own kicks.
+    applyKickConfidence(world, s, out, offId)
     pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: s.down, distance: s.distance })
     restartAfterFieldGoal(s, good)
     return 'continue'
@@ -9017,6 +9060,8 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
         fgS.points += 3
         fgS.fgMade += 1
       }
+      // FUTURES #42: the kicker's own in-game confidence moves with his own kicks.
+      applyKickConfidence(world, s, out, offId)
       pushPlay(s, { ...out, startYard: s.yard, endYard: s.yard, down: 4, distance: s.distance })
       restartAfterFieldGoal(s, good)
       return 'continue'
