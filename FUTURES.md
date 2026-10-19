@@ -49,7 +49,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 39 | **Hard counts** (user 2026-10-11) | QB cadence vs each DL's discipline → offsides/false starts per player | J8d | ⏳ |
 | 40 | **Kicker & punter traits** (user 2026-10-11) | Leg strength vs accuracy vs wind handling; directional and coffin-corner punting; return-man decisions | W2, J8d | ⏳ |
 | 41 | **In-game injuries by player** (user 2026-10-11) | Injury proneness per player, contact type, next man up from the depth chart, play through pain | #15 | ⏳ |
-| 42 | **In-game confidence / hot hand** (user 2026-10-11) | Per-player confidence within a game (a WR who's caught 3 in a row, a CB who got beaten deep) — individual, not a team momentum meter | J7 | ⏳ |
+| 42 | **In-game confidence / hot hand** (user 2026-10-11) | Per-player confidence within a game (a WR who's caught 3 in a row, a CB who got beaten deep) — individual, not a team momentum meter | J7 | ✅ fut42 2026-10-19 |
 | 43 | **Rotation control** (user 2026-10-11) | Set DL rotation %, RB committee, snap shares; fatigue-aware | R15 fatigue | ⏳ |
 | 44 | **Coaching careers** (user 2026-10-11) | Coaches gain sub-ratings with experience, have contracts, get poached, fired mid-season, interim HC | J9, #21 | ✅ fut44 2026-10-18 |
 | 45 | **Practice-week reps** (user 2026-10-11) | Split reps starters vs backups: development vs fatigue vs game readiness; install opponent-specific plays | #13 | ✅ fut45 2026-10-18 |
