@@ -329,7 +329,7 @@ export function GamePlanScreen() {
           <UsageCard disabled={readOnly} />
           <SpecialTeamsCard disabled={readOnly} />
           <HalftimeSpeechCard disabled={readOnly} />
-          <TrickPlaysCard disabled={readOnly} />
+          <TrickPlaysCard disabled={readOnly} oppId={opp?.id} />
         </div>
       </section>
 

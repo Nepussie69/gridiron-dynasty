@@ -15,8 +15,11 @@
 //   surprise = fit(situation, defCall) · (1 − alert) · gameDecay · (1 − 0.2·read)
 //   edge     = −3 + 9·surprise + 1 when the trick is installed this week
 //
-// `TRICK.aiRate` is 0 in T1: the AI never calls a trick (the calibration harness
-// and every AI-vs-AI game are untouched). T4 owns turning it on.
+// `TRICK.aiRate` is T4: the AI calls tricks at NFL rates, scaled by the specific
+// coordinator's own play-calling sub and aggression (never a league/unit mean),
+// by the situation (a run-heavy stretch, midfield, trailing) and cut when the
+// league has seen the call. The gate is a pure hash after the concept draw, so
+// the rng stream is untouched by the decision itself.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { clamp, hash32 } from './rng'
@@ -24,7 +27,8 @@ import { playerAttrs } from '../data/ratings'
 import { positionRating } from './individual'
 import { POS_MEAN } from './ratingMeans'
 import { conceptFromPlaybook, type SimConcept } from '../data/playbookData'
-import type { Player } from '../types'
+import { COACH_SUBS_FLOOR, coachSubs, getCoachSubs } from './coachSubs'
+import type { Player, StaffMember } from '../types'
 import type { World } from './generate'
 import type { DefCall } from './decisions'
 import type { STTeamRecord } from './specialCalls'
@@ -133,9 +137,59 @@ export const TRICK = {
   hbCompMax: 0.12,
   /** Extra sack chance a trick snap carries on top of the shared model — the long
    *  mesh / slow-developing misdirection holds the ball longer. Trick-only. */
-  sackExtra: { flea: 0.055, hbpass: 0, reverse: 0, fakespike: 0.015 } as Record<TrickKind, number>,
-  /** T4 turns AI tricks on. T1 ships with the AI never calling one. */
-  aiRate: 0,
+  sackExtra: { flea: 0.02, hbpass: 0, reverse: 0, fakespike: 0.015 } as Record<TrickKind, number>,
+  // ── T4: the AI's trick appetite ────────────────────────────────────────────
+  /**
+   * T4: per-eligible-snap AI rates at a league-average coordinator. The nominal
+   * eligible snaps are `aiSnaps`, so the nominal league total is Σ rate·snaps ≈
+   * 0.037 tricks per team-game; the situation multipliers lift the realized rate to
+   * ≈ 0.045 per team-game (≈ 0.75 per 17-game team-season). NFL truth (nflverse
+   * 2021–25, 160 team-seasons): flea 22 + reverse 19 + RB pass 39 = 80 plays =
+   * 0.50 per team-SEASON ≈ 0.03 per team-game; description-regex detection
+   * undercounts (end-arounds, unlabelled fakes), so the target is up to ~2x that
+   * (0.5–1.0 per team-season). Fake punts are a separate #4 system.
+   */
+  aiRate: { flea: 0.00022, reverse: 0.00022, hbpass: 0.00025, fakespike: 0.0007 } as Record<TrickKind, number>,
+  /** Nominal eligible snaps per team-game (a fixed reference for the rate and the
+   *  staff estimate — never a roster/unit average). */
+  aiSnaps: { flea: 60, reverse: 55, hbpass: 40, fakespike: 2 } as Record<TrickKind, number>,
+  /** The fixed staff-scale reference (a coordinator at 68 — the generated staff's
+   *  own scale centre — adds nothing). A hard-coded constant like the J38 centres,
+   *  never read from the world, and the deviation is the coach's alone. */
+  coachRef: 68,
+  /** How much his own play-calling sub and his own aggression move the rate. */
+  appPcW: 0.018,
+  appAggW: 0.014,
+  appLo: 0.32,
+  appHi: 1.9,
+  /** Situation multipliers — the look the call needs. */
+  sitRunHeavy: 1.35, // 3+ runs in the last 4 offensive snaps: the fake is set up
+  sitRunLast: 1.12, // the previous snap was a run of 3+ yards
+  sitMidfield: 1.2, // own 30 … own 70
+  sitBackedUp: 0.65, // own 15 or worse
+  sitTrailing: 1.2,
+  sitTrailingBig: 1.25, // two scores down — multiplied into sitTrailing
+  sitLeading: 0.78, // leading by 8+
+  sitThird: 0.6,
+  sitBlowout: 0.5, // 21+ either way
+  sitHurry: 0.7,
+  /** The 2nd trick of a game is called at this share; the same trick again at this. */
+  callDecaySecond: 0.5,
+  callDecaySame: 0.2,
+  /** A scouted club's rate is cut by this share of `trickAlert`. */
+  alertCut: 0.5,
+  /** Games in a season, for the staff estimate. */
+  seasonGames: 17,
+  /**
+   * T4: whether the E1 emergent pursuit field owns the yards on a trick RUN
+   * (the reverse). The field's anchor is the *calibrated* CDF gain and its
+   * stop-short branch regresses that anchor toward zero, which destroys the
+   * reverse's own bimodal model (measured: E1 ON −1.8 ypc / 71% loss, E1 OFF
+   * 9.2 ypc / 53% loss in the same world). T1's trick model owns the trick
+   * outcome, so the field is bypassed on a trick snap. Only `call.trick` snaps
+   * read this — the neutral sim is untouched.
+   */
+  fieldOnTrick: false,
 } as const
 
 // ── Scouting memory (extends the FUTURES #4 store — no new save field) ────────
@@ -502,7 +556,7 @@ export function trickCarrierElusiveness(p: Player): number {
 // strung out for a loss. Every term comes from the specific men on the rep — the
 // thrower's own arm, the reverse carrier's own legs, the read pair's own
 // AWR/PRC/SPD — never a unit mean. These functions run ONLY on a trick snap (the
-// `call.trick` guard in `playsim.ts`), so the neutral sim is byte-identical.
+// `call.trick` guard in `playsim.ts`); every non-trick snap is untouched.
 
 /** The trick snap's identity handed to the resolvers (built in `playsim.step`). */
 export interface TrickSnap {
@@ -513,6 +567,19 @@ export interface TrickSnap {
   readValue: number
   /** The men whose own read decided it (film / probe / animation). */
   readIds: string[]
+  /**
+   * T4: a per-snap salt for the trick's own deterministic draws. A plain
+   * `${n}:${offId}` key repeats across every game at the same play index, so a
+   * rare call clustered on a few indices would decide its own outcome the same
+   * way in every game (a systematic bias). The salt folds in the clock, field
+   * and score, which differ game to game at the same snap. No rng draw.
+   */
+  salt: string
+}
+
+/** T4: the per-snap salt the trick draws hang off (see `TrickSnap.salt`). */
+export function trickSalt(s: GameState, offId: string): string {
+  return `${offId}:${s.n}:${s.qtr}:${s.clock}:${s.yard}:${s.down}:${s.distance}:${s.homeScore}-${s.awayScore}`
 }
 
 export interface TrickPassOut {
@@ -554,9 +621,15 @@ export function trickPassOverride(t: TrickSnap, passAir: number, arm: number, ta
     // YPA follows the window (10–12) instead of the shared ~11-yd completion.
     const open = clamp(0.45 * t.surprise + 0.55 * (1 - rf), 0, 1)
     const air = Math.max(passAir, TRICK.fleaAirFloor)
-    const compProb = clamp(0.20 + 0.76 * open + (a - 0.5) * 0.08, 0.06, 0.92)
-    const intProb = clamp(0.092 - 0.075 * t.surprise - 0.09 * (open - 0.5), 0.006, 0.30)
-    const gainAdd = Math.round(air * (0.80 + 0.55 * open) + clamp(targetSpdRel, -25, 25) * 0.2)
+    // The deep window: a biting front / dull secondary leaves it wide (comp → ~0.9
+    // and a 30-yd shot), a sharp pair that reads the pitch back closes it (comp →
+    // ~0.25). The BASE is low and the SLOPE is steep on purpose: the read pair's
+    // own AWR/PRC must separate the outcome widely (the user's elite-vs-poor
+    // directive — a ≥20-pt completion gap between the sharpest and dullest pairs)
+    // while the mid-window completion stays ≈ 45-50% (NFL 54.5%).
+    const compProb = clamp(0.06 + 1.25 * open + (a - 0.5) * 0.08, 0.06, 0.95)
+    const intProb = clamp(0.10 - 0.062 * t.surprise - 0.08 * (open - 0.5), 0.006, 0.30)
+    const gainAdd = Math.round(air * (1.05 + 0.66 * open) + clamp(targetSpdRel, -25, 25) * 0.2)
     return { compProb, intProb, gainAdd, gainMult: 0.35 }
   }
   // Fake spike: the defence is set for the clock-killing spike, so a quick throw
@@ -573,23 +646,23 @@ export function trickPassOverride(t: TrickSnap, passAir: number, arm: number, ta
  * strung out for a loss. `elusiveness` is `trickCarrierElusiveness` (≈72-centred)
  * of the specific receiver on the rep. Deterministic hashes — no rng draw.
  */
-export function trickRunGain(t: TrickSnap, elusiveness: number, n: number, offId: string): number {
+export function trickRunGain(t: TrickSnap, elusiveness: number, key: string): number {
   const rf = readFactor(t.readValue)
   const open = clamp(0.55 * t.surprise + 0.45 * (1 - rf), 0, 1)
   const legs = elusiveness - 72
   // The man's own legs decide how often the pursuit strings him out (a burner
   // rarely loses ground; a slow receiver often does) — a ≥10-pt loss-rate gap
   // between the fastest and slowest carriers.
-  const lossP = clamp(0.16 + 0.22 * (1 - open) - legs * 0.018, 0.05, 0.5)
-  if (h01(`${n}:${offId}:revblown`) < lossP) {
+  const lossP = clamp(0.16 + 0.215 * (1 - open) - legs * 0.018, 0.05, 0.5)
+  if (h01(`${key}:revblown`) < lossP) {
     // Read and strung out: a 2–8 yard loss (the pursuit catches him behind).
-    return -(2 + Math.round(h01(`${n}:${offId}:revlossmag`) * 6))
+    return -(2 + Math.round(h01(`${key}:revlossmag`) * 6))
   }
   // They bit: the carrier's own legs plus how wide the edge is; a small share
   // breaks clean for a chunk.
-  const base = 3.0 + legs * 0.45 + open * 6.5
-  const extra = h01(`${n}:${offId}:revbreak`) < 0.10 + 0.30 * open
-    ? 10 + Math.round(h01(`${n}:${offId}:revbig`) * 22)
+  const base = 2.9 + legs * 0.42 + open * 5.9
+  const extra = h01(`${key}:revbreak`) < 0.09 + 0.26 * open
+    ? 9 + Math.round(h01(`${key}:revbig`) * 20)
     : 0
   return Math.round(clamp(base + extra, 1, 92))
 }
@@ -604,6 +677,8 @@ export function trickExtraSack(kind: TrickKind): number {
 export interface TrickEnv {
   /** The back on the field at the moment of the call (HB pass eligibility). */
   rb?: Player
+  /** Whether a back is on the field; absent means "assume one" (the AI path). */
+  hasRb?: boolean
   /** The roughest available guess at the defence on the field (the meter only). */
   defEleven?: Player[]
   /** The last scrimmage play left the clock running (the spike window). */
@@ -669,22 +744,140 @@ export function trickConcept(kind: TrickKind): SimConcept | undefined {
   return conceptFromPlaybook(TRICKS[kind].concept)
 }
 
-// ── The AI / delegated-OC hand-off (FUTURES #26) ──────────────────────────────
+// ── The AI / delegated-OC hand-off (FUTURES #26, T4 rates) ───────────────────
+
+/** T4: what the staff card shows about a club's play-caller. */
+export interface AiTrickProfile {
+  /** The specific coordinator in the seat (or 'vacant OC'). */
+  ocName: string
+  /** His own play-calling sub (J9; his overall rating when the sub toggle is off). */
+  playCalling: number
+  /** His own aggression — game management + play calling + a stable temperament. */
+  aggression: number
+  /** Multiplier on the league-reference trick rate (his own, 0.32–1.9). */
+  mult: number
+  /** Expected tricks per team-game and per 17-game season at this rate. */
+  perGame: number
+  perSeason: number
+  /** One-word staff read. */
+  word: string
+}
 
 /**
- * Whether the club's play-caller dials up a trick on this snap. T1 ships with
- * `TRICK.aiRate = 0`, so the AI never calls one; T4 owns the rate. The gate is a
- * pure hash on the snap (never an rng draw), so turning it on later cannot move
- * the rng stream, and a scouted club is cut by (1 − 0.5·alert).
+ * T4: a coordinator's own aggression. His game-management and play-calling subs
+ * (J9, derived for old saves) plus a stable ±10 temperament offset hashed from
+ * his own id — never a league, roster or unit mean. A vacant seat takes the
+ * floor's game management (a poor, conservative chair), not an average one.
+ */
+export function coachAggression(m: StaffMember | undefined): number {
+  if (!m) return COACH_SUBS_FLOOR.gameManagement
+  const s = coachSubs(m)
+  const temper = (hash32(`${m.id}:trickagg`, 13) % 21) - 10
+  return clamp(Math.round(0.55 * s.gameManagement + 0.3 * s.playCalling + 0.15 * s.motivation + temper), 25, 99)
+}
+
+const aiProfileCache = new WeakMap<World, Map<string, AiTrickProfile>>()
+
+/** T4: the club's AI trick rate, from its own coordinator (pure; cached per world). */
+export function aiTrickProfile(world: World, teamId: string): AiTrickProfile {
+  const oc = (world.staff[teamId] ?? []).find((s) => s.role === 'Offensive Coordinator')
+  const key = `${world.season}:${teamId}:${oc?.id ?? 'none'}:${getCoachSubs() ? 's' : 'r'}`
+  let cache = aiProfileCache.get(world)
+  if (!cache) {
+    cache = new Map()
+    aiProfileCache.set(world, cache)
+  }
+  const hit = cache.get(key)
+  if (hit) return hit
+  // With the J9 sub toggle off, his one overall rating stands in for both traits
+  // (still his own number, never a team mean).
+  const subs = oc ? coachSubs(oc) : COACH_SUBS_FLOOR
+  const playCalling = oc ? (getCoachSubs() ? subs.playCalling : oc.rating) : COACH_SUBS_FLOOR.playCalling
+  const aggression = getCoachSubs() ? coachAggression(oc) : (oc?.rating ?? COACH_SUBS_FLOOR.gameManagement)
+  const mult = clamp(
+    1 + (playCalling - TRICK.coachRef) * TRICK.appPcW + (aggression - TRICK.coachRef) * TRICK.appAggW,
+    TRICK.appLo,
+    TRICK.appHi,
+  )
+  let base = 0
+  for (const k of TRICK_KINDS) base += TRICK.aiRate[k] * TRICK.aiSnaps[k]
+  const perGame = base * mult
+  const word = mult >= 1.35 ? 'gambles' : mult >= 1.05 ? 'takes chances' : mult >= 0.8 ? 'measured' : 'conservative'
+  const out: AiTrickProfile = {
+    ocName: oc?.name ?? 'vacant OC',
+    playCalling,
+    aggression,
+    mult: +mult.toFixed(3),
+    perGame: +perGame.toFixed(3),
+    perSeason: +(perGame * TRICK.seasonGames).toFixed(2),
+    word,
+  }
+  cache.set(key, out)
+  return out
+}
+
+/** T4: the last few offensive snaps (the run-heavy stretch a trick is set up by). */
+function recentOffence(s: GameState, offId: string): { runs: number; n: number; lastRunYards: number | null } {
+  let runs = 0
+  let n = 0
+  let lastRunYards: number | null = null
+  for (let i = s.plays.length - 1; i >= 0 && n < 4; i--) {
+    const p = s.plays[i]
+    if (p.type !== 'run' && p.type !== 'pass') continue
+    if (p.offId !== offId) break
+    if (n === 0 && p.type === 'run') lastRunYards = p.yards
+    n += 1
+    if (p.type === 'run') runs += 1
+  }
+  return { runs, n, lastRunYards }
+}
+
+/**
+ * T4: the situation's multiplier on the AI's rate. The NFL calls come after a
+ * run-heavy stretch (the fake is set up), around midfield and while trailing;
+ * they are rare on third down, backed up, in a blowout or in a hurry. The
+ * recent-snap read is the club's own play sequence, not a unit average.
+ */
+function aiSituationMult(s: GameState, offId: string): number {
+  const margin = offId === s.homeId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore
+  const recent = recentOffence(s, offId)
+  let m = 1
+  if (recent.runs >= 3) m *= TRICK.sitRunHeavy
+  else if (recent.lastRunYards !== null && recent.lastRunYards >= 3) m *= TRICK.sitRunLast
+  if (s.yard >= 30 && s.yard <= 70) m *= TRICK.sitMidfield
+  else if (s.yard < 15) m *= TRICK.sitBackedUp
+  if (margin < 0) m *= margin <= -9 ? TRICK.sitTrailing * TRICK.sitTrailingBig : TRICK.sitTrailing
+  else if (margin > 7) m *= TRICK.sitLeading
+  if (s.down === 3) m *= TRICK.sitThird
+  if (Math.abs(margin) >= 21) m *= TRICK.sitBlowout
+  if (s.twoMinMode === 'hurry' || s.twoMinMode === 'protect') m *= TRICK.sitHurry
+  return m
+}
+
+/**
+ * Whether the club's play-caller dials up a trick on this snap. The rate is the
+ * play-caller's own (`aiTrickProfile`: his play-calling sub + aggression), scaled
+ * by the situation and cut by `(1 − 0.5·alert)` when the league has seen the
+ * call, then by the in-game decay (a second trick is half as likely, the same
+ * trick again a fifth). The gate is a pure hash on the snap (never an rng draw),
+ * so the decision cannot move the rng stream; only the snap it elects does.
  */
 export function aiTrickCall(world: World, s: GameState, offId: string, pkg?: readonly TrickKind[], env?: TrickEnv): TrickKind | null {
-  if (TRICK.aiRate <= 0) return null
   const sit = trickSituation(s, env?.clockRunning ?? true)
+  const pool = pkg && pkg.length ? [...pkg] : [...TRICK_KINDS]
   const mem = world.stMemory && world.stMemory.season === world.season ? world.stMemory.teams : undefined
-  const pool = (pkg && pkg.length ? [...pkg] : [...TRICK_KINDS]).filter((k) => trickEligible(k, sit, !!env?.rb))
-  if (!pool.length) return null
-  const kind = pool[hash32(`${s.n}:${offId}:trickpick`) % pool.length]
-  const alert = trickAlert(mem?.[offId], kind)
-  const p = TRICK.aiRate * (1 - 0.5 * alert)
-  return h01(`${s.n}:${offId}:trick:${kind}`) < p ? kind : null
+  const used = s.tricksUsed?.[offId] ?? []
+  const prof = aiTrickProfile(world, offId)
+  const sitMult = aiSituationMult(s, offId)
+  for (const kind of pool) {
+    if (!isTrickKind(kind)) continue
+    // `env.hasRb === false` means no back is on the field (the HB pass needs one);
+    // absent means assume one (the AI path never resolves the men up front).
+    if (!trickEligible(kind, sit, env?.hasRb ?? true)) continue
+    const alert = trickAlert(mem?.[offId], kind)
+    const decay = used.length === 0 ? 1 : used.includes(kind) ? TRICK.callDecaySame : TRICK.callDecaySecond
+    const p = TRICK.aiRate[kind] * prof.mult * sitMult * (1 - TRICK.alertCut * alert) * decay
+    if (h01(`${trickSalt(s, offId)}:trick:${kind}`) < p) return kind
+  }
+  return null
 }
