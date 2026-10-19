@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Anchor, BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Flame, Goal, Megaphone, Minus, Pause, PanelBottom, Play, RotateCcw, Settings, Shield, SkipForward, Target, Timer, TrendingDown, Wind, Zap } from 'lucide-react'
+import { Anchor, BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsRight, Clock, Eye, Flame, Goal, Megaphone, Minus, Pause, PanelBottom, Play, RotateCcw, Settings, Shield, SkipForward, Snowflake, Target, Timer, TrendingDown, Wind, Zap } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { coachLabels, penaltyTotals, PENALTY_INFO, type DecisionLog, type Play as PlayEvent, type Moment, type MomentKind, type PenaltyKind, type PenaltyTally } from '../game/engine/playsim'
 import { BUCKET_LABEL } from '../game/engine/decisions'
@@ -33,6 +33,9 @@ import { effRating } from './animRatings'
 import { TeamHoverCard } from './TeamHoverCard'
 import { PlayerHoverCard } from './PlayerHoverCard'
 import { Badge, BroadcastScope, Button, Chip, ConfirmSheet, DivergingMeter, IconButton, OptionCard, OptionGroup, OverflowMenu, ScoreBlock, TeamCrest, VerdictChip, type MenuItem } from '../ui/kit'
+// FUTURES #42: the per-player in-game confidence (hot hand) map + its read, so a
+// hot/cold man carries a small flame/ice chip on his live box-score line.
+import { hotAt, hotRead, centerFor } from '../game/engine/hotHand'
 import { lockerRoomState } from '../game/engine/lockerRoom'
 import { usePhone } from '../ui/hooks'
 import { challengeThreshold, type ChallengeState, type PlayReview } from '../game/engine/review'
@@ -402,6 +405,9 @@ export function MatchView() {
   // play that hasn't been shown yet.
   const shownPlays = useMemo(() => match?.plays.slice(0, idx + 1) ?? [], [match, idx])
   const liveBox = useMemo(() => (match ? boxScore(world, { ...match, plays: match.plays.slice(0, idx + 1) }) : undefined), [world, match, idx])
+  // FUTURES #42: the in-game confidence the sim held at the play on screen — the
+  // same fold the engine keeps, so the chip can never run ahead of the replay.
+  const liveHot = useMemo(() => (match ? hotAt(match.plays, idx) : {}), [match, idx])
 
   // Space plays / pauses (not while typing in a field).
   useEffect(() => {
@@ -1391,6 +1397,7 @@ export function MatchView() {
                   world={world}
                   teamId={boxTeamId}
                   box={liveBox}
+                  hot={liveHot}
                   pen={pen}
                   challenges={gameDay?.state.challenges?.[boxTeamId]}
                   gmName={career?.gmName}
@@ -2465,7 +2472,7 @@ function DefCallPicker({ moment, onAnswer }: { moment: Moment; onAnswer: (id: st
   )
 }
 
-export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId, onTeamClick }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; pen?: PenaltyTally; challenges?: ChallengeState; gmName?: string; myTeamId?: string; onTeamClick?: (teamId: string) => void }) {
+export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId, onTeamClick, hot }: { world: World; teamId: string; box?: import('../game/engine/stats').PlayerBoxScore[]; pen?: PenaltyTally; challenges?: ChallengeState; gmName?: string; myTeamId?: string; onTeamClick?: (teamId: string) => void; hot?: Record<string, number> }) {
   const team = world.byId[teamId]
   const rows = (box ?? []).filter((b) => b.teamId === teamId)
   const passing = rows.filter((r) => (r.line.passAtt ?? 0) > 0)
@@ -2483,7 +2490,7 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
   // linear scan per box-score row would add up fast.
   const byId = useMemo(() => new Map(world.players.map((p) => [p.id, p])), [world.players])
   const jerseyNumbers = useMemo(() => teamJerseys(world, teamId), [world, teamId])
-  const fp = { gmName, myTeamId, byId, jerseyNumbers }
+  const fp = { gmName, myTeamId, byId, jerseyNumbers, hot }
   return (
     <div className="min-w-0 rounded-lg bg-surface-2/60 p-2">
       <div className="mb-2">
@@ -2564,7 +2571,32 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
   )
 }
 
-interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player>; jerseyNumbers: Map<string, number> }
+/**
+ * FUTURES #42: a man's in-game confidence on his own live box-score line — a
+ * small flame (hot) or ice (cold) chip. Only men the game has actually moved
+ * today show one; the tooltip names the state and the number is the sim's own
+ * confidence (−1 cold … +1 hot). Tokens only, so it holds in both themes; on a
+ * 375 px phone the word drops and the icon carries it.
+ */
+function HotChip({ c, pos }: { c?: number; pos?: string }) {
+  const read = hotRead(c === undefined ? undefined : c - centerFor(pos))
+  if (!read) return null
+  const Icon = read.hot ? Flame : Snowflake
+  return (
+    <span
+      title={`In-game confidence: ${read.label} — ${c!.toFixed(2)} for the game, ${(c! - centerFor(pos)).toFixed(2)} against what a ${pos ?? 'player'} normally carries`}
+      className={cn(
+        'ml-1 inline-flex shrink-0 items-center gap-0.5 rounded-full border px-1 py-px font-cond text-label font-700 uppercase tracking-wide',
+        read.hot ? 'border-warn/40 bg-warn-soft text-warn' : 'border-brand/30 bg-brand-soft text-brand',
+      )}
+    >
+      <Icon size={10} aria-hidden />
+      <span className="hidden sm:inline">{read.label}</span>
+    </span>
+  )
+}
+
+interface FingerprintCtx { gmName?: string; myTeamId?: string; byId: Map<string, import('../game/types').Player>; jerseyNumbers: Map<string, number>; hot?: Record<string, number> }
 /** Row 453: the box score's short origin tag ("Traded for by you" → "Traded"); the
  *  full wording stays on the hover title. */
 function boxTag(tag: string): string {
@@ -2634,6 +2666,7 @@ function BoxBlock({ title, rows, cols, fp, cap = 8, order }: { title: string; ro
                         {boxTag(tag)}
                       </span>
                     )}
+                    <HotChip c={fp.hot?.[b.playerId]} pos={p?.pos} />
                   </div>
                 </td>
                 {cols.map((c) => (

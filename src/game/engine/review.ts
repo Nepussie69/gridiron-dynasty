@@ -70,6 +70,10 @@ export interface ReviewSnapshot {
   userDrive: number
   /** C2: in-game fatigue, rested by a possession swap (cloned after chargeSnaps). */
   fat: Record<string, number>
+  /** FUTURES #42: the in-game confidence map at the snapshot (cloned), so a
+   *  reversed ruling never double-counts a hot/cold event. Optional: an old
+   *  caller that does not carry it restores nothing. */
+  hot?: import('./hotHand').HotMap
   /** rushvar: the in-game pressure ledger (see GameState.rushHeat). */
   heat?: Record<string, number>
   stats: { home: TeamGameStats; away: TeamGameStats }
