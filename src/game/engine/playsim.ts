@@ -703,6 +703,13 @@ import { EMERGENT_E3, emergentPassSet } from './emergentRush'
 // `EMERGENT.on`, and the replaced rng() draws are still consumed at the same
 // point in the stream.
 import { EMERGENT, emergentRun } from './emergent'
+// r2penalties (NEXT_PHASE_REALISM2 #2): the fouls come off the men on the play —
+// the blocker who actually lost his rep, the cover man the receiver has beaten,
+// the late hit by the man who got home, the jumper against the QB's own cadence
+// (see the header of engine/emergentPenalties.ts). Default OFF; OFF ⇒ both hooks
+// below are skipped and the base rate block runs exactly as before.
+import { getEmergentPen, penOffenseFoul, penDefenseFoul } from './emergentPenalties'
+export { setEmergentPen, getEmergentPen } from './emergentPenalties'
 // REALISM2 #3 (r2fumbles): fumbles & ball security from the actual hit. OFF by
 // default; when on, the run-carry / catch-strip / muff / strip-sack chances come
 // off the real contact (closing speed, angle, the pile, the hitter's own HPW/TAK
@@ -9126,14 +9133,32 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // Defensive penalty — typed by hash within the R2 yardage tier, automatic first down.
   const penFields = getIndividual() ? penaltyFields(world, s, concept, offId, defId) : undefined
   const defDisc = (getCoachSubs() ? disciplineMult(world, defId) : ocEffect(world, defId).discipline) * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
-  // L12.13 M3: a defense that knows the system makes fewer mental errors.
-  if (s.rng() < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1)) {
+  // r2penalties (NEXT_PHASE_REALISM2 #2): with the field layer on it REPLACES the
+  // flat per-snap rate draw — the men on the play alone say whether the defence
+  // fouled and who did it (engine/emergentPenalties.ts). The draw is still consumed
+  // at exactly this point in the stream and is the field's own gate, so the seed
+  // stream keeps its exact length and order. `penFieldOn` is false at the shipped
+  // default owner's-off mode or without individual units, and then the untouched
+  // rate test below runs byte-for-byte (`setEmergentPen(false)` is the dev toggle).
+  const penFieldOn = getEmergentPen() && !!penFields
+  const defRoll = s.rng()
+  const penQb = penFields?.off.find((p) => p.pos === 'QB')
+  const fieldDef = penFieldOn && penFields
+    ? penDefenseFoul({
+      n: s.n, offId, defId, type: concept.type, depth: concept.depth, yard: s.yard,
+      off: penFields.off, def: penFields.def, roll: defRoll, disc: defDisc,
+      mental: s.mental[defId]?.def ?? 1, hurry: 1, crowd: 1, rate: eff, qb: penQb,
+    })
+    : undefined
+  // L12.13 M3: a defense that knows the system makes fewer mental errors. With the
+  // field on, the base draw is not re-tested (the field decided above).
+  if (fieldDef || (!penFieldOn && defRoll < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1))) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    const py = penaltyYards(`${s.n}:penD:${defId}`, 'def')
-    const kind = pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py, penFields?.def, penFields?.off)
+    const py = fieldDef ? fieldDef.yards : penaltyYards(`${s.n}:penD:${defId}`, 'def')
+    const kind = fieldDef ? fieldDef.kind : pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py, penFields?.def, penFields?.off)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`, kind, penFields?.def)
+    const offender = fieldDef ? fieldDef.player : penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`, kind, penFields?.def)
     const who = shortName(offender?.name)
     // R14: offsetting — both clubs fouled on the snap; replay, no yardage.
     const offset = h01(`${s.n}:penOffset:${defId}`) < 0.001
@@ -9167,13 +9192,25 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // FUTURES #6: the road offence false-starts more in a loud house; the home side
   // carries the centering offset. Exactly 1 with weather off, so the base is exact.
   const crowdPen = wxFor(s, offId === s.homeId)?.falseStartMult ?? 1
-  if (s.rng() < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1) * crowdPen) {
+  // r2penalties: the offence's fouls come off the same field (the beaten blocker,
+  // the jumper on the line, the receiver who pushes off, the man under centre);
+  // with the field on it replaces the flat rate draw. The base draw is consumed at
+  // exactly the same point and is the field's own gate, so OFF is byte-identical.
+  const offRoll = s.rng()
+  const fieldOff = penFieldOn && penFields
+    ? penOffenseFoul({
+      n: s.n, offId, defId, type: concept.type, depth: concept.depth, yard: s.yard,
+      off: penFields.off, def: penFields.def, roll: offRoll, disc: offDisc,
+      mental: s.mental[offId]?.off ?? 1, hurry: hurryPen, crowd: crowdPen, rate: eff, qb: penQb,
+    })
+    : undefined
+  if (fieldOff || (!penFieldOn && offRoll < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1) * crowdPen)) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    const py = penaltyYards(`${s.n}:penO:${offId}`, 'off')
-    const kind = pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py, penFields?.off, penFields?.def)
+    const py = fieldOff ? fieldOff.yards : penaltyYards(`${s.n}:penO:${offId}`, 'off')
+    const kind = fieldOff ? fieldOff.kind : pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py, penFields?.off, penFields?.def)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`, kind, penFields?.off)
+    const offender = fieldOff ? fieldOff.player : penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`, kind, penFields?.off)
     const who = shortName(offender?.name)
     s.yard = clamp(s.yard - py, 1, 99)
     // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).

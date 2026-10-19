@@ -21,7 +21,8 @@ import { KeysCard } from './KeysCard'
 import { momentFieldPos } from './fieldPos'
 import { canPractice, practicePlan } from '../game/engine/practice'
 import { canPickKeys } from '../game/engine/keys'
-import { buildPlayAnim, holderAt, liftAt, posAt, qbThrowAt, snapYard, targetKey, actorWhy } from './playAnim'
+import { holderAt, liftAt, posAt, qbThrowAt, snapYard, targetKey, actorWhy } from './playAnim'
+import { buildTrickAnim } from './playTricks'
 import { RouteDiagram } from './RouteDiagram'
 import { quickOffCall } from '../game/engine/quickCall'
 import { FORMATIONS, playbookPlay } from '../game/data/playbookData'
@@ -333,7 +334,7 @@ export function MatchView() {
   }, [world, match, play, byId, career?.teamId, career?.matchups])
   const anim = useMemo(() => {
     if (!play) return null
-    return buildPlayAnim(play, {
+    return buildTrickAnim(play, {
       next: nextForAnim,
       targetPos: play.targetId ? byId.get(play.targetId)?.pos : undefined,
       carrierIsQB: play.type === 'run' && !!play.carrierId && byId.get(play.carrierId)?.pos === 'QB',
