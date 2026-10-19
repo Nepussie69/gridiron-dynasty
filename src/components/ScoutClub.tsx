@@ -10,6 +10,7 @@ import {
   type Bucket,
 } from '../game/engine/decisions'
 import { aiTendency } from '../game/engine/playsim'
+import { getAiCalls, coordTendency } from '../game/engine/r2aicalls'
 import { seasonLine } from '../game/engine/stats'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Button, Card, SectionTitle } from '../ui/kit'
@@ -84,7 +85,13 @@ export function ScoutClubCard({ teamId, className }: { teamId: string; className
   const twoLabel = tend.twoPoint === 'go' ? 'Chases two' : tend.twoPoint === 'kick' ? 'Always kicks' : 'Kicks by the chart'
   const timeoutLabel = tend.timeouts === 'aggressive' ? 'Uses them early' : 'Saves them'
   const tempoLabel = tend.tempo >= 0.25 ? 'Up-tempo' : tend.tempo <= -0.15 ? 'Deliberate' : 'Balanced'
-  const identityLabel = tend.passRate >= 0.58 ? 'Pass-heavy' : tend.passRate <= 0.5 ? 'Run-leaning' : 'Balanced'
+  // r2aicalls (row #6): the coordinator's OWN pass-rate-over-expected when the
+  // real-tendency model is on, so the card reads the same tendency the sim calls
+  // from (the legacy scheme identity otherwise).
+  const aiTend = getAiCalls() ? coordTendency(league, teamId) : null
+  const identityLabel = aiTend
+    ? aiTend.proe >= 0.02 ? 'Pass-heavy' : aiTend.proe <= -0.02 ? 'Run-leaning' : 'Balanced'
+    : tend.passRate >= 0.58 ? 'Pass-heavy' : tend.passRate <= 0.5 ? 'Run-leaning' : 'Balanced'
 
   return (
     <Card className={className}>

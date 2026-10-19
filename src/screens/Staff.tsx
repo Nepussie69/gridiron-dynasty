@@ -56,6 +56,7 @@ import { DataTable, type Column } from '../components/DataTable'
 import { DraftStanceChips } from '../components/DraftPhilosophyCard'
 import { CoachSubRatings } from '../components/CoachSubRatings'
 import { CoachCareerTimeline, FormerPlayerBadge, InterimHeadCoachBanner } from '../components/CoachCareer'
+import { MedicalStaffCard } from '../components/MedicalStaffCard'
 import { isCoachSeat } from '../game/engine/coachCareer'
 import { isSubKey, SUB_FLOOR, SUB_META, subsForRole, subValue, type SubKey } from '../components/coachSubsUi'
 import { staffGrade, coordinatorEdge, type CoachEffect } from '../game/engine/coaching'
@@ -172,6 +173,10 @@ const MARKET_ROLES: { id: string; label: string }[] = [
   { id: 'Scout', label: 'Scout' },
   { id: 'Director of Player Personnel', label: 'DPP' },
   { id: ANALYTICS_ROLE, label: 'Analytics' },
+  // FUTURES #48: the three medical seats (market-only, like Analytics).
+  { id: 'Head Athletic Trainer', label: 'Trainer' },
+  { id: 'Team Physician', label: 'Physician' },
+  { id: 'Sports Science Director', label: 'Sports sci' },
 ]
 
 const SORTS = [
@@ -230,6 +235,10 @@ const SHORT_ROLE: Record<string, string> = {
   'Director of Player Personnel': 'Dir. Player Personnel',
   Analytics: 'Analytics',
   'General Manager': 'General Manager',
+  // FUTURES #48
+  'Head Athletic Trainer': 'Head Athletic Trainer',
+  'Team Physician': 'Team Physician',
+  'Sports Science Director': 'Sports Science Director',
 }
 
 /** Two/three-letter tag for unit and role chips. */
@@ -248,6 +257,10 @@ const ROLE_TAG: Record<string, string> = {
   'Director of Player Personnel': 'DPP',
   'General Manager': 'GM',
   Analytics: 'AN',
+  // FUTURES #48
+  'Head Athletic Trainer': 'ATC',
+  'Team Physician': 'MD',
+  'Sports Science Director': 'SSC',
 }
 
 /** "Find a better OC" wording. */
@@ -265,6 +278,10 @@ const FIND_LABEL: Record<string, string> = {
   Scout: 'scout',
   'Director of Player Personnel': 'personnel director',
   Analytics: 'analyst',
+  // FUTURES #48
+  'Head Athletic Trainer': 'athletic trainer',
+  'Team Physician': 'team physician',
+  'Sports Science Director': 'sports-science director',
 }
 
 const lastName = (n: string) => n.split(' ').slice(-1)[0]
@@ -845,6 +862,14 @@ export function Staff() {
           }
         >
           <SystemCheck ctx={ctx} phone={phone} open={sysOpen} onOpen={setSysOpen} />
+          {/* FUTURES #48: the medical staff & sports-science seats. */}
+          <MedicalStaffCard
+            world={league}
+            teamId={activeTeamId}
+            career={career}
+            onOpenMarket={openMarket}
+            className="mt-6"
+          />
           {view === 'chart' ? (
             <OrgChart
               ctx={ctx}

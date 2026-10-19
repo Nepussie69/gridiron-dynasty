@@ -28,6 +28,14 @@ export interface WeekRecovery {
    * multiplier still applies on top).
    */
   risk?: Record<string, number>
+  /**
+   * FUTURES #48: the sports-science department's own prevention read, per player
+   * id — the Sports Science Director's own rating against that man's body. A
+   * raised threshold protects him; only the user's club ever gets a map, and a
+   * vacant seat supplies none, so the league is untouched. Like `risk`, only the
+   * threshold moves, so the rng() draw count is fixed.
+   */
+  prevention?: Record<string, number>
 }
 
 const HOME_ADV = 1.4
@@ -129,7 +137,10 @@ function healPlayers(world: World, rng: Rng, week: number, recovery?: WeekRecove
     // L12 E2/R5: a player's TGH moves his own threshold (relative to his position
     // mean). The fallback still reads the OVR-derived attribute, unchanged.
     if (!p.injured && p.teamId) {
-      const m = (recovery?.teamId === p.teamId ? mult : 1) * (recovery?.risk?.[p.id] ?? 1)
+      const m =
+        (recovery?.teamId === p.teamId ? mult : 1) *
+        (recovery?.risk?.[p.id] ?? 1) *
+        (recovery?.teamId === p.teamId ? (recovery?.prevention?.[p.id] ?? 1) : 1)
       const tghMean = POS_MEAN[p.pos]?.TGH
       const tgh = (playerAttrs(p).TGH ?? tghMean ?? 70)
       const tghMult = tghMean === undefined ? 1 : clamp(1 + (tghMean - tgh) / INJ_TGH_SLOPE, 0.5, 1.7)

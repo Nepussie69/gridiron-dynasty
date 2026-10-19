@@ -33,6 +33,7 @@ export interface PlayerBoxScore {
  */
 export function defenseImpact(l: GameStatLine): number {
   return (l.tackles ?? 0)
+    + (l.assists ?? 0) * 0.5
     + (l.defSacks ?? 0) * 4
     + (l.defInts ?? 0) * 4
     + (l.tfl ?? 0) * 1.5
@@ -51,6 +52,7 @@ export function defenseImpact(l: GameStatLine): number {
  */
 export function hasDefenseStat(l: GameStatLine): boolean {
   return (l.tackles ?? 0) > 0
+    || (l.assists ?? 0) > 0
     || (l.tfl ?? 0) > 0
     || (l.defSacks ?? 0) > 0
     || (l.defInts ?? 0) > 0
@@ -235,8 +237,15 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       // tackle for loss, derived from the play's negative gain, exactly like a
       // stuffed run — the engine does not stamp TFL itself.
       if (isComp && play.tackleIds?.length) {
-        add(play.tackleIds[0], def, 'tackles', 1)
-        if ((play.yards ?? 0) < 0) add(play.tackleIds[0], def, 'tfl', 1)
+        // The box score's SOLO credit is the field's own tackler (the man the
+        // broadcast draws making the stop) — never a relabelled pile man.
+        const cred = play.tackleIds[0]
+        add(cred, def, 'tackles', 1)
+        if ((play.yards ?? 0) < 0) add(cred, def, 'tfl', 1)
+        // Assisted tackles: the other men in on the stop (the pile). PFR
+        // gang-tackle convention — a gang tackle is credited 1 solo + 1 assist.
+        // Bookkeeping only: the tackle, the yards and every miss are unchanged.
+        if (play.assistIds?.length) for (const id of play.assistIds) if (id !== cred) add(id, def, 'assists', 1)
       }
       // R5: the defender who whiffed is charged a missed tackle; the carrier
       // who broke it is credited with a forced miss.
@@ -288,9 +297,15 @@ export function boxScore(world: World, sim: GameSim): PlayerBoxScore[] {
       const t = play.tackleIds ?? []
       if (t.length) {
         const tackler = t[(play.n + play.yards + 10) % t.length]
-        add(tackler, def, 'tackles', 1)
+        // The box score's SOLO credit is the field's own tackler (see the pass
+        // branch above). The animation and the yards use the same man.
+        const cred = tackler
+        add(cred, def, 'tackles', 1)
         // Q7: the tackler on a run for a loss also gets the TFL.
-        if (play.yards < 0) add(tackler, def, 'tfl', 1)
+        if (play.yards < 0) add(cred, def, 'tfl', 1)
+        // Assisted tackles (the pile): PFR gang-tackle convention, 1 solo + 1
+        // assist. The assist is a man actually in contact range at the stop.
+        if (play.assistIds?.length) for (const id of play.assistIds) if (id !== cred) add(id, def, 'assists', 1)
       }
       // R5: charge the miss to the defender and credit the back who broke it.
       if (play.missedTackleIds?.length) for (const id of play.missedTackleIds) add(id, def, 'missedTackles', 1)
@@ -372,6 +387,7 @@ function mergeInto(season: SeasonStats, line: GameStatLine) {
   season.recYds += line.recYds ?? 0
   season.recTD += line.recTD ?? 0
   season.tackles += line.tackles ?? 0
+  season.assists = (season.assists ?? 0) + (line.assists ?? 0)
   season.defSacks += line.defSacks ?? 0
   season.defInts += line.defInts ?? 0
   // 405: passes defensed (break-ups + interceptions) were credited per game but
@@ -485,6 +501,7 @@ export function careerTotals(p: Player) {
     t.rushAtt += s.rushAtt; t.rushYds += s.rushYds; t.rushTD += s.rushTD
     t.targets += s.targets; t.rec += s.rec; t.recYds += s.recYds; t.recTD += s.recTD
     t.tackles += s.tackles; t.defSacks += s.defSacks; t.defInts += s.defInts
+    t.assists = (t.assists ?? 0) + (s.assists ?? 0)
     t.passDef += s.passDef ?? 0
     t.tfl = (t.tfl ?? 0) + (s.tfl ?? 0)
     t.defTargets = (t.defTargets ?? 0) + (s.defTargets ?? 0)

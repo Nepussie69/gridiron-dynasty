@@ -74,6 +74,11 @@ import {
   edgeManOf, getQbRun, qbEdgeYardEffect, qbEffectiveCall, qbKeepsOnRead, qbRunKind, qbSneakGain,
   type EdgeMan, type QbRunKind,
 } from './qbRun'
+// REALISM2 #6 (r2aicalls): each AI coordinator's own real-seeded tendencies —
+// PROE by down/distance/score/time, 4th-down go lean, red-zone/two-minute leans,
+// play-action and motion rates. OFF (getAiCalls() false) never enters the file.
+import { getAiCalls, coordTendency, aiPassLean, aiClubMenu, aiGoLean } from './r2aicalls'
+export { AICALLS, setAiCalls, getAiCalls, coordTendency, aiSpread } from './r2aicalls'
 
 /**
  * FUTURES #24: the ordinary call-matrix edge plus, on a trick snap ONLY, the
@@ -705,6 +710,13 @@ import { EMERGENT_E3, emergentPassSet } from './emergentRush'
 // `EMERGENT.on`, and the replaced rng() draws are still consumed at the same
 // point in the stream.
 import { EMERGENT, emergentRun } from './emergent'
+// r2penalties (NEXT_PHASE_REALISM2 #2): the fouls come off the men on the play —
+// the blocker who actually lost his rep, the cover man the receiver has beaten,
+// the late hit by the man who got home, the jumper against the QB's own cadence
+// (see the header of engine/emergentPenalties.ts). Default OFF; OFF ⇒ both hooks
+// below are skipped and the base rate block runs exactly as before.
+import { getEmergentPen, penOffenseFoul, penDefenseFoul } from './emergentPenalties'
+export { setEmergentPen, getEmergentPen } from './emergentPenalties'
 // REALISM2 #3 (r2fumbles): fumbles & ball security from the actual hit. OFF by
 // default; when on, the run-carry / catch-strip / muff / strip-sack chances come
 // off the real contact (closing speed, angle, the pile, the hitter's own HPW/TAK
@@ -1340,6 +1352,8 @@ export interface Play {
   // attribution for individual stats
   qbId?: string
   tackleIds?: string[]
+  /** The men in on the stop besides the credited tackler (the pile) — assists. */
+  assistIds?: string[]
   sackId?: string
   intId?: string
   /** L11.5 Q7: the defender in coverage on the target (derived, never an rng draw). */
@@ -1803,6 +1817,12 @@ export const PB = {
   mirrorW: 0.14, // blocker AGI (mirror)
   awrW: 0.12, // blocker AWR (recognition / pass-off)
   styleW: 0.9, // a speed/finesse rusher's burst, a power rusher's push
+  // snap-to-snap execution noise (rating points, sd = execVar × 0.408): the same
+  // rep is not run the same way twice, so the best rusher wins his rep on a real
+  // share of snaps and the club's pressures spread across the front. Hashed on the
+  // rep key — zero rng draws added or removed. `PB_CENTER.edge` is re-centred on
+  // the measured mean of the noisy field so the league pressure/sack means hold.
+  execVar: 60,
   // twists & miss-pickups (the two blockers pass off with their OWN AWR)
   twistRate: 0.28, // share of reps that are a twist / stunt
   passOffW: 0.02, // blocker AWR rel → the exchange is clean
@@ -1828,7 +1848,7 @@ export const PB = {
  * `WX_CENTER` pattern) so the individual reps only widen the distribution; the
  * league pressure and sack rates do not move.
  */
-export const PB_CENTER = { edge: 17.25 }
+export const PB_CENTER = { edge: 33.5 }
 
 /** Dev accumulator (turned on by `protectionProbe`): the two league means. */
 export const PB_STAT = { on: false, n: 0, raw: 0, old: 0 }
@@ -1869,6 +1889,11 @@ function rushRepWin(r: Player, b: Player | undefined, key: string, fat: Record<s
     passOff = clamp(0.55 + rmean(b.pos, 'AWR', ba.AWR ?? 70) * PB.passOffW, 0.2, 0.9)
   }
   let win = rush - block
+  // Snap-to-snap execution noise (centred, sd = execVar × 0.408 rating points).
+  // Every rep gets its own offset, hashed on the rep key (no rng draw), so within
+  // one matchup the pressures go to whoever executed that snap, not always the
+  // same man — while the rating gaps still order the league.
+  win += (h01(`${key}:rx`) + h01(`${key}:rx2`) - 1) * PB.execVar
   if (!b) return { win: win + PB.freeWin }
   // A twist / stunt: the two blockers must pass off, each on his OWN AWR. J37: when the
   // handoff breaks, the ADJACENT PAIR's continuity decides how much the rep of the blocker
@@ -1894,6 +1919,8 @@ export interface RushResult {
   edge: number
   reps: RushRep[]
   credit?: RushRep
+  /** Stat credit: the rep who reached the QB first (bookkeeping only). */
+  pressurer?: RushRep
   maxWin: number
   freeRusher: boolean
   lost: number
@@ -3221,10 +3248,14 @@ export function offStyle(world: World, teamId: string): OffenseStyle {
   const concepts = MENU_REALISM_ON
     ? (SCHEME_MENUS_REALISM[scheme] ?? SCHEME_MENUS_REALISM['Pro Style'])
     : base.concepts
+  // r2aicalls: the coordinator's OWN play-action rate (real team spread, league
+  // mean held) reweights the play-action entries of this menu — same single
+  // concept draw inside the type-filtered pool, so the draw count is unchanged.
+  const menu = getAiCalls() ? aiClubMenu(world, teamId, concepts) : concepts
   // R18.2: the widening pivots on the league's own mean identity, so the scheme's
   // pass-rate identity is spread out club-to-club without moving the league average.
   const passRate = offPassRate(world, teamId, oc?.scheme)
-  return passRate === base.passRate && concepts === base.concepts ? base : { ...base, passRate, concepts }
+  return passRate === base.passRate && menu === base.concepts ? base : { ...base, passRate, concepts: menu }
 }
 function defStyle(world: World, teamId: string): DefenseStyle {
   const dc = (world.staff[teamId] ?? []).find((s) => s.role === 'Defensive Coordinator')
@@ -3345,6 +3376,8 @@ export interface PlayOutcome {
   // attribution for individual stats
   qbId?: string
   tackleIds?: string[]
+  /** The men in on the stop besides the credited tackler (the pile) — assists. */
+  assistIds?: string[]
   sackId?: string
   intId?: string
   /** L11.5 Q7: coverage defender on the target. */
@@ -4789,7 +4822,7 @@ function proximityWeight(p: Player, coverId: string | undefined): number {
 /** J8c: dev accumulator (turned on by `j8cProbe`): the mean individual terms. */
 export const J8C_STAT = { on: false, n: 0, cov: 0, cov2: 0, sep: 0, compRaw: 0, qAcc: 0, compProb: 0, sk: 0, ks: 0, stopN: 0, stopRating: 0, stopMiss: 0, hawk: 0 }
 
-function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: TrickCall, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect, passerOverride?: Player): PlayOutcome {
+function resolvePass(world: World, rng: Rng, offId: string, defId: string, concept: Concept, yard: number, passShare = 0.57, tier: 'NFL' | 'FBS' = 'NFL', clutch = 0, env?: SimEnv, call?: TrickCall, n = 0, means: MasteryMeans = leagueMasteryMeans(world), dist = 0, down = 0, j13?: J13Effect, passerOverride?: Player, heatLedger?: Record<string, number>): PlayOutcome {
   const ocEff = withSpeech(ocEffect(world, offId), env, offId)
   const dcEff = withSpeech(ocEffect(world, defId), env, defId)
   // L10 G11/G12: matchup and workload effects apply to the user's club only, so
@@ -4887,6 +4920,14 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
   const shadowActive = !!wr1Opp && wrs.some((w) => w.id === wr1Opp.id)
   const dStyle = defStyle(world, defId)
   const ocScheme = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')?.scheme
+  // rushvar: the OC's own adjustment sub (centred) drives the in-game protection
+  // adjustment — how soon the slide/double goes to the man who is winning. Zero
+  // when the J9 coach-subs layer is off (so OFF is byte-identical).
+  const ocMember = (world.staff[offId] ?? []).find((s) => s.role === 'Offensive Coordinator')
+  const heatAdj = getCoachSubs()
+    ? (centeredSub(world, 'Offensive Coordinator', 'adjustments', ocMember) +
+       centeredSub(world, 'Offensive Coordinator', 'gameManagement', ocMember)) * 0.5
+    : 0
   const pEdge = personnelEdgeFor(world, env, offId, defId)
   // R15: the offence's and defence's average in-game fatigue. Effects use the
   // difference, so a league-average club is exactly neutral.
@@ -5005,6 +5046,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       fat: env?.fat, offMove: effOffMove, defMove: effDefMove,
       dlUsage: usage && userDef ? usage.dl : undefined, q4: isQ4,
       j13, j13Dev, handoffChem: olChem, passer, conceptDepth: concept.depth, j12: J12_ON,
+      heat: heatLedger, heatAdj,
     })
     : undefined
   const pb: RushResult | undefined = PROT_ON
@@ -5094,11 +5136,22 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const pool = dl.length ? dl : lbs
     return hashPick(pool, (p) => Math.max(1, Math.max(mkAttrs(p).PMV ?? 70, mkAttrs(p).FMV ?? 70)), hash32(`${n}:${defId}:presspick`))?.id
   }
-  // J8b: with the layer on the rusher who WON the rep (the max win) takes the
-  // credit; the base weighted pick is the fallback.
-  const creditRusherId = (): string | undefined => (pb ? pb.credit?.id : pressureRusherId())
+  // Stat credit (bookkeeping only): with the layer on the pressure, hit or sack
+  // goes to the rep who reached the QB FIRST (`pb.pressurer`: the earliest
+  // time-to-pressure among the reps that won before the throw); the base weighted
+  // pick is the fallback. No hash, no rng.
+  const creditRep = (): { id: string; blockerId?: string } | undefined => pb?.pressurer ?? pb?.credit
+  const creditRusherId = (): string | undefined => (pb ? creditRep()?.id : pressureRusherId())
+  // rushvar: record this play's credited pressure in the game ledger. The E3
+  // protection adjustment (a later play) slides/doubles to the man who has been
+  // winning this game. Game state only — no rng draw; gated on the E3 layer so
+  // the OFF path never populates it.
+  if (e3 && heatLedger && pressured) {
+    const hid = creditRusherId()
+    if (hid) heatLedger[hid] = (heatLedger[hid] ?? 0) + 1
+  }
   const pressureFields = (type: 'sack' | 'hit' | 'hurry', id?: string): Pick<PlayOutcome, 'pressure' | 'pressureType' | 'pressureId' | 'beatenBlockerId' | 'timeToPressureS'> =>
-    ({ pressure: true, pressureType: type, pressureId: id, ...(pb ? { beatenBlockerId: pb.credit?.blockerId, timeToPressureS: pb.time } : {}) })
+    ({ pressure: true, pressureType: type, pressureId: id, ...(pb ? { beatenBlockerId: creditRep()?.blockerId, timeToPressureS: pb.time } : {}) })
 
   // ── J10a: the designed progression, read speed and checkdown draw ──────────
   // The concept's read order (from its playbook assignments), how far the QB gets
@@ -5392,8 +5445,8 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
     const blitzLb = blitz && lbs.length && hash32(`${n}:${defId}:blitzsack`) % 100 < 55
       ? lbs[hash32(`${n}:${defId}:blitzlb`) % lbs.length]?.id
       : undefined
-    // J8b: with the layer on, the sack goes to the rusher who won his rep.
-    const sackId = pb ? pb.credit?.id : blitzLb ?? dlPick
+    // J8b/E3: the sack goes to the man who got home first (pb.pressurer).
+    const sackId = pb ? creditRep()?.id : blitzLb ?? dlPick
     // R16: a strip sack forces a fumble. A proximity hash decides who falls on it
     // (the rusher is usually on top of the ball, so the defence recovers more).
     // The result keeps the "Sack" prefix so it is still counted as a sack.
@@ -6276,6 +6329,7 @@ function resolvePass(world: World, rng: Rng, offId: string, defId: string, conce
       defTD: fumTD, returnerId: fumTDScorer, scorerId: fumTDScorer,
       ...(pressured ? pressureFields(pressureIsHit ? 'hit' : 'hurry', creditRusherId()) : {}),
       timeUsed: 24 + Math.floor(tu * 16), qbId: passer?.id, coverId, ...matchupFields, ...j12Fields, ...scoutFields, ...visionFields, ...throwFields, ...j13Fields, ...wrFields, ...chemFields, ...olFailFields, ...iuPassFields, tackleIds: stopper ? [!e1b && J8A_ON && J8A.passChaserCredit && !missedTackleIds && gain > 15 && passClose.chaser ? passClose.chaser.id : stopper] : undefined,
+      assistIds: e1b && stopper ? e1b.assistIds : undefined,
       missedTackleIds, forcedMissedIds,
       reception: true,
       ...spgField,
@@ -6921,7 +6975,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
     // R5: the defender whose contact forced the ball loose (real actor on the 11).
     fumbleId: fumble ? tackler : undefined,
     goalLineFumble: fumble && yard >= R16.goalLineYard ? true : undefined,
-    timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, missedTackleIds, forcedMissedIds,
+    timeUsed: 30 + Math.floor(rng() * 14), qbId: undefined, tackleIds, assistIds: e1 ? e1.assistIds : undefined, missedTackleIds, forcedMissedIds,
     defTD: fumbleTD, returnerId: fumbleTD ? recoverer?.id : undefined, scorerId: fumbleTD ? recoverer?.id : (e1 ? e1.scorerId : undefined),
     // E1: the recorded field paths (animation; optional — old saves ignore them).
     ...(e1 ? { carryPath: e1.carryPath, fieldPaths: e1.fieldPaths } : {}),
@@ -7554,6 +7608,12 @@ export interface GameState {
   // ── R15: in-game stamina, snap counts and rotation ─────────────────────────
   /** In-game fatigue per player (0 fresh → ~1 spent). */
   fat: Record<string, number>
+  /**
+   * rushvar: pressures credited per defender SO FAR THIS GAME. Game state, not
+   * an rng draw — the E3 protection adjustment reads it (the man who has been
+   * winning draws doubles/slides, `EMERGENT_E3.heat*`). Cleared each game.
+   */
+  rushHeat?: Record<string, number>
   /** Scrimmage snaps played per player. */
   snaps: Record<string, number>
   /** Scrimmage snaps run by each club's offence / defence (the snap-% denominator). */
@@ -7758,7 +7818,9 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const ev = fourthDownEV(sit, kickPower)
   // J-PUNTS: the specific head coach's own aggression (his gameManagement sub),
   // never the 3-bucket style and never a unit mean. Undefined when the fix is off.
-  const aggro = getPuntFix() ? coachTendency(world, s.offId).aggro : undefined
+  // r2aicalls: an AI club's coordinator adds his own real-seeded go lean; the
+  // user's club keeps its own call sheet (isUser) untouched.
+  const aggro = getPuntFix() ? coachTendency(world, s.offId).aggro + (isUser ? 0 : aiGoLean(world, s.offId)) : undefined
   let chosen = fourthDownChoice(sheet.fourth, sit, kickPower, aggro)
   // J2: the actual call adds a per-play hash dither on the style's go
   // propensity, so the league go-rate matches the NFL cells instead of every
@@ -8287,6 +8349,7 @@ export function createGame(world: World, homeId: string, awayId: string, seed: n
     mastery: means,
     mental: { [homeId]: teamMental(homeId), [awayId]: teamMental(awayId) },
     fat: {},
+    rushHeat: {},
     snaps: {},
     snapSide: {},
     specialists: {},
@@ -8415,7 +8478,7 @@ function stepTry(world: World, s: GameState): 'continue' | 'moment' {
     const concept = pickConcept(s.rng, style, 4, 2, 0)
     const env = envFor(s)
     const out = concept.type === 'pass'
-      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98) + clutchEdge(world, s, offId, s.defId, 'pass'), env, undefined, s.n, s.mastery)
+      ? resolvePass(world, s.rng, offId, s.defId, concept, 98, style.passRate, s.tier, clutchFor(world, offId, 4, 98) + clutchEdge(world, s, offId, s.defId, 'pass'), env, undefined, s.n, s.mastery, 0, 0, undefined, undefined, s.rushHeat)
       : resolveRun(world, s.rng, offId, s.defId, concept, 2, 98, s.tier, clutchFor(world, offId, 4, 98) + clutchEdge(world, s, offId, s.defId, 'run'), env, undefined, s.n, s.mastery)
     s.clock -= out.timeUsed * s.pace
     const good = !out.turnover && out.yards >= 2
@@ -8538,7 +8601,10 @@ function applyScrimmageOutcome(
   if (MENU_REALISM_ON) {
     const pers = conceptFromPlaybook(out.concept)?.personnel
     const gun = formationForConcept(out.concept).startsWith('Gun')
-    const rate = pers === '11' && gun ? MENU_REALISM.motionRate + MENU_REALISM.motionGun11Bump : MENU_REALISM.motionRate
+    // r2aicalls: the coordinator's OWN motion rate (real team spread, league mean
+    // held) instead of one league-wide rate. Still one hash flag, no rng draw.
+    const base = getAiCalls() ? coordTendency(world, offId).motionRate : MENU_REALISM.motionRate
+    const rate = pers === '11' && gun ? base + MENU_REALISM.motionGun11Bump : base
     motion = h01(`${s.n}:${offId}:motion`) < rate
   }
   // J38: a featured jet sweep carries jet motion regardless of the hash roll.
@@ -8658,6 +8724,7 @@ function snapshotFor(s: GameState): ReviewSnapshot {
     n: s.n,
     userDrive: s.userDrive,
     fat: { ...s.fat },
+    heat: s.rushHeat ? { ...s.rushHeat } : undefined,
     stats: { home: { ...s.stats.home }, away: { ...s.stats.away } },
   }
 }
@@ -8682,6 +8749,7 @@ function restoreSnapshot(s: GameState, snap: ReviewSnapshot): void {
   s.n = snap.n
   s.userDrive = snap.userDrive
   s.fat = { ...snap.fat }
+  s.rushHeat = snap.heat ? { ...snap.heat } : {}
   s.stats = { home: { ...snap.stats.home }, away: { ...snap.stats.away } }
 }
 
@@ -8891,7 +8959,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // J1: with the situational model ON the table replaces the base league lean
   // (s.passAdj) and the red-zone lean (rzPassAdj) — no double counting — while
   // the plan/quick/mode edges stay additive. OFF keeps the legacy combined lean.
-  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj + clockPassShift + jointPassShift : passAdj
+  const aiPassAdj = getAiCalls()
+    ? aiPassLean(coordTendency(world, offId), { yard: s.yard, qtr: s.qtr, clockSec: s.clock })
+    : 0
+  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj + clockPassShift + jointPassShift + aiPassAdj : passAdj
 
   // ── L10 G9/G10: the snap's concept and any call-matrix edge. The `call` and
   //    `defCall` decisions sit before the penalty rng; the AI's counter-call is
@@ -8904,7 +8975,11 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const sit: SituationInput | undefined = getSituational()
     ? {
         down: s.down, distance: s.distance, yard: s.yard, qtr: s.qtr, clockSec: s.clock,
-        margin: marginOf(offId), twoMinMode: s.twoMinMode, identity: style.passRate - worldPassMean(world),
+        margin: marginOf(offId), twoMinMode: s.twoMinMode,
+        // r2aicalls: the club's own PROE replaces the scheme-only identity (his
+        // real-seeded pass tendency is applied through `aiPassAdj` above, where
+        // its magnitude is his own measurement, not the R18 identScale).
+        identity: getAiCalls() ? 0 : style.passRate - worldPassMean(world),
       }
     : undefined
   const offIsUser = !!s.ctx && offId === s.ctx.userTeamId
@@ -9154,14 +9229,32 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // Defensive penalty — typed by hash within the R2 yardage tier, automatic first down.
   const penFields = getIndividual() ? penaltyFields(world, s, concept, offId, defId) : undefined
   const defDisc = (getCoachSubs() ? disciplineMult(world, defId) : ocEffect(world, defId).discipline) * cohesionMult(s.cohesionMean?.def, s.cohesion?.[defId]?.def, 0.6)
-  // L12.13 M3: a defense that knows the system makes fewer mental errors.
-  if (s.rng() < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1)) {
+  // r2penalties (NEXT_PHASE_REALISM2 #2): with the field layer on it REPLACES the
+  // flat per-snap rate draw — the men on the play alone say whether the defence
+  // fouled and who did it (engine/emergentPenalties.ts). The draw is still consumed
+  // at exactly this point in the stream and is the field's own gate, so the seed
+  // stream keeps its exact length and order. `penFieldOn` is false at the shipped
+  // default owner's-off mode or without individual units, and then the untouched
+  // rate test below runs byte-for-byte (`setEmergentPen(false)` is the dev toggle).
+  const penFieldOn = getEmergentPen() && !!penFields
+  const defRoll = s.rng()
+  const penQb = penFields?.off.find((p) => p.pos === 'QB')
+  const fieldDef = penFieldOn && penFields
+    ? penDefenseFoul({
+      n: s.n, offId, defId, type: concept.type, depth: concept.depth, yard: s.yard,
+      off: penFields.off, def: penFields.def, roll: defRoll, disc: defDisc,
+      mental: s.mental[defId]?.def ?? 1, hurry: 1, crowd: 1, rate: eff, qb: penQb,
+    })
+    : undefined
+  // L12.13 M3: a defense that knows the system makes fewer mental errors. With the
+  // field on, the base draw is not re-tested (the field decided above).
+  if (fieldDef || (!penFieldOn && defRoll < R2.penDefRate * defDisc * (s.mental[defId]?.def ?? 1))) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    const py = penaltyYards(`${s.n}:penD:${defId}`, 'def')
-    const kind = pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py, penFields?.def, penFields?.off)
+    const py = fieldDef ? fieldDef.yards : penaltyYards(`${s.n}:penD:${defId}`, 'def')
+    const kind = fieldDef ? fieldDef.kind : pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py, penFields?.def, penFields?.off)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`, kind, penFields?.def)
+    const offender = fieldDef ? fieldDef.player : penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`, kind, penFields?.def)
     const who = shortName(offender?.name)
     // R14: offsetting — both clubs fouled on the snap; replay, no yardage.
     const offset = h01(`${s.n}:penOffset:${defId}`) < 0.001
@@ -9195,13 +9288,25 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // FUTURES #6: the road offence false-starts more in a loud house; the home side
   // carries the centering offset. Exactly 1 with weather off, so the base is exact.
   const crowdPen = wxFor(s, offId === s.homeId)?.falseStartMult ?? 1
-  if (s.rng() < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1) * crowdPen) {
+  // r2penalties: the offence's fouls come off the same field (the beaten blocker,
+  // the jumper on the line, the receiver who pushes off, the man under centre);
+  // with the field on it replaces the flat rate draw. The base draw is consumed at
+  // exactly the same point and is the field's own gate, so OFF is byte-identical.
+  const offRoll = s.rng()
+  const fieldOff = penFieldOn && penFields
+    ? penOffenseFoul({
+      n: s.n, offId, defId, type: concept.type, depth: concept.depth, yard: s.yard,
+      off: penFields.off, def: penFields.def, roll: offRoll, disc: offDisc,
+      mental: s.mental[offId]?.off ?? 1, hurry: hurryPen, crowd: crowdPen, rate: eff, qb: penQb,
+    })
+    : undefined
+  if (fieldOff || (!penFieldOn && offRoll < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1) * crowdPen)) {
     const penS = statFor(s, offId)
     const startY = s.yard
-    const py = penaltyYards(`${s.n}:penO:${offId}`, 'off')
-    const kind = pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py, penFields?.off, penFields?.def)
+    const py = fieldOff ? fieldOff.yards : penaltyYards(`${s.n}:penO:${offId}`, 'off')
+    const kind = fieldOff ? fieldOff.kind : pickPenaltyKind(world, s, 'off', offId, defId, offId !== s.homeId, py, penFields?.off, penFields?.def)
     const info = PENALTY_INFO[kind]
-    const offender = penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`, kind, penFields?.off)
+    const offender = fieldOff ? fieldOff.player : penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`, kind, penFields?.off)
     const who = shortName(offender?.name)
     s.yard = clamp(s.yard - py, 1, 99)
     // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
@@ -9279,7 +9384,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     if (a !== 0) call = { edge: (call?.edge ?? 0) + a, sackMult: call?.sackMult ?? 1, trick: call?.trick }
   }
   const out = concept.type === 'pass'
-    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0, j13, trickPasser)
+    ? resolvePass(world, s.rng, offId, defId, concept, s.yard, offStyle(world, offId).passRate, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'pass'), env, call, s.n, s.mastery, s.distance ?? 0, s.down ?? 0, j13, trickPasser, s.rushHeat)
     : resolveRun(world, s.rng, offId, defId, concept, s.distance, s.yard, s.tier, clutchFor(world, offId, s.down, s.yard) + clutchEdge(world, s, offId, defId, 'run'), env, call, s.n, s.mastery, j13, trickCarrier)
   // FUTURES #24: mark the snap for the play log, the film line and the animation.
   if (trickKind) {

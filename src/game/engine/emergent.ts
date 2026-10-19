@@ -127,6 +127,14 @@ export const EMERGENT = {
   oobMax: 0.45,
   /** The forcer has to be this close (yd) for the end to count as forced out. */
   oobR: 2.0,
+  /** A forced out of bounds is a SIDELINE end: the carrier has to be this close
+   *  (yd) to the chalk when the forcer gets home. The animation draws the field's
+   *  own recording only when the recorded stop is at the sideline
+   *  (E1C.oobMargin, 6); further inside it falls back to its own choreography,
+   *  which cannot draw a forcer who is really there (check-broadcast r8, backlog
+   *  354/373). A defender who meets the carrier further inside has tackled him,
+   *  not shoved him out. Bookkeeping/outcome: those plays stop in bounds. */
+  oobRail: 6,
   /** A run aimed wider than this from the ball drifts toward that sideline. */
   driftFrom: 14,
   /** The outward drift (yd/s) of such a run (it can be forced out of bounds). */
@@ -187,6 +195,22 @@ export const EMERGENT = {
   markerStop: 3,
   /** Warmup: the recorded path cadence (ticks between fieldPaths points). */
   pathEvery: 5,
+  // ── assisted tackles (bookkeeping only; the yards/tackler are unchanged) ────
+  /** A defender within this radius of the ball at the stop is genuinely in on the
+   *  tackle (the pile) and takes the ASSIST. The SOLO is always the field's own
+   *  tackler (`tacklerId`) — the man the broadcast draws making the tackle; the
+   *  box score never relabels the stop to a man the replay does not show in
+   *  contact. The radius is the pile radius: the field's own contact range (the
+   *  YAC field's `contactR`) plus the ground a pursuer covers while the pile
+   *  forms (≈0.25 s at league pursuit speed), i.e. a defender arriving as the
+   *  tackle is made — never a man a dozen yards away. A man still held on a block
+   *  or recovering from a miss is excluded (he is not in on the stop). Men
+   *  converging from further out may be in the pursuit but get no credit, so the
+   *  tackle count is reported as the field actually made it. Pick-one convention
+   *  (documented in stats.ts): a gang tackle = 1 solo + 1 assist (PFR). */
+  assistR: 3.0,
+  /** How many extra men in the pile are credited (1 = one assist per tackle). */
+  assistN: 1,
 } as const
 
 interface MutableE1 { on: boolean }
@@ -220,6 +244,10 @@ export const E1_STAT = {
   posN: {} as Record<string, number>,
   posField: {} as Record<string, number>,
   posPlanned: {} as Record<string, number>,
+  /** Dev (rushvar): which path credited the tackler, and the credited man's role. */
+  creditSrc: {} as Record<string, number>,
+  creditRole: {} as Record<string, number>,
+  creditPin: {} as Record<string, number>,
   attempts: 0,
 }
 
@@ -295,6 +323,8 @@ export interface EmergentRunIn {
 export interface EmergentRunOut {
   yards: number
   tacklerId?: string
+  /** The men in on the stop besides the tackler (nearest first) — assists. */
+  assistIds?: string[]
   missedTackleIds?: string[]
   forcedMissedIds?: string[]
   outOfBounds?: boolean
@@ -468,6 +498,7 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
   const fieldPaths: Record<string, LPt[]> = { [inp.carrier.id]: path }
   let stopX: number | null = null
   let tacklerId: string | undefined
+  let creditSrc = ''
   let oob = false
   let td = false
   const missed: string[] = []
@@ -484,6 +515,9 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
   // unforced step-out.
   const oobRoll = (dist: number): boolean => {
     if (dist > R.oobR) return false
+    // (a forced out of bounds is a sideline end - see oobRail; MID * 2 is the
+    //  animation's FIELD_H, the frame the broadcast draws the stop in)
+    if (Math.min(carrier.y, MID * 2 - carrier.y) > R.oobRail) return false
     const lat = Math.abs(carrier.y - MID)
     const pOob = clamp((lat - R.oobFrom) * R.oobW, 0, R.oobMax)
     return pOob > 0 && h01(`${key}:oob`) < pOob
@@ -589,10 +623,12 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
       } else if (oobRoll(d)) {
         oob = true
         tacklerId = near.p.id
+        creditSrc = 'contact-oob'
         break
       } else {
         stopX = carrier.x
         tacklerId = near.p.id
+        creditSrc = 'contact'
         break
       }
     }
@@ -615,8 +651,9 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
         if (d2 < bd) { bd = d2; who = m }
       }
       if (who) {
-        if (oobRoll(Math.sqrt(bd))) { oob = true; tacklerId = who.p.id; break }
+        if (oobRoll(Math.sqrt(bd))) { oob = true; tacklerId = who.p.id; creditSrc = 'misstail-oob'; break }
         tacklerId = who.p.id
+        creditSrc = 'misstail'
       }
       stopX = carrier.x
       break
@@ -652,10 +689,12 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
         } else if (oobRoll(d)) {
           oob = true
           tacklerId = who.p.id
+          creditSrc = 'aim-oob'
           break
         } else {
           stopX = carrier.x
           tacklerId = who.p.id
+          creditSrc = 'aim'
           break
         }
       } else {
@@ -702,7 +741,7 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
       const u = h01(`${key}:tail`)
       const tl = cur * Math.min(R.tailCap, R.tailLo + (R.tailHi - R.tailLo) * u)
       fieldGain = Math.min(cur, Math.max(0, tl))
-      if (!tacklerId) tacklerId = nearestId()
+      if (!tacklerId) { tacklerId = nearestId(); creditSrc = 'tail' }
     }
   }
 
@@ -719,7 +758,41 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
   const forced = missedSet.size > 0
 
   // CLOCK_ON: a runner forced out of bounds is still credited to a defender.
-  if (oob && inp.clockOn && !tacklerId) tacklerId = nearestId()
+  if (oob && inp.clockOn && !tacklerId) { tacklerId = nearestId(); creditSrc = 'oobclock' }
+
+  if (E1_STAT.on && tacklerId && creditSrc) {
+    E1_STAT.creditSrc[creditSrc] = (E1_STAT.creditSrc[creditSrc] ?? 0) + 1
+    const mm = defs.find((m) => m.p.id === tacklerId)
+    const role = mm?.role ?? '?'
+    E1_STAT.creditRole[role] = (E1_STAT.creditRole[role] ?? 0) + 1
+    const pin = !mm ? '?' : mm.pinned > t ? 'pinned' : mm.react > t ? 'unreacted' : mm.recover > t ? 'recovering' : 'free'
+    const tag = `${role}:${pin}`
+    E1_STAT.creditPin[tag] = (E1_STAT.creditPin[tag] ?? 0) + 1
+  }
+
+  // ── the pile: the box score's solo credit + the assists (bookkeeping only) ──
+  // The field's own tackler (`tacklerId`) is the nearest man in contact — it is
+  // what the broadcast draws, and it is ALSO the box score's SOLO credit: the
+  // stop belongs to the man who made it. The ASSIST goes to another defender
+  // actually in contact range of the carrier at the stop (within `assistR`, the
+  // field's own contact radius), nearest first; if nobody else is that close
+  // there is no assist (a solo tackle). Zero rng draws; the yards, the field's
+  // tackler and every miss are unchanged. PFR gang-tackle convention: one solo +
+  // one assist.
+  let assistIds: string[] | undefined
+  if (!td && tacklerId && EMERGENT.assistN > 0) {
+    const inStop: { id: string; d: number }[] = []
+    for (const m of defs) {
+      if (m.p.id === tacklerId) continue
+      // A man still held on a block or recovering from a miss is not in on the
+      // stop — he is not in contact range as the tackle is made.
+      if (m.pinned > t || m.recover > t) continue
+      const d = Math.hypot(carrier.x - m.x, carrier.y - m.y)
+      if (d <= EMERGENT.assistR) inStop.push({ id: m.p.id, d })
+    }
+    inStop.sort((a, b) => a.d - b.d)
+    if (inStop.length) assistIds = inStop.slice(0, Math.max(1, EMERGENT.assistN)).map((c) => c.id)
+  }
 
   if (E1_STAT.on) {
     E1_STAT.n++
@@ -747,6 +820,7 @@ export function emergentRun(inp: EmergentRunIn): EmergentRunOut {
   return {
     yards,
     tacklerId: td ? undefined : tacklerId,
+    assistIds: td ? undefined : assistIds,
     missedTackleIds: missed.length ? missed : undefined,
     forcedMissedIds: forced ? [inp.carrier.id] : undefined,
     outOfBounds: oob || undefined,
