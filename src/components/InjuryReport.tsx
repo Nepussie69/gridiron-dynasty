@@ -30,6 +30,7 @@ import {
   type InjuryStatus,
   type MedicalGrade,
 } from '../game/engine/injuryCalls'
+import { expectedReturn, loadRestIds, restGameIds } from '../game/engine/medicalStaff'
 import { useGame, useWorld } from '../store/gameStore'
 import {
   Avatar,
@@ -169,12 +170,24 @@ export function InjuryReport({ className, disabled = false }: { className?: stri
                         </span>
                       ) : null}
                       {playing && <Badge tone="info">Playing hurt</Badge>}
+                      {loadRestIds(career, world.season).includes(p.id) && <Chip>Practice rest</Chip>}
+                      {restGameIds(career, world.season, world.week).includes(p.id) && <Chip>Rested this week</Chip>}
                     </div>
 
                     <div className="mt-1 text-small leading-snug text-ink-2">
                       {p.injured?.note ?? 'On injured reserve'}
                       {r.status === 'OUT' && <span className="text-muted"> — not a choice this week</span>}
                     </div>
+
+                    {/* FUTURES #48: the club's own timeline. The centre is the
+                        trainer's rehab read; the width is the physician's — a
+                        better doctor narrows the band and calls it exactly. */}
+                    {p.injured && p.injured.games < 99 && (
+                      <InjuryTimeline
+                        games={p.injured.games}
+                        band={expectedReturn(world, career.teamId, p, p.injured.games)}
+                      />
+                    )}
 
                     {r.status !== 'OUT' && (
                       <>
@@ -266,11 +279,42 @@ export function InjuryReport({ className, disabled = false }: { className?: stri
 }
 
 /**
+ * FUTURES #48: one player's injury timeline — the weeks he is out as a bar, the
+ * expected-return band shaded, and the club's own read of it. The band comes
+ * straight from `expectedReturn` (the trainer's read sets the centre, the
+ * physician's sets the width).
+ */
+export function InjuryTimeline({ games, band }: { games: number; band: { lo: number; hi: number; label: string } }) {
+  const span = Math.max(6, band.hi)
+  const solid = Math.min(100, (band.lo / span) * 100)
+  const open = Math.min(100, (band.hi / span) * 100)
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-2">
+        <div
+          className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-3"
+          role="img"
+          aria-label={`Out ${games} ${games === 1 ? 'game' : 'games'} — expected back in ${band.label}`}
+        >
+          <div className="absolute inset-y-0 left-0 bg-warn-soft" style={{ width: `${open}%` }} />
+          <div className="absolute inset-y-0 left-0 bg-warn" style={{ width: `${solid}%` }} />
+        </div>
+        <span className="shrink-0 font-cond text-label font-600 uppercase tracking-[0.05em] text-muted tnum">
+          {games} out
+        </span>
+      </div>
+      <div className="mt-0.5 text-small text-muted">
+        Expected back in <strong className="font-600 text-ink-2">{band.label}</strong>
+      </div>
+    </div>
+  )
+}
+
+/**
  * The compact injury status badge used on the depth chart and the player
  * profile: "Questionable · playing hurt" once the club has sent him out, else
  * his injury. Reads the store itself so a screen only passes the player.
- */
-export function InjuryStatusBadge({
+ */export function InjuryStatusBadge({
   player,
   world,
   compact = false,

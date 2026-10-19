@@ -73,7 +73,18 @@ export const EMERGENT_YAC = {
   maxT: 4.5,
   /** A free defender inside this distance of the receiver makes the attempt. */
   contactR: 1.7,
-
+  // ── assisted tackles (bookkeeping only; the yards/tackler are unchanged) ────
+  /** A defender within this radius of the ball at the stop is genuinely in on the
+   *  tackle (the pile) and takes the ASSIST. The SOLO is always the field's own
+   *  tackler — the man the broadcast draws; the box score never relabels the stop
+   *  to a man the replay does not show in contact. The radius is the pile radius:
+   *  this field's own `contactR` plus the ground a pursuer covers while the pile
+   *  forms (≈0.25 s at league pursuit speed) — a defender arriving as the tackle
+   *  is made, never one a dozen yards away. Pick-one convention (documented in
+   *  stats.ts): a gang tackle = 1 solo + 1 assist (PFR). */
+  assistR: 3.0,
+  /** How many extra men in the pile are credited (1 = one assist per tackle). */
+  assistN: 1,
   // ── the receiver ───────────────────────────────────────────────────────────
   /** The receiver's own open-field edge (SpeedGap mph) → yd/s of top speed. */
   edgeW: 0.30,
@@ -151,6 +162,12 @@ export const EMERGENT_YAC = {
   oobFrom: 12,
   oobW: 0.02,
   oobMax: 0.3,
+  /** A forced out of bounds is a SIDELINE end: the carrier has to be this close
+   *  (yd) to the chalk. The animation draws the field's recording only when the
+   *  recorded stop is at the sideline (E1C.oobMargin, 6); further inside it falls
+   *  back to its own choreography, which cannot draw a forcer who is really there
+   *  (check-broadcast r8, backlog 354/373). See EMERGENT.oobRail. */
+  oobRail: 6,
   /** Physical edge (the field clamps y to ~0.8/52.5, so this is the hard rail). */
   oobTight: 0.85,
 
@@ -315,6 +332,8 @@ export interface YacResult {
   raw: number
   bucket: string
   tacklerId?: string
+  /** The men in on the stop besides the tackler (nearest first) — assists. */
+  assistIds?: string[]
   missedTackleIds: string[]
   forcedMissedIds: string[]
   outOfBounds: boolean
@@ -496,6 +515,8 @@ export function emergentYac(inp: YacInput): YacResult {
    *  crossing is the calibrated stand-up (`tdGate`), not a clean score. */
   let contestedPlane = false
   const oobRoll = (cp: LPt): boolean => {
+    // (a forced out of bounds is a sideline end - see oobRail)
+    if (Math.min(cp.y, FH - cp.y) > E.oobRail) return false
     const lat = Math.abs(cp.y - MID)
     const p = clamp((lat - E.oobFrom) * E.oobW, 0, E.oobMax)
     return p > 0 && h01(`${seed}:oob`) < p
@@ -610,6 +631,27 @@ export function emergentYac(inp: YacInput): YacResult {
   }
   const yac = total - inp.passAir
 
+  // ── the pile: the box score's solo credit + the assists (bookkeeping only) ──
+  // `tackler` is the field's own man (the nearest in contact — what the animation
+  // draws) and it is ALSO the box score's SOLO credit: the stop belongs to the man
+  // who made it. The ASSIST goes to another defender in contact range of the ball
+  // at the stop (within `assistR`), nearest first; nobody that close means no
+  // assist. Zero rng draws; the yards, the field's tackler and every miss are
+  // unchanged. PFR gang-tackle convention: one solo + one assist.
+  let assistIds: string[] | undefined
+  if (!emittedTd && tackler && E.assistN > 0) {
+    const inStop: { p: Player; d: number }[] = []
+    for (const d of defs) {
+      const a = field.agents.get(d.key)
+      if (!a || d.p.id === tackler.id) continue
+      if (a.recover > 0 || field.t - a.freedAt < 0.2) continue
+      const dist = Math.hypot(a.x - cpEnd.x, a.y - cpEnd.y)
+      if (dist <= E.assistR) inStop.push({ p: d.p, d: dist })
+    }
+    inStop.sort((a, b) => a.d - b.d)
+    if (inStop.length) assistIds = inStop.slice(0, Math.max(1, E.assistN)).map((c) => c.p.id)
+  }
+
   // ── paths for the animation (E1c) ───────────────────────────────────────────
   const carryPath: LPt[] = (field.agents.get(carrierKey)?.mv.path ?? []).map((w) => ({ x: +w.x.toFixed(2), y: +w.y.toFixed(2) }))
   const fieldPaths: Record<string, LPt[]> = {}
@@ -645,6 +687,7 @@ export function emergentYac(inp: YacInput): YacResult {
     raw,
     bucket,
     tacklerId: emittedTd ? undefined : tackler?.id,
+    assistIds,
     missedTackleIds: missed.length ? missed : [],
     forcedMissedIds: missedSet.size ? (carrier ? [carrier.id] : []) : [],
     outOfBounds: emittedTd ? false : outOfBounds,

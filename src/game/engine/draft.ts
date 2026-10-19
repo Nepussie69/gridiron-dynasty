@@ -8,7 +8,7 @@ import { pushLedger } from './ledger'
 import { departmentGrade } from './department'
 import { convictionPick } from './conviction'
 import { redFlagIds } from './redflag'
-import { roomNote, roomTilt, roomWinner } from './draftRoom'
+import { aiRoomTilt, roomMovesUsed, roomNote, roomTilt, roomWinner } from './draftRoom'
 import { applyDraftTradeDown, roomTradeDown } from './draftTrades'
 import { makeCharacter } from './character'
 import { isEvaluator, scoutReport } from './scoutBias'
@@ -520,7 +520,9 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0, 
     }
     // FUTURES #27 DF1: on your club's picks the room's blended stance tilts the
     // board (red flag first, then the tilt, then a conviction call can still win).
-    const tilt = career && teamId === career.teamId ? roomTilt(world, career) : undefined
+    // DF4: with the AI-identity toggle on, an NPC club's OWN room tilts its board.
+    const tilt =
+      career && teamId === career.teamId ? roomTilt(world, career) : aiRoomTilt(world, career, teamId)
     // FUTURES #27 DF2: an Accumulate room moves off the clock itself when an NPC is
     // running your pick. Deterministic (h01), read-only until it actually accepts,
     // and it reuses the same accept internals a click uses. A coach who holds the
@@ -531,6 +533,8 @@ export function simUntilUser(world: World, career: CareerState | null, max = 0, 
       if (move) {
         const applied = applyDraftTradeDown(world, career, move.offer, { runForward: false })
         if (applied.ok) {
+          // The room has now used one of its moves back this draft (NFL-real cap).
+          career.draftRoomMoves = { season: world.season, count: roomMovesUsed(world, career) + 1 }
           pushLedger(career, {
             kind: 'advice',
             name: `Trade down with ${applied.partnerAbbr}`,
@@ -622,9 +626,38 @@ export function simulateRestOfDraft(world: World, career: CareerState | null) {
     const mine = !!career && teamId === career.teamId
     // L12.17 DR3: an NPC club drafts off its own evaluators' reports.
     const gradeOf = mine ? (p: DraftProspect) => departmentGrade(world, career!, p) ?? p.grade : clubBoardOf(world, teamId)
+    // FUTURES #27 DF2: with an Accumulate philosophy the room does not just show
+    // the most offers when the draft is auto-finished for you — it takes the best
+    // one the board can afford to give up (the same deterministic check, the same
+    // apply internals a click uses). Never fires without a live philosophy, so an
+    // old save and the unset default run exactly as before.
+    if (mine && career && !coachHoldsTradePen(career)) {
+      const tradedRound = currentRound(world)
+      const move = roomTradeDown(world, career, gradeOf)
+      if (move) {
+        const applied = applyDraftTradeDown(world, career, move.offer, { runForward: false })
+        if (applied.ok) {
+          // The room has now used one of its moves back this draft (NFL-real cap).
+          career.draftRoomMoves = { season: world.season, count: roomMovesUsed(world, career) + 1 }
+          pushLedger(career, {
+            kind: 'advice',
+            name: `Trade down with ${applied.partnerAbbr}`,
+            pos: '—',
+            college: '—',
+            round: tradedRound,
+            note: move.note,
+            accepted: true,
+          })
+          // The incoming picks are extra selections: give the safety cap one slot each.
+          guard += move.offer.get.filter((a) => a.kind === 'pick').length
+          continue
+        }
+      }
+    }
     // FUTURES #27 DF1: an auto/clock pick uses your own vector at 0.7 plus the
     // room's at 0.3 — you still hear the building before the card goes in.
-    const tilt = mine ? roomTilt(world, career, { auto: true }) : undefined
+    // DF4: an NPC club picks off its own room's stance when the toggle is on.
+    const tilt = mine ? roomTilt(world, career, { auto: true }) : aiRoomTilt(world, career, teamId)
     const prospect = bestAvailableFor(world, teamId, undefined, gradeOf, tilt, mine ? null : gmStyle(generalManager(world, teamId)))
     if (!prospect) {
       world.draftState.complete = true

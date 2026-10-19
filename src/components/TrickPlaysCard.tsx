@@ -10,12 +10,12 @@
 
 import { Zap } from 'lucide-react'
 import { capabilities } from '../game/engine/capabilities'
-import { TRICK, trickRecordText } from '../game/engine/trickPlays'
-import { trickInstallState, trickRecordFor } from '../lib/trickUi'
+import { aiTrickProfile, TRICK, trickRecordText } from '../game/engine/trickPlays'
+import { trickInstallState, trickMotionLine, trickRecordFor } from '../lib/trickUi'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, OptionCard, OptionGroup, VerdictChip } from '../ui/kit'
 
-export function TrickPlaysCard({ disabled = false }: { disabled?: boolean }) {
+export function TrickPlaysCard({ disabled = false, oppId }: { disabled?: boolean; oppId?: string }) {
   const league = useWorld()
   const career = useGame((s) => s.career)!
   const setTrickPackage = useGame((s) => s.setTrickPackage)
@@ -30,6 +30,11 @@ export function TrickPlaysCard({ disabled = false }: { disabled?: boolean }) {
   const install = trickInstallState(career, scouted, disabled || !offSide)
   const own = trickRecordText(scouted)
   const oc = career.ocTricks === true
+  // FUTURES #24 T4: both scouts read the specific coordinator's own appetite —
+  // his play-calling sub plus his aggression — never a league/unit average.
+  const oppOc = oppId ? aiTrickProfile(league, oppId) : null
+  const myOc = offSide ? aiTrickProfile(league, career.teamId) : null
+  const everyGames = (perGame: number) => (perGame > 0 ? Math.max(1, Math.round(1 / perGame)) : 99)
 
   const toggle = (kind: (typeof install.rows)[number]['kind']) => {
     const installed = install.installed
@@ -56,6 +61,16 @@ export function TrickPlaysCard({ disabled = false }: { disabled?: boolean }) {
         remembers every one you show.
       </p>
 
+      {oppOc && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[var(--r-md)] border border-line bg-surface-2 px-3 py-2">
+          <Badge tone={oppOc.mult >= 1.28 ? 'warn' : oppOc.mult >= 0.85 ? 'neutral' : 'info'}>{oppOc.word}</Badge>
+          <span className="min-w-0 text-small leading-snug text-muted">
+            Their OC, <strong className="text-ink-2">{oppOc.ocName}</strong>, {oppOc.word} — about one trick every{' '}
+            {everyGames(oppOc.perGame)} games.
+          </span>
+        </div>
+      )}
+
       {!offSide ? (
         <p className="rounded-[var(--r-md)] bg-surface-2 px-3 py-2 text-small text-muted">
           Tricks are an offensive call — the OC installs them.
@@ -75,6 +90,23 @@ export function TrickPlaysCard({ disabled = false }: { disabled?: boolean }) {
               />
             ))}
           </OptionGroup>
+
+          {install.installed.length > 0 && (
+            <div className="mt-3 rounded-[var(--r-md)] border border-line bg-surface-2 px-3 py-2.5">
+              <p className="font-cond text-label font-700 uppercase tracking-wide text-ink-2">Game-day motion</p>
+              <ul className="mt-1 space-y-1">
+                {install.installed.map((kind) => (
+                  <li key={kind} className="flex flex-col gap-0.5 text-label leading-snug text-muted sm:flex-row sm:items-baseline sm:gap-2">
+                    <span className="font-600 text-ink-2">{install.rows.find((r) => r.kind === kind)?.label}</span>
+                    <span className="min-w-0">{trickMotionLine(kind)}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-label leading-snug text-muted">
+                On game day the broadcast draws each exchange as it happened, and the defence's own reaction to the fake.
+              </p>
+            </div>
+          )}
 
           <div className="mt-3 rounded-[var(--r-md)] border border-line bg-surface-2 p-3">
             <label className="flex cursor-pointer items-start gap-2.5">
@@ -97,6 +129,12 @@ export function TrickPlaysCard({ disabled = false }: { disabled?: boolean }) {
               </span>
             </label>
           </div>
+
+          {oc && myOc && (
+            <p className="mt-2 text-label leading-snug text-muted">
+              {myOc.ocName} {myOc.word} — the staff takes about one trick every {everyGames(myOc.perGame)} games.
+            </p>
+          )}
 
           <p className="mt-3 text-small leading-snug text-muted">
             {install.full && 'Two installed — unselect one to change the package. '}

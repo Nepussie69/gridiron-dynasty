@@ -87,9 +87,17 @@ export const EMERGENT_E3 = {
   handoffK: 1.2,
   twistSec: 0.4,
   /** Rating points of technique margin → seconds off the hip time. */
-  techSec: 0.028,
+  techSec: 0.052,
+  /** Snap-to-snap execution noise: the SAME rep is not run the same way twice.
+   *  Every rep gets a centred triangular offset on its hip time, hashed on the
+   *  rep key (`hash01`, never an rng draw), with sd = execVar × 0.408 s. This is
+   *  what gives the rusher a real per-SNAP win rate instead of winning every snap
+   *  in a matchup (NFL: an elite rusher wins ~20-30% of his snaps, an average one
+   *  ~8-12%), so the club's pressures spread across the front; the rating gaps
+   *  (move/set/pace) still order the league, so elite-vs-poor stays large. */
+  execVar: 3.2,
   /** The hip clock: an average rep is won at this time + the pace term. */
-  hipBase: 2.62,
+  hipBase: 4.12,
   beatW: 1.0,
   beatLo: 0.55,
   beatHi: 4.6,
@@ -105,7 +113,7 @@ export const EMERGENT_E3 = {
   // ── the verdict ────────────────────────────────────────────────────────────
   /** The clock window (s) inside which the pressure is felt and reported: a man
    *  home inside `tThrow + pressWin` forced the throw (≈30% of dropbacks). */
-  pressWin: 0.30,
+  pressWin: 0.25,
   /** The animation's clock band (today's PB.minTime / PB.maxTime). */
   minTime: 0.7,
   maxTime: 4.2,
@@ -123,12 +131,27 @@ export const EMERGENT_E3 = {
   /** Main's own loss line (PB.lossLine: a rep with a win above it is lost). */
   lossLine: 0,
   /** Measured league mean of the raw field edge (the re-centre, see E3_STAT). */
-  edgeCenter: -10.35,
+  edgeCenter: -34.66,
+  /** Re-scale of the centred field edge. The per-rep execution noise (below) makes
+   *  the raw field edge far wider than the blended J8b edge it replaces (sd 51 vs
+   *  14 measured, E3_STAT), and `edgeTerm` feeds the QB's pocket plan / checkdown
+   *  bias, so an unscaled term would move the passing game. Scaling the centred
+   *  edge by (sd_main / sd_field) keeps the league's `pressureEdge` distribution —
+   *  and therefore the passing stream — where main had it, while the pressure
+   *  credit and the pressure verdict keep the whole field spread. */
+  edgeScale: 0.267,
   // ── the sack term (replaces `pressureEdge × 0.0012` in `sackChance`) ───────
   /** Extra sack probability per second the man is home before the throw. */
   sackPerSec: 0.15,
-  /** Measured league mean of `tHome − tThrow` (the re-centre, see E3_STAT). */
-  sackCenter: 0.49,
+  /** The zero point of the sack term (see `sackPerSec`/`sackLo`/`sackHi`). The
+   *  measured league mean of `tHome − tThrow` is ≈0.73 s (E3_STAT), but the sack
+   *  term is CLAMPED at ±0.1, so a term centred on that mean lands slightly
+   *  negative — the E3 league sack rate came out 4.8% against the OFF path's
+   *  6.3% (a 1.1 sack/game drift). The zero point is therefore set where the
+   *  CENTRED term's league mean matches the OFF path's (`pressureEdge × 0.0012`,
+   *  mean +0.0036), which the probe measures directly: sackCenter 0.95 puts the
+   *  ON sack rate at the OFF path's 6.3–6.6% (analysis/rushvar-sack.mjs). */
+  sackCenter: 0.88,
   sackLo: -0.10,
   sackHi: 0.10,
   // ── assignment (the base engine's own rules, kept as inputs) ───────────────
@@ -146,6 +169,40 @@ export const EMERGENT_E3 = {
   slideLo: 0.05,
   slideHi: 0.95,
   whiffBase: 0.18,
+  // ── in-game protection adjustment (the OC adjusts to the man who is winning) ─
+  // Real protection is not static: once a rusher has beaten his man a few times,
+  // the offence slides a lineman, chips him with the back and slides the QB away
+  // — doubles and slides go to the man who is winning. This block makes the
+  // dominant rep draw that help AFTER he wins early in a game (`inp.heat` = the
+  // pressures this defender has already been credited with this game, game state
+  // threaded from playsim — never an rng draw). The OC's own `adjustments` /
+  // `gameManagement` sub sets how soon the slide comes; the QB's own AWR is
+  // already in his clock and also scales the help. Effect: the club's pressures
+  // spread across the front instead of pooling on one man (no player > 12 in a
+  // game), while an elite-vs-poor gap still orders the league.
+  /** Pressures this game at which the slide/double starts (before the OC sub). */
+  heatThresh: 4,
+  /** Seconds the hot man's rep is slowed by the initial double. */
+  heatDoubleAdd: 0.5,
+  /** Extra seconds per pressure past the threshold (help keeps arriving). */
+  heatExtra: 0.14,
+  /** Cap on the total help (s) on the hot man's rep. */
+  heatAddMax: 1.3,
+  /** Seconds the man freed by the slide gets home sooner. */
+  heatFreeBoost: 0.22,
+  /** The doubled man's rep counts this share (like the J12 flat double). */
+  heatMult: 0.5,
+  /** The OC adjustments sub moves the threshold (a sharp OC adjusts sooner). */
+  heatAdjW: 0.04,
+  /** The QB's own AWR moves the threshold the same way (slide calls). */
+  heatAwrW: 0.03,
+  /** Threshold clamp. */
+  heatThreshLo: 2,
+  heatThreshHi: 8,
+  /** QB gets the ball out faster against heat: seconds per pressure … */
+  heatQbStep: 0.02,
+  /** …capped here. */
+  heatQbCap: 0.12,
 } as const
 
 /** The object above is const; only `on` is ever written (the setJ13 pattern). */
@@ -231,6 +288,8 @@ export interface E3Rush {
   edge: number
   reps: E3Rep[]
   credit?: E3Rep
+  /** Stat credit: the rep who reached the QB first (bookkeeping only). */
+  pressurer?: E3Rep
   maxWin: number
   freeRusher: boolean
   lost: number
@@ -262,6 +321,11 @@ export interface E3In {
   conceptDepth: number
   /** The J12 layer is on (its double/chip/spy handling). */
   j12: boolean
+  /** In-game pressure ledger (playerId → pressures credited this game). Game
+   *  state, not an rng draw: drives the protection adjustment (`heat*` knobs). */
+  heat?: Record<string, number>
+  /** The OC's own adjustments/gameManagement sub, centred on the league (points). */
+  heatAdj: number
 }
 
 export interface E3Out {
@@ -300,6 +364,9 @@ function repRace(
   r: Player, b: Player | undefined, key: string, blitz: boolean,
   fat: Record<string, number> | undefined, handoffRel: number | undefined,
 ): { tHip: number; tHome: number; free: boolean; twistFail: boolean } {
+  // Snap-to-snap execution noise for this rep (centred, sd = execVar × 0.408).
+  // Hashed on the rep key — zero rng draws added or removed.
+  const exec = (hash01(`${key}:ex`) + hash01(`${key}:ex2`) - 1) * EMERGENT_E3.execVar
   const ra = effAttrs(r)
   const pmv = rel(r.pos, 'PMV', ra.PMV ?? 70)
   const fmv = rel(r.pos, 'FMV', ra.FMV ?? 70)
@@ -317,7 +384,7 @@ function repRace(
   let tHip = EMERGENT_E3.hipBase + EMERGENT_E3.reactDl * (1 - clamp(getoff / 20, -1, 1))
   if (!b) {
     // Nobody is assigned to him: he is in the pocket's lap, early.
-    const t = EMERGENT_E3.reactDl * 0.5 + tTravel(EMERGENT_E3.laneFree, topR, accR) * 0.6
+    const t = EMERGENT_E3.reactDl * 0.5 + tTravel(EMERGENT_E3.laneFree, topR, accR) * 0.6 + exec
     return { tHip: EMERGENT_E3.reactDl * 0.5, tHome: clamp(t, EMERGENT_E3.beatLo, EMERGENT_E3.beatHi), free: true, twistFail: false }
   }
   const ba = effAttrs(b)
@@ -334,6 +401,7 @@ function repRace(
   tHip += tTravel(laneOf(r, blitz), topR, accR) - tTravel(EMERGENT_E3.mirrorD, topB, accB) * EMERGENT_E3.beatW
   tHip += EMERGENT_E3.reactOl * (1 - clamp(setQ / 20, -1, 1))
   tHip -= tech * EMERGENT_E3.techSec
+  tHip += exec
   // A twist / stunt whose exchange breaks: the rusher comes cleaner. The two
   // blockers pass off on their OWN AWR; a settled J37 pair recovers it.
   const passOff = clamp(0.55 + rel(b.pos, 'AWR', ba.AWR ?? 70) * EMERGENT_E3.passOffW, 0.2, 0.9)
@@ -474,6 +542,54 @@ export function emergentPassSet(inp: E3In): E3Out {
       }
     }
   }
+  // 5b. In-game protection adjustment: the offence slides a lineman, doubles and
+  // chips the man who has been winning this game (his credited pressures so far,
+  // `inp.heat`) and the QB slides away from that heat. The OC's own `adjustments`
+  // / `gameManagement` sub (plus the QB's AWR) decides how soon the slide comes.
+  // Deterministic — heat is game state, never an rng draw. It is a real protection
+  // adjustment: the man who is winning is slowed by the slide/double, the man freed
+  // by it gets home sooner, and the QB's clock tightens against the heat — so the
+  // pocket clock, the pressure verdict, the credit and the sack term all move
+  // together, and the club's pressures spread across the front.
+  let heatMax = 0
+  if (inp.heat) {
+    for (const rep of reps) {
+      const h = inp.heat[rep.id] ?? 0
+      if (h > heatMax) heatMax = h
+    }
+  }
+  let heatRelief = 0
+  if (heatMax > 0 && reps.length > 1) {
+    const qbAwrRel = inp.passer ? rel('QB', 'AWR', effAttrs(inp.passer).AWR ?? 70) : 0
+    const thresh = clamp(
+      EMERGENT_E3.heatThresh - inp.heatAdj * EMERGENT_E3.heatAdjW - qbAwrRel * EMERGENT_E3.heatAwrW,
+      EMERGENT_E3.heatThreshLo, EMERGENT_E3.heatThreshHi)
+    if (heatMax >= thresh) {
+      // The hottest rep (tie → earliest home) takes the slide/double; a blitzer
+      // the offence has to account for is equally real.
+      let hot = -1
+      for (let i = 0; i < reps.length; i++) {
+        const h = inp.heat?.[reps[i].id] ?? 0
+        if (h < thresh) continue
+        const hb = hot >= 0 ? (inp.heat?.[reps[hot].id] ?? 0) : -1
+        if (hot < 0 || h > hb || (h === hb && reps[i].tHome < reps[hot].tHome)) hot = i
+      }
+      if (hot >= 0) {
+        const add = Math.min(EMERGENT_E3.heatAddMax,
+          EMERGENT_E3.heatDoubleAdd + EMERGENT_E3.heatExtra * (heatMax - thresh))
+        reps[hot].tHome += add
+        reps[hot].mult *= EMERGENT_E3.heatMult
+        // The man freed by the slide gets home sooner (the next-best rep).
+        let freed = -1
+        for (let i = 0; i < reps.length; i++) {
+          if (i === hot) continue
+          if (freed < 0 || reps[i].tHome < reps[freed].tHome) freed = i
+        }
+        if (freed >= 0) reps[freed].tHome -= EMERGENT_E3.heatFreeBoost
+        heatRelief = Math.min(EMERGENT_E3.heatQbCap, (heatMax - thresh + 1) * EMERGENT_E3.heatQbStep)
+      }
+    }
+  }
   // 6. The QB's own clock: his pocket presence and the concept depth. (His
   // mobility/poise still scale the sack in the existing multipliers.)
   const qa = inp.passer ? effAttrs(inp.passer) : undefined
@@ -484,6 +600,7 @@ export function emergentPassSet(inp: E3In): E3Out {
     qbT -= Math.max(0, (inp.passer?.age ?? 22) - 22) * EMERGENT_E3.qbExpW
   }
   qbT -= inp.j13Dev * EMERGENT_E3.qbReadW
+  qbT -= heatRelief
   qbT = clamp(qbT, EMERGENT_E3.qbClampLo, EMERGENT_E3.qbClampHi)
   // 7. The pocket: the earliest man home is the pocket clock; a rep inside the
   // throw window carries the edge (and the pressure is felt).
@@ -499,9 +616,45 @@ export function emergentPassSet(inp: E3In): E3Out {
   const meanWin = wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : 0
   const edgeRaw = EMERGENT_E3.unionW * maxWin + EMERGENT_E3.blendW * meanWin
   const credit = reps[wins.indexOf(maxWin)]
+  // Stat credit (bookkeeping only; `credit` above still drives freeRusher): the
+  // pressure goes to the rep who reached the QB FIRST (earliest tHome) among the
+  // reps that won their rep and got home before the QB released (tHome <= qbT);
+  // else the earliest winner; else the earliest rep. Deterministic, no hash/rng.
+  //
+  // A lineman's block first: the broadcast draws a pressure rusher beating his
+  // BLOCK (the animflow 6c invariant), and it records that move only for a man who
+  // was in the drawn protection — a rusher left over the drawn wall (the last man
+  // in the animation's own rush order) is drawn FREE, and a blitzer is in practice
+  // that man. The animation also draws the back's chip on the blitzer the sim gave
+  // the back to, and a chip is a glancing engagement with no shed move: crediting a
+  // chipped blitzer puts the box score on a man the field never shows beating a
+  // block. So the credit prefers the FRONT (the non-blitz reps the animation always
+  // holds the line on): the earliest man home off the front, then the earliest man
+  // home overall, then the front's earliest winner, then the earliest winner, then
+  // anyone. Same clock, same verdict, same outcome — the only change is which of
+  // several home rushers owns the stat.
+  let pBefore: E3Rep | undefined
+  let pWon: E3Rep | undefined
+  let pAny: E3Rep | undefined
+  let pFront: E3Rep | undefined
+  let pFrontWon: E3Rep | undefined
+  let pFrontAny: E3Rep | undefined
+  for (const r of reps) {
+    if (!pAny || r.tHome < pAny.tHome) pAny = r
+    if (!r.blitz && (!pFrontAny || r.tHome < pFrontAny.tHome)) pFrontAny = r
+    if (r.win > EMERGENT_E3.lossLine) {
+      if (!pWon || r.tHome < pWon.tHome) pWon = r
+      if (!r.blitz) {
+        if (!pFrontWon || r.tHome < pFrontWon.tHome) pFrontWon = r
+        if (r.tHome <= qbT && (!pFront || r.tHome < pFront.tHome)) pFront = r
+      }
+      if (r.tHome <= qbT && (!pBefore || r.tHome < pBefore.tHome)) pBefore = r
+    }
+  }
+  const pressurer = pFront ?? pFrontWon ?? pFrontAny ?? pBefore ?? pWon ?? pAny
   const freeRusher = !!credit?.free
   const delta = tHome - qbT
-  const edgeTerm = edgeRaw - EMERGENT_E3.edgeCenter
+  const edgeTerm = (edgeRaw - EMERGENT_E3.edgeCenter) * EMERGENT_E3.edgeScale
   const sackTerm = clamp((EMERGENT_E3.sackCenter - delta) * EMERGENT_E3.sackPerSec, EMERGENT_E3.sackLo, EMERGENT_E3.sackHi)
   const pressured = delta <= EMERGENT_E3.pressWin
   const time = clamp(tHome, EMERGENT_E3.minTime, EMERGENT_E3.maxTime)
@@ -530,6 +683,7 @@ export function emergentPassSet(inp: E3In): E3Out {
       edge: edgeRaw + edgeAdj,
       reps,
       credit,
+      pressurer,
       maxWin,
       freeRusher,
       lost,

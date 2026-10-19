@@ -10,17 +10,15 @@ import {
 } from 'react'
 import { ArrowRight, CornerDownLeft, Search, X } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { useGame, useWorld, type ScreenId } from '../store/gameStore'
+import { useGame, useWorld } from '../store/gameStore'
 import { stageOf } from '../game/engine/draft'
-import type { World } from '../game/engine/generate'
-import type { CareerState, Player } from '../game/types'
 import { IconButton, useDensity } from '../ui/kit'
+import { buildPaletteIndex, fuzzyScore, type PaletteItem } from '../ui/palette'
 import {
   ADVANCE_KEYS,
   advanceLabel,
   canCoach as canCoachNow,
   getSidebarCollapsed,
-  navGroupOf,
   openSettings,
   PALETTE_KEYS,
   readThemePref,
@@ -28,7 +26,6 @@ import {
   setThemePref,
   STAGE_NAME,
   subscribeSidebar,
-  visibleScreens,
   type ThemePref,
 } from '../ui/nav'
 
@@ -38,6 +35,8 @@ import {
 // coach, sim mode, theme, density, sidebar, export / import, settings, new
 // career). The index is built once each time the palette opens, so typing
 // stays cheap. F3: nav model shared with the shell via src/ui/nav.ts.
+// The pure index + fuzzy search live in src/ui/palette.ts so the probe can
+// assert coverage without a browser.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_RESULTS = 50
@@ -49,86 +48,8 @@ const GROUP_LABEL: Record<Item['kind'], string> = {
   action: 'Actions',
 }
 
-type Item =
-  | { kind: 'screen'; key: string; label: string; sub: string; sort: string; screen: ScreenId }
-  | { kind: 'player'; key: string; label: string; sub: string; sort: string; playerId: string }
-  | { kind: 'club'; key: string; label: string; sub: string; sort: string; teamId: string }
-  | { kind: 'action'; key: string; label: string; sub: string; sort: string; run: () => void }
-
-interface Indexed {
-  item: Item
-  hay: string
-}
-
-/** Case-insensitive substring-first fuzzy score (higher is a better match). */
-function fuzzyScore(needle: string, hay: string): number {
-  if (!needle) return 1
-  const h = hay.toLowerCase()
-  const n = needle.toLowerCase()
-  const idx = h.indexOf(n)
-  if (idx >= 0) return 1000 - idx + (idx === 0 ? 250 : 0) - h.length * 0.05
-  let hi = 0
-  let gaps = 0
-  for (let ni = 0; ni < n.length; ni++) {
-    const found = h.indexOf(n[ni], hi)
-    if (found < 0) return -1
-    if (ni > 0) gaps += found - hi
-    hi = found + 1
-  }
-  return 300 - gaps - h.length * 0.05
-}
-
-/** Build the searchable index once per open from the live world. */
-function buildIndex(world: World, career: CareerState | null): Indexed[] {
-  const out: Indexed[] = []
-
-  // Every nav item visible at this career's tier / access level (same list as
-  // the sidebar and the phone group sheets).
-  for (const s of visibleScreens(career)) {
-    const group = navGroupOf(s.id) ?? s.group
-    out.push({
-      item: { kind: 'screen', key: `screen:${s.id}`, label: s.label, sub: group, sort: s.label, screen: s.id },
-      hay: `${s.label} ${group} screen`,
-    })
-  }
-
-  // League-wide players (rostered + free agents), deduped by id.
-  const seen = new Set<string>()
-  const addPlayer = (p: Player) => {
-    if (seen.has(p.id)) return
-    seen.add(p.id)
-    const club = p.teamId ? world.byId[p.teamId]?.abbr ?? '' : 'FA'
-    out.push({
-      item: {
-        kind: 'player',
-        key: `player:${p.id}`,
-        label: p.name,
-        sub: `${p.pos} · ${club} · ${p.ovr} OVR`,
-        sort: p.name,
-        playerId: p.id,
-      },
-      hay: `${p.name} ${p.pos} ${club}`,
-    })
-  }
-  for (const p of world.players) addPlayer(p)
-  for (const p of world.freeAgents) addPlayer(p)
-
-  // Every club whose read-only team page can open.
-  for (const t of world.teams) {
-    out.push({
-      item: {
-        kind: 'club',
-        key: `club:${t.id}`,
-        label: t.tier === 'NFL' ? `${t.city} ${t.name}` : t.name,
-        sub: t.tier === 'NFL' ? `${t.conference} ${t.division}` : t.tier,
-        sort: `${t.city} ${t.name}`,
-        teamId: t.id,
-      },
-      hay: `${t.city} ${t.name} ${t.abbr ?? ''} club team`,
-    })
-  }
-  return out
-}
+type Item = PaletteItem | { kind: 'action'; key: string; label: string; sub: string; sort: string; run: () => void }
+type Indexed = { item: Item; hay: string }
 
 export function CommandPalette() {
   const world = useWorld()
@@ -198,9 +119,9 @@ export function CommandPalette() {
   const canCoach = canCoachNow(world, career, !!gameDay)
 
   // Index once per open (refreshes if the world mutates while open).
-  const base = useMemo(() => {
+  const base = useMemo<Indexed[]>(() => {
     void tick
-    return open ? buildIndex(world, career) : []
+    return open ? buildPaletteIndex(world, career) : []
   }, [open, world, career, tick])
   const index = useMemo(() => {
     const act = (key: string, label: string, sub: string, run: () => void): Item => ({

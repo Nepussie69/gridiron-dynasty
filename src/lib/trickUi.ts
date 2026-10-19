@@ -29,6 +29,39 @@ export const TRICK_ALERT_TONE: Record<TrickAlertLevel, Tone> = {
 /** A second showing is already a read (the engine's `alertBadge` is the alert line). */
 const SEEN_AT = 0.15
 
+/**
+ * FUTURES #24 T3: how the broadcast draws each trick, in the order it happens.
+ * One source of truth for the card legend and for check-broadcast, which asserts
+ * the drawn exchanges match this order on every real trick snap.
+ */
+export type TrickBeatRole = 'handoff' | 'pitch' | 'exchange' | 'toss' | 'fake' | 'throw' | 'carry'
+
+export const TRICK_MOTION: Record<TrickKind, { role: TrickBeatRole; label: string }[]> = {
+  flea: [
+    { role: 'handoff', label: 'handoff' },
+    { role: 'pitch', label: 'pitch back to the QB' },
+    { role: 'throw', label: 'deep shot' },
+  ],
+  reverse: [
+    { role: 'handoff', label: 'handoff' },
+    { role: 'exchange', label: 'exchange to the receiver' },
+    { role: 'carry', label: 'carry the other way' },
+  ],
+  hbpass: [
+    { role: 'toss', label: 'toss to the back' },
+    { role: 'throw', label: 'the back throws' },
+  ],
+  fakespike: [
+    { role: 'fake', label: 'sell the spike' },
+    { role: 'throw', label: 'quick throw' },
+  ],
+}
+
+/** The one-line motion legend the install card shows for a trick. */
+export function trickMotionLine(kind: TrickKind): string {
+  return TRICK_MOTION[kind].map((m) => m.label).join(' → ')
+}
+
 export function trickAlertLevel(rec: STTeamRecord | undefined, kind: TrickKind): TrickAlertLevel {
   const a = trickAlert(rec, kind)
   if (a >= TRICK.alertBadge) return 'alert'

@@ -74,6 +74,8 @@ export interface ReviewSnapshot {
    *  reversed ruling never double-counts a hot/cold event. Optional: an old
    *  caller that does not carry it restores nothing. */
   hot?: import('./hotHand').HotMap
+  /** rushvar: the in-game pressure ledger (see GameState.rushHeat). */
+  heat?: Record<string, number>
   stats: { home: TeamGameStats; away: TeamGameStats }
 }
 
