@@ -7,9 +7,11 @@ import {
   buildDraftTradeDownOffers,
   buildDraftTradeUpTargets,
   draftAssetName,
+  roomTradeDown,
   type DraftTradeOffer,
 } from '../game/engine/draftTrades'
 import { tradeDownOfferLimit } from '../game/engine/draftRoom'
+import { departmentGrade } from '../game/engine/department'
 import type { World } from '../game/engine/generate'
 import type { TradeAsset } from '../game/engine/trade'
 import { playerById } from '../game/selectors'
@@ -50,6 +52,13 @@ export function DraftTradePanel({ className }: { className?: string }) {
   // The engine memoises both searches per world/stamp, so calling them every
   // render is cheap and always reflects the current slot.
   const down = open && mine && canTrade && career ? buildDraftTradeDownOffers(world, career.teamId, tradeDownOfferLimit(world, career)) : []
+  // FUTURES #27 DF2: the room's own call on the clock. Only with a live philosophy
+  // (an Accumulate room) and only a deal the board can afford to give up. It is the
+  // exact offer the room would take if the draft were auto-finished for you.
+  const roomCall =
+    open && mine && canTrade && career
+      ? roomTradeDown(world, career, (p) => departmentGrade(world, career, p) ?? p.grade)
+      : null
   const up = open && !mine && canTrade && (deciding || pen) && career ? buildDraftTradeUpTargets(world, career.teamId, 5) : []
 
   const clockOn = career?.draftClock === true
@@ -136,6 +145,20 @@ export function DraftTradePanel({ className }: { className?: string }) {
               Calls are coming in for the pick on the clock. Accept one to move back and stockpile assets
               {pen && ' — or press Sim to my next pick and your GM makes the selection'}.
             </p>
+            {roomCall && (
+              <div className="rounded-[var(--r-md)] border border-line-strong bg-surface-2 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="warn">The room&rsquo;s call</Badge>
+                  <span className="text-micro text-muted">
+                    {roomCall.isUserCall ? 'yours to take' : `${roomCall.advocateShort} is on the phones`}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-small text-ink">{roomCall.note}</p>
+                <Button variant="secondary" size="sm" className="mt-2.5" disabled={!canTrade} onClick={() => accept(roomCall.offer.id)}>
+                  Take the deal
+                </Button>
+              </div>
+            )}
             {down.map((o) => (
               <OfferRow key={o.id} world={world} offer={o} canAct={canTrade} onAsk={() => setPending({ offer: o, up: false })} />
             ))}

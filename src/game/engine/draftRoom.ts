@@ -311,26 +311,24 @@ export function userDraftWeight(career: CareerState): number {
   return 0.1
 }
 
-/** Authority per seat, summing to 1. The pen holds 0.45 unless you are the pen. */
-export function seatWeights(career: CareerState, world?: World): Record<SeatKey, number> {
+/**
+ * The pen holder's own share of the room. gmpersona: the pen's authority is HIS —
+ * a sharp GM commands a little more of the room than a thin one (±15% of the pen
+ * share, from his own rating alone). Never a league or unit average.
+ */
+export function penWeightOf(world: World | undefined, teamId: string): number {
+  const gm = world ? generalManager(world, teamId) : undefined
+  return gm ? PEN_WEIGHT * (0.85 + ((clamp(gm.rating, 52, 92) - 52) / 40) * 0.3) : PEN_WEIGHT
+}
+
+/** Split one club's authority: the pen, then the seat you hold, then the rest by seat share. */
+function splitRoom(penWeight: number, userSeat: SeatKey | null, userWeight: number): Record<SeatKey, number> {
   const out: Record<SeatKey, number> = { scouting: 0, personnel: 0, agm: 0, gm: 0, hc: 0, coord: 0 }
-  const seat = userSeatKey(career)
-  if (seat === 'gm') {
-    out.gm = 1
-    return out
-  }
-  // gmpersona: the pen's authority is HIS own. A sharp GM commands a little more
-  // of the room than a thin one (±15% of the pen share, from his rating alone);
-  // the rest of the building still splits by seat share. No AI club reads this.
-  const gm = world ? generalManager(world, career.teamId) : undefined
-  const penWeight = gm
-    ? PEN_WEIGHT * (0.85 + ((clamp(gm.rating, 52, 92) - 52) / 40) * 0.3)
-    : PEN_WEIGHT
   out.gm = penWeight
-  const wUser = seat ? clamp(userDraftWeight(career), 0, 1 - penWeight) : 0
-  if (seat) out[seat] = wUser
+  const wUser = userSeat ? clamp(userWeight, 0, 1 - penWeight) : 0
+  if (userSeat) out[userSeat] = wUser
   let rest = Math.max(0, 1 - penWeight - wUser)
-  const others = SEAT_ORDER.filter((k) => k !== seat && k !== 'gm')
+  const others = SEAT_ORDER.filter((k) => k !== userSeat && k !== 'gm')
   const total = others.reduce((s, k) => s + SEAT_SHARE[k], 0)
   for (let i = 0; i < others.length; i++) {
     const k = others[i]
@@ -339,6 +337,22 @@ export function seatWeights(career: CareerState, world?: World): Record<SeatKey,
     rest -= share
   }
   return out
+}
+
+/** Authority per seat, summing to 1. The pen holds 0.45 unless you are the pen. */
+export function seatWeights(career: CareerState, world?: World): Record<SeatKey, number> {
+  const seat = userSeatKey(career)
+  if (seat === 'gm') return { scouting: 0, personnel: 0, agm: 0, gm: 1, hc: 0, coord: 0 }
+  return splitRoom(penWeightOf(world, career.teamId), seat, seat ? userDraftWeight(career) : 0)
+}
+
+/**
+ * FUTURES #27 DF4: an AI club's room carries the same authority split, with no
+ * seat of yours — the GM holds the pen and the rest of the building splits the
+ * remainder by seat share. Only read when `career.aiDraftIdentities` is on.
+ */
+export function aiSeatWeights(world: World, teamId: string): Record<SeatKey, number> {
+  return splitRoom(penWeightOf(world, teamId), null, 0)
 }
 
 /** Who has the biggest hole: the offense or the defense? */
@@ -360,8 +374,7 @@ function topScout(staff: StaffMember[]): StaffMember | undefined {
 }
 
 /** One axis' opinion straight from a person's hash, 60% toward the default. */
-function hashedStep(id: string, axisIndex: number): PhilosophyStep {
-  const axis = PHILOSOPHY_AXES[axisIndex]
+function hashedStep(id: string, axisIndex: number): PhilosophyStep {  const axis = PHILOSOPHY_AXES[axisIndex]
   const h = hash32(`${id}|axis${axisIndex}`, 1013)
   if (h % 10 < 6) return DEFAULT_PHILOSOPHY[axis]
   // Off-default steps: the two extremes, chosen deterministically.
@@ -369,8 +382,17 @@ function hashedStep(id: string, axisIndex: number): PhilosophyStep {
 }
 
 /**
+ * The schemes that ask for rare physical traits vs the ones that ask for a player
+ * who has already done it (generate.ts SCHEMES_OFF / SCHEMES_DEF). "Multiple" is
+ * in neither: a system-agnostic coordinator has no lean of his own.
+ */
+const TRAITS_SCHEMES = ['Air Raid', 'Spread', 'Blitz Heavy', '4-2-5 Nickel']
+const PRODUCTION_SCHEMES = ['Pro Style', 'West Coast', 'RPO Heavy', '4-3 Base', '3-4 Base']
+
+/**
  * A seat's stance: what THIS person believes, from his own focus, scouting bias,
- * mentor philosophy and scheme — then the remaining axes from his own hash.
+ * mentor philosophy, scheme and rating — then the remaining axes from his own
+ * hash. Never a league, unit or staff average.
  */
 function npcVector(world: World, teamId: string, seat: SeatKey, member?: StaffMember): DraftPhilosophy {
   const v = { ...DEFAULT_PHILOSOPHY } as Record<PhilosophyAxis, PhilosophyStep>
@@ -411,10 +433,29 @@ function npcVector(world: World, teamId: string, seat: SeatKey, member?: StaffMe
     else if (philosophy === 'measurables') v.traitsProduction = 'Traits'
     else if (philosophy === 'character') v.characterRisk = 'Avoid'
     else if (philosophy === 'analytics') v.board = 'BPA'
-    v.schemeFit = 'Heavy'
+    // His own system, from his own record: an established head coach runs a scheme
+    // and only wants players who fit it; a CEO-style coach (a thin coach record)
+    // leaves the fit calls to the coordinators who do run it. Then his own
+    // standing: a head coach who has earned the building's trust backs his board.
+    v.schemeFit = (member?.rating ?? 0) >= 70 ? 'Heavy' : 'Light'
+    if ((member?.rating ?? 0) >= 84) v.board = 'BPA'
   } else if (seat === 'coord') {
-    v.board = 'Need'
+    // A coordinator's whole job is the fit — he always wants his own side's men to
+    // fit HIS system. Everything else he stands for is his own: a coach who has
+    // earned his stripes (his own rating) trusts his teaching and takes the best
+    // talent, while a young or middling one wants bodies ready to play now. His
+    // own scheme decides whether he bets on traits or on production, and only a
+    // coordinator with real standing asks the front office for more picks.
     v.schemeFit = 'Heavy'
+    const rating = member?.rating ?? 0
+    if (rating >= 80) v.board = 'BPA'
+    else if (rating <= 62) v.board = 'Need'
+    if (rating >= 82) v.tradeDown = 'Accumulate'
+    const scheme = member?.scheme ?? ''
+    if (TRAITS_SCHEMES.includes(scheme)) v.traitsProduction = 'Traits'
+    else if (PRODUCTION_SCHEMES.includes(scheme)) v.traitsProduction = 'Production'
+    // "Multiple" is deliberately neither — a system-agnostic coordinator has no
+    // traits-vs-production lean of his own.
   }
   const id = member?.id ?? `${seat}_${teamId}`
   for (let i = 0; i < PHILOSOPHY_AXES.length; i++) {
@@ -435,18 +476,18 @@ function userVector(world: World, career: CareerState): DraftPhilosophy {
 }
 
 /**
- * The room: 4–6 seats, one of which may be yours. Each seat carries its own
- * philosophy (specific people, not team averages) and its authority.
+ * One club's seats: 4–6 seats, one of which may be yours. Each seat carries its
+ * own philosophy (specific people, not team averages) and its own authority.
+ * `career` is absent for an AI club (DF4): then nobody holds your seat and the
+ * GM's own weight table applies.
  */
-export function roomSeats(world: World, career: CareerState): RoomSeat[] {
-  const teamId = career.teamId
+function buildSeats(world: World, teamId: string, userSeat: SeatKey | null, career?: CareerState): RoomSeat[] {
   const staff = world.staff[teamId] ?? []
-  const weights = seatWeights(career, world)
-  const userSeat = userSeatKey(career)
+  const weights = career ? seatWeights(career, world) : aiSeatWeights(world, teamId)
   // The coordinator seat is the one whose side has the biggest hole — unless the
   // user IS the coordinator, in which case it is his own side.
   const side: 'off' | 'def' =
-    userSeat === 'coord'
+    userSeat === 'coord' && career
       ? career.unitFocus === 'def'
         ? 'def'
         : 'off'
@@ -469,7 +510,7 @@ export function roomSeats(world: World, career: CareerState): RoomSeat[] {
     if (!isUser && !member && key !== 'agm' && key !== 'gm') continue
     const id = member?.id ?? (isUser ? 'you' : `${key}_${teamId}`)
     const title =
-      isUser && career.path === 'personnel' && (key === 'scouting' || key === 'personnel')
+      isUser && career?.path === 'personnel' && (key === 'scouting' || key === 'personnel')
         ? userTitle(career)
         : key === 'coord'
           ? SEAT_TITLE.coord + (side === 'def' ? ' (DC)' : ' (OC)')
@@ -479,15 +520,29 @@ export function roomSeats(world: World, career: CareerState): RoomSeat[] {
       title,
       short: isUser && key === 'scouting' ? 'your board' : SEAT_SHORT[key],
       // The AGM and a club without a GM are hash-named NPCs with their own salt.
-      name: isUser ? career.gmName : member?.name ?? npcName(`${teamId}|${key}`, key === 'agm' ? 143 : 151),
+      name: isUser ? (career?.gmName ?? 'You') : member?.name ?? npcName(`${teamId}|${key}`, key === 'agm' ? 143 : 151),
       id,
       isUser,
       holdsPen: key === 'gm',
       weight: weights[key],
-      vector: isUser ? userVector(world, career) : npcVector(world, teamId, key, member),
+      vector: isUser && career ? userVector(world, career) : npcVector(world, teamId, key, member),
     })
   }
   return seats
+}
+
+/** The room: 4–6 seats, one of which may be yours. */
+export function roomSeats(world: World, career: CareerState): RoomSeat[] {
+  return buildSeats(world, career.teamId, userSeatKey(career), career)
+}
+
+/**
+ * FUTURES #27 DF4: an AI club's own room — the same seats, its own people, its
+ * own authority table and no seat of yours. Read only with the AI-identity
+ * toggle on, so an old save (and the default) never touches this.
+ */
+export function aiSeats(world: World, teamId: string): RoomSeat[] {
+  return buildSeats(world, teamId, null, undefined)
 }
 
 function userTitle(career: CareerState): string {
@@ -559,6 +614,53 @@ export function roomTilt(
   if (!career || !draftPhilosophyActive(world, career)) return undefined
   const ctx = tiltContext(world, career.teamId)
   return (p: DraftProspect) => philosophyDelta(p, blendedVector(world, career, { ...opts, prospect: p }), ctx)
+}
+
+// ── AI clubs' own identities (DF4) ───────────────────────────────────────────
+//
+// Off by default. With `career.aiDraftIdentities` on, every AI club's board is
+// weighted by ITS OWN room — the same seats, the same authority split, the same
+// per-person stances — so a club run by a Need-minded GM and a fit-obsessed
+// coordinator drafts differently from an Analytics club, and no two clubs share a
+// board. Read only when the toggle is on: the default path never calls this, so an
+// old save and the calibration are untouched.
+
+/**
+ * An AI club's blended stance: its own room, weighted by its own authority — and
+ * then the pen holder's own view is decisive on every axis he holds one. An NFL
+ * board is the GM's board: the room argues inside it, it does not average it away.
+ * Every number is the individual man's; nothing here is a league mean.
+ */
+export function aiIdentityVector(world: World, teamId: string): DraftPhilosophy {
+  const seats = aiSeats(world, teamId)
+  const total = seats.reduce((s, x) => s + x.weight, 0)
+  if (total <= 0) return { ...DEFAULT_PHILOSOPHY }
+  const indices = {} as Record<PhilosophyAxis, number>
+  for (const axis of PHILOSOPHY_AXES) {
+    let sum = 0
+    for (const s of seats) sum += vectorToIndices(s.vector)[axis] * s.weight
+    indices[axis] = sum / total
+  }
+  const out = indicesToVector(indices) as unknown as Record<PhilosophyAxis, PhilosophyStep>
+  const pen = seats.find((s) => s.holdsPen)
+  if (pen) {
+    for (const axis of PHILOSOPHY_AXES) {
+      if (pen.vector[axis] !== DEFAULT_PHILOSOPHY[axis]) out[axis] = pen.vector[axis]
+    }
+  }
+  return out as unknown as DraftPhilosophy
+}
+
+/** The tilt an AI club's own room puts on its board (undefined unless DF4 is on). */
+export function aiRoomTilt(
+  world: World,
+  career: CareerState | null | undefined,
+  teamId: string,
+): ((p: DraftProspect) => number) | undefined {
+  if (!career?.aiDraftIdentities || teamId === career.teamId) return undefined
+  const ctx = tiltContext(world, teamId)
+  const vector = aiIdentityVector(world, teamId)
+  return (p: DraftProspect) => philosophyDelta(p, vector, ctx)
 }
 
 // ── The argument ─────────────────────────────────────────────────────────────
@@ -678,6 +780,66 @@ export function roomNote(winner: RoomArgument | null): string {
   return `The ${winner.short}'s call won the room.`
 }
 
+// ── Who moved a prospect (the board's own attribution) ───────────────────────
+
+export interface ProspectVoice {
+  prospectId: string
+  /** The seat whose own stance moves this prospect the most. */
+  seat: SeatKey
+  short: string
+  name: string
+  title: string
+  isUser: boolean
+  /** That seat's own stance delta for him, in grade points (signed). */
+  lift: number
+  /** One line of why, in that seat's own voice. */
+  reason: string
+  /** The blended tilt the club's own board applies to him (0 when unset). */
+  blended: number
+}
+
+/**
+ * The board's attribution: for every prospect still available, the seat whose OWN
+ * stance moves him furthest (up or down), the size of that move and the line he
+ * would say. This is what puts a name on the board row — the scouting director's
+ * production bet, the coordinator's fit, the head coach's fade on a red flag.
+ *
+ * Pure and cheap (six seats × the class, hash-only): no world-RNG draw, no truth
+ * leakage — a stance reads the same visible fields the score does.
+ */
+export function boardVoices(world: World, career: CareerState): Map<string, ProspectVoice> {
+  const seats = roomSeats(world, career)
+  if (!seats.length) return new Map()
+  const ctx = tiltContext(world, career.teamId)
+  const tilt = roomTilt(world, career)
+  const out = new Map<string, ProspectVoice>()
+  for (const p of world.draft) {
+    if (p.draftedBy) continue
+    let bestSeat: RoomSeat | null = null
+    let bestLift = 0
+    for (const s of seats) {
+      const lift = philosophyDelta(p, s.vector, ctx)
+      if (!bestSeat || Math.abs(lift) > Math.abs(bestLift)) {
+        bestSeat = s
+        bestLift = lift
+      }
+    }
+    if (!bestSeat || Math.abs(bestLift) < 1) continue
+    out.set(p.id, {
+      prospectId: p.id,
+      seat: bestSeat.key,
+      short: bestSeat.short,
+      name: bestSeat.name,
+      title: bestSeat.title,
+      isUser: bestSeat.isUser,
+      lift: Math.round(bestLift * 10) / 10,
+      reason: argueReason(p, bestSeat.vector, ctx, p.grade),
+      blended: tilt ? Math.round(tilt(p) * 10) / 10 : 0,
+    })
+  }
+  return out
+}
+
 // ── Trade-down volume (DF2) ──────────────────────────────────────────────────
 //
 // The trade-down axis is the room's appetite to move off the clock: Stand pat
@@ -692,6 +854,14 @@ export const TRADE_DOWN_OFFER_LIMIT: Record<DraftPhilosophy['tradeDown'], number
   Open: 4,
   Accumulate: 6,
 }
+
+/**
+ * How many times an Accumulate room may actually move your club off the clock in
+ * one draft. Chosen to be NFL-real: a club that declares an accumulate year works
+ * the phones, but it still makes most of its own picks (the league averaged 5.6
+ * first-round trades per draft 2020–25 across all 32 clubs — FOX Sports, 2025).
+ */
+export const ROOM_MOVE_BACK_CAP = 3
 
 /** Deterministic uniform in [0,1) from a string key (a hash, never a world draw). */
 function h01(key: string): number {
@@ -711,6 +881,12 @@ export function tradeDownOfferLimit(world: World, career: CareerState | null | u
 /** How hard one seat's step pushes toward actually taking a deal: only Accumulate bites. */
 export function tradeDownWeight(step: PhilosophyStep): number {
   return step === 'Accumulate' ? 1 : 0
+}
+
+/** How many times the room has already moved your club off the clock this draft. */
+export function roomMovesUsed(world: World, career: CareerState | null | undefined): number {
+  if (!career || career.draftRoomMoves?.season !== world.season) return 0
+  return career.draftRoomMoves.count
 }
 
 /** Is the room hoarding picks this draft? (Active philosophy + an Accumulate blend.) */

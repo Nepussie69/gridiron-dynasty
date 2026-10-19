@@ -81,7 +81,9 @@ export function throwHand(style: ThrowStyle, toRel: number): { off: number; z: n
   const a = wind - toRel // age in the throw window
   if (a <= 0) return { off: 0, z: 1.2 }
   const cock = smooth01(a / (wind * 0.75))
-  const over = smooth01((a - (wind - 0.07)) / 0.13)
+  // seamfix: the over-the-top move spans 0.17 s (was 0.13) so the hand is not at its peak speed the frame the
+  // flight is declared (a frame straddling the release was drawn at ~19.6 yd/s outside a flight).
+  const over = smooth01((a - (wind - 0.11)) / 0.17)
   const back = style === 'quick' ? -0.18 : style === 'hurry' ? -0.22 : -0.28
   const top = style === 'deep' ? 2.2 : style === 'quick' ? 1.75 : style === 'hurry' ? 1.82 : style === 'run' ? 1.97 : 2.1
   return { off: back * cock + (0.4 - back) * over * cock, z: 1.2 + (1.95 - 1.2) * cock + (top - 1.95) * over }

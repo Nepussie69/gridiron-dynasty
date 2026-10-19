@@ -11,7 +11,7 @@
 // `setDraftPhilosophy(axis, step)`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Compass, Megaphone, PenLine } from 'lucide-react'
+import { Compass, Megaphone, PenLine, RotateCcw } from 'lucide-react'
 import { cn } from '../lib/cn'
 import {
   PHILOSOPHY_AXES,
@@ -19,7 +19,7 @@ import {
   type RoomSeat,
 } from '../game/engine/draftRoom'
 import { useGame, useWorld } from '../store/gameStore'
-import { AccessBanner, Badge, Card, OptionCard, OptionGroup, SectionTitle, VerdictChip } from '../ui/kit'
+import { AccessBanner, Badge, Button, Card, OptionCard, OptionGroup, SectionTitle, VerdictChip } from '../ui/kit'
 import { philosophyView, stanceChips, voiceLine } from './draftRoomUi'
 
 /**
@@ -71,6 +71,7 @@ export function DraftPhilosophyCard({ className }: { className?: string }) {
   const world = useWorld()
   const career = useGame((s) => s.career)
   const setDraftPhilosophy = useGame((s) => s.setDraftPhilosophy)
+  const clearDraftPhilosophy = useGame((s) => s.clearDraftPhilosophy)
   if (!career) return null
 
   const view = philosophyView(world, career)
@@ -144,8 +145,23 @@ export function DraftPhilosophyCard({ className }: { className?: string }) {
       {view.active && (
         <p className="mt-3 flex items-start gap-1.5 text-micro leading-snug text-muted">
           <Megaphone size={12} className="mt-0.5 shrink-0" aria-hidden /> The room’s argument — each seat’s own guy and
-          why — is on the Draft War Room in the Room view, and the Ledger grades how it turned out.
+          why — is on the Draft War Room: the voices panel while you are on the clock, and the Room view for the whole
+          board. The Ledger grades how it turned out.
         </p>
+      )}
+
+      {view.canEdit && changed.length > 0 && (
+        <div className="mt-3">
+          <Button
+            variant="quiet"
+            size="sm"
+            icon={<RotateCcw size={14} aria-hidden />}
+            onClick={clearDraftPhilosophy}
+            title="Back to the middle step of every axis — the board as it runs today"
+          >
+            Clear the philosophy
+          </Button>
+        </div>
       )}
     </Card>
   )

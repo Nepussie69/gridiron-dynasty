@@ -16,6 +16,8 @@ import { readProspect, readRookieRanges } from '../game/engine/evaluation'
 import { draftPickValue } from '../game/selectors'
 import { useGame, useWorld } from '../store/gameStore'
 import { DraftRoom } from '../components/DraftRoom'
+import { DraftVoices } from '../components/DraftVoices'
+import { boardVoiceIndex } from '../components/draftRoomUi'
 import { DraftTradePanel, PickClock } from '../components/DraftTradePanel'
 import { useDraftTradeCalls } from '../components/draftTradeCalls'
 import { DataTable, type Column } from '../components/DataTable'
@@ -36,6 +38,7 @@ import {
   Card,
   Chip,
   ConfirmSheet,
+  Delta,
   FilterChip,
   KpiStrip,
   KpiTile,
@@ -117,6 +120,8 @@ export function Draft() {
   const board = career.userBoard ?? []
   const watched = career.prospectWatch ?? []
   const capital = myPicks.reduce((s, p) => s + draftPickValue(p.draftPick ?? 250), 0)
+  // FUTURES #27: whose own stance moves each prospect, for the board's Room voice cell.
+  const voiceIndex = useMemo(() => boardVoiceIndex(league, career), [league, career])
 
   const readOf = (p: DraftProspect) => readProspect(career, p)
   // Row 460: one rookie-range read per prospect per render (the Now and Ceiling
@@ -201,6 +206,37 @@ export function Draft() {
         // readProspect hides the consensus below director rungs / 70% confidence.
         if (read.consensus == null) return <span className="text-small text-muted">hidden</span>
         return <RatingTile value={read.consensus} size="sm" college label="College grade" />
+      },
+    },
+    // FUTURES #27: whose own stance moves this prospect on YOUR club's board — the
+    // scouting director's production bet, the coordinator's fit, the coach's fade.
+    {
+      key: 'voice',
+      label: 'Room voice',
+      headerTitle:
+        'Whose own stance moves this prospect most on your club’s board — the scouting director, the personnel director, the AGM, the GM, the head coach or a coordinator. The room argues on every pick; the blend reaches the board once you set your philosophy.',
+      card: 'meta',
+      sortValue: (p) => Math.abs(voiceIndex.get(p.id)?.lift ?? 0),
+      render: (p) => {
+        const v = voiceIndex.get(p.id)
+        if (!v || Math.abs(v.lift) < 2) return <span className="text-small text-faint">—</span>
+        return (
+          <span
+            className="inline-flex flex-wrap items-center gap-x-1.5"
+            title={`${v.name} — ${v.title}: “${v.reason}”`}
+          >
+            <span
+              className={
+                v.isUser
+                  ? 'font-cond text-micro font-700 uppercase tracking-[0.05em] text-[var(--team-accent-text)]'
+                  : 'font-cond text-micro font-700 uppercase tracking-[0.05em] text-ink-2'
+              }
+            >
+              {v.isUser ? 'You' : v.short}
+            </span>
+            <Delta value={v.lift} digits={1} />
+          </span>
+        )
       },
     },
     {
@@ -450,6 +486,10 @@ export function Draft() {
               </div>
             </Card>
           )}
+
+          {/* FUTURES #27: the room argues while the club is on the clock (or while
+              you advise on the pick). The full argument lives in the Room view. */}
+          {draftIsOpen && !complete && (mine || advising) && <DraftVoices limit={2} />}
 
           {advising && (
             <Card>

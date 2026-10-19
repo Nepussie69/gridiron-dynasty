@@ -17,13 +17,16 @@ import { generalManager, type World } from './generate'
 import { bestAvailableFor, draftOpen, makePick, simUntilUser } from './draft'
 import { hash32 } from './rng'
 import { gmStyle } from './gmStyle'
+import { aiRoomTilt } from './draftRoom'
 import { logConvictionPicks } from './conviction'
 import { logRedFlags } from './redflag'
 import { isOnShadowBoard } from './shadow'
 import { recordTrade, resolveTradePicks } from './tradeTree'
 import {
+  ROOM_MOVE_BACK_CAP,
   roomAccumulating,
   roomBoardScores,
+  roomMovesUsed,
   roomTakesTradeDown,
   roomTradeNote,
   tradeDownAdvocate,
@@ -253,6 +256,8 @@ export function roomTradeDown(
 ): RoomTradeDown | null {
   if (!draftOpen(world) || world.draftState.complete) return null
   if (!roomAccumulating(world, career)) return null
+  // A room hoards picks; it does not trade away the whole class (NFL-real cap).
+  if (roomMovesUsed(world, career) >= ROOM_MOVE_BACK_CAP) return null
   const pick = onClockPick(world, career.teamId)
   if (!pick) return null
   const offers = buildDraftTradeDownOffers(world, career.teamId, tradeDownOfferLimit(world, career))
@@ -369,7 +374,15 @@ export function applyDraftTradeDown(
   executeTrade(world, career.teamId, offer.partnerId, offer.give, offer.get)
   stampIncomingPlayers(world, career, offer.partnerId, offer.get)
   syncDraftOrder(world)
-  const prospect = bestAvailableFor(world, offer.partnerId, undefined, undefined, undefined, gmStyle(generalManager(world, offer.partnerId)))
+  // DF4: the partner club picks off its own room's stance when the toggle is on.
+  const prospect = bestAvailableFor(
+    world,
+    offer.partnerId,
+    undefined,
+    undefined,
+    aiRoomTilt(world, career, offer.partnerId),
+    gmStyle(generalManager(world, offer.partnerId)),
+  )
   if (prospect) makePick(world, prospect, offer.partnerId)
   else world.draftState.complete = true
   career.trades = [...(career.trades ?? []), rec].slice(-60)

@@ -8,8 +8,9 @@
 // Kept out of the .tsx files so they export components only (fast refresh).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CareerState } from '../game/types'
+import type { CareerState, Position } from '../game/types'
 import type { World } from '../game/engine/generate'
+import { generalManager } from '../game/engine/generate'
 import {
   DEFAULT_PHILOSOPHY,
   PHILOSOPHY_AXES,
@@ -17,8 +18,10 @@ import {
   PHILOSOPHY_STEPS,
   PHILOSOPHY_STEP_HINT,
   SEAT_ORDER,
+  aiIdentityVector,
   blendedTradeWeight,
   blendedVector,
+  boardVoices,
   draftPhilosophyActive,
   roomAccumulating,
   roomArgument,
@@ -33,6 +36,7 @@ import {
   type PhilosophyStep,
   type RoomArgument,
   type RoomSeat,
+  type SeatKey,
 } from '../game/engine/draftRoom'
 import { canAdvise, canDecide } from '../game/engine/access'
 import { currentTeamId, draftOpen } from '../game/engine/draft'
@@ -220,4 +224,159 @@ export function consensusLine(view: RoomView): string {
   if (view.consensus) return `The room is settled: everyone wants ${view.leader.prospectName}.`
   const pen = view.pen?.seat.short ?? 'GM'
   return `${view.spread} names on the table — the ${pen} breaks the tie.`
+}
+
+// ── The voices on the clock (DF4/DF1 — the arguing panel) ────────────────────
+
+export interface VoiceLine {
+  seat: SeatKey
+  short: string
+  title: string
+  name: string
+  isUser: boolean
+  holdsPen: boolean
+  weightPct: number
+  prospectId: string
+  prospectName: string
+  pos: Position
+  grade: number
+  /** How far this seat's own stance lifts his guy above the raw grade. */
+  pull: number
+  reason: string
+}
+
+export interface VoicesView {
+  lines: VoiceLine[]
+  /** The room is settled on one name. */
+  consensus: boolean
+  /** How many distinct names the whole room is pushing. */
+  spread: number
+  /** The blended stance is live on the board this draft. */
+  active: boolean
+  /** The loudest voice's guy, for the header. */
+  leader: string | null
+  /** The line your own seat would say, if you hold one. */
+  yourLine: string | null
+}
+
+/**
+ * The room as it argues while the club is on the clock: the decision-makers
+ * first (the pen, then you), each with his own guy, his own reason and his own
+ * authority. Everything comes off `roomArgument` — the same call the pick uses.
+ */
+export function voicesView(world: World, career: CareerState, k = 3): VoicesView {
+  const args = roomArgument(world, career, SEAT_ORDER.length)
+  const order = (a: RoomArgument) => (a.holdsPen ? 0 : a.isUser ? 1 : 2)
+  const ranked = args.slice().sort((a, b) => order(a) - order(b) || b.weight - a.weight)
+  const lines: VoiceLine[] = ranked.slice(0, k).map((a) => ({
+    seat: a.seat,
+    short: a.short,
+    title: a.title,
+    name: a.name,
+    isUser: a.isUser,
+    holdsPen: a.holdsPen,
+    weightPct: Math.round(a.weight * 100),
+    prospectId: a.prospectId,
+    prospectName: a.prospectName,
+    pos: a.pos,
+    grade: a.grade,
+    pull: Math.round((a.score - a.grade) * 10) / 10,
+    reason: a.reason,
+  }))
+  const spread = new Set(args.map((a) => a.prospectId)).size
+  const mine = args.find((a) => a.isUser)
+  return {
+    lines,
+    consensus: args.length > 0 && spread === 1,
+    spread,
+    active: draftPhilosophyActive(world, career),
+    leader: ranked[0]?.prospectName ?? null,
+    yourLine: mine ? mine.reason : null,
+  }
+}
+
+// ── The board's attribution (whose view moved a prospect) ────────────────────
+
+export interface BoardVoice {
+  short: string
+  name: string
+  title: string
+  isUser: boolean
+  /** The seat's own stance delta for him, signed grade points. */
+  lift: number
+  reason: string
+  /** The blended tilt the club's board applies (0 when the philosophy is unset). */
+  blended: number
+}
+
+/**
+ * `boardVoices` keyed by prospect id, for the board's "Room voice" cell. Only
+ * prospects a stance actually moves (|lift| ≥ 1) are returned.
+ */
+export function boardVoiceIndex(world: World, career: CareerState): Map<string, BoardVoice> {
+  const out = new Map<string, BoardVoice>()
+  for (const [id, v] of boardVoices(world, career)) {
+    out.set(id, { short: v.short, name: v.name, title: v.title, isUser: v.isUser, lift: v.lift, reason: v.reason, blended: v.blended })
+  }
+  return out
+}
+
+// ── AI clubs' own identities (DF4) ───────────────────────────────────────────
+
+export interface AiClubIdentity {
+  teamId: string
+  abbr: string
+  name: string
+  /** The club's GM, whose own numbers frame the room. */
+  gm: string
+  chips: StanceChip[]
+  /** The blended step the club's board runs on. */
+  vector: DraftPhilosophy
+}
+
+export interface AiIdentityView {
+  on: boolean
+  /** Every club, in board order (the ones with a stance of their own first). */
+  clubs: AiClubIdentity[]
+  /** How many clubs carry at least one non-default stance. */
+  withStance: number
+  /** How many distinct blended vectors the league holds (a spread, not an average). */
+  distinct: number
+  /** Clubs whose board leans Need vs BPA — the two ends of the axis. */
+  need: number
+  bpa: number
+}
+
+/**
+ * Every AI club's own room, read straight off the engine (`aiSeats` /
+ * `aiIdentityVector`). Only computed when the toggle is on — off is today's
+ * league, and the panel says so.
+ */
+export function aiIdentityView(world: World, career: CareerState): AiIdentityView {
+  const on = career.aiDraftIdentities === true
+  if (!on) return { on, clubs: [], withStance: 0, distinct: 0, need: 0, bpa: 0 }
+  const clubs: AiClubIdentity[] = []
+  const vectors = new Set<string>()
+  let withStance = 0
+  let need = 0
+  let bpa = 0
+  for (const team of world.teams) {
+    if (team.id === career.teamId) continue
+    const vector = aiIdentityVector(world, team.id)
+    const chips = stanceAxes(vector).map((a) => ({ axis: a.axis, label: PHILOSOPHY_AXIS_LABEL[a.axis], step: a.step }))
+    if (chips.length) withStance++
+    if (vector.board === 'Need') need++
+    else if (vector.board === 'BPA') bpa++
+    vectors.add(PHILOSOPHY_AXES.map((a) => vector[a]).join('|'))
+    clubs.push({
+      teamId: team.id,
+      abbr: team.abbr,
+      name: team.name,
+      gm: generalManager(world, team.id)?.name ?? '—',
+      chips,
+      vector,
+    })
+  }
+  clubs.sort((a, b) => b.chips.length - a.chips.length || (a.teamId < b.teamId ? -1 : 1))
+  return { on, clubs, withStance, distinct: vectors.size, need, bpa }
 }
