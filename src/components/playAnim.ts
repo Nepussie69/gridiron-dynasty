@@ -29,6 +29,7 @@ import { formationForConcept, formationHasFullback, playbookPlay, treeFor } from
 import { kickFlight, presentAnim, throwHand, THROW_TIMING, type BroadcastAnim, type ThrowStyle } from './broadcast/animData'
 import { LiveField, pursue, phases, holdSpot, livePos, type Brain, type PairPlan } from './playLive'
 import { runReturnField, returnLine, returnScheme } from './playReturn.ts'
+import type { LPt } from '../game/engine/liveField'
 import { carrierMove, effAttrs, effRating, fatigueMap, fatiguePace } from './animRatings'
 import { attrOf, paceFor, type Pace } from '../game/engine/pace'
 import { planOf } from './jersey'
@@ -6847,6 +6848,91 @@ function coverNeed(m: Record<string, Mover>, keys: string[], c: Pt): number {
   return best
 }
 
+/**
+ * r2returns (REALISM2 #1): draw the return the live field actually ran.
+ *
+ * The engine records the returner's path and every cover man's / blocker's
+ * path in its own frame: `x` is the distance gained from the catch, `y` the
+ * absolute lateral. The animation's catch point is authoritative, so the
+ * recording is mapped onto it (`x = catch.x + dir*d`, `y = catch.y + (y-y0)`)
+ * and replayed over the choreography's own catch→whistle window. Men whose
+ * recorded first sample is not near where the animation already has them (a
+ * gunner still jammed at the line) are left to the existing choreography, as
+ * are the play's designated tackler and any synthetic copy whose yardage the
+ * recording does not explain (a probe's made-up touchdown).
+ *
+ * Presentation only: no sim value is read back. `retPath` absent (an old save,
+ * the toggle off, a fair catch / touchback) keeps every existing path.
+ */
+function rewindMover(mv: Mover, t: number, pt: Pt): void {
+  mv.path = mv.path.filter((w) => w.t <= t + 1e-9)
+  if (!mv.path.length) mv.path.push({ t: 0, x: pt.x, y: pt.y })
+  mv.t = t
+  mv.x = pt.x
+  mv.y = pt.y
+  mv.lastStop = false
+  mv.path.push({ t, x: pt.x, y: pt.y })
+}
+
+function applyRecordedReturn(
+  play: Play,
+  m: Record<string, Mover>,
+  ctx: AnimContext,
+  catchPt: Pt,
+  catchT: number,
+  endT: number,
+  dir: 1 | -1,
+  skip: Set<string>,
+): number {
+  const p = play as unknown as { retPath?: LPt[]; retPaths?: Record<string, LPt[]>; returnYards?: number }
+  const rp = p.retPath
+  if (!rp || rp.length < 3 || !rp[0] || endT - catchT < 0.15) return 0
+  const last = rp[rp.length - 1]
+  // A synthetic "same return, taken all the way" copy keeps the old recording:
+  // it does not reach the goal, so draw the copy's own scripted touchdown.
+  if (play.returnTD && last.x < (play.returnYards ?? 0) - 2.5) return 0
+  const oy = rp[0].y
+  // The field is a different model from the box score: the recorded centre is
+  // corrected to the calibrated anchor, so the recording's end need not equal the
+  // play's recorded yards. Draw the recording's own SHAPE but sized to the
+  // recorded return: a uniform scale keeps every heading (no new weave) and lands
+  // the returner exactly on the play's end spot (catch.x + dir*yards).
+  const fieldEnd = Math.max(0.6, last.x)
+  const s = play.returnTD ? 1 : clampN((play.returnYards ?? fieldEnd) / fieldEnd, 0.2, 6)
+  const map = (q: LPt): Pt => ({ x: clampX(catchPt.x + dir * q.x * s), y: clampY(catchPt.y + (q.y - oy) * s) })
+  const keyOfId = new Map<string, string>()
+  if (ctx.actors) for (const [k, pl] of ctx.actors) keyOfId.set(pl.id, k)
+  const retKey = play.type === 'punt' ? 's0' : 'rb'
+  const retMv = m[retKey]
+  if (!retMv) return 0
+  const rpts = rp.map(map)
+  rpts[0] = { x: clampX(catchPt.x), y: clampY(catchPt.y) }
+  rewindMover(retMv, catchT, rpts[0])
+  runTimed(retMv, rpts.slice(1), catchT, endT, false, false, 1.35)
+  let drawn = 1
+  const men = p.retPaths
+  if (!men) return drawn
+  for (const id of Object.keys(men)) {
+    if (id === play.returnerId) continue
+    const key = keyOfId.get(id)
+    if (!key || key === retKey || skip.has(key)) continue
+    const mv = m[key]
+    const src = men[id]
+    if (!mv || !src || src.length < 5) continue
+    const pts = src.map(map)
+    const at = posAt(mv.path, catchT)
+    // Only men already near their recorded catch-time spot (no teleport across
+    // the field: a gunner the animation still has jammed at the line keeps his
+    // existing block).
+    if (Math.hypot(pts[0].x - at.x, pts[0].y - at.y) > 9) continue
+    pts[0] = at
+    rewindMover(mv, catchT, at)
+    runTimed(mv, pts.slice(1), catchT, endT, false, false, 1.25)
+    drawn++
+  }
+  return drawn
+}
+
 function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
   const kind = play.returnKind
   const touchback = kind === 'touchback' || play.result.includes('touchback')
@@ -7007,6 +7093,7 @@ function buildPunt(play: Play, ctx: AnimContext): PlayAnim {
     })
   }
 
+  applyRecordedReturn(play, m, ctx, landPt, landT, endSec, -1, new Set(td || !designated ? [] : [designated]))
   const free = covNoP.filter((k) => !rr.stillEngaged.has(k))
   const tackler = td ? closestKey(m, free.length ? free : covNoP, spot, endSec) : chooseTackler(m, free.length ? free : covNoP, designated, cPt, tackleFrom, contactT - tackleFrom)
   if (!td) hitAndRide(m[tackler], m.s0, tackleFrom, contactT, endSec)
@@ -7116,6 +7203,7 @@ function buildKickoff(play: Play, ctx: AnimContext): PlayAnim {
     blockOf: (k) => blockOf(rate(k), false),
     shedOf: (k) => bestAttr(rate(k), ['BSH', 'STR']),
   })
+  applyRecordedReturn(play, m, ctx, catchPt, catchT, endSec, 1, new Set(td || !designated ? [] : [designated]))
   const cand = covKeys.filter((k) => k !== kicker && !rr.stillEngaged.has(k))
   const tackler = td ? closestKey(m, covKeys, spot, endSec) : chooseTackler(m, cand.length ? cand : covKeys, designated, cPt, tackleFrom, contactT - tackleFrom)
 

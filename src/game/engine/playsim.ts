@@ -15,6 +15,8 @@ import { NO_USER_BONUS, coachEffect } from './coaching'
 import { depthAt, depthGroup } from './depth'
 import { aiDefPackage, aiOffPersonnel, defenseCounts, offenseCounts, personnelEdge } from './personnel'
 import { clubReturners, coverageScore, coverUnit, returnScore } from './returns'
+// r2returns (REALISM2 #1): the kick / punt return decided on the live field.
+import { R2RET, returnsOnField, returnHang } from './emergentReturns'
 import { planEffects, BALANCED_PLAN } from './gameplan'
 import { aiCallSheet, coachTendency, offPassRate, fourthDownChoice, fourthDownEV, fourthGoPropensity, getFourthRetune, twoPointChoice, fgProb, fgRangeYard, bucketFor, offClassFor, callEffect, bestCounterCall, bestCounterClass, defCallForPlan, topKey, DEF_CALLS, OFF_CLASSES, OFF_PASS_RATE, BUCKET_LABEL, OFF_CLASS_LABEL, DEF_CALL_LABEL, worldPassMean, getPuntFix, type CallSheet, type Situation, type Bucket, type OffClass, type DefCall, type CallEffect } from './decisions'
 // J-PUNTS: the individual-coach 4th-down model's toggle (setStamina pattern).
@@ -3412,6 +3414,11 @@ export interface PlayOutcome {
   carryPath?: LPt[]
   /** E1: every man's recorded path off the pursuit field (animation; optional). */
   fieldPaths?: Record<string, LPt[]>
+  // ── r2returns (REALISM2 #1): the recorded return paths (animation; optional) ─
+  /** r2returns: the returner's recorded path off the return field (old saves ignore it). */
+  retPath?: LPt[]
+  /** r2returns: the cover men's / blockers' recorded paths (animation; optional). */
+  retPaths?: Record<string, LPt[]>
   /** J6: a victory-formation kneeldown (a rush attempt for negative yards). */
   kneel?: boolean
   /** J6: the QB spiked the ball to stop the clock (a pass attempt, incomplete). */
@@ -7010,17 +7017,47 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
   let retYds = 0
   let returnTD = false
   let returnerId: string | undefined
+  let retOob: boolean | undefined
+  let retPath: import('./liveField').LPt[] | undefined
+  let retPaths: Record<string, import('./liveField').LPt[]> | undefined
   if ((kind === 'return' || kind === 'fairCatch' || kind === 'muff') && pr) returnerId = pr.id
   if (kind === 'return' && pr) {
     // J8d: the deciding cover man on the play (specific player, not the unit mean).
     const covMan = getIndividual() && defId ? stCoverMan(world, defId, `${key}:cov`) : undefined
     const cov = defId ? (getIndividual() ? coverScoreOf(covMan) : coverageScore(world, defId)) : 72
-    retYds = Math.max(0, returnYards(key, returnScore(pr), cov, 7 + m.base, 14 * m.spread))
-    returnTD = h01(`${key}:td`) < (getIndividual() ? returnTdProb(J8D.tdPunt, pr, covMan) : 0.006)
-    // A return touchdown is caught at the punt's landing spot and taken the rest
-    // of the way, so its recorded yardage runs to the kicking team's goal line
-    // (yard + gross yards back the way the punt came).
-    if (returnTD) retYds = Math.max(retYds, clamp(yard + gross, 1, 99))
+    // The calibrated scheme yardage for THIS play — the field's anchor in both
+    // paths (the OFF chain *is* this value; the field deviates from it).
+    const anchor = Math.max(0, returnYards(key, returnScore(pr), cov, 7 + m.base, 14 * m.spread))
+    // ── r2returns: the return decided on the field ────────────────────────────
+    // The returner's own vision decides: he reads the coverage lanes, takes the
+    // open one, and the cover men's own pace against the punt's hang time, the
+    // blockers' own RBK/IMP and his own CTH/BCV/AWR decide the return, the fair
+    // catch, the muff and the out of bounds. `R2RET.on` false ⇒ `r2ret`
+    // undefined ⇒ the OFF hashes below run byte-for-byte.
+    const r2ret = R2RET.on && getIndividual() && defId && pr
+      ? returnsOnField({
+          n, kickingId: offId, kind: 'punt', key, goal: clamp(yard + gross, 1, 99),
+          returner: pr, cover: coverUnit(world, offId), kicker: p, blockers: coverUnit(world, defId),
+          fat: env?.fat, anchor, travel: gross, hang: returnHang(p, gross, 'punt'),
+          inEndZone: yard + gross >= 100,
+          missChance: (def, openness) => tackleMissChance(def, pr, openness, false),
+          clockOn: CLOCK_ON,
+        })
+      : undefined
+    if (r2ret && r2ret.kind !== 'return') {
+      kind = r2ret.kind
+      returnerId = kind === 'fairCatch' || kind === 'muff' ? pr.id : undefined
+    } else {
+      retYds = r2ret ? r2ret.yards : anchor
+      returnTD = r2ret ? r2ret.td : h01(`${key}:td`) < (getIndividual() ? returnTdProb(J8D.tdPunt, pr, covMan) : 0.006)
+      if (r2ret) {
+        retOob = r2ret.oob || undefined
+        retPath = r2ret.path
+        retPaths = r2ret.paths
+      } else if (returnTD) {
+        retYds = Math.max(retYds, clamp(yard + gross, 1, 99))
+      }
+    }
   }
   const spot =
     returnTD ? 100
@@ -7042,6 +7079,9 @@ export function resolveSpecial(world: World, rng: Rng, offId: string, type: 'pun
     type: 'punt', concept: 'Punt', yards: net, result, turnover: true, timeUsed: 6,
     returnerId, returnYards: kind === 'return' ? retYds : undefined, returnTD, returnKind: kind,
     blockedKick: kind === 'blocked' || undefined,
+    ...(retOob ? { outOfBounds: true } : {}),
+    ...(retPath ? { retPath } : {}),
+    ...(retPaths ? { retPaths } : {}),
   }
 }
 
@@ -7246,10 +7286,42 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
   let returnTD = false
   let fumble = false
   let catchYard = 0
+  let retOob: boolean | undefined
+  let retPath: import('./liveField').LPt[] | undefined
+  let retPaths: Record<string, import('./liveField').LPt[]> | undefined
   if (!touchback && returner) {
     catchYard = clamp(2 + Math.round(h01(`${base}:cy`) * 7), 0, 9)
-    retYds = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5 + rm.base, 26 * rm.spread))
-    returnTD = h01(`${base}:td`) < (getIndividual() ? returnTdProb(J8D.tdKick, returner, covMan) : 0.003)
+    // The calibrated scheme yardage for THIS play — the field's anchor in both
+    // paths (the OFF chain is this value; the field deviates from it).
+    const anchor = Math.max(0, returnYards(base, returnScore(returner), cov, 20.5 + rm.base, 26 * rm.spread))
+    // ── r2returns: the return decided on the field ────────────────────────────
+    // The kickoff is caught at `catchYard`; the coverage runs its own lanes from
+    // the kick spot (65 − catchYard yards of travel) against the kicker's own
+    // hang time, and the return team's blockers fire at them. The returner's own
+    // vision picks the lane, his own pace runs it. `R2RET.on` false ⇒ `r2ret`
+    // undefined ⇒ the OFF hashes run byte-for-byte.
+    const travel = 65 - catchYard
+    const r2ret = R2RET.on && getIndividual() && returner
+      ? returnsOnField({
+          n: s.n, kickingId: kicking, kind: 'kickoff', key: base, goal: 100 - catchYard,
+          returner, cover: coverUnit(world, kicking), kicker: k, blockers: coverUnit(world, receiving),
+          anchor, travel, hang: returnHang(k, travel, 'kickoff'), inEndZone: false,
+          missChance: (def, openness) => tackleMissChance(def, returner, openness, false),
+          clockOn: CLOCK_ON,
+        })
+      : undefined
+    if (r2ret) {
+      retYds = r2ret.yards
+      returnTD = r2ret.td
+      retOob = r2ret.oob || undefined
+      retPath = r2ret.path
+      retPaths = r2ret.paths
+    } else {
+      retYds = anchor
+      returnTD = h01(`${base}:td`) < (getIndividual() ? returnTdProb(J8D.tdKick, returner, covMan) : 0.003)
+    }
+    // A lost fumble on the return is the returner's own ball security (the OFF
+    // hash chain is unchanged in both paths, so the turnover level cannot drift).
     fumble = !returnTD && h01(`${base}:fum`) < (getIndividual() ? J8D.fumKick * carrySecurityOf(returner) * rm.fumble * (koWx?.fumbleMult ?? 1) : 0.005 * rm.fumble * (koWx?.fumbleMult ?? 1))
     if (returnTD) retYds = 100 - catchYard
   }
@@ -7271,6 +7343,9 @@ function resolveKickoff(world: World, s: GameState): { scored: boolean; moment?:
     returnTD, returnKind: touchback ? 'touchback' : 'return', turnover: fumble,
     scorerId: returnTD ? returner?.id : undefined,
     fumbleCause: fumble ? 'kickoff' : undefined, fumbleRecoveredBy: fumble ? 'def' : undefined,
+    ...(retOob ? { outOfBounds: true } : {}),
+    ...(retPath ? { retPath } : {}),
+    ...(retPaths ? { retPaths } : {}),
   })
   if (returnTD) {
     if (receiving === s.homeId) s.homeScore += 6
