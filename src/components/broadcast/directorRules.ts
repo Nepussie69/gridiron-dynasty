@@ -35,6 +35,8 @@ import { carrierOcclusion } from './directorOcclusion.ts'
 const HEAD_Z = 2.0
 const MAX_SPAN = 55
 const MIN_SPAN = 20
+/** (fut42 r2) how far ahead a holder switch is treated as "the ball is leaving with him now". */
+const HANDOFF_LEAD_SEC = 0.9
 
 // ── small reads of the animation (shared by the rules) ───────────────────────
 const playSeconds = (ctx: ShotContext): number => Math.max(0.05, (ctx.anim.duration || 0) / 1000)
@@ -412,14 +414,58 @@ function goalOf(ctx: ShotContext): number {
 function leavingGoal(ctx: ShotContext, gl: number): number {
   const c = ctx.carrier
   if (!c) return 0
-  const away = Math.sign(c.x - gl)
-  if (!away) return 0
-  const v = velAt(ctx, c.key, ctx.t)
-  // At the own goal line (backed up) the framing is there for the safety: a carrier at speed who is not
-  // heading back at the line is leaving it even when he runs across the field (a jet sweep from the 2).
-  const leaving = gl === OWN_GOAL_LINE ? v.x * away > -1 && Math.hypot(v.x, v.y) > 3 : v.x * away >= 2
-  if (!leaving) return 0
-  return clamp01((Math.abs(c.x - gl) - 3) / 7)
+  const cv = velAt(ctx, c.key, ctx.t)
+  const cands: { x: number; vx: number; vy: number }[] = [{ x: c.x, vx: cv.x, vy: cv.y }]
+  // (fut42 r2) A handoff to a runner already on the move is the same "leaving" the
+  // moment the ball changes hands: the framing hands over with it instead of holding
+  // the goal line until the NEW holder's own velocity reads. Parked on the own end
+  // zone through the mesh, the pan was then dragged 8 yd back and needed a quarter of
+  // a second at the accel limit to catch a back breaking to the edge.
+  for (const h of ctx.anim.holders ?? []) {
+    if (!h.key || h.key === c.key) continue
+    if (!(h.t > ctx.t + 1e-4 && h.t <= ctx.t + HANDOFF_LEAD_SEC)) continue
+    const p = ctx.actors.get(h.key)
+    if (!p) continue
+    const v = velAt(ctx, h.key, ctx.t)
+    cands.push({ x: p.x, vx: v.x, vy: v.y })
+    break
+  }
+  let out = 0
+  for (const q of cands) {
+    const away = Math.sign(q.x - gl)
+    if (!away) continue
+    // At the own goal line (backed up) the framing is there for the safety: a carrier at speed who is not
+    // heading back at the line is leaving it even when he runs across the field (a jet sweep from the 2).
+    const leaving = gl === OWN_GOAL_LINE ? q.vx * away > -1 && Math.hypot(q.vx, q.vy) > 3 : q.vx * away >= 2
+    if (!leaving) continue
+    // (merge fix) a back already at 6+ yd/s and 2+ yd off the line hands over at once: the distance ramp alone
+    // left a 9 yd/s run on the goal-line framing until 13 yd out (a 5 yd camera trail).
+    const dist = Math.abs(q.x - gl)
+    const fast = clamp01((Math.hypot(q.vx, q.vy) - 5) / 3) * clamp01((dist - 1.5) / 2.5)
+    out = Math.max(out, clamp01((dist - 3) / 7), fast)
+  }
+  return out
+}
+
+/**
+ * rushvar merge fix: the man who is handed the ball inside the next HANDOFF_LOOK seconds, when he leaves
+ * the goal line `gl` at speed (a back taking a handoff / pitch at his own 8 and running up the field).
+ * The goal-line pins sit BEHIND the quarterback; they held the pan back at the goal line through the
+ * handoff and the rate-limited pan then had to catch a back at full speed (6 yd of trail).
+ */
+function incomingLeaver(ctx: ShotContext, gl: number): { x: number; y: number } | null {
+  const here = ctx.carrier?.key ?? null
+  const dur = playSeconds(ctx)
+  for (const h of ctx.anim.holders) {
+    if (h.t <= ctx.t || h.t > ctx.t + 0.9 / dur) continue
+    if (!h.key || h.key === here) continue
+    const away = Math.sign(posAt(ctx.anim.actors.find((a) => a.key === h.key)?.path ?? [], h.t).x - gl)
+    const v = velAt(ctx, h.key, h.t)
+    if (!away || v.x * away < 3) return null
+    const p = posAt(ctx.anim.actors.find((a) => a.key === h.key)!.path, h.t)
+    return { x: p.x, y: p.y }
+  }
+  return null
 }
 
 const goalLine: DirectorRule = {
@@ -469,6 +515,12 @@ const goalLine: DirectorRule = {
     // A carrier leaving the goal line is the only thing that must stay in frame (r6d).
     if (ctx.carrier && !ctx.events.some((e) => e.kind === 'score') && leavingGoal(ctx, gl) > 0) {
       return [...carrierPts(ctx.carrier), { x: ctx.ball.x, y: ctx.ball.y, z: 0 }]
+    }
+    const inc = incomingLeaver(ctx, gl)
+    if (inc && !ctx.events.some((e) => e.kind === 'score')) {
+      const pts = [{ x: ctx.ball.x, y: ctx.ball.y, z: 0 }, { x: inc.x, y: inc.y, z: 0 }, { x: inc.x, y: inc.y, z: 2.2 }]
+      if (ctx.carrier) pts.push(...carrierPts(ctx.carrier))
+      return pts
     }
     // Pin the goal line and the end zone AT THE CARRIER's lane, plus the nearest
     // pylon — pinning both corners 53 yd apart cannot fit the safe frame and

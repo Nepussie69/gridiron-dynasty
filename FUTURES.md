@@ -31,7 +31,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 21 | **Coaching tree** | Your coordinators get hired away as head coaches; their success adds to your legacy; poach them back | History ✅ | ✅ merged |
 | 22 | **Owner personalities** | Win-now, patient builder, meddler — different firing lines and mandates | — | ✅ merged |
 | 23 | **Hall of Fame & legacy** (`NEXT_PHASE_L12_16.md`) | Career timeline, records, HOF vote at retirement (yours and your players'); also persists history/awards across reloads | History ✅ | ✅ merged |
-| 24 | **Trick plays** | Flea flicker, reverse, halfback pass, fake spike as calls with surprise value | 1 | ✅ engine + futt2 UI 2026-10-17 (left: T3 trick animation, T4 AI trick rates) |
+| 24 | **Trick plays** | Flea flicker, reverse, halfback pass, fake spike as calls with surprise value | 1 | ✅ engine + UI + futt3 animation + futt4 AI rates (2026-10-19) |
 | 25 | **Ask the GM / owner meetings** | Request budget, a star signing or a staff hire; owner reacts by personality | 22 | GM requests ✅ 52d1df7; owner meetings ✅ merged |
 | 26 | **Coach playcalling** (user 2026-10-10) | As head coach (or when you keep the call sheet), call plays yourself in live games: down/distance call sheet, formation + concept from your playbook, audible menu, hand play-calling to a coordinator per side or per situation; AI coordinators call by scheme/tendency when you don't. Audit existing GamePlan / `playCall` / user-package paths first and extend, don't duplicate | 1, 3, 24 | ✅ futp3a/futp3b 2026-10-15 |
 | 27 | **Draft philosophy by GM role + coaching staff** (user 2026-10-10) | Set a draft philosophy (BPA / need / scheme fit / trade-down volume / traits-vs-production / character risk); GM roles (scouting director, personnel director, AGM) and coaching staff each hold their own view, argue in the draft room, and the board is weighted by who has authority at your career level. Builds on existing career philosophy, conviction/red-flag tags and staff | 10, 14 | ✅ draftreal + fut27 2026-10-18 |
@@ -49,7 +49,7 @@ Several rows can run in parallel when they touch different files. Status: ⏳ ne
 | 39 | **Hard counts** (user 2026-10-11) | QB cadence vs each DL's discipline → offsides/false starts per player | J8d | ⏳ |
 | 40 | **Kicker & punter traits** (user 2026-10-11) | Leg strength vs accuracy vs wind handling; directional and coffin-corner punting; return-man decisions | W2, J8d | ⏳ |
 | 41 | **In-game injuries by player** (user 2026-10-11) | Injury proneness per player, contact type, next man up from the depth chart, play through pain | #15 | ⏳ |
-| 42 | **In-game confidence / hot hand** (user 2026-10-11) | Per-player confidence within a game (a WR who's caught 3 in a row, a CB who got beaten deep) — individual, not a team momentum meter | J7 | ⏳ |
+| 42 | **In-game confidence / hot hand** (user 2026-10-11) | Per-player confidence within a game (a WR who's caught 3 in a row, a CB who got beaten deep) — individual, not a team momentum meter | J7 | ✅ fut42 2026-10-19 |
 | 43 | **Rotation control** (user 2026-10-11) | Set DL rotation %, RB committee, snap shares; fatigue-aware | R15 fatigue | ⏳ |
 | 44 | **Coaching careers** (user 2026-10-11) | Coaches gain sub-ratings with experience, have contracts, get poached, fired mid-season, interim HC | J9, #21 | ✅ fut44 2026-10-18 |
 | 45 | **Practice-week reps** (user 2026-10-11) | Split reps starters vs backups: development vs fatigue vs game readiness; install opponent-specific plays | #13 | ✅ fut45 2026-10-18 |
