@@ -67,7 +67,7 @@ import {
 import { FEATURED_CONCEPT, electFeatured, featuredPassEdge, featuredRunEdge, featuredIntMult, featuredOn, type FeaturedPlay } from './featured'
 import {
   aiTrickCall, hbThrower, isTrickKind, spikeEligible, TRICK, trickCarrierElusiveness,
-  trickConcept, trickEffect, trickExtraSack, trickOptions, trickPassOverride, trickRunGain, trickSituation, trickSurprise,
+  trickConcept, trickEffect, trickExtraSack, trickOptions, trickPassOverride, trickRunGain, trickSalt, trickSituation, trickSurprise,
   type TrickEffect, type TrickKind, type TrickPassOut, type TrickSnap,
 } from './trickPlays'
 import {
@@ -6774,7 +6774,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // read it he is strung out for a loss. Trick-only — the shared run model above
   // runs exactly as before, and no ordinary carry ever reaches this.
   if (call?.trick && call.trick.kind === 'reverse') {
-    gain = trickRunGain(call.trick, elusiveness, n, offId)
+    gain = trickRunGain(call.trick, elusiveness, call.trick.salt)
   }
   // ── E1: the pursuit field (RUN side) ───────────────────────────────────────
   // The legacy block above has produced its full result (`gain`: the sampled CDF
@@ -6788,7 +6788,7 @@ function resolveRun(world: World, rng: Rng, offId: string, defId: string, concep
   // The drawn gain the field deviates from (the RED-ZONE score guard reads it
   // after the field has replaced `gain`).
   const plannedGain = gain
-  const e1 = EMERGENT.on && carrierC
+  const e1 = EMERGENT.on && carrierC && !(call?.trick && !TRICK.fieldOnTrick)
     ? emergentRun({
         n, defId, offId, yard, distance, down: env?.down ?? 0,
         planned: gain,
@@ -8859,10 +8859,25 @@ function trickPasserOf(world: World, s: GameState, offId: string, concept: Conce
   return trickOffEleven(world, s, offId, concept).find((p) => p.pos === 'RB')
 }
 
-/** FUTURES #24 T1: the receiver a reverse hands the ball to (WR3, else WR2). */
+/**
+ * FUTURES #24 T1/T4: the receiver a reverse hands the ball to. The OC scripts it
+ * for the man whose own legs are the best open-field weapon he has on the field —
+ * the receiver his own SPD/ACC/AGI/COD pick out (never a unit mean). Deterministic
+ * (no rng draw); a slow third receiver is not handed the reverse by default.
+ */
 function trickCarrierOf(world: World, s: GameState, offId: string, concept: Concept): Player | undefined {
   const wrs = trickOffEleven(world, s, offId, concept).filter((p) => p.pos === 'WR')
-  return wrs[2] ?? wrs[1] ?? wrs[0]
+  if (!wrs.length) return undefined
+  let best = wrs[0]
+  let bestE = trickCarrierElusiveness(best)
+  for (const w of wrs) {
+    const e = trickCarrierElusiveness(w)
+    if (e > bestE) {
+      best = w
+      bestE = e
+    }
+  }
+  return best
 }
 
 function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
@@ -9000,13 +9015,33 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // offence alone — an AI club (and the calibration harness, which has no ctx)
   // never reaches any of it.
   const trickPkg: TrickKind[] = offIsUser ? s.ctx!.tricks ?? [] : []
-  const trickRb = offIsUser ? topGroup(world, offId, ['RB'], 1, s.qbOverride)[0] : undefined
-  const trickDefEleven = offIsUser
+  // FUTURES #24 T4: an AI club has no package — it may call any trick — and its
+  // individual men are only resolved after the rate gate fires (below), so a
+  // normal AI snap pays no depth-chart cost. The user's club still resolves them
+  // up front for the pre-snap meter.
+  let trickRb = offIsUser ? topGroup(world, offId, ['RB'], 1, s.qbOverride)[0] : undefined
+  let trickDefEleven = offIsUser
     ? fillToEleven(world, defId, defenseOnField(world, defId, undefined, STAMINA_ON ? s.fat : undefined), DEF_FILL)
     : undefined
   const trickOffers = offIsUser
     ? trickOptions(world, s, offId, trickPkg, { rb: trickRb, defEleven: trickDefEleven, clockRunning: clockRunning(s) })
     : []
+  // FUTURES #24 T4: the AI / delegated-OC trick gate. Every AI club calls at its
+  // own coordinator's rate; the user's club only when the OC holds the call sheet
+  // (the T2 toggle). Pure hashes, and the men are resolved only on a real call.
+  const aiTrickFor = (): TrickKind | null =>
+    (!offIsUser || s.ctx?.ocTricks === true)
+      ? aiTrickCall(world, s, offId, offIsUser ? trickPkg : undefined, { rb: trickRb, hasRb: offIsUser ? !!trickRb : undefined, clockRunning: clockRunning(s) })
+      : null
+  const takeAiTrick = (kind: TrickKind, defCall?: DefCall) => {
+    trickKind = kind
+    trickDefCall = defCall
+    concept = trickConcept(kind) ?? concept
+    if (!offIsUser) {
+      trickRb = topGroup(world, offId, ['RB'], 1)[0]
+      trickDefEleven = fillToEleven(world, defId, defenseOnField(world, defId, undefined, STAMINA_ON ? s.fat : undefined), DEF_FILL)
+    }
+  }
   // FUTURES #26: with a call sheet the user's side is also asked when this
   // situation is theirs ('me'). An empty `callers` reproduces 'key' exactly.
   const calling = s.ctx?.calling
@@ -9126,6 +9161,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     }
     // J38: the AI playcaller mixes in a featured play for a qualifying star.
     concept = applyFeatured(world, s, concept, offId, defId)
+    // FUTURES #24 T4: the AI's trick gate faces the user's actual defensive call
+    // (known here), so the surprise reads the call it was really run against.
+    const t4kind = aiTrickFor()
+    if (t4kind) takeAiTrick(t4kind, userDefCall)
     const last = s.decisions[s.decisions.length - 1]
     if (last && last.momentId === id && last.source === 'user') {
       // FUTURES #26 (design 4): the D-side audible ('ask' only).
@@ -9161,13 +9200,12 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       // when it has plays for this bucket. The rng draw above is kept (then
       // discarded), so the stream holds; an empty sheet changes nothing.
       concept = sheetOffCall(world, s, offId, bucket, concept)
-      // FUTURES #24: the delegated-OC standing order. `TRICK.aiRate` is 0 in T1
-      // (T4 owns the rates), so this never fires yet; the gate is a pure hash, so
-      // turning it on later cannot move the rng stream.
-      if (offIsUser && s.ctx?.ocTricks) {
-        const ocKind = aiTrickCall(world, s, offId, trickPkg, { rb: trickRb, clockRunning: clockRunning(s) })
-        if (ocKind) { trickKind = ocKind; concept = trickConcept(ocKind) ?? concept }
-      }
+      // FUTURES #24 T4: the AI (and the user's delegated OC) standing order. The
+      // rate comes from the club's own coordinator, scaled by the situation, cut
+      // when the league has seen the call. The gate is a pure hash, so the rng
+      // stream holds; only the elected snap changes.
+      const t4kind = aiTrickFor()
+      if (t4kind) takeAiTrick(t4kind)
     }
   }
   if (PC_DEV.on) { PC_DEV.selDraws += PC_DEV.draws - selD0; PC_DEV.selSnaps += 1 }
@@ -9180,10 +9218,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   let trickSurpriseValue: number | undefined
   if (trickKind) {
     const trickSit = trickSituation(s, clockRunning(s))
-    const sur = trickSurprise({ world, s, offId, kind: trickKind, defCall: trickDefCall, sit: trickSit, rbOnField: !!trickRb, defEleven: trickDefEleven })
+    const sur = trickSurprise({ world, s, offId, kind: trickKind, defCall: userDefCall ?? trickDefCall, sit: trickSit, rbOnField: !!trickRb, defEleven: trickDefEleven })
     trickEff = trickEffect(trickKind, sur.surprise, trickPkg.includes(trickKind))
     trickSurpriseValue = sur.surprise
-    trickSnapValue = { kind: trickKind, surprise: sur.surprise, readValue: sur.readValue, readIds: sur.readIds }
+    trickSnapValue = { kind: trickKind, surprise: sur.surprise, readValue: sur.readValue, readIds: sur.readIds, salt: trickSalt(s, offId) }
     call = { edge: (call?.edge ?? 0) + trickEff.edge, sackMult: (call?.sackMult ?? 1) * trickEff.sackMult, trick: trickSnapValue }
     // The league remembers: this snap goes on the scouting sheet, and the next
     // trick this game is a 0.6 read (`gameDecay`).
