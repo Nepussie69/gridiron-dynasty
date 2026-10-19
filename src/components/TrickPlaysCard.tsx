@@ -11,7 +11,7 @@
 import { Zap } from 'lucide-react'
 import { capabilities } from '../game/engine/capabilities'
 import { TRICK, trickRecordText } from '../game/engine/trickPlays'
-import { trickInstallState, trickRecordFor } from '../lib/trickUi'
+import { trickInstallState, trickMotionLine, trickRecordFor } from '../lib/trickUi'
 import { useGame, useWorld } from '../store/gameStore'
 import { Badge, Card, OptionCard, OptionGroup, VerdictChip } from '../ui/kit'
 
@@ -75,6 +75,23 @@ export function TrickPlaysCard({ disabled = false }: { disabled?: boolean }) {
               />
             ))}
           </OptionGroup>
+
+          {install.installed.length > 0 && (
+            <div className="mt-3 rounded-[var(--r-md)] border border-line bg-surface-2 px-3 py-2.5">
+              <p className="font-cond text-label font-700 uppercase tracking-wide text-ink-2">Game-day motion</p>
+              <ul className="mt-1 space-y-1">
+                {install.installed.map((kind) => (
+                  <li key={kind} className="flex flex-col gap-0.5 text-label leading-snug text-muted sm:flex-row sm:items-baseline sm:gap-2">
+                    <span className="font-600 text-ink-2">{install.rows.find((r) => r.kind === kind)?.label}</span>
+                    <span className="min-w-0">{trickMotionLine(kind)}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-label leading-snug text-muted">
+                On game day the broadcast draws each exchange as it happened, and the defence's own reaction to the fake.
+              </p>
+            </div>
+          )}
 
           <div className="mt-3 rounded-[var(--r-md)] border border-line bg-surface-2 p-3">
             <label className="flex cursor-pointer items-start gap-2.5">
