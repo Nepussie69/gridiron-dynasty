@@ -72,6 +72,11 @@ import {
   edgeManOf, getQbRun, qbEdgeYardEffect, qbEffectiveCall, qbKeepsOnRead, qbRunKind, qbSneakGain,
   type EdgeMan, type QbRunKind,
 } from './qbRun'
+// REALISM2 #6 (r2aicalls): each AI coordinator's own real-seeded tendencies —
+// PROE by down/distance/score/time, 4th-down go lean, red-zone/two-minute leans,
+// play-action and motion rates. OFF (getAiCalls() false) never enters the file.
+import { getAiCalls, coordTendency, aiPassLean, aiClubMenu, aiGoLean } from './r2aicalls'
+export { AICALLS, setAiCalls, getAiCalls, coordTendency, aiSpread } from './r2aicalls'
 
 /**
  * FUTURES #24: the ordinary call-matrix edge plus, on a trick snap ONLY, the
@@ -3219,10 +3224,14 @@ export function offStyle(world: World, teamId: string): OffenseStyle {
   const concepts = MENU_REALISM_ON
     ? (SCHEME_MENUS_REALISM[scheme] ?? SCHEME_MENUS_REALISM['Pro Style'])
     : base.concepts
+  // r2aicalls: the coordinator's OWN play-action rate (real team spread, league
+  // mean held) reweights the play-action entries of this menu — same single
+  // concept draw inside the type-filtered pool, so the draw count is unchanged.
+  const menu = getAiCalls() ? aiClubMenu(world, teamId, concepts) : concepts
   // R18.2: the widening pivots on the league's own mean identity, so the scheme's
   // pass-rate identity is spread out club-to-club without moving the league average.
   const passRate = offPassRate(world, teamId, oc?.scheme)
-  return passRate === base.passRate && concepts === base.concepts ? base : { ...base, passRate, concepts }
+  return passRate === base.passRate && menu === base.concepts ? base : { ...base, passRate, concepts: menu }
 }
 function defStyle(world: World, teamId: string): DefenseStyle {
   const dc = (world.staff[teamId] ?? []).find((s) => s.role === 'Defensive Coordinator')
@@ -7683,7 +7692,9 @@ function chooseFourth(world: World, s: GameState): 'go' | 'fg' | 'punt' | 'fake'
   const ev = fourthDownEV(sit, kickPower)
   // J-PUNTS: the specific head coach's own aggression (his gameManagement sub),
   // never the 3-bucket style and never a unit mean. Undefined when the fix is off.
-  const aggro = getPuntFix() ? coachTendency(world, s.offId).aggro : undefined
+  // r2aicalls: an AI club's coordinator adds his own real-seeded go lean; the
+  // user's club keeps its own call sheet (isUser) untouched.
+  const aggro = getPuntFix() ? coachTendency(world, s.offId).aggro + (isUser ? 0 : aiGoLean(world, s.offId)) : undefined
   let chosen = fourthDownChoice(sheet.fourth, sit, kickPower, aggro)
   // J2: the actual call adds a per-play hash dither on the style's go
   // propensity, so the league go-rate matches the NFL cells instead of every
@@ -8463,7 +8474,10 @@ function applyScrimmageOutcome(
   if (MENU_REALISM_ON) {
     const pers = conceptFromPlaybook(out.concept)?.personnel
     const gun = formationForConcept(out.concept).startsWith('Gun')
-    const rate = pers === '11' && gun ? MENU_REALISM.motionRate + MENU_REALISM.motionGun11Bump : MENU_REALISM.motionRate
+    // r2aicalls: the coordinator's OWN motion rate (real team spread, league mean
+    // held) instead of one league-wide rate. Still one hash flag, no rng draw.
+    const base = getAiCalls() ? coordTendency(world, offId).motionRate : MENU_REALISM.motionRate
+    const rate = pers === '11' && gun ? base + MENU_REALISM.motionGun11Bump : base
     motion = h01(`${s.n}:${offId}:motion`) < rate
   }
   // J38: a featured jet sweep carries jet motion regardless of the hash roll.
@@ -8816,7 +8830,10 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // J1: with the situational model ON the table replaces the base league lean
   // (s.passAdj) and the red-zone lean (rzPassAdj) — no double counting — while
   // the plan/quick/mode edges stay additive. OFF keeps the legacy combined lean.
-  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj + clockPassShift + jointPassShift : passAdj
+  const aiPassAdj = getAiCalls()
+    ? aiPassLean(coordTendency(world, offId), { yard: s.yard, qtr: s.qtr, clockSec: s.clock })
+    : 0
+  const pickPassAdj = getSituational() ? planPassAdj + quickPassAdj + modePassAdj + clockPassShift + jointPassShift + aiPassAdj : passAdj
 
   // ── L10 G9/G10: the snap's concept and any call-matrix edge. The `call` and
   //    `defCall` decisions sit before the penalty rng; the AI's counter-call is
@@ -8829,7 +8846,11 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   const sit: SituationInput | undefined = getSituational()
     ? {
         down: s.down, distance: s.distance, yard: s.yard, qtr: s.qtr, clockSec: s.clock,
-        margin: marginOf(offId), twoMinMode: s.twoMinMode, identity: style.passRate - worldPassMean(world),
+        margin: marginOf(offId), twoMinMode: s.twoMinMode,
+        // r2aicalls: the club's own PROE replaces the scheme-only identity (his
+        // real-seeded pass tendency is applied through `aiPassAdj` above, where
+        // its magnitude is his own measurement, not the R18 identScale).
+        identity: getAiCalls() ? 0 : style.passRate - worldPassMean(world),
       }
     : undefined
   const offIsUser = !!s.ctx && offId === s.ctx.userTeamId
