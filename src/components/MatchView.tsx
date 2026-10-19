@@ -2523,7 +2523,8 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
         { k: 'snapPct', l: 'SNP%', title: 'Snaps played share', fmt: (r) => (r.snapPct == null ? '—' : `${r.snapPct.toFixed(0)}%`) },
       ]} />}
       {defense.length > 0 && <BoxBlock title="Defense" rows={defense} fp={fp} cap={99} order={(b) => defenseImpact(b.line)} cols={[
-        { k: 'tackles', l: 'TCK' }, { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' },
+        { k: 'tackles', l: 'TCK' }, { k: 'assists', l: 'AST', title: 'Assisted tackles (gang tackle: 1 solo + 1 assist)' },
+        { k: 'missedTackles', l: 'MT', title: 'Missed tackles' }, { k: 'tfl', l: 'TFL' }, { k: 'defSacks', l: 'SCK' },
         { k: 'prs', l: 'PRS', title: 'Pressures (SCK + QBH + HUR)' }, { k: 'defInts', l: 'INT' }, { k: 'defTD', l: 'TD', title: 'Defensive touchdowns (pick-six, fumble return)' },
       ]} />}
       {passRush.length > 0 && <BoxBlock title="Pass rush" rows={passRush} fp={fp} cap={99} order={(b) => (b.line.prs ?? 0) * 100 + (b.line.defSacks ?? 0) * 10 + (b.line.hurries ?? 0)} cols={[

@@ -422,6 +422,27 @@ function leavingGoal(ctx: ShotContext, gl: number): number {
   return clamp01((Math.abs(c.x - gl) - 3) / 7)
 }
 
+/**
+ * rushvar merge fix: the man who is handed the ball inside the next HANDOFF_LOOK seconds, when he leaves
+ * the goal line `gl` at speed (a back taking a handoff / pitch at his own 8 and running up the field).
+ * The goal-line pins sit BEHIND the quarterback; they held the pan back at the goal line through the
+ * handoff and the rate-limited pan then had to catch a back at full speed (6 yd of trail).
+ */
+function incomingLeaver(ctx: ShotContext, gl: number): { x: number; y: number } | null {
+  const here = ctx.carrier?.key ?? null
+  const dur = playSeconds(ctx)
+  for (const h of ctx.anim.holders) {
+    if (h.t <= ctx.t || h.t > ctx.t + 0.9 / dur) continue
+    if (!h.key || h.key === here) continue
+    const away = Math.sign(posAt(ctx.anim.actors.find((a) => a.key === h.key)?.path ?? [], h.t).x - gl)
+    const v = velAt(ctx, h.key, h.t)
+    if (!away || v.x * away < 3) return null
+    const p = posAt(ctx.anim.actors.find((a) => a.key === h.key)!.path, h.t)
+    return { x: p.x, y: p.y }
+  }
+  return null
+}
+
 const goalLine: DirectorRule = {
   id: 'goalLine',
   applies(ctx) {
@@ -469,6 +490,12 @@ const goalLine: DirectorRule = {
     // A carrier leaving the goal line is the only thing that must stay in frame (r6d).
     if (ctx.carrier && !ctx.events.some((e) => e.kind === 'score') && leavingGoal(ctx, gl) > 0) {
       return [...carrierPts(ctx.carrier), { x: ctx.ball.x, y: ctx.ball.y, z: 0 }]
+    }
+    const inc = incomingLeaver(ctx, gl)
+    if (inc && !ctx.events.some((e) => e.kind === 'score')) {
+      const pts = [{ x: ctx.ball.x, y: ctx.ball.y, z: 0 }, { x: inc.x, y: inc.y, z: 0 }, { x: inc.x, y: inc.y, z: 2.2 }]
+      if (ctx.carrier) pts.push(...carrierPts(ctx.carrier))
+      return pts
     }
     // Pin the goal line and the end zone AT THE CARRIER's lane, plus the nearest
     // pylon — pinning both corners 53 yd apart cannot fit the safe frame and

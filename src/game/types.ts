@@ -110,6 +110,8 @@ export interface SeasonStats {
   defSacks: number
   defInts: number
   passDef: number
+  /** Assisted tackles (PFR gang-tackle convention: 1 solo + 1 assist). */
+  assists?: number
   /** L11.5 Q7: tackles for loss (not previously rolled into season totals). */
   tfl?: number
   /** L12 R4b: season-summed coverage fields, used for the coverage grade (optional). */
@@ -179,6 +181,8 @@ export interface GameStatLine {
   tackles?: number
   defSacks?: number
   defInts?: number
+  /** Assisted tackles (PFR 1-solo+1-assist gang-tackle convention). */
+  assists?: number
   /** L11.5 Q7: tackles for loss (runs stopped behind the line; sacks count too). */
   tfl?: number
   /** L11.5 Q7: coverage stats for the defender on the target. */
