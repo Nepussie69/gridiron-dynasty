@@ -476,7 +476,10 @@ function jumpPlan(anim: PlayAnim, play: Play, ctx: AnimContext, plan: ReadPlan):
     // costs a little more than his own break speed, capped so the drawn stride
     // still stays inside the animshed bound (11 yd/s). An interception he cannot
     // reach is still drawn as close as he gets (the int branch keeps vcap).
-    const vOk = int ? vcap * 0.92 : Math.min(vcap, 8.0)
+    // (fut39 merge: the credited man can start 15-20 yd from the ball - a zone LB opposite the throw - and the
+    //  8 yd/s cap left him 1.4-4.5 yd short of a credited break-up. A closing sprint to the ball is allowed up
+    //  to 10.4 yd/s, still inside the animshed 11 yd/s bound.)
+    const vOk = int ? vcap * 0.92 : Math.min(vcap * 1.35, 10.4)
     const k = (vOk * T) / d
     if (k < 1) P = { x: p0.x + (P.x - p0.x) * k, y: p0.y + (P.y - p0.y) * k }
   }
