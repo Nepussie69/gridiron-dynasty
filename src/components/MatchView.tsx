@@ -2551,6 +2551,27 @@ export function BoxScore({ world, teamId, box, pen, challenges, gmName, myTeamId
                 <span key={k}>{PENALTY_INFO[k as PenaltyKind]?.label ?? k} <span className="tnum text-ink-2">{n}</span></span>
               ))}
           </div>
+          {/* FUTURES #39: pre-snap fouls come from the men themselves — name who
+              jumped the count (the club's worst offenders, discipline on show). */}
+          {(() => {
+            const men = Object.entries(pen.byPlayer ?? {})
+              .map(([id, n]) => ({ p: byId.get(id), n }))
+              .filter((x) => !!x.p)
+              .sort((a, b) => b.n - a.n || (a.p!.name < b.p!.name ? -1 : 1))
+              .slice(0, 4)
+            if (!men.length) return null
+            return (
+              <div className="mt-0.5 text-label text-muted">
+                <span className="text-ink-2">Flags by man</span>{' '}
+                {men.map((m, i) => (
+                  <span key={m.p!.id}>
+                    {i > 0 ? ' · ' : ''}
+                    <span className="text-ink-2">{m.p!.name}</span> <span className="tnum">{m.n}</span>
+                  </span>
+                ))}
+              </div>
+            )
+          })()}
         </div>
       )}
       {challenges && challenges.won + challenges.lost > 0 && (

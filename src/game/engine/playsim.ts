@@ -710,6 +710,13 @@ import { EMERGENT, emergentRun } from './emergent'
 // below are skipped and the base rate block runs exactly as before.
 import { getEmergentPen, penOffenseFoul, penDefenseFoul } from './emergentPenalties'
 export { setEmergentPen, getEmergentPen } from './emergentPenalties'
+// FUTURES #39 (hard counts): the QB's cadence against the jumper's own discipline,
+// and the offence's own snap count against its own linemen. It only re-weights the
+// offside / false-start type inside the tier the existing draw already picked, so
+// every point/first-down the tier produces is untouched and OFF is byte-identical
+// (see the header of engine/hardCounts.ts). Default ON.
+import { HARD_COUNT, getHardCount, offsideMult, delayMult, hardCountRisk, isHardCountSnap, offsideLabel, crowdFalseStart, snapCountMult, hardCountSample } from './hardCounts'
+export { setHardCount, getHardCount } from './hardCounts'
 // REALISM2 #3 (r2fumbles): fumbles & ball security from the actual hit. OFF by
 // default; when on, the run-carry / catch-strip / muff / strip-sack chances come
 // off the real contact (closing speed, angle, the pile, the hitter's own HPW/TAK
@@ -951,7 +958,9 @@ export interface PenaltyInfo { label: string; side: 'off' | 'def'; yards: number
 export const PENALTY_INFO: Record<PenaltyKind, PenaltyInfo> = {
   holdingOff: { label: 'Offensive holding', side: 'off', yards: 10, tiers: [10], pos: ['OT', 'OG', 'C', 'TE', 'RB'] },
   holdingDef: { label: 'Defensive holding', side: 'def', yards: 5, tiers: [5], pos: ['CB', 'S', 'LB'] },
-  falseStart: { label: 'False start', side: 'off', yards: 5, tiers: [5], pos: ['OT', 'OG', 'C', 'TE', 'WR'] },
+  // FUTURES #39: the count is the line's, so the jumper is a lineman or a tight
+  // end on the line — not a receiver (pre-snap motion fouls are a different flag).
+  falseStart: { label: 'False start', side: 'off', yards: 5, tiers: [5], pos: ['OT', 'OG', 'C', 'TE'] },
   // Defensive offside is a 5-yard replay-down foul in the NFL, but this pre-snap
   // model resets the down for every defensive flag (the R2 status quo), so it
   // takes the same treatment as the rest.
@@ -1161,6 +1170,24 @@ function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId
     w.roughing = (w.roughing ?? 0) * clamp(1 + (72 - dlAwr) * 0.008, 0.8, 1.3)
     w.unnecessary = (w.unnecessary ?? 0) * clamp(1 + (72 - dbAwr) * 0.01, 0.8, 1.3)
   }
+  // FUTURES #39 (hard counts): the cadence / snap-count layer. When the men are
+  // read and the r2penalties field is not in charge, the flat false-start and
+  // offside type weights are REPLACED by the individuals': the QB's own cadence
+  // against the jumper's own discipline (and the deliberate 4th-and-short draw),
+  // and the line's own snap count against the loud road house. The per-snap draws
+  // and the tier they picked are untouched — only the split inside the tier moves,
+  // so the league totals the tier calibrated are held. Zero rng() draws.
+  if (getHardCount() && getIndividual() && field && field.length && !getEmergentPen()) {
+    if (side === 'off') {
+      const crowd = wxFor(s, teamId === s.homeId)?.falseStartMult ?? 1
+      const risk = hardCountRisk(s.down, s.distance)
+      w.falseStart = HARD_COUNT.falseStartW * crowdFalseStart(crowd) * risk
+      w.delay = (w.delay ?? 0) * delayMult(s.down, s.distance)
+    } else {
+      const qb = (oppField ?? []).find((p) => p.pos === 'QB')
+      w.offside = HARD_COUNT.offsideW * offsideMult(qb, field, s.down, s.distance)
+    }
+  }
   const entries = (Object.entries(w) as [PenaltyKind, number][])
     .filter(([k, v]) => v > 0 && PENALTY_INFO[k].tiers.includes(tier))
   if (!entries.length) return side === 'off' ? 'holdingOff' : 'dpi'
@@ -1174,9 +1201,9 @@ function pickPenaltyKind(world: World, s: GameState, side: 'off' | 'def', teamId
 }
 
 /** R14: a club's accepted penalties from a play log, by type (for the box score). */
-export interface PenaltyTally { count: number; yards: number; byType: Partial<Record<PenaltyKind, number>> }
+export interface PenaltyTally { count: number; yards: number; byType: Partial<Record<PenaltyKind, number>>; /** FUTURES #39: accepted flags per offender (the man who committed it). */ byPlayer?: Record<string, number> }
 export function penaltyTotals(plays: Play[], teamId: string): PenaltyTally {
-  const out: PenaltyTally = { count: 0, yards: 0, byType: {} }
+  const out: PenaltyTally = { count: 0, yards: 0, byType: {}, byPlayer: {} }
   for (const p of plays) {
     if (p.type !== 'penalty') continue
     const team = p.penaltyTeam ?? (p.concept === 'Offensive Penalty' ? p.offId : p.defId)
@@ -1186,6 +1213,7 @@ export function penaltyTotals(plays: Play[], teamId: string): PenaltyTally {
     out.yards += Math.abs(p.yards ?? 0)
     const kind = p.penaltyKind
     if (kind) out.byType[kind] = (out.byType[kind] ?? 0) + 1
+    if (p.penaltyPlayerId) out.byPlayer![p.penaltyPlayerId] = (out.byPlayer![p.penaltyPlayerId] ?? 0) + 1
   }
   return out
 }
@@ -1438,6 +1466,9 @@ export interface Play {
   // ── R14: typed penalties ───────────────────────────────────────────────────
   /** R14: the specific foul (holding, false start, DPI, …). */
   penaltyKind?: PenaltyKind
+  /** FUTURES #39: this pre-snap flag came off the QB's 4th-and-short hard count
+   *  (the count that drew the defence offside, or the risk his own line took). */
+  hardCount?: boolean
   /** R14: the club that committed the foul. */
   penaltyTeam?: string
   /** R14: the player charged with the foul. */
@@ -9111,6 +9142,14 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const py = fieldDef ? fieldDef.yards : penaltyYards(`${s.n}:penD:${defId}`, 'def')
     const kind = fieldDef ? fieldDef.kind : pickPenaltyKind(world, s, 'def', defId, offId, offId !== s.homeId, py, penFields?.def, penFields?.off)
     const info = PENALTY_INFO[kind]
+    // FUTURES #39: the real pre-snap defensive foul behind the flag — the man in
+    // the neutral zone at the snap who made contact is an encroachment, one who
+    // did not is a neutral-zone infraction, otherwise a plain offside. The label
+    // is a hash on the play key (no rng draw), and the hard count that drew him is
+    // named when the QB held the count on 4th and short.
+    const hcOffside = !fieldDef && getHardCount() && kind === 'offside'
+    const label = hcOffside ? offsideLabel(`${s.n}:hc:${defId}`) : info.label
+    const hcDrew = hcOffside && isHardCountSnap(s.down, s.distance)
     const offender = fieldDef ? fieldDef.player : penaltyOffender(world, defId, 'def', info.pos, `${s.n}:penOffender:${defId}`, kind, penFields?.def)
     const who = shortName(offender?.name)
     // R14: offsetting — both clubs fouled on the snap; replay, no yardage.
@@ -9122,7 +9161,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     if (offset) {
       result = 'Offsetting penalties — replay the down'
     } else if (declined) {
-      result = `${info.label} on ${who} — declined`
+      result = `${label} on ${who} — declined`
     } else {
       s.yard = clamp(s.yard + py, 1, 99)
       // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
@@ -9130,12 +9169,12 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       s.down = 1
       s.distance = Math.min(10, 100 - s.yard)
       yards = py
-      result = `${info.label} on ${who} — ${py} yards, automatic first down`
+      result = `${hcDrew ? 'Hard count — ' : ''}${label} on ${who} — ${py} yards, automatic first down`
     }
     const t = 18 * s.pace
     s.clock -= t
     penS.top += t
-    pushPlay(s, { type: 'penalty', concept: info.label, penaltyKind: kind, penaltyTeam: defId, penaltyPlayerId: offender?.id, penaltyDisposition: offset ? 'offset' : declined ? 'declined' : 'accepted', yards, result, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 18 })
+    pushPlay(s, { type: 'penalty', concept: label, penaltyKind: kind, penaltyTeam: defId, penaltyPlayerId: offender?.id, penaltyDisposition: offset ? 'offset' : declined ? 'declined' : 'accepted', yards, result, hardCount: hcDrew || undefined, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 18 })
     return 'continue'
   }
 
@@ -9145,6 +9184,15 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
   // FUTURES #6: the road offence false-starts more in a loud house; the home side
   // carries the centering offset. Exactly 1 with weather off, so the base is exact.
   const crowdPen = wxFor(s, offId === s.homeId)?.falseStartMult ?? 1
+  // FUTURES #39: the offence's own snap count. The jumpiest lineman's own AWR and
+  // experience (and the centre's own) scale the whole pre-snap offensive gate, so
+  // a disciplined veteran line commits fewer pre-snap fouls and a young, jumpy one
+  // more — centred on the league mean, so the calibrated totals hold. One man is
+  // the term; never a line or league average. Zero rng() draws.
+  const hcOffMult = getHardCount() && getIndividual() && !penFieldOn ? snapCountMult(penFields?.off) : 1
+  // Probe sample of the raw terms the centres are measured from (once per snap;
+  // a no-op unless HC_STAT.on and the toggle is on).
+  if (getHardCount() && getIndividual()) hardCountSample(penFields?.off, penFields?.def, s.down, s.distance)
   // r2penalties: the offence's fouls come off the same field (the beaten blocker,
   // the jumper on the line, the receiver who pushes off, the man under centre);
   // with the field on it replaces the flat rate draw. The base draw is consumed at
@@ -9157,7 +9205,7 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
       mental: s.mental[offId]?.off ?? 1, hurry: hurryPen, crowd: crowdPen, rate: eff, qb: penQb,
     })
     : undefined
-  if (fieldOff || (!penFieldOn && offRoll < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1) * crowdPen)) {
+  if (fieldOff || (!penFieldOn && offRoll < R2.penOffRate * offDisc * hurryPen * (s.mental[offId]?.off ?? 1) * crowdPen * hcOffMult)) {
     const penS = statFor(s, offId)
     const startY = s.yard
     const py = fieldOff ? fieldOff.yards : penaltyYards(`${s.n}:penO:${offId}`, 'off')
@@ -9165,12 +9213,15 @@ function step(world: World, s: GameState): 'continue' | 'moment' | 'done' {
     const info = PENALTY_INFO[kind]
     const offender = fieldOff ? fieldOff.player : penaltyOffender(world, offId, 'off', info.pos, `${s.n}:penOffender:${offId}`, kind, penFields?.off)
     const who = shortName(offender?.name)
+    // FUTURES #39: the QB held the count on 4th and short and his own line jumped
+    // (or he took the delay) — name the risk the hard count carried.
+    const hcRisk = !fieldOff && getHardCount() && (kind === 'falseStart' || kind === 'delay') && isHardCountSnap(s.down, s.distance)
     s.yard = clamp(s.yard - py, 1, 99)
     // R2: penalties are not scrimmage plays (the stat counts rushes + pass attempts).
     const t = 22 * s.pace
     s.clock -= t
     penS.top += t
-    pushPlay(s, { type: 'penalty', concept: info.label, penaltyKind: kind, penaltyTeam: offId, penaltyPlayerId: offender?.id, penaltyDisposition: 'accepted', yards: -py, result: `${info.label} on ${who} — ${py} yards, replay down`, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 22 })
+    pushPlay(s, { type: 'penalty', concept: info.label, penaltyKind: kind, penaltyTeam: offId, penaltyPlayerId: offender?.id, penaltyDisposition: 'accepted', yards: -py, result: `${hcRisk ? 'Hard count — ' : ''}${info.label} on ${who} — ${py} yards, replay down`, hardCount: hcRisk || undefined, turnover: false, startYard: startY, endYard: s.yard, down: s.down, distance: s.distance, timeUsed: 22 })
     s.distance = Math.min(s.distance + py, 100 - s.yard)
     return 'continue'
   }
